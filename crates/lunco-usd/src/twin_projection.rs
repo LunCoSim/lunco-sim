@@ -827,7 +827,7 @@ fn is_waypoint_prim(world: &World, scene_id: AssetId<UsdStageAsset>, path: &str)
 /// resolves to inline BT.CPP XML or to a supported BT asset. The child name is
 /// intentionally irrelevant: `Mission`, `Safety`, `Guidance`, and user-authored
 /// names all use the same live projection contract.
-fn is_behavior_program(
+pub(crate) fn is_behavior_program(
     world: &World,
     scene_id: AssetId<UsdStageAsset>,
     path: &openusd::sdf::Path,

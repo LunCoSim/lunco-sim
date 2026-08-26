@@ -19,7 +19,7 @@
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentSaved};
+use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
 use lunco_workbench::{BrowserSectionRegistry, PanelId};
 
 use crate::document::UsdDocument;
@@ -91,9 +91,6 @@ impl Plugin for UsdUiPlugin {
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(register_workspace_stage_on_doc_user_owned);
         app.add_observer(drop_workspace_stage_on_doc_closed);
-        app.add_observer(sync_workspace_on_doc_opened);
-        app.add_observer(sync_workspace_on_doc_saved);
-        app.add_observer(sync_workspace_on_doc_closed);
 
         // Document hot-exit: persist & restore open USD buffers via the
         // per-Twin workspace-state, mirroring Modelica. Restore replays
@@ -115,78 +112,6 @@ impl Plugin for UsdUiPlugin {
         // Surface external on-disk edits (git pull, another editor) to the user.
         app.add_systems(Update, badge_externally_changed_usd_docs);
     }
-}
-
-/// Keep the generic Workspace document list in step with the USD registry.
-///
-/// USD stages are documents just like Modelica models. The previous viewport
-/// registration made a newly-created stage visible to USD panels but left the
-/// shared File menu without an active document, so Save/Save-As could never
-/// complete the first-use workflow.
-fn sync_workspace_on_doc_opened(
-    trigger: On<DocumentOpened>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    if workspace.document(doc).is_some() {
-        workspace.active_document = Some(doc);
-        return;
-    }
-    let origin = host.document().origin().clone();
-    let context_twin = if origin.is_untitled() {
-        workspace.active_twin
-    } else {
-        None
-    };
-    workspace.add_document(lunco_workspace::DocumentEntry {
-        id: doc,
-        kind: lunco_workspace::DocumentKindId::new(crate::commands::USD_DOCUMENT_KIND),
-        title: origin.display_name(),
-        origin,
-        context_twin,
-    });
-    workspace.active_document = Some(doc);
-}
-
-/// Reflect USD Save and Save-As origin changes into the generic Workspace.
-fn sync_workspace_on_doc_saved(
-    trigger: On<DocumentSaved>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    let origin = host.document().origin().clone();
-    if let Some(path) = origin.canonical_path() {
-        workspace.recents.push_loose(path.to_path_buf());
-    }
-    if let Some(entry) = workspace.document_mut(doc) {
-        entry.title = origin.display_name();
-        entry.origin = origin;
-    }
-}
-
-/// Remove the Workspace shadow entry when a USD registry document closes.
-fn sync_workspace_on_doc_closed(
-    trigger: On<DocumentClosed>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    workspace.close_document(trigger.event().doc);
 }
 
 /// Poll the registry for USD documents whose file changed on disk behind the

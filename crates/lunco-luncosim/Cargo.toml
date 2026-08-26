@@ -305,7 +305,10 @@ luncosim = []
 # server comes from `lunco-api/transport-http` (added to `default` above);
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-lunco-api = ["dep:lunco-api", "lunco-modelica/lunco-api"]
+lunco-api = [
+    "dep:lunco-api",
+    "lunco-modelica/lunco-api",
+]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
 # rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
 # on native, and always on wasm). In `default` + `server`; the wasm build gets

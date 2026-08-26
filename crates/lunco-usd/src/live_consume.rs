@@ -91,24 +91,23 @@ fn find_live_entity(
         .map(|(e, _)| e)
 }
 
-/// Whether a structural notice belongs to a `LunCoProgramAPI` child. Program
-/// prims are authored USD (journalled, saved and replicated), but they have no
-/// visual or physical ECS projection of their own: their source is projected
-/// onto the owning runtime. The capability, not a prim name such as `Mission`,
-/// is the authoritative discriminator.
-fn is_program_scope(world: &World, stage_id: AssetId<UsdStageAsset>, path: &str) -> bool {
+/// Whether a structural notice belongs to a behavior-tree program child.
+///
+/// Behavior-tree programs are policy projected onto their owning vessel and do
+/// not need a separate physical ECS entity. Causal `.mo`/`.py` programs are
+/// different: their own entity owns the generic `SimComponent` and port
+/// surface, so they must take the normal structural projection path. The
+/// source capability, not a prim name such as `Mission`, is authoritative.
+fn is_behavior_program(world: &World, stage_id: AssetId<UsdStageAsset>, path: &str) -> bool {
     let Ok(path) = SdfPath::new(path) else {
         return false;
     };
-    world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-        .and_then(|stages| stages.get(stage_id))
-        .is_some_and(|stage| stage.view().has_api_schema(&path, "LunCoProgramAPI"))
+    crate::twin_projection::is_behavior_program(world, stage_id, &path)
 }
 
 /// Whether a program prim is the BT source currently projected onto its owner.
 /// The composed source may already be empty after a clear, so this provenance
-/// check is the removal-side counterpart to [`is_program_scope`].
+/// check is the removal-side counterpart to [`is_behavior_program`].
 fn projected_behavior_owner(
     world: &World,
     stage_id: AssetId<UsdStageAsset>,
@@ -638,7 +637,7 @@ pub(crate) fn refresh_edited_prims_live(
         // extension, the same rule `.mo` and `.rhai` follow. A live edit to either
         // re-reads the tree from the prim that owns it.
         if (attr == "info:sourceCode" || attr == "info:sourceAsset")
-            && (is_program_scope(world, id, prim)
+            && (is_behavior_program(world, id, prim)
                 || projected_behavior_owner(world, id, prim).is_some())
         {
             // Read the value under a short stage borrow, then resolve/mutate the
@@ -769,7 +768,7 @@ pub(crate) fn reconcile_structural_live(
         // A program child has no physical ECS subtree of its own. If the authored
         // prim disappears, remove only the tree it projected onto its owner; the
         // owner, ports, physics and avatar remain live.
-        if !is_program_scope(world, id, path) {
+        if !is_behavior_program(world, id, path) {
             if let Some(owner) = projected_behavior_owner(world, id, path) {
                 let mut entity = world.entity_mut(owner);
                 entity.remove::<BehaviorXml>();
@@ -779,7 +778,7 @@ pub(crate) fn reconcile_structural_live(
                 continue;
             }
         }
-        if is_program_scope(world, id, path) {
+        if is_behavior_program(world, id, path) {
             continue;
         }
         let Ok(sp) = SdfPath::new(path) else { continue };

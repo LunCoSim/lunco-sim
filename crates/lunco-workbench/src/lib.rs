@@ -796,7 +796,12 @@ impl Plugin for WorkbenchPlugin {
         // what makes `CaptureScreenshot` reject cleanly there instead of deferring a
         // response that nothing would ever send.
         #[cfg(feature = "api")]
-        app.add_plugins(screenshot::ScreenshotPlugin);
+        {
+            app.add_plugins(screenshot::ScreenshotPlugin);
+            if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
+                app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+            }
+        }
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin {
                 // egui owns the workbench chrome and its transient surfaces:
@@ -3710,7 +3715,7 @@ fn render_layout(
                 // domain observer creates the doc. Ctrl+N fires the
                 // default-resolution path through `EditorIntent`.
                 if ui.button("New Twin…").clicked() {
-                    world.trigger(file_ops::CreateTwin {
+                    world.trigger(lunco_workspace::open::CreateTwin {
                         path: String::new(),
                         name: String::new(),
                         default_scene: String::new(),

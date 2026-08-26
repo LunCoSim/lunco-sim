@@ -18,10 +18,8 @@
 //!   producing output `/A.outputs:netForce` (self-loop when `A == B`).
 //!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
-//! No domain-specific markers (`BalloonModelMarker`, …) are inserted
-//! here. Catalog-created editor entities in `lunco-luncosim-edit` keep their
-//! own markers; this translator is the authoritative path for USD-defined
-//! cosim entities.
+//! No domain-specific ECS marker is inserted here. The translator is the
+//! authoritative path for USD-defined cosim entities.
 
 use avian3d::prelude::PhysicsTime;
 use bevy::prelude::*;
@@ -1213,14 +1211,14 @@ fn process_usd_cosim_prim_read(
     }
 
     // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
-    // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
-    // non-active cases skip silently: a model with no ports is a
-    // documentation-only reference (wheels/motors/batteries carry
-    // `lunco:modelicaModel` for provenance); ports with no model are a pure
-    // physics sink driven through its backend (a joint receiving
-    // `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring itself
-    // is native `connectionPaths`, derived by `rewire_usd_connections`
-    // (the journaled, distributed path), never parsed here.
+    // AND declares connectable ports (`inputs:`/`outputs:` attributes). Ports
+    // with no model are a pure physics sink driven through its backend (a joint
+    // receiving `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring
+    // itself is native `connectionPaths`, derived by `rewire_usd_connections`
+    // (the journaled, distributed path), never parsed here. A Modelica/Python
+    // source with no declared interface is an authored source-only program; it
+    // receives an observable terminal status instead of disappearing from the
+    // cosim graph.
     // A program names its source as an `asset`. The LANGUAGE comes from the file's
     // extension, never from a second attribute: the same `.py` is a plant on one
     // prim and a script on the next, so a `lunco:pythonModel`-style name would be
@@ -1240,6 +1238,35 @@ fn process_usd_cosim_prim_read(
         .iter()
         .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
     if !has_ports {
+        let (inputs, outputs) = declared_interface(reader, sdf_path);
+        let model_name = modelica_path.as_deref().map_or_else(
+            || format!("Python:{}", python_path.as_deref().unwrap_or("<source>")),
+            |path| format!("Modelica:{path}"),
+        );
+        let reason = format!(
+            "program `{}` has no declared inputs or outputs; add an explicit USD scalar interface before it can run",
+            prim_path.path
+        );
+        commands.entity(entity).try_insert((
+            UsdSimProcessed,
+            lunco_core::NotPredictable,
+            SimComponent {
+                model_name,
+                inputs,
+                outputs,
+                status: SimStatus::Error(reason.clone()),
+                ..default()
+            },
+        ));
+        wiring_dirty.0 = true;
+        warn!("[usd-cosim] {reason}");
+        commands.trigger(lunco_core::TelemetryEvent {
+            name: MODEL_CONFIGURATION_INVALID.into(),
+            source: 0,
+            severity: lunco_core::Severity::Error,
+            data: lunco_core::TelemetryValue::String(reason),
+            timestamp: 0.0,
+        });
         return;
     }
 
@@ -3515,6 +3542,13 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
                     "has_simcomponent": comp.is_some(),
                     "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
+                    "status": comp.map(|c| match &c.status {
+                        SimStatus::Idle => "Idle".to_string(),
+                        SimStatus::Compiling => "Compiling".to_string(),
+                        SimStatus::Running => "Running".to_string(),
+                        SimStatus::Paused => "Paused".to_string(),
+                        SimStatus::Error(reason) => format!("Error: {reason}"),
+                    }).unwrap_or_else(|| "Unbound".to_string()),
                     "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),

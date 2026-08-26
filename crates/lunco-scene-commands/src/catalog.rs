@@ -38,18 +38,6 @@
 use bevy::prelude::*;
 use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
 
-/// Marker components used by `lunco-cosim`'s integration tests to tag a
-/// test entity that should go through a mini compile-and-wire pipeline
-/// mirroring the production translator. Production code spawns balloons
-/// from USD (`vessels/balloons/{modelica,python}_balloon.usda`) and
-/// `lunco_usd_sim::cosim` handles them end-to-end without these markers.
-#[derive(Component, Default)]
-pub struct BalloonModelMarker;
-
-/// See [`BalloonModelMarker`] — Python-side test fixture marker.
-#[derive(Component, Default)]
-pub struct PythonBalloonMarker;
-
 /// Registry of all spawnable object types.
 #[derive(Resource, Default)]
 pub struct SpawnCatalog {

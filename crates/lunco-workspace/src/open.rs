@@ -114,7 +114,6 @@ pub fn create_twin(path: &std::path::Path, name: &str) -> Result<TwinMode, TwinE
 
 /// Create a new Twin folder and asynchronously add it to the workspace.
 /// Empty `path` means "ask the windowed workbench for a folder".
-#[derive(Clone, Debug)]
 #[Command(default)]
 pub struct CreateTwin {
     /// Target Twin folder. The manifest is created here; missing ancestors are

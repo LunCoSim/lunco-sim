@@ -118,7 +118,10 @@ cleanup needs a `ModelicaCommand::Despawn` per stepper, follow-up).
 
 `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}` returns one row per
 `UsdSourcedCosim` entity with position, velocity, Modelica timing, and
-the value currently flowing through `SimComponent.inputs["force_y"]`.
+the value currently flowing through `SimComponent.inputs["force_y"]`. Each row
+also has a `status` string (`Unbound`, `Compiling`, `Running`, `Paused`, or
+`Error: …`), so a source-only program or failed source load is visible instead
+of looking like a missing participant.
 Useful for confirming a chain works end-to-end without polling logs.
 
 ### See also

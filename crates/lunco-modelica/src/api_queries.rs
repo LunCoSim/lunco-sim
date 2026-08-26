@@ -1,28 +1,13 @@
-//! API query providers for Modelica + cross-domain workspace listings.
+//! API query providers for Modelica documents and simulation state.
 //!
 //! Registers two [`ApiQueryProvider`]s (see `lunco-api` for the trait):
 //!
 //! - **`ListBundled`** — embedded `assets/models/*.mo` examples. Modelica-
 //!   specific; lives here because that's where the data lives.
-//! - **`ListOpenDocuments`** — cross-domain workspace state. Reads
-//!   [`lunco_workspace::WorkspaceResource`], so it transparently surfaces
-//!   USD / SysML / Mission / Markdown documents in addition to Modelica
-//!   ones — anything the Workspace layer tracks.
-//!
-//! ## Why `ListOpenDocuments` lives in the Modelica crate (for now)
-//!
-//! `lunco-workspace` does not depend on `lunco-api`, and we don't want to
-//! grow that dep yet. The Modelica plugin is the one binary surface that
-//! always loads when the API is present, so registering the provider here
-//! is the path of least resistance. The provider's *implementation* is
-//! kind-agnostic — only its registration site is here. When a non-Modelica
-//! binary ships, this provider can move to `lunco-workspace` (with an
-//! optional `lunco-api` feature) without changing its behaviour.
 
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
-use lunco_twin::{DocumentKindId, FileEntry, FileKind};
 use lunco_workspace::WorkspaceResource;
 
 use crate::ast_extract;
@@ -44,6 +29,9 @@ pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
+            app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+        }
         // Idempotent init: `LunCoApiPlugin::ApiQueryRegistryPlugin`
         // installs this resource too, but plugin ordering is not
         // guaranteed — if the modelica plugin builds before lunco-api,
@@ -54,9 +42,6 @@ impl Plugin for ModelicaApiQueriesPlugin {
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
         registry.register(ListSolversProvider);
-        registry.register(ListOpenDocumentsProvider);
-        registry.register(ListRecentFilesProvider);
-        registry.register(ListTwinProvider);
         registry.register(ListMslProvider);
         registry.register(ListCompileCandidatesProvider);
         registry.register(QueryExperimentBoundsProvider);
@@ -146,201 +131,6 @@ impl ApiQueryProvider for ListSolversProvider {
             "solvers": items,
             "count": items.len(),
         }))
-    }
-}
-
-// ─── ListOpenDocuments ─────────────────────────────────────────────────
-
-struct ListOpenDocumentsProvider;
-
-impl ApiQueryProvider for ListOpenDocumentsProvider {
-    fn name(&self) -> &'static str {
-        "ListOpenDocuments"
-    }
-
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
-        let ws = world.resource::<WorkspaceResource>();
-        let active = ws.active_document;
-
-        let mut items: Vec<serde_json::Value> = ws
-            .documents()
-            .iter()
-            .map(|entry| {
-                serde_json::json!({
-                    "doc_id": entry.id.raw(),
-                    "title": entry.title,
-                    "kind": document_kind_label(&entry.kind),
-                    "origin": origin_to_json(&entry.origin),
-                    "active": Some(entry.id) == active,
-                    "context_twin": entry.context_twin.map(|t| t.raw()),
-                })
-            })
-            .collect();
-
-        // Generated scene networks have no file-system workspace entry, but
-        // they are normal read-only Modelica documents. Include every such
-        // registry document here so an API client discovers it through the
-        // same listing as authored files before fetching its source.
-        let workspace_docs: std::collections::HashSet<_> =
-            ws.documents().iter().map(|entry| entry.id).collect();
-        let registry = world.resource::<ModelicaDocumentRegistry>();
-        let mut generated: Vec<_> = registry
-            .docs()
-            .filter(|(id, host)| {
-                !workspace_docs.contains(id) && is_generated_document(host.document())
-            })
-            .collect();
-        generated.sort_by_key(|(id, _)| id.raw());
-        items.extend(generated.into_iter().map(|(id, host)| {
-            let document = host.document();
-            serde_json::json!({
-                "doc_id": id.raw(),
-                "title": document.origin().display_name(),
-                "kind": "modelica",
-                "origin": origin_to_json(document.origin()),
-                "active": Some(id) == active,
-                "context_twin": serde_json::Value::Null,
-            })
-        }));
-
-        ApiResponse::ok(serde_json::json!({
-            "open_documents": items,
-            "count": items.len(),
-            "active_doc_id": active.map(|d| d.raw()),
-        }))
-    }
-}
-
-// ─── ListRecentFiles ───────────────────────────────────────────────────
-
-/// Surfaces the user's recently-opened loose files and Twin folders — the
-/// "latest files" list backing the File ▸ Open Recent menu. Reads
-/// [`WorkspaceResource`]'s persisted `recents` (`~/.lunco/recents.json`),
-/// which are kept in most-recently-used order (front = newest). For each
-/// path we also report whether it still exists on disk and its mtime, so
-/// automation can pick the freshest model without a filesystem sweep.
-struct ListRecentFilesProvider;
-
-impl ApiQueryProvider for ListRecentFilesProvider {
-    fn name(&self) -> &'static str {
-        "ListRecentFiles"
-    }
-
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
-        fn entry(path: &std::path::Path) -> serde_json::Value {
-            // mtime as whole seconds since the Unix epoch; `None` when the
-            // path is gone or the platform/file has no modified time.
-            let modified_secs = std::fs::metadata(path)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
-            serde_json::json!({
-                "path": path.display().to_string(),
-                "name": path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default(),
-                "exists": path.exists(),
-                "modified_secs": modified_secs,
-            })
-        }
-
-        let ws = world.resource::<WorkspaceResource>();
-        let files: Vec<serde_json::Value> =
-            ws.recents.loose_paths.iter().map(|p| entry(p)).collect();
-        let twins: Vec<serde_json::Value> =
-            ws.recents.twin_paths.iter().map(|p| entry(p)).collect();
-
-        ApiResponse::ok(serde_json::json!({
-            "recent_files": files,
-            "recent_twins": twins,
-            "count": files.len(),
-        }))
-    }
-}
-
-// ─── ListTwin ──────────────────────────────────────────────────────────
-
-struct ListTwinProvider;
-
-impl ApiQueryProvider for ListTwinProvider {
-    fn name(&self) -> &'static str {
-        "ListTwin"
-    }
-
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        // Pagination params: both optional. `offset` defaults to 0,
-        // `limit` defaults to "all" (no slicing). Caller supplies them
-        // when a Twin folder is large enough to warrant paging; the
-        // common case (<100 files) returns the whole list.
-        let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize);
-
-        let ws = world.resource::<WorkspaceResource>();
-
-        // No Twin open → explicit `{open: false}`. Distinguish from
-        // "Twin open but empty" (`{open: true, files: [], total: 0}`)
-        // so the agent does not retry pointlessly.
-        let Some(twin_id) = ws.active_twin else {
-            return ApiResponse::ok(serde_json::json!({ "open": false }));
-        };
-        let Some(twin) = ws.twin(twin_id) else {
-            // Active id points at a Twin that's no longer registered
-            // — possible if the Twin was closed but `active_twin`
-            // wasn't cleared. Treat as no Twin open.
-            return ApiResponse::ok(serde_json::json!({ "open": false }));
-        };
-
-        let all = twin.files();
-        let total = all.len();
-        let end = match limit {
-            Some(n) => (offset + n).min(total),
-            None => total,
-        };
-        let slice = if offset >= total {
-            &[][..]
-        } else {
-            &all[offset..end]
-        };
-
-        let root = twin.root_handle().as_file_path().map(|p| p.to_path_buf());
-        let items: Vec<serde_json::Value> = slice
-            .iter()
-            .map(|f| file_entry_to_json(f, root.as_deref()))
-            .collect();
-
-        ApiResponse::ok(serde_json::json!({
-            "open": true,
-            "root": root.as_ref().map(|p| p.to_string_lossy().into_owned()),
-            "files": items,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-        }))
-    }
-}
-
-fn file_entry_to_json(f: &FileEntry, root: Option<&std::path::Path>) -> serde_json::Value {
-    let abs = root.map(|r| r.join(&f.relative_path));
-    serde_json::json!({
-        "relative_path": f.relative_path.to_string_lossy(),
-        "absolute_path": abs.as_ref().map(|p| p.to_string_lossy().into_owned()),
-        "kind": file_kind_label(&f.kind),
-    })
-}
-
-/// Compact string form of a [`FileKind`]. Documents become
-/// `"document/<subkind>"` so the agent can filter by the broad category
-/// or the specific domain. File references and unknowns are flat.
-fn file_kind_label(k: &FileKind) -> String {
-    match k {
-        FileKind::Document(d) => format!("document/{}", document_kind_label(d)),
-        FileKind::FileReference => "file_reference".into(),
-        FileKind::Unknown => "unknown".into(),
     }
 }
 
@@ -1792,11 +1582,6 @@ fn err_doc_not_found(doc_id: DocumentId) -> ApiResponse {
         ApiErrorCode::EntityNotFound,
         format!("doc_id {} not in registry", doc_id.raw()),
     )
-}
-
-/// Stable string label for a registered document kind.
-fn document_kind_label(kind: &DocumentKindId) -> String {
-    kind.to_string()
 }
 
 /// Project a [`lunco_doc::DocumentOrigin`] onto a JSON object. Untitled docs carry

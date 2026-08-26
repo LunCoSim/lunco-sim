@@ -242,6 +242,15 @@ impl Plugin for SandboxUiPlugin {
                 app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
                 app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
                 app.register_panel(models_palette::ModelsPalette);
+                app.init_resource::<models_palette::ProgramCatalog>();
+                app.add_systems(Startup, models_palette::refresh_program_catalog_startup);
+                app.add_systems(
+                    Update,
+                    models_palette::refresh_program_catalog_manifest
+                        .run_if(resource_changed::<lunco_assets::discovery::AssetManifest>),
+                );
+                app.add_observer(models_palette::refresh_program_catalog_twin_added);
+                app.add_observer(models_palette::refresh_program_catalog_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
                 #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]

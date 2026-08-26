@@ -1,0 +1,17 @@
+[package]
+name = "lunco-workspace-api"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "API query providers for the headless-capable LunCoSim workspace session"
+
+[dependencies]
+bevy = { workspace = true, default-features = false, features = ["bevy_log"] }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-doc = { path = "../lunco-doc" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-workspace = { path = "../lunco-workspace" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

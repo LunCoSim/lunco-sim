@@ -1073,6 +1073,7 @@ fn on_active_twin_closed(
     session.world = None;
     pending_advance.0 = None;
     commands.queue(|world: &mut World| {
+        #[cfg(feature = "ui")]
         clear_tutorial_hud(world);
         stop_tutorial_host(world);
     });
