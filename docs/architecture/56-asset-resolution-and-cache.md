@@ -378,6 +378,13 @@ packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
 `luncosim-web`. The web build still creates its dedicated MSL bundle through
 `build_msl_assets`; raw MSL entries therefore target native packaging only.
 
+The downloader qualifies bundle keys as `<group>/<key>` for actionable errors,
+but leaves those keys out of opaque on-cache scratch filenames. The process ID
+and attempt number provide the uniqueness contract without allowing a manifest
+separator or platform-reserved character to become a directory or invalid
+filename; the final artifact still lands only at the `entry_dest_path` resolved
+above.
+
 This keeps the manifest authoritative without bundling runtime datasets that
 must remain user-consented. The packaged `lunco://` reader checks authored
 assets, packed cache, development cache, and the machine-global cache in that

@@ -411,6 +411,17 @@ pub const RECV_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// must still fail after a bounded amount of time.
 pub const DOWNLOAD_RETRIES: usize = 5;
 
+/// Build the opaque scratch-file name used for one download attempt.
+///
+/// Bundle keys include their manifest group (`fonts/dejavu_sans`) so errors
+/// identify the declaration uniquely. They are deliberately not part of this
+/// filename: the key is for diagnostics, while the process/attempt pair is
+/// already the uniqueness contract and works on every filesystem.
+#[cfg(not(target_arch = "wasm32"))]
+fn scratch_name(process_id: u32, attempt: u64) -> String {
+    format!("lunco_{process_id}_{attempt}")
+}
+
 /// Returns whether a failed request is worth trying again.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_retryable_download_error(error: &ureq::Error) -> bool {
@@ -602,7 +613,7 @@ pub fn download_asset_with_control(
         static ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     };
-    let scratch = format!("lunco_{key}_{}_{attempt}", std::process::id());
+    let scratch = scratch_name(std::process::id(), attempt);
     let install_parent = dest.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(install_parent)
         .map_err(|e| DownloadError::WriteFailed(install_parent.to_path_buf(), e.to_string()))?;
@@ -1375,6 +1386,14 @@ fn install_staged_path(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratch_name_is_opaque_and_cross_platform() {
+        let scratch = scratch_name(10_737, 0);
+        assert_eq!(scratch, "lunco_10737_0");
+        assert!(!scratch.contains('/'));
+        assert!(!scratch.contains('\\'));
+    }
 
     #[test]
     fn transient_downloads_use_five_bounded_retries() {
