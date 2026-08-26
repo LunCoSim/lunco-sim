@@ -1661,10 +1661,10 @@ const ROUTE_SAMPLE_SPACING_M: f64 = 2.0;
 /// (relatively expensive) rebuild only happens when the route, surface, or active
 /// leg changes — not while the rover moves.
 ///
-/// A route draws as two roles: the future green waypoint-to-waypoint path and a
-/// blue highlight for the current authored leg. Both change when
-/// `ReachedWaypoints` advances; the moving rover is intentionally not a route
-/// projection input.
+/// A route draws as two roles: the complete ordered green waypoint-to-waypoint
+/// path and a blue highlight for the current authored leg. The blue highlight
+/// changes when `ReachedWaypoints` advances; the moving rover is intentionally
+/// not a route projection input.
 #[derive(Component)]
 pub struct WaypointPathMesh {
     pub vessel: Entity,
@@ -1675,16 +1675,16 @@ pub struct WaypointPathMesh {
 /// Which half of a route a ribbon draws.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PathPart {
-    /// Future waypoint-to-waypoint route, starting at the current unresolved leg.
+    /// Complete ordered waypoint-to-waypoint route.
     Future,
     /// Current authored waypoint-to-waypoint leg.
     Remaining,
 }
 
-/// Split route geometry into its two visual roles: the future green
-/// waypoint-to-waypoint route and the single active blue authored leg.
-/// Visited legs are removed from both roles at the same transition that tints the
-/// corresponding marker gray. Keeping this pure makes that state transition
+/// Split route geometry into its two visual roles: the complete ordered green
+/// waypoint-to-waypoint route and the single active blue authored leg. Visited
+/// state advances the blue highlight and marker appearance, but never removes
+/// a point from the authored route. Keeping this pure makes the transition
 /// testable without a renderer or a Bevy world.
 fn route_ribbon_points(
     points: &[(DVec3, bool)],
@@ -1693,9 +1693,7 @@ fn route_ribbon_points(
     let next = active_index
         .filter(|&index| index < points.len())
         .or_else(|| points.iter().position(|(_, visited)| !visited));
-    let green = next
-        .map(|index| points[index..].iter().map(|(point, _)| *point).collect())
-        .unwrap_or_default();
+    let green = points.iter().map(|(point, _)| *point).collect();
     let blue = next
         .and_then(|index| {
             // The first leg has no previous authored waypoint. The route itself
@@ -2579,7 +2577,7 @@ mod tests {
     }
 
     #[test]
-    fn route_ribbon_keeps_connections_green_and_advances_blue_leg() {
+    fn route_ribbon_keeps_complete_ordered_route_green_and_advances_blue_leg() {
         let w0 = DVec3::new(0.0, 0.0, 0.0);
         let w1 = DVec3::new(10.0, 0.0, 0.0);
         let w2 = DVec3::new(20.0, 0.0, 0.0);
@@ -2591,7 +2589,7 @@ mod tests {
 
         let (green_after, blue_after) =
             route_ribbon_points(&[(w0, true), (w1, false), (w2, false)], Some(1));
-        assert_eq!(green_after, vec![w1, w2]);
+        assert_eq!(green_after, vec![w0, w1, w2]);
         assert_eq!(blue_after, vec![w0, w1]);
     }
 
