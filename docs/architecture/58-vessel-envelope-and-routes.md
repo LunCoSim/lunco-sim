@@ -191,9 +191,10 @@ The route line is a transient render annotation, not another authored USD geomet
 source. USD remains authoritative for waypoint identity, composed `xformOpOrder`
 transforms, and mission topology; the renderer projects those resolved points onto the
 terrain oracle and adds its own small surface clearance. That clearance is independent
-of the waypoint marker's authored sphere radius and child transform. When a leg is
-reached, the same latched state removes its route segment and tints its marker, so the
-old annotation cannot compete with the gray translucent marker or reassert green state.
+of the waypoint marker's authored sphere radius and child transform. The complete
+ordered route remains green so every authored connection stays visible; the same
+latched state tints reached markers and advances the blue active-leg highlight, so the
+execution cue cannot reassert a stale active leg.
 If any required sample is outside the analytic surface coverage, the route snapshot
 is omitted atomically rather than showing a misleading partial line. Once the
 authoritative route, target pose, terrain surface key, active frame, or visit state

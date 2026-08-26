@@ -40,10 +40,10 @@ leg on the authoritative terrain surface, and publishes the active-frame geometr
 The marker-root surface projection runs before that producer and is a separate
 change-gated owner; mesh and marker-look systems only consume the resulting snapshot.
 The clearance is owned by the annotation
-renderer; it never reuses a waypoint sphere's radius or local transform. Reached legs
-are removed from the annotation at the same state transition that changes their marker
-appearance, so an old route overlay cannot compete with a gray transparent marker while
-preserving USD as the sole owner of scene facts.
+renderer; it never reuses a waypoint sphere's radius or local transform. The complete
+ordered route remains visible while the same state transition changes reached-marker
+appearance and advances the active-leg highlight, preserving USD as the sole owner of
+scene facts.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 
