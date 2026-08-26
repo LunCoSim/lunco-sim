@@ -54,6 +54,10 @@ luncosim --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 3
 | `--offscreen` | Windowless GPU mode. The scene renders into an offscreen target image; the process exits when the recording drains. Also usable with `--api` for a windowless interactive instance (API `CaptureScreenshot` reads the offscreen target). |
 | `--record-size WxH` | Offscreen target resolution (default 1280x720 — the windowed default, so offscreen takes match windowed ones). |
 
+After the authored camera contract is present, offscreen recording holds virtual time
+for a one-second cold-GPU render warm-up before numbering frame 0. This fence lets
+pipelines finish compiling without emitting a clear-color first frame.
+
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
 explicit active presentation camera, an authored `LocalAvatar` presentation camera,
 or an authored camera track with a valid camera binding. The recorder consumes that

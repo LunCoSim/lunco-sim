@@ -728,10 +728,8 @@ fn execute_request(
 /// it available to COMMANDS too, and — crucially — **without `lunco-api` knowing what any of
 /// them are.**
 ///
-/// It used to know. The executor special-cased the literal string `"CaptureScreenshot"`, and
-/// carried a `PendingScreenshotRequest` resource and a `ScreenshotBackend` marker to go with
-/// it — a domain capability named inside the substrate, plus a hand-rolled second answer to
-/// "does this binary have that command?" that the type registry already gives you for free.
+/// The executor remains capability-agnostic: render-bound commands register their own deferred
+/// types, while binaries without the owning plugin follow the ordinary `CommandNotFound` path.
 ///
 /// A crate that owns such a command registers it:
 ///

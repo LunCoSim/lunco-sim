@@ -121,6 +121,21 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 #[derive(Component, Debug, Clone, Default)]
 pub struct ReachedWaypoints(pub std::collections::HashSet<String>);
 
+/// The authored facts the editor needs to present a route.
+///
+/// This is derived once from the mission XML. The editor must not independently
+/// parse the same tree for target identity, loop policy, and interpolation policy:
+/// the autopilot owns BT.CPP route semantics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuthoredRouteMetadata {
+    /// `drive_to` target identities in authored traversal order.
+    pub targets: Vec<String>,
+    /// Whether the authored root repeats the route.
+    pub loops: bool,
+    /// Whether route legs request Catmull-Rom interpolation.
+    pub smooth: bool,
+}
+
 /// Raw text of a `.btxml`/`.xml` behaviour tree — the file-backed twin of inline
 /// `info:sourceCode`, so a mission stays an editable, hot-reloadable file that Groot2
 /// can open.
@@ -266,6 +281,49 @@ fn legs_ref(root: &Value) -> Option<&Vec<Value>> {
         .and_then(|c| c.as_array())
 }
 
+/// Parse the authored BT.CPP route facts once for all presentation consumers.
+pub fn authored_route_metadata(xml: &str) -> Result<AuthoredRouteMetadata, String> {
+    let value = crate::btcpp_xml::xml_to_value(xml)?;
+    let mut targets = Vec::new();
+    collect_navigation_targets(&value, &mut targets);
+    let loops = match value.get("kind").and_then(Value::as_str) {
+        Some("forever" | "patrol") => true,
+        Some("repeat") => value
+            .get("times")
+            .and_then(Value::as_u64)
+            .is_some_and(|times| times > 1),
+        _ => false,
+    };
+    let smooth = legs_ref(&value).is_some_and(|legs| {
+        legs.iter()
+            .find_map(|leg| leg.get("smooth").and_then(Value::as_bool))
+            .unwrap_or(false)
+    });
+    Ok(AuthoredRouteMetadata {
+        targets,
+        loops,
+        smooth,
+    })
+}
+
+fn collect_navigation_targets(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if map.get("kind").and_then(Value::as_str) == Some("drive_to") {
+                if let Some(Value::String(target)) = map.get("target") {
+                    out.push(target.clone());
+                }
+            }
+            map.values()
+                .for_each(|child| collect_navigation_targets(child, out));
+        }
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_navigation_targets(item, out)),
+        _ => {}
+    }
+}
+
 pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String, String> {
     let leaf = serde_json::json!({ "kind": "drive_to", "target": prim_path });
 
@@ -372,29 +430,9 @@ pub fn waypoint_dwell(xml: &str, target: &str) -> Option<f64> {
         .and_then(|d| d.as_f64())
 }
 
-/// Whether the route is authored as a **smooth** (Catmull-Rom) path rather than
-/// straight legs.
-///
-/// Conceptually route-level, but stored as a `smooth` attribute on each `drive_to`
-/// LEG rather than on the `Sequence`: the BT.CPP parser deliberately drops unknown
-/// attributes from known control elements (that's what keeps Groot's `name`/`_uid`
-/// decorations out of the spec), so a flag on `<Sequence>` would not survive the XML
-/// round-trip. The legs are `<Action ID="drive_to">`, whose ports ARE preserved.
-/// The whole route is one path, so the flag is read from the first leg and written to
-/// all of them.
-pub fn route_is_smooth(xml: &str) -> bool {
-    crate::btcpp_xml::xml_to_value(xml)
-        .ok()
-        .and_then(|root| {
-            let legs = legs_ref(&root)?;
-            legs.iter()
-                .find_map(|l| l.get("smooth").and_then(|s| s.as_bool()))
-        })
-        .unwrap_or(false)
-}
-
 /// Toggle the whole route between smooth (arcs through the waypoints) and straight
-/// legs. See [`route_is_smooth`] for why the flag rides on the legs.
+/// legs. The route-level flag rides on each `drive_to` leg because the BT.CPP parser
+/// preserves those ports while dropping unknown attributes from control elements.
 pub fn set_route_smooth(xml: &str, smooth: bool) -> Result<String, String> {
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
     let legs = legs_mut(&mut root)?;
@@ -566,7 +604,7 @@ fn expand_editor_route_in_place(v: &mut Value) {
         else {
             return;
         };
-        // Route-level flag, carried per-leg (see `route_is_smooth`). Consumed here —
+        // Route-level flag, carried per-leg (see `AuthoredRouteMetadata::smooth`). Consumed here —
         // it is not a `BehaviorSpec` field.
         smooth |= ch.get("smooth").and_then(|s| s.as_bool()).unwrap_or(false);
         ctrl.push((
@@ -1061,14 +1099,41 @@ mod editor_tests {
     #[test]
     fn smooth_flag_round_trips_through_xml() {
         let xml = route(&["1;0;1", "2;0;2"]);
-        assert!(!route_is_smooth(&xml));
+        assert!(!authored_route_metadata(&xml).unwrap().smooth);
         let on = set_route_smooth(&xml, true).unwrap();
         assert!(
-            route_is_smooth(&on),
+            authored_route_metadata(&on).unwrap().smooth,
             "smooth must survive the XML round-trip"
         );
         let off = set_route_smooth(&on, false).unwrap();
-        assert!(!route_is_smooth(&off));
+        assert!(!authored_route_metadata(&off).unwrap().smooth);
+    }
+
+    #[test]
+    fn authored_route_metadata_is_the_single_route_semantics_read() {
+        let xml = set_route_smooth(&route(&["/Route/W0", "/Route/W1"]), true).unwrap();
+        let metadata = authored_route_metadata(&xml).unwrap();
+
+        assert_eq!(metadata.targets, vec!["/Route/W0", "/Route/W1"]);
+        assert!(metadata.loops);
+        assert!(metadata.smooth);
+    }
+
+    #[test]
+    fn authored_route_metadata_ignores_non_navigation_targets() {
+        let xml = crate::btcpp_xml::value_to_xml(&serde_json::json!({
+            "kind": "sequence",
+            "children": [
+                {"kind": "drive_to", "target": "/Route/W0"},
+                {"kind": "run_tool", "target": "camera"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            authored_route_metadata(&xml).unwrap().targets,
+            vec!["/Route/W0"]
+        );
     }
 
     #[test]

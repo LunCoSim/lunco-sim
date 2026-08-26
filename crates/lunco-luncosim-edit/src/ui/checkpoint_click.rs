@@ -29,8 +29,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
     append_waypoint_leaf, catmull_rom_path, insert_waypoint_after, remove_waypoint_leaf,
-    route_is_smooth, set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints,
-    TargetBindings,
+    set_route_smooth, set_waypoint_dwell, BehaviorXml, ReachedWaypoints, TargetBindings,
 };
 use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
@@ -41,17 +40,15 @@ use lunco_core::{
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SceneCamera, SurfaceAlpha};
+use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
 use lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding;
+use lunco_scene_commands::SelectedEntities;
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{
     LayerId, UsdOp, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM, WAYPOINT_ROUTE_SCOPE,
 };
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
-use serde_json::Value;
-
-use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
-use lunco_scene_commands::SelectedEntities;
 
 fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
@@ -752,7 +749,8 @@ pub fn draw_waypoint_context_menu(
     // Buffer the dwell outside the closure: the closure needs `&mut` to it while
     // `menu_state` is still read afterwards.
     let mut dwell = menu_state.dwell;
-    let mut smooth = route_is_smooth(&xml.0);
+    let mut smooth = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0)
+        .is_ok_and(|metadata| metadata.smooth);
     let mut edited: Option<String> = None;
     // The marker prim a Delete must also un-author, alongside its mission leg.
     let mut deleted_marker: Option<String> = None;
@@ -928,53 +926,11 @@ pub fn draw_waypoint_context_menu(
     }
 }
 
-fn route_targets(
-    xml: Option<&BehaviorXml>,
-    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
-) -> Vec<String> {
-    if let Some(xml) = xml {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
-            return Vec::new();
-        };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
-        // Authored XML owns the route whenever it exists. An empty or malformed
-        // authored tree must not silently fall through to a stale runtime spec.
-        return targets;
-    }
-    spec.and_then(|spec| spec.patrol_waypoints())
-        .map(|waypoints| (0..waypoints.len()).map(runtime_waypoint_key).collect())
-        .unwrap_or_default()
-}
-
-fn route_loops(
-    xml: Option<&BehaviorXml>,
-    spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
-) -> bool {
-    if let Some(xml) = xml {
-        // XML is the authored route and therefore owns topology when both the
-        // authored tree and its derived runtime spec are present.
-        return lunco_autopilot::btcpp_xml::xml_to_value(&xml.0)
-            .ok()
-            .map(|value| authored_route_loops(&value))
-            .unwrap_or(false);
-    }
-
-    spec.is_some_and(|spec| match &spec.0 {
+fn runtime_route_loops(spec: &lunco_autopilot::AutopilotBehaviorSpec) -> bool {
+    match &spec.0 {
         lunco_autopilot::BehaviorSpec::Forever { .. }
         | lunco_autopilot::BehaviorSpec::Patrol { .. } => true,
         lunco_autopilot::BehaviorSpec::Repeat { times, .. } => *times > 1,
-        _ => false,
-    })
-}
-
-fn authored_route_loops(value: &Value) -> bool {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("forever" | "patrol") => true,
-        Some("repeat") => value
-            .get("times")
-            .and_then(Value::as_u64)
-            .is_some_and(|times| times > 1),
         _ => false,
     }
 }
@@ -1060,25 +1016,6 @@ fn route_execution(
             )
         })
         .unwrap_or_default()
-}
-
-fn collect_targets(v: &Value, out: &mut Vec<String>) {
-    match v {
-        Value::Object(map) => {
-            // A route target is a navigation leaf, not every arbitrary BT.CPP
-            // node that happens to carry a field named `target`.
-            if map.get("kind").and_then(Value::as_str) == Some("drive_to") {
-                if let Some(Value::String(s)) = map.get("target") {
-                    out.push(s.clone());
-                }
-            }
-            for child in map.values() {
-                collect_targets(child, out);
-            }
-        }
-        Value::Array(items) => items.iter().for_each(|i| collect_targets(i, out)),
-        _ => {}
-    }
 }
 
 /// One resolved waypoint in the derived route view. The key remains the
@@ -1276,12 +1213,10 @@ fn resolve_marker(
 ) -> Option<(Entity, String, usize, bool)> {
     let path = &q_prim.get(marker).ok()?.path;
     for (vessel, xml, reached) in q_vessels.iter() {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+        let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
             continue;
         };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
-        if let Some(index) = targets.iter().position(|t| t == path) {
+        if let Some(index) = metadata.targets.iter().position(|t| t == path) {
             let passed = reached.map(|r| r.0.contains(path)).unwrap_or(false);
             return Some((vessel, path.clone(), index, passed));
         }
@@ -1299,12 +1234,10 @@ fn vessel_for_target<'a>(
     target: &str,
 ) -> Option<(Entity, &'a BehaviorXml, &'a UsdPrimPath)> {
     let mut matches = q_vessel.iter().filter(|(_, xml, _)| {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+        let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
             return false;
         };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
-        targets.iter().any(|t| t == target)
+        metadata.targets.iter().any(|t| t == target)
     });
     let first = matches.next()?;
     matches.next().is_none().then_some(first)
@@ -1670,12 +1603,10 @@ fn has_authored_movement_route(
     spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
 ) -> bool {
     if let Some(xml) = xml {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+        let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
             return false;
         };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
-        return !targets.is_empty();
+        return !metadata.targets.is_empty();
     }
     spec.is_some_and(|spec| spec.0.has_motion())
 }
@@ -2046,7 +1977,13 @@ pub(crate) fn rebuild_waypoint_route_projection(
 
     for (vessel, xml, spec, bindings, reached) in q_vessels.iter() {
         let (targets, points, smooth, closed, entities) = if let Some(xml) = xml {
-            let targets = route_targets(Some(xml), spec);
+            // Authored XML is parsed once by the autopilot owner. Its route
+            // metadata remains authoritative even while a derived runtime spec
+            // is present, and malformed XML is an explicit no-route state.
+            let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
+                continue;
+            };
+            let targets = metadata.targets;
             let Some(bindings) = bindings else { continue };
             if targets.is_empty() {
                 continue;
@@ -2071,8 +2008,8 @@ pub(crate) fn rebuild_waypoint_route_projection(
             (
                 targets,
                 resolved.iter().map(|(point, _)| *point).collect::<Vec<_>>(),
-                route_is_smooth(&xml.0),
-                route_loops(Some(xml), spec),
+                metadata.smooth,
+                metadata.loops,
                 resolved
                     .into_iter()
                     .map(|(_, entity)| Some(entity))
@@ -2090,7 +2027,7 @@ pub(crate) fn rebuild_waypoint_route_projection(
                 (0..points.len()).map(runtime_waypoint_key).collect(),
                 points,
                 false,
-                route_loops(None, Some(spec)),
+                runtime_route_loops(spec),
                 vec![None; waypoints.len()],
             )
         } else {
@@ -2412,8 +2349,8 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        has_authored_movement_route, resample_polyline, route_loops, route_ribbon_points,
-        route_targets, route_visual_state, select_ground_point, BehaviorXml, ReachedWaypoints,
+        has_authored_movement_route, resample_polyline, route_ribbon_points, route_visual_state,
+        runtime_route_loops, select_ground_point, BehaviorXml, ReachedWaypoints,
         WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
@@ -2506,6 +2443,26 @@ mod tests {
     }
 
     #[test]
+    fn malformed_authored_xml_does_not_fall_back_to_a_stale_runtime_route() {
+        let malformed = BehaviorXml("<broken".to_string());
+        let stale_runtime = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
+            waypoints: vec![PatrolWaypoint::at([1.0, 0.0, 0.0])],
+            speed: 0.5,
+            radius: 1.0,
+            dwell: 0.0,
+        });
+
+        assert!(
+            lunco_autopilot::usd_tree::authored_route_metadata(&malformed.0).is_err(),
+            "malformed authored data must remain an explicit parse failure"
+        );
+        assert!(!has_authored_movement_route(
+            Some(&malformed),
+            Some(&stale_runtime)
+        ));
+    }
+
+    #[test]
     fn runtime_waypoint_uses_the_catalog_asset_identity() {
         assert_eq!(
             lunco_assets::engine_asset_rel(WAYPOINT_MARKER_ASSET),
@@ -2553,7 +2510,12 @@ mod tests {
             .unwrap(),
         );
 
-        assert_eq!(route_targets(Some(&xml), None), vec!["/Route/W0"]);
+        assert_eq!(
+            lunco_autopilot::usd_tree::authored_route_metadata(&xml.0)
+                .unwrap()
+                .targets,
+            vec!["/Route/W0"]
+        );
     }
 
     #[test]
@@ -2600,8 +2562,16 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert!(!route_loops(Some(&sequence), None));
-        assert!(route_loops(Some(&forever), None));
+        assert!(
+            !lunco_autopilot::usd_tree::authored_route_metadata(&sequence.0)
+                .unwrap()
+                .loops
+        );
+        assert!(
+            lunco_autopilot::usd_tree::authored_route_metadata(&forever.0)
+                .unwrap()
+                .loops
+        );
     }
 
     #[test]
@@ -2619,8 +2589,8 @@ mod tests {
             radius: 1.0,
             dwell: 0.0,
         });
-        assert!(!route_loops(None, Some(&one_way)));
-        assert!(route_loops(None, Some(&patrol)));
+        assert!(!runtime_route_loops(&one_way));
+        assert!(runtime_route_loops(&patrol));
     }
 
     #[test]

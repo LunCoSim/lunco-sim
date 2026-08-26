@@ -143,7 +143,7 @@ Not everything visual is *appearance*. Three things had no honest intent represe
 - **`terrain_maps`** — the derived-layer bind onto the terrain material that `lunco-usd-sim` authors
   asynchronously (no component to restate).
 
-Screenshots do **not** live there either — but not for the reason this document used to give.
+Screenshots do **not** live there either.
 `CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a
 `render` feature that was **on by default**. So render-free was the *non-default* path, every consumer
 had to remember `default-features = false`, and **three forgot** (`lunco-doc-bevy`,

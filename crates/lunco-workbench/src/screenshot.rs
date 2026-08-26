@@ -32,13 +32,9 @@
 //! (`lunco_api::executor::register_deferred_command`) and answers on the request's
 //! correlation id when the capture lands.
 //!
-//! That mechanism is generic and lives in the substrate; `lunco-api` does not know this
-//! command exists. It used to: the executor special-cased the literal string
-//! `"CaptureScreenshot"` and carried a bespoke `PendingScreenshotRequest` + a
-//! `ScreenshotBackend` marker — the latter a hand-rolled second answer to "does this binary
-//! have that command?", which the type registry already answers for every other command.
-//! A binary without this plugin never registers the type, so the request resolves as an
-//! ordinary `CommandNotFound` — the same way any other absent command does.
+//! That mechanism is generic and lives in the substrate; `lunco-api` does not know these
+//! render-bound commands. A binary without this plugin never registers the types, so requests
+//! resolve as ordinary `CommandNotFound` errors.
 
 use std::io::Cursor;
 
@@ -61,10 +57,8 @@ use lunco_tools_bevy::{register_closure_tool, ToolResult};
 /// not advertise a command it cannot execute — `DiscoverSchema` (and hence the MCP tool list
 /// and the generated command reference) only sees it when this plugin is added.
 ///
-/// The declared fields are the ones the handler actually reads — which they once were not.
-/// The registered type was `CaptureScreenshot {}`, *no fields*, while the executor pulled
-/// `save_to_file` / `path` / `region` straight out of the raw params. The schema that MCP
-/// agents and `commands-reference.md` are generated from advertised a parameterless command.
+/// The reflected fields are the executable API contract used by the handler and generated
+/// command schema.
 #[Command(default)]
 pub struct CaptureScreenshot {
     /// Write the PNG to `path` instead of returning the bytes to the caller.
@@ -115,7 +109,10 @@ impl Plugin for ScreenshotPlugin {
             )
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
-            .add_systems(Last, drive_offline_clock);
+            .add_systems(
+                Last,
+                (dispatch_pending_texture_readbacks, drive_offline_clock).chain(),
+            );
 
         // `init_resource` first: the registry is shared by every plugin that
         // publishes a query, so whether it already exists depends on plugin
@@ -164,6 +161,40 @@ struct PendingCapture {
     completion_correlation_id: Option<u64>,
     save_path: Option<String>,
     region: Option<(u32, u32, u32, u32)>,
+}
+
+/// An API image-target capture requested during command dispatch.
+///
+/// Texture readback must be inserted in `Last`, after the main-world camera and render-target
+/// state has been updated for the frame. The offline recorder already owns that boundary; API
+/// captures use this pending component to reach the same boundary instead of sampling the
+/// target before the camera has rendered it.
+#[derive(Component, Debug, Clone)]
+struct PendingTextureReadback {
+    target: Handle<bevy::image::Image>,
+    request: PendingCapture,
+}
+
+fn queue_texture_readback(
+    commands: &mut Commands,
+    target: Handle<bevy::image::Image>,
+    request: PendingCapture,
+) {
+    commands.spawn(PendingTextureReadback { target, request });
+}
+
+/// Dispatch API image-target readbacks at the same schedule boundary as offline recording.
+fn dispatch_pending_texture_readbacks(
+    pending: Query<(Entity, &PendingTextureReadback)>,
+    mut commands: Commands,
+) {
+    for (entity, pending) in &pending {
+        commands.entity(entity).insert((
+            Readback::texture(pending.target.clone()),
+            pending.request.clone(),
+        ));
+        commands.entity(entity).remove::<PendingTextureReadback>();
+    }
 }
 
 /// An ordinary command handler. It arms the capture and returns; the answer is sent by
@@ -231,11 +262,10 @@ fn on_capture_screenshot(
         }
     };
 
-    // Spawned HERE, not by a domain-side observer. It used to be the latter, and that
-    // observer only shipped in `lunco-avatar` — so binaries that didn't pull it in (lunica,
-    // hello_workbench) never produced a screenshot at all: curl simply hung.
+    // Spawned HERE, next to the render-bound command implementation, so every binary that
+    // installs this plugin uses the same capture and response path.
     if let Some(target) = capture_target {
-        commands.spawn((Readback::texture(target.0.clone()), request));
+        queue_texture_readback(&mut commands, target.0.clone(), request);
     } else {
         commands.spawn((Screenshot::primary_window(), request));
     }
@@ -556,7 +586,7 @@ fn on_capture_from_camera(
         // replacing the image's output attachment with Screenshot's intermediate target loses
         // HDR camera output on the windowless path.
         bevy::camera::RenderTarget::Image(image) => {
-            commands.spawn((Readback::texture(image.handle.clone()), request));
+            queue_texture_readback(&mut commands, image.handle.clone(), request);
             return;
         }
         bevy::camera::RenderTarget::TextureView(texture_view) => {
@@ -755,6 +785,9 @@ pub struct OfflineRecordingState {
     /// Set by `deliver_offline_frame` when a frame lands; consumed by
     /// `drive_offline_clock` to schedule exactly one `1/fps` time step.
     pub frame_just_captured: bool,
+    /// Cold-GPU warm-up fence for offscreen recording. No simulation time or
+    /// output frame is consumed while this is active.
+    pub render_warmup_until: Option<web_time::Instant>,
     /// Primary window present mode as it was before recording uncapped it,
     /// restored on stop.
     pub prev_present_mode: Option<bevy::window::PresentMode>,
@@ -1078,6 +1111,7 @@ fn activate_recording(
     keep_awake: &mut lunco_core::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
+    offscreen: bool,
 ) {
     let dir = pending.output_dir.clone();
     state.active = true;
@@ -1091,6 +1125,11 @@ fn activate_recording(
     // time by exactly one frame before requesting the next capture.
     state.frame_just_captured = false;
     state.prev_virtual_max_delta = None;
+    // A camera can be structurally ready before its first offscreen render has
+    // completed pipeline compilation. Hold virtual time and frame numbering for
+    // one render-second so frame 0 cannot become a clear-color race on a cold GPU.
+    state.render_warmup_until =
+        offscreen.then(|| web_time::Instant::now() + std::time::Duration::from_secs(1));
 
     // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
     // a missing encoder must demote the recording to a PNG sequence with a loud
@@ -1179,6 +1218,7 @@ fn teardown_recording(
     state.active = false;
     state.is_waiting_for_frame = false;
     state.frame_just_captured = false;
+    state.render_warmup_until = None;
 
     // Video mode: EOF the encoder and wait for the container trailer. When
     // this returns the take is a complete, playable file — synchronous, like
@@ -1447,6 +1487,7 @@ fn start_recording_when_scene_ready(
         &mut keep_awake,
         &mut windows,
         &mut commands,
+        capture_target.is_some(),
     );
     commands.remove_resource::<PendingShotStart>();
 }
@@ -1518,6 +1559,17 @@ fn drive_offline_clock(
 
     if !state.active {
         return;
+    }
+
+    if let Some(until) = state.render_warmup_until {
+        if web_time::Instant::now() < until {
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::ZERO,
+            ));
+            return;
+        }
+        state.render_warmup_until = None;
+        info!("[offline-record] offscreen render warm-up complete; capturing frame 0");
     }
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);

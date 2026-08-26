@@ -11,7 +11,9 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
+use lunco_autopilot::usd_tree::{
+    append_waypoint_leaf, authored_route_metadata, BehaviorXml, ReachedWaypoints,
+};
 use lunco_core::{
     on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
     TelemetryEvent, TelemetryValue, TriggerZone,
@@ -366,18 +368,16 @@ pub fn mark_reached_waypoints_on_enter(
                             let Ok((_, Some(xml))) = q_vessels.get(curr) else {
                                 continue;
                             };
-                            let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+                            let Ok(metadata) = authored_route_metadata(&xml.0) else {
                                 continue;
                             };
-                            let mut targets = Vec::new();
-                            collect_targets(&value, &mut targets);
-                            if !targets.iter().any(|target| target == marker_path) {
+                            if !metadata.targets.iter().any(|target| target == marker_path) {
                                 continue;
                             }
                             arrivals.push(Arrival::Authored {
                                 marker_path: marker_path.to_string(),
                                 vessel: curr,
-                                targets,
+                                targets: metadata.targets,
                             });
                         }
                         resolved = true;
@@ -467,27 +467,6 @@ fn runtime_waypoint_is_next(index: usize, reached: &std::collections::HashSet<St
         next += 1;
     }
     index == next
-}
-
-fn collect_targets(value: &serde_json::Value, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            if map.get("kind").and_then(serde_json::Value::as_str) == Some("drive_to") {
-                if let Some(target) = map.get("target").and_then(serde_json::Value::as_str) {
-                    out.push(target.to_string());
-                }
-            }
-            for child in map.values() {
-                collect_targets(child, out);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                collect_targets(item, out);
-            }
-        }
-        _ => {}
-    }
 }
 
 register_commands!(on_add_runtime_waypoint);

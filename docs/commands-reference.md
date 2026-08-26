@@ -1567,10 +1567,8 @@ type and literal, journals the edit, and re-composes the live stage.
  not advertise a command it cannot execute — `DiscoverSchema` (and hence the MCP tool list
  and the generated command reference) only sees it when this plugin is added.
 
- The declared fields are the ones the handler actually reads — which they once were not.
- The registered type was `CaptureScreenshot {}`, *no fields*, while the executor pulled
- `save_to_file` / `path` / `region` straight out of the raw params. The schema that MCP
- agents and `commands-reference.md` are generated from advertised a parameterless command.
+ The reflected fields are the executable API contract used by the handler and generated command
+ schema.
 
 - *defined in:* `crates/lunco-workbench/src/screenshot.rs`
 

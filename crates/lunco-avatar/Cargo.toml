@@ -11,13 +11,8 @@ license.workspace = true
 # not be: the camera *pipeline* (`Camera3d`, tonemapping, MSAA, bloom) is attached by
 # `lunco-render-bevy` from the `lunco_render::SceneCamera` intent this crate spawns.
 #
-# `screenshot.rs` was DELETED for the same reason: a render-world readback has no
-# render-free form. Its dead `CaptureScreenshot` duplicate is gone, and the live
-# `CaptureFromCamera` (the `science::take_photo` instrument) moved WITH its observer
-# and its tool registration to `lunco-workbench::screenshot`, which is where the one
-# `CaptureScreenshot` lives — a binary that cannot render cannot photograph, and now
-# says so by simply not registering the command.
-# See docs/architecture/render-decoupling.md.
+# Render-bound screenshots and offline recording live in `lunco-workbench`; keeping them out
+# preserves this crate's render-free camera/interaction dependency boundary.
 bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
 # Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
 # should look" — stated without naming a render pipeline.

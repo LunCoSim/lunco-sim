@@ -167,9 +167,13 @@ derive the route from the same mission data that drives the vehicle. The editor'
 progress, and `sync_route_visual_meshes`; it is real 3D geometry in the active
 physics frame, not the camera-path preview's screen-space presentation.
 
-`rebuild_waypoint_route_projection` is change-gated. It reads authored XML through
-the exact `TargetBindings` map (runtime patrols use their explicit runtime binding),
-resolves positions in the active physics grid, and publishes one atomic snapshot.
+`rebuild_waypoint_route_projection` is change-gated. The autopilot-owned
+`AuthoredRouteMetadata` read derives target identity, loop policy, and smoothness
+from the mission XML once; the editor then uses the exact `TargetBindings` map
+(runtime patrols use their explicit runtime binding), resolves positions in the
+active physics grid, and publishes one atomic snapshot.
+Malformed or empty authored XML is an explicit unresolved route; it never falls
+back to an older derived runtime spec.
 `project_waypoint_markers_to_surface` is a separate change-gated owner for the
 runtime marker root, so the dome and arrival sensor remain on the same surface
 without coupling marker transforms to mesh reconciliation. Meshes and marker looks

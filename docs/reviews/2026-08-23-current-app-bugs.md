@@ -286,3 +286,50 @@ Twin with focused and production headless verification. Remaining acceptance is
 limited to the platform-native Windows icon inspection and any additional
 cross-platform window captures; existing unrelated Twin changes remain
 untouched.
+
+## Verification addendum — 2026-08-26
+
+The report was rerun after a cargo-clean recovery and the `tutorials` branch
+integration. The production checkout now contains merge commit `9493a371b`
+(`tutorials` is an ancestor of `main`), with no merge conflicts or whitespace
+errors.
+
+The Summer Space School presentation path is production-verified. A fresh
+windowed `target/debug/luncosim` run reached `/api/ready` with
+`pending_count: 0`; `SceneCameraAudit` found the unique authored
+`/Traverse/Avatar` `LocalAvatar` camera; and `CaptureScreenshot` produced a
+2561x1553 PNG with non-clear pixels (`min=0`, `max=62708`). The startup UI no
+longer opens the heavy rover-build/Modelica presentation by default.
+
+The offscreen clear-frame defect had two independent causes. Cold GPU pipelines
+could consume the first capture before they were ready, and interactive API
+image captures queued `Readback::texture` before the render-target write for the
+frame. The recorder now applies a one-second offscreen warm-up before frame 0,
+and API image captures are queued and dispatched in `Last`, sharing the same
+render boundary as offline recording. Fresh production checks passed for both
+paths: a 10-frame 640x360 take exited after draining with non-clear pixels
+(`min=0`, `max=65535`), while interactive API `CaptureScreenshot` and
+`CaptureFromCamera` each produced a 1280x720 non-clear PNG. Typed `Exit` closed
+the API session and released its port.
+
+The route projection cutover is now single-owner: `lunco-autopilot` exposes
+`AuthoredRouteMetadata` for target identity, loop policy, and smoothness. The
+editor and arrival handling consume it; they no longer carry duplicate XML
+parsers or fall back from malformed authored XML to a stale runtime route. The
+focused tests cover malformed authored data, navigation-only target extraction,
+route completion, and the no-blue-first-leg contract.
+
+The external Twin remains a separate dirty worktree and was not folded into the
+engine merge. Its `sim/rovers/lunokhod2.usda` currently authors eight wheel
+attachment/vehicle API pairs, eight motor shaft-speed connections, and eight
+wheel-speed inputs into the electrical wrapper. The authored Modelica
+`LunCo.Electrical.DCMotor` contract consumes that measured speed. Those checks
+are source-backed; the file still contains unrelated pre-existing Twin edits
+and must be committed/owned separately.
+
+Focused verification after the merge: autopilot 28/28, editor 49/49, scene
+commands 54/54, terrain surface 102/102, and workbench camera-capture 2/2.
+The production UI build, `cargo fmt --all -- --check`, and `git diff --check`
+also pass. Remaining limits are the same platform-native Windows icon
+inspection and untested cross-platform window captures; generic authored camera
+track capture remains outside this Twin-specific runtime proof.

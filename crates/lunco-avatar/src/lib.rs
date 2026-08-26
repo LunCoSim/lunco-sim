@@ -51,40 +51,9 @@ use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 pub mod commands;
 pub use commands::*;
-// `screenshot.rs` was DELETED here (2026-07-13, render decoupling): it named
-// `bevy::render::view::screenshot::Screenshot`, a genuine render-world readback with
-// no render-free form, which made this crate link `bevy_render`.
-//
-// Two things lived in it, and they went different ways:
-//
-// - `CaptureScreenshot` was a DEAD duplicate — the executor matched the command by NAME
-//   and returned early, so this crate's `#[Command]` + observer was unreachable, and it
-//   declared `CaptureScreenshot {}` (no fields) while the real one takes
-//   `save_to_file`/`path`/`region`, so the reflected schema behind the MCP tool list was
-//   lying. It is simply gone; the one live implementation is `lunco-workbench::screenshot`.
-//
-// - `CaptureFromCamera` — the typed command behind the `science::take_photo` instrument —
-//   is LIVE, but it needs `Camera3d` and a render-world `Screenshot`, neither of which
-//   exists in a render-free crate. It moved BODILY to `lunco-workbench::screenshot`,
-//   taking its observer AND its `register_closure_tool` registration with it (the closure
-//   only needs the command type, so it belongs next to it). `WorkbenchPlugin` installs
-//   both, which means every binary that can render can photograph, and a headless one
-//   neither registers the command nor advertises the tool — instead of registering a
-//   `take_photo` that silently captures nothing.
-// See docs/architecture/render-decoupling.md ("What has no intent form").
-//
-// `recording.rs` was DELETED here for the same reason, one step further along.
-// It wrapped Bevy's `EasyScreenRecordPlugin` (libx264 via `bevy_dev_tools`)
-// behind an optional `recording` cargo feature. The feature was never enabled in
-// any build we ship or record with, so what shipped was a control surface —
-// settings section, `ToggleRecording`/`StartRecording`/`StopRecording`, a
-// Ctrl+Shift+R hotkey — that captured nothing and logged a warning saying so.
-//
-// The live capture path is `lunco-workbench::screenshot`'s OFFLINE recorder: it
-// owns the clock, writes one PNG per captured frame at a fixed rate, and is
-// driven from scenario scripts by the `shot_*` prelude verbs. That is a
-// deterministic frame sequence, which is what film work needs; a realtime
-// wall-clock encoder is not a substitute for it.
+// Render-bound screenshots and deterministic offline recording are owned by
+// `lunco-workbench::screenshot`; this crate remains responsible for camera intent,
+// possession, and interaction, without linking the render-world readback pipeline.
 mod intents;
 
 /// Upper bound on parent-chain walks when resolving an entity's owning Grid
@@ -6004,9 +5973,8 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
 }
 
 // Wires the avatar's commands into `register_all_commands(app)`, called from
-// LunCoAvatarPlugin::build(). (`CaptureScreenshot` used to be first in this list; it
-// was a dead duplicate and is gone — the one live registration is `lunco-api`'s.
-// See the `screenshot` note at the top of this file.)
+// LunCoAvatarPlugin::build(). Render-bound capture commands are registered by
+// `lunco-workbench::screenshot` with the renderer that owns their implementation.
 register_commands!(
     on_show_notification,
     on_set_camera_input,
