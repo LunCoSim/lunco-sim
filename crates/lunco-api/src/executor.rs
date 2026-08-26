@@ -1299,7 +1299,7 @@ mod id_codec_tests {
     }
 
     #[test]
-    fn resolve_handles_field_off_the_old_heuristic_list() {
+    fn resolve_handles_entity_typed_vessel_field() {
         let (reg, ent, e, gid) = setup();
         let mut v = json!({ "vessel": gid.get() });
         resolve_command_ids(&mut v, TypeId::of::<TVessel>(), &reg, &ent);
