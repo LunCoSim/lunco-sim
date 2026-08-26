@@ -92,6 +92,25 @@ fn on_tick(me) {
 
     let f = [];
 
+    let missing_epoch = by_rule(findings, "epoch-api-missing-time");
+    f.push(t_true(missing_epoch.len() == 2,
+        "epoch-api-missing-time fired " + missing_epoch.len() +
+        " time(s), expected exactly 2 (/LintSelftest/MissingEpoch and ZeroEpoch)"));
+    if missing_epoch.len() == 2 {
+        f.push(t_true(mentions(missing_epoch, "/LintSelftest/MissingEpoch"),
+            "epoch-api-missing-time did not name the opt-in without an authored epoch"));
+        f.push(t_true(mentions(missing_epoch, "/LintSelftest/ZeroEpoch"),
+            "epoch-api-missing-time did not reject the schema's zero compatibility default"));
+        f.push(t_true(missing_epoch[0].severity == "error",
+            "epoch-api-missing-time is severity " + missing_epoch[0].severity +
+            ", expected error because orbital time must not be implicit"));
+        f.push(t_true(missing_epoch[0].message.contains("lunco:time:epochJd"),
+            "epoch-api-missing-time did not name the field the author must set"));
+    }
+    f.push(t_true(!mentions(findings, "/LintSelftest/AuthoredEpoch"),
+        "a finding names /LintSelftest/AuthoredEpoch — an explicit epoch on the " +
+        "LunCoEpochAPI opt-in is the valid control"));
+
     // The motor bug, by rule id and by subject.
     let nested = by_rule(findings, "nested-body-no-joint");
     f.push(t_true(nested.len() == 1,

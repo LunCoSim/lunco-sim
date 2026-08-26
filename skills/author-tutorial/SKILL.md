@@ -1,23 +1,16 @@
 ---
 name: author-tutorial
 description: >
-  How to author an interactive tutorial / guided lesson / onboarding flow in
-  LunCoSim. USE THIS SKILL whenever the user asks, in plain words, things like:
-  "make a tutorial that teaches X", "add a guided lesson for the rover / the
-  Modelica workbench", "walk a new user through Y step by step", "add an
-  onboarding flow / first-run experience", "spotlight this button and explain
-  it", or "add an objectives checklist that advances as the user does things".
-  Any request to teach a user how to do something in-app, guided, belongs here.
-  (For the agent mid-code: a `mission(me)` / `objective(...)`, `coach_step`,
-  `hint` / `spotlight`, `requires_event:"cmd:*"`, `register_tutorial`,
-  `StartTutorial`, `TutorialProgress`, or a file under `assets/tutorials/`.)
-  Project-specific and non-obvious: a lesson is declared by one curriculum USD
-  prim with a script and optional world payload, objectives advance on REAL user actions (a `cmd:*` bus
-  event or a `done` predicate — never a timer), the HUD auto-publishes from
-  `mission(me)`, and adding one is two steps (drop a `.rhai`, register a row) —
-  no Rust per lesson. Builds on author-scenario (a tutorial is a scenario with a
-  teaching HUD). Reference impls: assets/tutorials/sandbox/first_drive.rhai,
-  assets/tutorials/lunica/*.rhai. Design: specs/011-interactive-tutorials/.
+  Author an interactive tutorial, guided lesson, onboarding flow, coach-mark
+  tour, or objectives checklist in LunCoSim. USE THIS SKILL for requests such as
+  "teach X", "walk a user through Y", "add first-run onboarding", "spotlight
+  this button", or "advance an objective after a real action". For the agent
+  mid-code: `mission`, `objective`, `coach_step`, `hint`, `spotlight`,
+  `requires_event:"cmd:*"`, `StartTutorial`, `TutorialProgress`, or a file under
+  `assets/tutorials/`. A lesson is one curriculum USD prim with a Rhai script
+  and optional payload; objectives use real events/state, never timers. Adding a
+  lesson is data plus Rhai, not Rust. Reference `assets/tutorials/sandbox/` and
+  `specs/011-interactive-tutorials/`.
 ---
 
 # Authoring tutorials
@@ -66,6 +59,17 @@ def Scope "FirstDrive" (
 
 The lesson's IDENTITY is its prim path, so `next` is a real relationship rather
 than an id string that nothing checks.
+
+Choose the payload's lighting/time contract before writing lesson policy. Use a
+fixed authored `DistantLight` and omit `LunCoEpochAPI`/`SolarSystem` for UI,
+onboarding, and basic-control lessons; use `LunCoEpochAPI` with an explicit
+`lunco:time:epochJd` plus the `SolarSystem` reference for astronomy-dependent
+lessons; reuse an existing scene when scenery is not the subject; and omit the
+payload for a UI-only lesson. The selection and current corpus are maintained
+in [`assets/tutorials/README.md`](../../assets/tutorials/README.md) and the
+scene-building workflow in [`build-usd-scene`](../build-usd-scene/SKILL.md).
+An applied epoch API without its authored epoch is rejected by the USD rule
+`epoch-api-missing-time`.
 
 **DECLARE THE WORLD, NEVER OPEN IT.** The launcher mounts the `payload` through
 `LoadScene` before running the script. The launcher owns this boundary, which

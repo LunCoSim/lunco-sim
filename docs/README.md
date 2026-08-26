@@ -54,6 +54,7 @@ The full catalogue with trigger phrases is in
 |---|---|
 | [repo-map](../skills/repo-map/SKILL.md) | Get oriented — layout, which binary to run, where a feature lives |
 | [build-usd-scene](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load, spawn, place, tune |
+| [update-documents](../skills/update-documents/SKILL.md) | Keep canonical docs, agent guidance, and skills aligned |
 | [author-scenario](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions |
 | [build-vehicle](../skills/build-vehicle/SKILL.md) | Build a rover from the mobility component library |
 | [authoring-vessel-controllers](../skills/authoring-vessel-controllers/SKILL.md) | Give a vessel a GNC / autopilot with manual handoff |

@@ -31,6 +31,34 @@ It does not choose a key or provide a control path. Lesson progression should
 listen for semantic command events or authoritative state, never for a raw key
 event. The bundled defaults are in `assets/config/keybindings.json`.
 
+## Choose the lesson world's time contract
+
+Each 3D lesson payload must choose one of these contracts. The choice belongs in
+the payload USD, not in the tutorial script or Rust launcher:
+
+| Contract | USD authoring | Use when |
+|---|---|---|
+| Fixed light | Reference `lunco://lighting/sun.usda` as a `DistantLight` and author its rotation. Do not apply `LunCoEpochAPI` or reference `lunco://celestial/solar_system.usda`. | The lesson teaches the UI, scene building, possession, or simple controls. The light is stable scenery. |
+| Explicit ephemeris | Apply `LunCoEpochAPI`, author `double lunco:time:epochJd = …`, and reference the standard `SolarSystem`; add the root site anchor when the lesson uses lunar geodetics or Earth tracking. | The lesson teaches celestial time, real sun direction, Earth tracking, orbital motion, or another astronomy-dependent result. |
+| Reuse an existing world | Reference/payload the scene that already owns the environment and time contract. | The lesson changes policy or behaviour, not the world. |
+| No world | Omit `payload` from the curriculum prim. | The lesson is a UI/workbench tour and should preserve the currently open scene. |
+
+The default epoch on `LunCoEpochAPI` is a compatibility default, not an
+acceptable tutorial choice. The authored USD lint rule
+`epoch-api-missing-time` rejects an applied epoch API without
+`lunco:time:epochJd`; fixed-light payloads remain valid because they omit the
+celestial opt-in entirely. This prevents a lesson from starting lit and then
+changing to an unintended ephemeris direction.
+
+The current corpus follows this split: `sandbox/first_drive.usda`,
+`sandbox/sandbox_intro.usda`, and `sandbox/build_base.usda` are fixed-light
+worlds; the luncosim Welcome/Controls lessons reuse `first_drive.usda`;
+`basic/driving_basics.usda` and `basic/slope_test.usda` author an explicit
+epoch and solar system; `basic/rover_variants.usda` reuses the former; the
+lander/cosim lessons reuse `scenes/luncosim/lander_ops.usda`; the Object Builder
+lesson reuses `scenes/luncosim/sandbox_scene.usda` and its explicit epoch; and
+the lunica lessons are UI/workbench lessons without a 3D payload.
+
 ## Layout
 
 ```

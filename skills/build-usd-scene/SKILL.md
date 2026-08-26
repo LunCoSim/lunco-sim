@@ -1,22 +1,17 @@
 ---
 name: build-usd-scene
 description: >
-  How to author and edit the 3D world in LunCoSim — load scenes, spawn objects,
-  place/move/rotate them, and tune their properties, over the API. USE THIS
-  SKILL whenever the user asks, in plain words, things like: "put a lander near
-  that crater", "spawn a few rovers here", "load the Moon scene", "add some
-  rocks / obstacles", "move / rotate / scale this", "set its colour / mass /
-  material", "build a scene with X and Y", or "clear the scene and start over".
-  Any request to assemble or edit what's IN the 3D world belongs here — the user
-  won't say "USD" or "prim". (For the agent mid-code: `LoadScene` / `SpawnEntity`
-  / `MoveEntity` / `SetObjectProperty`, an `entry_id` from the spawn catalog, a
-  `.usda` file, coordinate placement, or "why did the gizmo grab the wrong
-  thing?".) Project-specific and non-obvious: USD is the SOURCE OF TRUTH
-  (projected to ECS — you edit the world by authoring it), the engine frame is
-  fixed (Y-up, right-handed, −Z-forward, metres), `LoadScene` paths are
-  root-qualified (`lunco://` or `twin://`), spawnable things come from a catalog (`list_bundled`), and
-  live edits must NOT go through `SetDocumentSource`. For the vehicle's BEHAVIOUR
-  use author-scenario; for its GNC use authoring-vessel-controllers.
+  Assemble or edit LunCoSim's 3D world: load scenes, spawn objects, place,
+  move, rotate, scale, tune, or clear them. USE THIS SKILL for requests such as
+  "put a lander near that crater", "spawn rovers", "load the Moon scene", "add
+  rocks", "move this", "set its mass or material", or "build a scene with X
+  and Y". For the agent mid-code: `LoadScene`, `SpawnEntity`, `MoveEntity`,
+  `SetObjectProperty`, a catalog `entry_id`, a `.usda` file, or a placement/
+  lighting issue. Project-specific: USD is the source of truth projected to ECS;
+  use the fixed Y-up, right-handed, -Z-forward metre frame, root-qualified
+  `lunco://` or `twin://` paths, and catalogued spawnables. Do not use
+  `SetDocumentSource` for live edits. Use author-scenario for behavior and
+  authoring-vessel-controllers for GNC.
 ---
 
 # Build & edit USD scenes
@@ -28,6 +23,30 @@ the API (`--api`, port **4101**; launch per [`test-via-api`](../test-via-api/SKI
 
 Design background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`usd-source-of-truth.md`](../../docs/architecture/usd-source-of-truth.md).
+
+Before assembling a scene, choose its world/time contract. The complete option
+matrix is in [`assets/tutorials/README.md`](../../assets/tutorials/README.md);
+the short version is below.
+
+## Choose the scene's lighting and time model
+
+| Scene contract | Author | Use it when |
+|---|---|---|
+| Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit `LunCoEpochAPI` and `SolarSystem`. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
+| Ephemeris world | Apply `LunCoEpochAPI`, author `double lunco:time:epochJd = …`, and reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. | Teaching a real lunar day, Earth tracking, orbital motion, or any feature whose result depends on celestial time. |
+| Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
+| UI-only lesson | Omit the payload and leave the current world untouched. | Teaching menus, commands, or workbench concepts. |
+
+Do not combine a fixed light with an implicit orbital provider. `LunCoEpochAPI`
+without an authored `lunco:time:epochJd` is a lint error (`epoch-api-missing-time`):
+set the epoch on the same scene root, or remove the celestial opt-in. A fixed
+light is a complete scene contract, not a temporary fallback.
+
+For tutorial payloads, use the fixed contract for onboarding scenes such as
+`first_drive.usda`, and the ephemeris contract for `driving_basics.usda` and
+`slope_test.usda`. `rover_variants.usda` reuses `driving_basics.usda`, while
+the lander mission reuses `scenes/luncosim/lander_ops.usda`; do not copy their
+environment or silently choose a second clock.
 
 ## The one coordinate frame (spec 009)
 
@@ -65,6 +84,10 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
    [`inspect-simulation`](../inspect-simulation/SKILL.md) for reading state back).
 6. **Persist:** to make it permanent, author it into the `.usda` scene file under
    `assets/scenes/` (the runtime edits are USD ops; save them into the layer).
+7. **Verify the contract:** run `target/debug/luncosim --validate <scene.usda>`;
+   for a composed world, run the authored Rhai scene gate and inspect its
+   verdict. `--validate` catches parse/composition/lint failures but does not
+   prove that the light remains stable during runtime.
 
 ## Gotchas
 
@@ -81,6 +104,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 - **A sphere you add for the Sun or Earth casts a shadow.** Sky bodies are real geometry sitting up-sun: they eclipse the DistantLight and sweep a hard shadow across the ground. Author `bool primvars:doNotCastShadows = true` (the starfield dome does; `big_space_setup.rs` stamps `NotShadowCaster` on the engine's own sun sphere). Better still, declare bodies with `LunCoCelestialBodyAPI` (`lunco:body = 399`) and let the ephemeris place them at true distance.
 - **Custom-shader inputs are snake_case** — the ShaderMaterial reflection binds the WGSL struct's field names (`star_density`, `point_size`, `brightness`). A camelCase `inputs:starDensity` is a dead wire: no error, no effect, and hours of "why does tuning the sky do nothing".
 - **Exposure and illuminance only mean something together.** The frame's brightness is `illuminance / 2^EV100`, so a scene that copies a `DistantLight` intensity from one file and an `exposureEv100` from another lands stops away from either. Author both on purpose: the sun prim's `inputs:intensity` and the `LunCoEnvironment` prim's `lunco:env:exposureEv100`.
+- **Celestial time is an explicit scene choice.** A `SolarSystem` reference makes body poses ephemeris-driven; `LunCoEpochAPI` makes the scene responsible for choosing the mission epoch. Author both the API and `lunco:time:epochJd` together. If the lesson needs repeatable light but not astronomy, use the fixed `DistantLight` contract instead.
 - **`LoadScene` path must be root-qualified** — use `lunco://scenes/luncosim/lander_ops.usda` for a shipped asset or `twin://<name>/…` for an opened Twin. Use `OpenFile` for a filesystem path.
 - **Spawn `entry_id` must be in the catalog** — an unknown id logs `unknown entry '…'` and no-ops. List first with `list_bundled`.
 - **Empty spawn path / root_prim → the `defaultPrim` sentinel**: an empty path means "the stage's default prim", not an error.

@@ -146,6 +146,7 @@ fn is_modelica_network(scope) {
 fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
+    for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_scope(facts) { out.push(f); }
@@ -402,6 +403,34 @@ fn stage_meters_per_unit_missing(facts) {
             "warn",
             "<stage>",
             "Stage omits metersPerUnit; OpenUSD defaults to 0.01 m/unit (centimetres). Author metersPerUnit = 1 for a LunCo metre-stage asset.",
+        ));
+    }
+    out
+}
+
+/// `LunCoEpochAPI` is the authored opt-in to celestial/mission time. Its schema
+/// default is zero, which deliberately means "no authored epoch" so the runtime
+/// can remain backwards-compatible with a partial scene. That is not a safe
+/// contract for an orbital scene: a polar surface can be dark at the engine's
+/// fallback time. Require the author to choose a non-zero epoch on the same prim.
+///
+/// A fixed-light scene stays valid by omitting both the epoch API and the
+/// celestial payload. This rule therefore checks the explicit opt-in, not the
+/// presence of a `DistantLight` and not a filename or tutorial path.
+fn epoch_api_requires_authored_time(facts) {
+    let out = [];
+    for prim in facts.prims {
+        if !prim.schemas.contains("LunCoEpochAPI") {
+            continue;
+        }
+        if prim.epoch_jd != () && prim.epoch_jd.is_finite() && prim.epoch_jd != 0.0 {
+            continue;
+        }
+        out.push(finding(
+            "epoch-api-missing-time",
+            "error",
+            prim.path,
+            "LunCoEpochAPI opts this stage into authored mission time, but lunco:time:epochJd is missing, zero, or malformed. Author a non-zero Julian epoch on this prim; for a fixed-light scene remove the epoch API and celestial payload instead.",
         ));
     }
     out
