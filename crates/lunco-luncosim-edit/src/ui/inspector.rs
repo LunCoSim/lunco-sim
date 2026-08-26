@@ -1651,6 +1651,7 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                         Some(asset) => {
                             let leaf = asset.rsplit('/').next().unwrap_or(asset);
                             ui.horizontal(|ui| {
+                                #[cfg(not(target_arch = "wasm32"))]
                                 if ui.button(format!("⊕ Attach {leaf}")).clicked() {
                                     attach = Some((
                                         asset.clone(),
@@ -1662,6 +1663,11 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                                         item.socket_frame,
                                     ));
                                 }
+                                #[cfg(target_arch = "wasm32")]
+                                ui.add_enabled(
+                                    false,
+                                    egui::Button::new(format!("⊕ Attach {leaf} (native only)")),
+                                );
                                 ui.weak("empty");
                             });
                         }

@@ -80,6 +80,10 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 | 02 — Author your own controller | *Script a Rover* (luncosim) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
 | 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (luncosim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
 
+The in-app **Build from Parts** lesson is a separate Object Builder track. It
+uses the existing USD socket/plug and typed-joint workflow; it is not a
+vehicle-specific tutorial implementation.
+
 Looking for a reference rather than a walkthrough? The full script verb list is
 in [`../scripting-guide.md`](../scripting-guide.md), the design behind scenarios is
 in [`../architecture/34-scenario-and-multidomain.md`](../architecture/34-scenario-and-multidomain.md),

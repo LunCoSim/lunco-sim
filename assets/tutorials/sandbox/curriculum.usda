@@ -88,7 +88,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:blurb = "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
-        rel lunco:tutorial:next = </Sandbox/BuildBase>
+        rel lunco:tutorial:next = </ObjectBuilder/MountComponents>
     }
 
     def Scope "BuildBase" (
