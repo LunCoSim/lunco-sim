@@ -6,13 +6,13 @@ package Icons "Semantic icons for the LunCo Modelica library"
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
       Rectangle(extent={{-70,-45},{70,45}}, lineColor={35,85,150}, fillColor={95,155,220}, fillPattern=FillPattern.Solid, radius=10),
       Line(points={{-18,0},{18,0}}, color={255,255,255}, thickness=1), Line(points={{0,-18},{0,18}}, color={255,255,255}, thickness=1), Line(points={{42,-12},{62,-12}}, color={255,255,255}, thickness=1),
-      Text(extent={{-80,-78},{80,-54}}, textString="BATTERY", textColor={35,85,150}, fontSize=10)}));
+      Text(extent={{-80,-78},{80,-54}}, textString="BATTERY", textColor={35,85,150}, fontSize=14)}));
   end Battery;
   partial model SolarPanel
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
       Polygon(points={{-78,-42},{45,-65},{72,35},{-50,60},{-78,-42}}, lineColor={20,75,145}, fillColor={55,130,205}, fillPattern=FillPattern.Solid),
       Line(points={{-55,-32},{58,-53}}, color={200,230,255}, thickness=1), Line(points={{-42,10},{65,-10}}, color={200,230,255}, thickness=1), Line(points={{-18,49},{-2,-53}}, color={200,230,255}, thickness=1), Line(points={{24,42},{39,-60}}, color={200,230,255}, thickness=1),
-      Ellipse(extent={{52,48},{86,82}}, lineColor={235,165,20}, fillColor={255,205,55}, fillPattern=FillPattern.Solid), Text(extent={{-92,-90},{92,-70}}, textString="SOLAR PANEL", textColor={20,75,145}, fontSize=9)}));
+      Ellipse(extent={{52,48},{86,82}}, lineColor={235,165,20}, fillColor={255,205,55}, fillPattern=FillPattern.Solid), Text(extent={{-92,-90},{92,-70}}, textString="SOLAR PANEL", textColor={20,75,145}, fontSize=14)}));
   end SolarPanel;
   partial model Motor
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={
@@ -21,7 +21,7 @@ package Icons "Semantic icons for the LunCo Modelica library"
       Ellipse(extent={{-13,-13},{13,13}}, lineColor={115,65,25}, fillColor={150,82,30}, fillPattern=FillPattern.Solid),
       Line(points={{-4,-27},{4,-27},{4,27},{-4,27},{-4,-27}}, color={115,65,25}, thickness=2),
       Line(points={{-90,0},{-62,0}}, color={115,65,25}, thickness=2), Line(points={{62,0},{90,0}}, color={115,65,25}, thickness=2),
-      Text(extent={{-82,-88},{82,-68}}, textString="%name", textColor={115,65,25}, fontSize=10)}));
+      Text(extent={{-82,-88},{82,-68}}, textString="%name", textColor={115,65,25}, fontSize=14)}));
   end Motor;
   partial model ElectricalControl
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={

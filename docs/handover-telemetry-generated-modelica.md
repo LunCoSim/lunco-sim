@@ -66,8 +66,9 @@ implementation detail and must not become the user-facing channel identity.
   - Emits Modelica components, ports, `connect(...)` equations, boundary and
     causal equations, icons, diagram graphics, and deterministic layout.
   - Owns named presentation constants for layout spacing, component extents,
-    icon sizing, and diagram typography; these are policy controls, not hidden
-    Rust/runtime parameters.
+    icon sizing, and diagram typography; repeated source/load members use a
+    deterministic near-square bank grid and per-column feeder lanes; these are
+    policy controls, not hidden Rust/runtime parameters.
   - Each authored motor/component remains a distinct component in the facts and
     generated topology; a policy may partition connected components into units
     without collapsing the source graph into a visual summary.

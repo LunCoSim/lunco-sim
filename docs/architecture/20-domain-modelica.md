@@ -116,12 +116,19 @@ or an inferred runtime connection. The policy chooses the highest-incidence
 member in each connected unit as the visual bus hub, with an authored
 `LunCoModelicaTopologyAPI` `storage` role breaking equal-incidence ties. It
 places authored `source` members on one bank and `load` members on the opposite
-bank, then packs `neutral` members onto the shorter bank. This is a generic
+bank, then packs `neutral` members onto the shorter bank. Each bank uses a
+deterministic near-square grid: repeated members advance across columns before
+adding rows, with the grid size derived from the bank count rather than from a
+component class name. Every connection routes through a per-column feeder lane
+and the central rail, so the authored `connect()` graph and the visible wiring
+remain one-to-one without a tangle of direct cross-bank wires. This is a generic
 presentation contract, not a battery/motor/solar class rule: Modelica's
 acausal `flow` direction remains runtime data and can reverse. The member
-source and load banks use disjoint lane ranges around the hub, so a horizontal
-route cannot be mistaken for a direct source-to-load wire. Coordinates are
-local to their owning unit diagram. As the member count grows,
+source and load banks use disjoint column ranges around the hub, so a horizontal
+route cannot be mistaken for a direct source-to-load wire. Diagram titles and
+the bus label use policy-owned readable typography, while native reusable
+electrical icons carry their own larger component labels. Coordinates are local
+to their owning unit diagram. As the member count grows,
 the policy expands the diagram extents with the same source/AST path, so
 `FitCanvas` can show the complete topology without a Rust layout branch.
 
