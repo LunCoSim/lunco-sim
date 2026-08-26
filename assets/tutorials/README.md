@@ -119,6 +119,10 @@ target/debug/luncosim test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
 ```
 
+The powered lander mission is a longer gate; use `--max-ticks 30000` for
+`scenes/tests/tutorial_lander_mission.usda` so the descent, rover deployment,
+and all waypoint objectives have time to complete.
+
 Edit the lesson or its observer, then rerun the production binary. No core
 rebuild is needed for Rhai edits. Use `--validate` only for syntax/preflight;
 it is not a runtime tutorial test. Keep Rust tests generic to the scripting or

@@ -63,7 +63,7 @@ RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim \
   --no-default-features --features lunco-api,transport-http -j 4
 target/debug/luncosim test \
   --scene assets/scenes/tests/tutorial_lander_mission.usda \
-  --threads 1 --jitter 0 --max-ticks 12000
+  --threads 1 --jitter 0 --max-ticks 30000
 ```
 
 Capture the process exit code and the final authored verdict. A parse-only
