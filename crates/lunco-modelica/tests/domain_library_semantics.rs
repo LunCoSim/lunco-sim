@@ -21,8 +21,8 @@ fn battery_discharge_current_reduces_soc() {
         "finite storage must keep the battery state inside the physical [0, 1] interval"
     );
     assert!(
-        source.contains("drained = if soc <= 0.0 then 1.0 else 0.0;"),
-        "battery drained must be a normalized empty-boundary predicate for authored notification"
+        source.contains("drained = max(0.0, min(1.0, 1.0 - soc / soc_empty_threshold));"),
+        "battery drained must be a branch-free normalized empty-boundary signal for authored notification"
     );
     assert!(
         source.contains("+ p.i * R_internal"),

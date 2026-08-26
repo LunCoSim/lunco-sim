@@ -9,6 +9,8 @@ model Battery
   parameter Real R_internal = 0.01 "Equivalent series resistance, Ohm";
   parameter Real capacity(unit="Ah") = 208.0 "Total capacity";
   parameter Real soc_init(unit="1") = 0.8 "State of charge at t=0, 0..1";
+  parameter Real soc_empty_threshold(unit="1", min=1e-12) = 1e-6
+    "Normalized SoC interval used to expose the empty-boundary signal";
 
   Pin p annotation(Placement(transformation(extent={{90,-10},{110,10}})));
   Real soc(unit="1", start = soc_init, fixed = true, min = 0.0, max = 1.0) "State of charge, 0..1";
@@ -47,7 +49,9 @@ equation
   discharge_power_w = max(0.0, -net_power_w);
   charge_current_a = max(0.0, p.i);
   discharge_current_a = max(0.0, -p.i);
-  // Event bindings consume normalized predicates, not a depletion fraction:
-  // the notification becomes active only at the physical empty boundary.
-  drained = if soc <= 0.0 then 1.0 else 0.0;
+  // Event bindings consume a normalized empty-boundary signal, not a depletion
+  // fraction. Saturation keeps it branch-free for the solver while retaining
+  // the exact boundary value: 1 at soc=0 and 0 at or above the tiny authored
+  // empty interval.
+  drained = max(0.0, min(1.0, 1.0 - soc / soc_empty_threshold));
 end Battery;
