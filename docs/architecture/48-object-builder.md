@@ -8,9 +8,11 @@ simulation object. It projects USD prims and connections into the existing
 canvas, prim-tree, inspector, and viewport surfaces. It does not create a second
 scene model or a vehicle-specific assembly API.
 
-The workbench exposes this surface through the `Object Builder` perspective.
-The `Terrain` perspective exposes the existing terrain tools and keeps sculpting
-separate from object assembly. Both perspectives are composed from the panels
+The workbench exposes this surface through the registered `object_builder`
+perspective. The registered `terrain_sculpt` perspective exposes the existing
+terrain tools and keeps sculpting separate from object assembly. Both are hidden
+from the default title-bar switcher, but remain available to authored tutorials
+and the typed `ActivatePerspective` command. They are composed from the panels
 listed below; they do not introduce a second authoring model.
 
 ## Ownership and persistence

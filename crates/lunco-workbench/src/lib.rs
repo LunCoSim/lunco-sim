@@ -4539,23 +4539,7 @@ fn render_layout(
                     }
                     ui.separator();
                 }
-                let active = layout.active_perspective;
-                let tabs: Vec<(PerspectiveId, String, bool)> = layout
-                    .perspectives
-                    .iter()
-                    .map(|w| {
-                        let id = w.id();
-                        (id, w.title(), active == Some(id))
-                    })
-                    // Iterate in reverse so right-to-left layout still puts
-                    // them in registration order from left to right.
-                    .rev()
-                    .collect();
-                // TODO: re-enable the perspective switcher once more
-                // than one perspective is registered. With a single
-                // perspective (Lunica ships only "⚙ Lunica" today) the
-                // lone tab is just noise — hide it, but keep the render
-                // logic intact for when "Build" / "Simulate" / etc. land.
+                let tabs = perspective_switcher_tabs(&layout);
                 if tabs.len() > 1 {
                     for (id, title, is_active) in tabs {
                         let button = egui::Button::new(title.as_str()).selected(is_active);
@@ -4888,6 +4872,25 @@ fn render_layout(
                 });
         }
     }
+}
+
+/// Build the title-bar perspective entries from the registered perspectives.
+/// Registration controls availability for authored flows and API commands;
+/// [`Perspective::show_in_switcher`] controls only everyday navigation chrome.
+fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<(PerspectiveId, String, bool)> {
+    let active = layout.active_perspective;
+    layout
+        .perspectives
+        .iter()
+        .filter(|perspective| perspective.show_in_switcher())
+        .map(|perspective| {
+            let id = perspective.id();
+            (id, perspective.title(), active == Some(id))
+        })
+        // Iterate in reverse so right-to-left layout still puts them in
+        // registration order from left to right.
+        .rev()
+        .collect()
 }
 
 /// Render a single panel inside its own egui container (side-panel mode).
@@ -6213,6 +6216,9 @@ mod tests {
         fn title(&self) -> String {
             self.title.to_string()
         }
+        fn show_in_switcher(&self) -> bool {
+            self.id != PerspectiveId("hidden")
+        }
         fn apply(&self, layout: &mut WorkbenchLayout) {
             layout.set_side_browser(Some(self.marker));
             layout.set_right_inspector(None);
@@ -6252,6 +6258,32 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
+    }
+
+    #[test]
+    fn hidden_perspective_stays_registered_but_is_not_a_switcher_tab() {
+        let mut layout = WorkbenchLayout::default();
+        for (id, marker) in [
+            ("a", "panel_a"),
+            ("hidden", "panel_hidden"),
+            ("b", "panel_b"),
+        ] {
+            layout.register_perspective(TestPerspective {
+                id: PerspectiveId(id),
+                title: id,
+                marker: PanelId(marker),
+            });
+        }
+
+        let ids = perspective_switcher_tabs(&layout)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![PerspectiveId("b"), PerspectiveId("a")]);
+
+        // Hiding navigation chrome must not remove the activation/API path.
+        layout.activate_perspective(PerspectiveId("hidden"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("hidden")));
     }
 
     #[test]

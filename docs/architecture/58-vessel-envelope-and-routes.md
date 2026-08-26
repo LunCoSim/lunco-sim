@@ -195,6 +195,9 @@ of the waypoint marker's authored sphere radius and child transform. The complet
 ordered route remains green so every authored connection stays visible; the same
 latched state tints reached markers and advances the blue active-leg highlight, so the
 execution cue cannot reassert a stale active leg.
+At a turnaround where adjacent authored targets coincide, ribbon orientation follows
+the incoming non-degenerate leg and keeps one coherent lateral frame through the
+return leg; it never inserts a world-axis segment or crosses the strip at the cusp.
 If any required sample is outside the analytic surface coverage, the route snapshot
 is omitted atomically rather than showing a misleading partial line. Once the
 authoritative route, target pose, terrain surface key, active frame, or visit state

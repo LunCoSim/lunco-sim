@@ -106,9 +106,11 @@ the side panels for tabbed dock trees.
 
 1. **Menu bar (top)** — File / Edit / View / Window / Help menus +
    right-aligned command-palette search bar.
-2. **Transport bar (top, below menu)** — workspace switcher tabs on the
-   left, transport controls (play / pause / step / time scrubber / speed)
-   on the right.
+2. **Transport bar (top, below menu)** — switcher tabs for perspectives that
+   opt into everyday navigation on the left, transport controls (play / pause /
+   step / time scrubber / speed) on the right. Registered authoring
+   perspectives may remain available to tutorials and `ActivatePerspective`
+   without occupying this strip.
 3. **Activity bar (far left)** — vertical strip of icons for primary
    navigation (Scene / Subsystems / Assets / Console / Search / Settings).
    Click an icon to open its browser in a slide-in panel.
@@ -239,6 +241,14 @@ keyboard if needed.
 
 Users can customize any layout and save as a named workspace. Ship workspaces
 are just the defaults; everything is editable.
+
+### Registered but hidden perspectives
+
+Registration controls whether a perspective can be activated by the typed API
+or a guided tutorial. `Perspective::show_in_switcher()` controls only whether
+it appears in the default title-bar switcher. Luncosim keeps `terrain_sculpt`
+and `object_builder` registered for their authored flows, but hides them from
+everyday navigation; this does not remove or duplicate either authoring mode.
 
 ### Guided presentation ownership
 

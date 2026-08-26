@@ -1722,23 +1722,17 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
     let mut pos: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
     let mut nrm: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
     let mut uv: Vec<[f32; 2]> = Vec::with_capacity(n * 2);
+    let mut previous_right = None;
     for i in 0..n {
-        // Central-difference tangent, flattened to the ground plane so the ribbon
-        // stays level across slopes instead of twisting.
-        let prev = points[i.saturating_sub(1)];
-        let next = points[(i + 1).min(n - 1)];
-        let mut tan = next - prev;
-        tan.y = 0.0;
-        let tan = if tan.length_squared() < 1e-9 {
-            DVec3::Z
-        } else {
-            tan.normalize()
-        };
-        let mut right = tan.cross(DVec3::Y);
-        if right.length_squared() < 1e-9 {
-            right = DVec3::X;
-        }
-        let right = right.normalize() * ROUTE_RIBBON_HALF_WIDTH_M as f64;
+        // Use the local route direction, flattened to the ground plane so the
+        // ribbon stays level across slopes instead of twisting. At a U-turn
+        // (the Apollo 15 W3 → W4 → W3 turnaround), the central difference is
+        // zero; keep the incoming direction there instead of inventing a
+        // world-axis tangent that breaks the ribbon at the waypoint.
+        let tan = route_tangent(points, i);
+        let right = route_right(tan, previous_right);
+        previous_right = Some(right);
+        let right = right * ROUTE_RIBBON_HALF_WIDTH_M as f64;
         let base = (points[i] - anchor).as_vec3() + Vec3::Y * ROUTE_SURFACE_CLEARANCE_M;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
@@ -1763,6 +1757,44 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh.insert_indices(Indices::U32(idx));
     Some(mesh)
+}
+
+fn route_tangent(points: &[DVec3], index: usize) -> DVec3 {
+    debug_assert!(!points.is_empty());
+    let current = points[index];
+    let prev = points[index.saturating_sub(1)];
+    let next = points[(index + 1).min(points.len() - 1)];
+
+    let mut tangent = next - prev;
+    tangent.y = 0.0;
+    if tangent.length_squared() < 1.0e-9 {
+        tangent = current - prev;
+        tangent.y = 0.0;
+    }
+    if tangent.length_squared() < 1.0e-9 {
+        tangent = next - current;
+        tangent.y = 0.0;
+    }
+    if tangent.length_squared() < 1.0e-9 {
+        DVec3::Z
+    } else {
+        tangent.normalize()
+    }
+}
+
+fn route_right(tangent: DVec3, previous_right: Option<DVec3>) -> DVec3 {
+    let mut right = tangent.cross(DVec3::Y);
+    if right.length_squared() < 1.0e-9 {
+        right = DVec3::X;
+    }
+    let mut right = right.normalize();
+    // A route ribbon is an unoriented strip. Keep its lateral frame coherent
+    // when traversal reverses at a turnaround; otherwise the outgoing vertex
+    // swaps left/right and the two triangles cross.
+    if previous_right.is_some_and(|previous| right.dot(previous) < 0.0) {
+        right = -right;
+    }
+    right
 }
 
 /// Uniformly sample a polyline in horizontal distance. Endpoints alone form a
@@ -2434,8 +2466,8 @@ pub(crate) fn sync_waypoint_marker_visuals(
 mod tests {
     use super::{
         has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
-        route_ribbon_points, route_visual_state, runtime_route_loops, select_ground_point,
-        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        route_ribbon_points, route_right, route_tangent, route_visual_state, runtime_route_loops,
+        select_ground_point, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
@@ -2601,6 +2633,28 @@ mod tests {
         assert_eq!(points.first(), Some(&DVec3::ZERO));
         assert_eq!(points.last(), Some(&DVec3::new(10.0, 100.0, 0.0)));
         assert_eq!(points[3], DVec3::new(6.0, 60.0, 0.0));
+    }
+
+    #[test]
+    fn turnaround_uses_the_incoming_route_direction_for_ribbon_orientation() {
+        let points = [
+            DVec3::new(0.0, 10.0, 0.0),
+            DVec3::new(10.0, 20.0, 0.0),
+            DVec3::new(0.0, 30.0, 0.0),
+        ];
+
+        assert_eq!(route_tangent(&points, 1), DVec3::X);
+
+        let rights = points
+            .iter()
+            .enumerate()
+            .scan(None, |previous, (index, _)| {
+                let right = route_right(route_tangent(&points, index), *previous);
+                *previous = Some(right);
+                Some(right)
+            })
+            .collect::<Vec<_>>();
+        assert!(rights[1].dot(rights[2]) > 0.0);
     }
 
     #[test]

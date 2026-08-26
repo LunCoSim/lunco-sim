@@ -812,6 +812,9 @@ impl Perspective for ObjectBuilderPerspective {
     fn title(&self) -> String {
         "Object Builder".into()
     }
+    fn show_in_switcher(&self) -> bool {
+        false
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         // Structure first: the USD prim tree (the object's authoring hierarchy)
@@ -846,6 +849,9 @@ impl Perspective for TerrainPerspective {
     }
     fn title(&self) -> String {
         "Terrain".into()
+    }
+    fn show_in_switcher(&self) -> bool {
+        false
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);

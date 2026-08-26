@@ -493,9 +493,9 @@ actually call, with the fields the deserializer actually accepts. See the
  Authoritative: whatever camera mode the avatar is in (orbit focus on a
  planet, spring-arm follow, surface mode), this strips it and reinstates a
  `FreeFlightCamera` at the requested pose — an API client asking for a
- specific view must always get it. `eye` is split into cell + local
- translation through the avatar's parent grid, so it lands in the scene
- frame even when a previous orbit focus left the camera cells away.
+ specific view must always get it. `eye` and `target` use the semantic
+ `ActivePhysicsFrame`; the concrete grid is resolved from that resource so a
+ previous orbit focus cannot put the camera in a different frame.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
@@ -1811,8 +1811,10 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `ActivatePerspective`
 
  Activate a registered [`Perspective`](crate::Perspective) by its
- `PerspectiveId` string. The luncosim ships `sandbox_view`, `rover_build`,
- and `modelica_analyze`. Unknown ids produce a user-visible status error.
+ `PerspectiveId` string. The luncosim registers `sandbox_view`, `rover_build`,
+ `terrain_sculpt`, and `object_builder`; the last two are explicit authoring
+ modes hidden from the default title-bar switcher. Unknown ids produce a
+ user-visible status error.
 
 - *defined in:* `crates/lunco-workbench/src/perspective_command.rs`
 

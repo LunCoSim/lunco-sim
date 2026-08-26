@@ -39,6 +39,16 @@ pub trait Perspective: Send + Sync + 'static {
     /// Human-readable title for the Perspective tab.
     fn title(&self) -> String;
 
+    /// Whether this perspective is shown in the default title-bar switcher.
+    ///
+    /// A perspective can remain registered and activatable by a tutorial or
+    /// [`crate::ActivatePerspective`] while staying out of the everyday
+    /// navigation chrome. This is useful for authoring tools that are
+    /// intentionally entered from a guided flow or an explicit command.
+    fn show_in_switcher(&self) -> bool {
+        true
+    }
+
     /// Apply this Perspective's slot assignments to the layout.
     ///
     /// Implementations call the slot setters on `layout`; each setter

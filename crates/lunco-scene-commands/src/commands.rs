@@ -2691,9 +2691,10 @@ pub fn apply_pending_focus(
 /// Authoritative: whatever camera mode the avatar is in (orbit focus on a
 /// planet, spring-arm follow, surface mode), this strips it and reinstates a
 /// `FreeFlightCamera` at the requested pose — an API client asking for a
-/// specific view must always get it. `eye` is split into cell + local
-/// translation through the avatar's parent grid, so it lands in the scene
-/// frame even when a previous orbit focus left the camera cells away.
+/// specific view must always get it. `eye` and `target` speak the semantic
+/// [`lunco_core::ActivePhysicsFrame`]; the concrete grid is resolved from that
+/// resource so a previous orbit focus or a canonical render-only grid cannot
+/// put the camera in a different frame.
 #[Command(default)]
 pub struct SetCameraLookAt {
     pub eye: Vec3,
@@ -2714,8 +2715,8 @@ pub fn on_set_camera_look_at(
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&Grid>,
-    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
     local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
@@ -2735,17 +2736,18 @@ pub fn on_set_camera_look_at(
         return;
     };
     replace_focus_diagnostic(&mut diagnostics, None);
-    // Explicit camera coordinates are canonical WorldGrid coordinates. Every
-    // camera path uses that frame, so the command can apply immediately.
+    // Explicit camera coordinates use the same active physics frame as
+    // MoveEntity and route projection. Never select a grid by marker/component
+    // type here: render and physics roots may legitimately differ.
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
-    let Ok(root) = q_world_grid.single() else {
-        warn!("SET_CAMERA: no canonical WorldGrid");
-        return;
-    };
+    let root = active_frame.0;
     let Ok(grid) = q_grids.get(root) else {
-        warn!("SET_CAMERA: canonical WorldGrid has no Grid component");
+        warn!(
+            ?root,
+            "SET_CAMERA: active physics frame has no Grid component"
+        );
         return;
     };
     let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
@@ -3517,6 +3519,65 @@ impl Plugin for SpawnCommandPlugin {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn set_camera_uses_the_active_physics_frame_for_noncanonical_grid() {
+        use super::*;
+        use big_space::prelude::{CellCoord, Grid};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_set_camera_look_at);
+
+        let canonical_render_grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 0.0),
+                lunco_core::WorldGrid,
+                GlobalTransform::default(),
+            ))
+            .id();
+        let active_physics_grid = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active_physics_grid));
+        app.insert_resource(lunco_core::TheLocalAvatar::default());
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                lunco_core::LocalAvatar,
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(active_physics_grid),
+                lunco_avatar::FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(SetCameraLookAt {
+            eye: Vec3::new(0.0, 2_500.0, 0.0),
+            target: Vec3::ZERO,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ChildOf>(avatar).unwrap().parent(),
+            active_physics_grid,
+            "camera placement must not migrate into the render-only WorldGrid"
+        );
+        let cell = *app.world().get::<CellCoord>(avatar).unwrap();
+        let translation = app.world().get::<Transform>(avatar).unwrap().translation;
+        let composed_y = cell.y as f64 * 2_000.0 + translation.y as f64;
+        assert!((composed_y - 2_500.0).abs() < 1.0e-3);
+        assert_ne!(canonical_render_grid, active_physics_grid);
+    }
+
     #[test]
     fn shader_property_values_require_the_reflected_schema() {
         let schema = lunco_materials::ParamSchema::parse(

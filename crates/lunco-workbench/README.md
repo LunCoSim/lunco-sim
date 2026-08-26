@@ -117,8 +117,9 @@ cargo run --bin lunica      # Modelica workbench
   presets.
 - **Perspectives** (renamed from the earlier `Workspace` trait — the
   latter is now taken for the editor session concept). Register any
-  number; their tabs appear in the transport bar; clicking applies the
-  slot preset by rebuilding the dock.
+  number; registered perspectives are API/tutorial-available, and those
+  opting into the default switcher appear in the transport bar. Clicking
+  a visible tab applies its slot preset by rebuilding the dock.
 - First-registered perspective auto-activates.
 - 3D-friendly: when no panels are docked the central region stays
   transparent so a Bevy 3D scene shows through.
@@ -143,6 +144,10 @@ frame.
 ## Design rationale
 
 See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md).
+
+Authoring-only perspectives can override `Perspective::show_in_switcher()`
+to stay out of the everyday title-bar navigation while remaining available to
+`ActivatePerspective` and guided tutorials.
 
 ### Why Perspective instead of "Workspace"?
 
