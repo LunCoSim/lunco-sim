@@ -19,8 +19,9 @@
 //! `scenes/tests/` is invisible to `scripts/run_scene_tests.sh`, which discovers
 //! by directory. Both checks live here so neither half can rot alone.
 //!
-//! Scenes that are legitimately NOT automatable are listed below BY NAME with a
-//! reason. An explicit exception is a decision; a silent gap is a bug.
+//! Every scene must bind an authored test observer. The observer's Rhai source
+//! declares `const TEST_KIND = "graphics"` when it needs the GPU; omission is
+//! the deterministic headless default.
 
 use std::path::{Path, PathBuf};
 
@@ -28,20 +29,12 @@ fn assets_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
-/// The attribute a scene uses to declare it cannot carry a headless verdict, with
-/// the reason as its value.
-///
-/// It lives in the SCENE, not in a list here, because
-/// `scripts/run_scene_tests.sh` needs the same answer — it skips exactly these —
-/// and two exception lists disagree the day one of them is edited. The reason
-/// must be about the scene (the render checks need a GPU), never about the effort
-/// of writing a scenario: "it would be work" is how an exception list becomes the
-/// place tests go to die.
-const NOT_HEADLESS_TESTABLE: &str = "lunco:notHeadlessTestable";
-
 fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).expect("read scenes dir").flatten() {
+    for entry in std::fs::read_dir(dir)
+        .expect("read scenes dir")
+        .map(|entry| entry.expect("read scene directory entry"))
+    {
         let path = entry.path();
         if path.extension().is_none_or(|x| x != "usda") {
             continue;
@@ -58,35 +51,18 @@ fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
 fn every_test_scene_carries_a_scenario() {
     let dir = assets_dir().join("scenes/tests");
     let scenes = usda_files(&dir);
-    let mut silent = Vec::new();
-
-    for (stem, path) in &scenes {
-        let src = std::fs::read_to_string(path).expect("read scene");
-        if src.contains(NOT_HEADLESS_TESTABLE) {
-            continue;
-        }
-        // A verdict needs a scenario to emit it, and a scenario reaches the scene
-        // through `LunCoProgramAPI`. Both, so that neither half can rot alone.
-        if !src.contains("lunco:scenario") || !src.contains("LunCoProgramAPI") {
-            silent.push(stem.clone());
-        }
-    }
+    let discovered = lunco_scene_commands::test_discovery::discover_scene_tests(&dir)
+        .expect("every scene must bind a valid test Rhai observer");
 
     assert!(
         scenes.len() > 10,
         "expected the test scenes, found {}",
         scenes.len()
     );
-    silent.sort();
-    assert!(
-        silent.is_empty(),
-        "test scenes that assert nothing ({}):\n  {}\n\n\
-         Give each one a scenario that checks the invariant its header already \
-         describes, or — if it genuinely cannot return a headless verdict — author \
-         `custom string {NOT_HEADLESS_TESTABLE} = \"<why>\"` on its root prim. A \
-         scene that cannot fail is not a test.",
-        silent.len(),
-        silent.join("\n  ")
+    assert_eq!(
+        discovered.len(),
+        scenes.len(),
+        "discovery must classify every scene exactly once"
     );
 }
 

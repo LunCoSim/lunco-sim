@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # run_scene_tests.sh — build the production luncosim runner ONCE, then run every
-# authored scene test: deterministic headless Rhai tests plus the GPU-backed
-# render tests declared with lunco:notHeadlessTestable.
+# authored scene test: deterministic headless Rhai tests plus graphics tests
+# whose Rhai observer declares `const TEST_KIND = "graphics"`.
 #
 # Each headless scene is an authored USD file whose attached Rhai scenario ends
 # in `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
@@ -75,26 +75,6 @@ SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 # not because its name ends in `_test`, and `lunco-assets`'s `is_test_asset` reads
 # the same fact to keep them out of the UI's Scene menu.
 #
-# A test scene that asserts nothing is not skipped-and-forgotten either: it is
-# caught by `lunco-scene-commands`'s `every_test_scene_carries_a_scenario`, which
-# fails naming it. The two halves together leave nowhere for a silent test to sit.
-# A scene that CANNOT return a headless verdict says so in itself, with a reason
-# (`lunco:notHeadlessTestable` — the render checks, which need a GPU). Those
-# scenes are not omitted: the GPU pass below discovers the same marker.
-mapfile -t SCENES < <(
-    grep -L "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
-)
-if [[ ${#SCENES[@]} -eq 0 ]]; then
-    echo "assets/scenes/tests/ is empty — the discovery glob is wrong" >&2
-    exit 2
-fi
-mapfile -t SKIPPED < <(
-    grep -l "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
-)
-for s in "${SKIPPED[@]}"; do
-    echo "==> QUEUE $(basename "$s" .usda) — GPU render assertion"
-done
-
 # Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
 # positional is the substring filter.
 FILTER=""
@@ -108,18 +88,6 @@ for arg in "$@"; do
         *) [[ -z "$FILTER" ]] && FILTER="$arg" ;;
     esac
 done
-
-if [[ -n "$FILTER" ]]; then
-    filtered=()
-    for s in "${SCENES[@]}"; do
-        [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
-    done
-    SCENES=("${filtered[@]}")
-    if [[ ${#SCENES[@]} -eq 0 ]]; then
-        echo "no scene matches filter '$FILTER'" >&2
-        exit 2
-    fi
-fi
 
 # ── Build ONCE ──────────────────────────────────────────────────────────────
 #
@@ -137,6 +105,46 @@ if [[ ! -x "$BIN" ]]; then
     echo "build reported success but $BIN is missing" >&2
     exit 2
 fi
+
+# The production binary owns the same composed-USD + Rhai discovery used by
+# the static test. This keeps the shell gate from parsing USD or maintaining a
+# second graphics exception list.
+LIST_OUTPUT="$("$BIN" test --list)" || {
+    echo "scene test discovery failed" >&2
+    exit 2
+}
+SCENES=()
+GRAPHICS_SCENES=()
+while IFS=$'\t' read -r kind scene; do
+    [[ -n "${scene:-}" ]] || continue
+    case "$kind" in
+        headless) SCENES+=("$scene") ;;
+        graphics) GRAPHICS_SCENES+=("$scene") ;;
+        *) echo "unknown scene test kind '$kind' for '$scene'" >&2; exit 2 ;;
+    esac
+done <<< "$LIST_OUTPUT"
+
+if [[ -n "$FILTER" ]]; then
+    filtered=()
+    for s in "${SCENES[@]}"; do
+        [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+    done
+    SCENES=("${filtered[@]}")
+
+    filtered=()
+    for s in "${GRAPHICS_SCENES[@]}"; do
+        [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+    done
+    GRAPHICS_SCENES=("${filtered[@]}")
+fi
+
+if [[ ${#SCENES[@]} -eq 0 && ${#GRAPHICS_SCENES[@]} -eq 0 ]]; then
+    echo "no scene matches filter '${FILTER:-all}'" >&2
+    exit 2
+fi
+for s in "${GRAPHICS_SCENES[@]}"; do
+    echo "==> QUEUE $(basename "$s" .usda) — graphics assertion"
+done
 
 # ── Run each scene ──────────────────────────────────────────────────────────
 LOG_DIR="target/scene-tests"
@@ -198,7 +206,7 @@ done
 # assertions are pixels and render diagnostics, not physics telemetry. The
 # helper still uses this already-built production binary and exits non-zero on
 # missing assets, wrong pixels, pipeline warnings, hangs, or incomplete frames.
-if [[ -z "$FILTER" || "hdri shader_fallback" == *"$FILTER"* ]]; then
+if [[ ${#GRAPHICS_SCENES[@]} -gt 0 ]]; then
     echo
     echo "==> GPU render pass (production offscreen renderer)"
     if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "$FILTER"; then
