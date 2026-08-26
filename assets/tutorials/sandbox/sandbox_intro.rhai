@@ -14,7 +14,7 @@ fn steps() {
         // 2
         #{ anchor: "panel.center",          focus: (),             title: "Locomotion",            body: "Use the authored avatar keymap to move through the scene: " + input_hint("forward") + "/" + input_hint("backward") + " move forward and backward, " + input_hint("left") + "/" + input_hint("right") + " strafe, and " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + " move down and up. Click Next after moving around the rover.", require: "cmd:TutorialNext" },
         // 3
-        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it, or select it in the Entities panel. The selected object becomes the subject of the Inspector.", require: "cmd:SelectEntity" },
+        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Select the Rover (or any object) in the Entities panel. In a build or object-builder view, Help shows the viewport-selection gesture. The selected object becomes the subject of the Inspector.", require: "cmd:SelectEntity" },
         // 4
         #{ anchor: "panel.right_inspector", focus: "spawn",          title: "Spawning Objects",      body: "Open Spawn in the right dock. Click a catalogued rover, prop, or structure, then place it in the scene. Cancel placement with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
         // 5

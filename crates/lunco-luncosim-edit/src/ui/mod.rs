@@ -301,10 +301,22 @@ impl Plugin for SandboxEditUiPlugin {
                                   the global key map and the controlled endpoint's map.",
                     shortcuts: vec![],
                     mouse: vec![
-                        HelpMouse { interaction: "Left-Click input endpoint", description: "Claim control; static objects do nothing" },
-                        HelpMouse { interaction: "Shift+Left-Click", description: "Select for inspection/gizmo in Build mode" },
-                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
-                        HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
+                        HelpMouse {
+                            interaction: "Left-Click input endpoint",
+                            description: "Claim control; static objects do nothing",
+                        },
+                        HelpMouse {
+                            interaction: "Shift+Left-Click",
+                            description: "Select for inspection/gizmo in Build mode",
+                        },
+                        HelpMouse {
+                            interaction: "Right-Drag",
+                            description: "Orbit / rotate the camera",
+                        },
+                        HelpMouse {
+                            interaction: "Scroll",
+                            description: "Zoom in / out",
+                        },
                     ],
                     has_tour: false,
                 },
@@ -317,24 +329,36 @@ impl Plugin for SandboxEditUiPlugin {
                     description: "3D scene editor. Spawn objects from the palette, \
                                   select and transform them, and assemble the scene.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "Shift", description: "Hold to place multiple (sticky spawn)" },
-                        HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
+                        HelpShortcut {
+                            keys: "Shift",
+                            description: "Hold to place multiple (sticky spawn)",
+                        },
+                        HelpShortcut {
+                            keys: "Ctrl+Z",
+                            description: "Undo",
+                        },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Left-Click", description: "Select object · confirm placement" },
-                        HelpMouse { interaction: "Shift+Left-Click", description: "Select + transform gizmo (drag to move)" },
-                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
-                        HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
+                        HelpMouse {
+                            interaction: "Left-Click",
+                            description: "Select object · confirm placement",
+                        },
+                        HelpMouse {
+                            interaction: "Shift+Left-Click",
+                            description: "Select + transform gizmo (drag to move)",
+                        },
+                        HelpMouse {
+                            interaction: "Right-Drag",
+                            description: "Orbit / rotate the camera",
+                        },
+                        HelpMouse {
+                            interaction: "Scroll",
+                            description: "Zoom in / out",
+                        },
                     ],
                     has_tour: false,
                 },
             )
-            // TODO(perspectives): re-introduce 🏔 Terrain and 🧩 Object Builder once
-            // the authoring flows behind them are ready. Registration is commented
-            // out — NOT deleted: `TerrainPerspective` / `ObjectBuilderPerspective`
-            // and their help entries stay intact, so re-enabling is uncommenting
-            // this block.
-            /*
             .register_perspective(TerrainPerspective)
             .register_perspective_help(
                 PerspectiveId("terrain_sculpt"),
@@ -344,16 +368,40 @@ impl Plugin for SandboxEditUiPlugin {
                                   then click the terrain to raise, dig, or flatten it. \
                                   Edits re-bake the visuals and the collider live.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "Shift + ↑/↓", description: "Grow / shrink brush radius" },
-                        HelpShortcut { keys: "Alt + ↑/↓", description: "Grow / shrink brush strength" },
-                        HelpShortcut { keys: "Esc", description: "Disarm the brush" },
+                        HelpShortcut {
+                            keys: "Shift + ↑/↓",
+                            description: "Grow / shrink brush radius",
+                        },
+                        HelpShortcut {
+                            keys: "Alt + ↑/↓",
+                            description: "Grow / shrink brush strength",
+                        },
+                        HelpShortcut {
+                            keys: "Esc",
+                            description: "Disarm the brush",
+                        },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Left-Click", description: "Sculpt (raise) · flatten to clicked height" },
-                        HelpMouse { interaction: "Alt+Left-Click", description: "Dig (invert the sculpt)" },
-                        HelpMouse { interaction: "Ctrl+Left-Click", description: "Flatten to the clicked height" },
-                        HelpMouse { interaction: "Shift / Alt + Scroll", description: "Brush radius / strength" },
-                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
+                        HelpMouse {
+                            interaction: "Left-Click",
+                            description: "Sculpt (raise) · flatten to clicked height",
+                        },
+                        HelpMouse {
+                            interaction: "Alt+Left-Click",
+                            description: "Dig (invert the sculpt)",
+                        },
+                        HelpMouse {
+                            interaction: "Ctrl+Left-Click",
+                            description: "Flatten to the clicked height",
+                        },
+                        HelpMouse {
+                            interaction: "Shift / Alt + Scroll",
+                            description: "Brush radius / strength",
+                        },
+                        HelpMouse {
+                            interaction: "Right-Drag",
+                            description: "Orbit / rotate the camera",
+                        },
                     ],
                     has_tour: false,
                 },
@@ -368,20 +416,36 @@ impl Plugin for SandboxEditUiPlugin {
                                   the palette, and tune the selected prim's parameters in \
                                   the Inspector.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "Ctrl+Z", description: "Undo the last edit" },
-                        HelpShortcut { keys: "Delete", description: "Remove the selected part" },
-                        HelpShortcut { keys: "Esc", description: "Clear selection / gizmo" },
+                        HelpShortcut {
+                            keys: "Ctrl+Z",
+                            description: "Undo the last edit",
+                        },
+                        HelpShortcut {
+                            keys: "Delete",
+                            description: "Remove the selected part",
+                        },
+                        HelpShortcut {
+                            keys: "Esc",
+                            description: "Clear selection / gizmo",
+                        },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Click a tree node", description: "Select a part to inspect / edit" },
-                        HelpMouse { interaction: "Shift+Left-Click", description: "Select + transform gizmo (drag to move)" },
-                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
+                        HelpMouse {
+                            interaction: "Click a tree node",
+                            description: "Select a part to inspect / edit",
+                        },
+                        HelpMouse {
+                            interaction: "Shift+Left-Click",
+                            description: "Select + transform gizmo (drag to move)",
+                        },
+                        HelpMouse {
+                            interaction: "Right-Drag",
+                            description: "Orbit / rotate the camera",
+                        },
                     ],
                     has_tour: false,
                 },
-            )
-            */
-            ;
+            );
 
         // WP-8: the Entity list is a pure view over `EntityTreeView`, derived by
         // a change-gated producer instead of being rebuilt every egui frame.
