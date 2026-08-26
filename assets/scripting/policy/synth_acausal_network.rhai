@@ -14,7 +14,8 @@ const BRANCH_FIRST_X = 0;
 const BRANCH_LEFT_X = -320;
 const BRANCH_LEFT_FIRST_ROW_Y = -80;
 const BRANCH_RIGHT_FIRST_ROW_Y = 80;
-const BRANCH_ROW_SPACING = 150;
+const BRANCH_COLUMN_SPACING = 180;
+const BRANCH_ROW_SPACING = 120;
 const BUS_RAIL_MARGIN = 35;
 
 const MEMBER_MIN_HALF_WIDTH = 180;
@@ -39,7 +40,8 @@ const ICON_CORNER_RADIUS_TEXT = "10";
 const DIAGRAM_TITLE_INSET_X = 20;
 const DIAGRAM_TITLE_TOP_INSET = 34;
 const DIAGRAM_TITLE_BOTTOM_INSET = 12;
-const DIAGRAM_TITLE_FONT_SIZE_TEXT = "16";
+const DIAGRAM_TITLE_FONT_SIZE_TEXT = "22";
+const DIAGRAM_BUS_FONT_SIZE_TEXT = "18";
 const ICON_TEXT_COLOR = "{255,255,255}";
 const UNIT_ICON_LINE_COLOR = "{60,90,145}";
 const UNIT_ICON_FILL_COLOR = "{75,130,190}";
@@ -177,12 +179,30 @@ fn topology_hub(net, members) {
     best
 }
 
-fn branch_placement(path, side, index) {
-    let x = if side == "left" { BRANCH_LEFT_X } else { BRANCH_FIRST_X };
-    let y = if side == "left" {
-        BRANCH_LEFT_FIRST_ROW_Y - index * BRANCH_ROW_SPACING
+// Use a deterministic near-square bank. This keeps repeated components of
+// the same type readable without giving the diagram a height proportional to
+// the number of motors, thrusters, or other common-pin members.
+fn branch_column_count(count) {
+    if count <= 1 { 1 }
+    else if count <= 4 { 2 }
+    else if count <= 9 { 3 }
+    else if count <= 16 { 4 }
+    else { 5 }
+}
+
+fn branch_placement(path, side, index, count) {
+    let columns = branch_column_count(count);
+    let column = index % columns;
+    let row = index / columns;
+    let x = if side == "left" {
+        BRANCH_LEFT_X - column * BRANCH_COLUMN_SPACING
     } else {
-        BRANCH_RIGHT_FIRST_ROW_Y + index * BRANCH_ROW_SPACING
+        BRANCH_FIRST_X + column * BRANCH_COLUMN_SPACING
+    };
+    let y = if side == "left" {
+        BRANCH_LEFT_FIRST_ROW_Y - row * BRANCH_ROW_SPACING
+    } else {
+        BRANCH_RIGHT_FIRST_ROW_Y + row * BRANCH_ROW_SPACING
     };
     #{
         path: path,
@@ -228,13 +248,15 @@ fn group_member_layout(net, members) {
     // semantic layout policy, not an electrical direction assumption: the
     // generated equations remain the authored acausal connect graph.
     let left_count = 0;
+    let left_total = classified.sources.len + classified.neutral.len;
     for path in classified.sources {
-        placements.push(branch_placement(path, "left", left_count));
+        placements.push(branch_placement(path, "left", left_count, left_total));
         left_count += 1;
     }
     let right_count = 0;
+    let right_total = classified.loads.len + classified.neutral.len;
     for path in classified.loads {
-        placements.push(branch_placement(path, "right", right_count));
+        placements.push(branch_placement(path, "right", right_count, right_total));
         right_count += 1;
     }
     // Components without a side preference remain fully supported. Pack them
@@ -243,10 +265,10 @@ fn group_member_layout(net, members) {
     // components.
     for path in classified.neutral {
         if left_count <= right_count {
-            placements.push(branch_placement(path, "left", left_count));
+            placements.push(branch_placement(path, "left", left_count, left_total));
             left_count += 1;
         } else {
-            placements.push(branch_placement(path, "right", right_count));
+            placements.push(branch_placement(path, "right", right_count, right_total));
             right_count += 1;
         }
     }
@@ -374,10 +396,28 @@ fn connect_equation(edge) {
     line
 }
 
+fn branch_feeder_x(x, rail_x) {
+    if x < rail_x {
+        x + COMPONENT_HALF_WIDTH + 18
+    } else {
+        x - COMPONENT_HALF_WIDTH - 18
+    }
+}
+
+fn append_point(line, x, y) {
+    line += ",{"
+        + x.to_string()
+        + ","
+        + y.to_string()
+        + "}";
+    line
+}
+
 // Keep common-pin electrical wiring legible. The authored topology remains
 // the connect() equation; these are standard Modelica Line waypoints only.
-// Every branch visits the policy-owned bus rail before reaching its member,
-// so a SolarPanel-to-motor equation cannot render as a direct wire.
+// Every branch visits its own feeder lane and then the central bus, so a
+// SolarPanel-to-motor equation cannot render as a direct wire or cut through
+// another repeated component.
 fn power_bus_annotation(edge, layout) {
     let left = position(layout, edge.left_path);
     let right = position(layout, edge.right_path);
@@ -399,19 +439,25 @@ fn power_bus_annotation(edge, layout) {
     line += left_port_x.to_string();
     line += ",";
     line += left.y.to_string();
-    line += "},{";
-    line += rail_x.to_string();
-    line += ",";
-    line += left.y.to_string();
-    line += "},{";
-    line += rail_x.to_string();
-    line += ",";
-    line += right.y.to_string();
-    line += "},{";
-    line += right_port_x.to_string();
-    line += ",";
-    line += right.y.to_string();
-    line += "}}, color=";
+    line += "}";
+    if left.x == HUB_X && left.y == BUS_Y {
+        line = append_point(line, rail_x, left.y);
+    } else {
+        let feeder_x = branch_feeder_x(left.x, rail_x);
+        line = append_point(line, feeder_x, left.y);
+        line = append_point(line, feeder_x, BUS_Y);
+        line = append_point(line, rail_x, BUS_Y);
+    }
+    if right.x == HUB_X && right.y == BUS_Y {
+        line = append_point(line, rail_x, right.y);
+    } else {
+        let feeder_x = branch_feeder_x(right.x, rail_x);
+        line = append_point(line, rail_x, BUS_Y);
+        line = append_point(line, feeder_x, BUS_Y);
+        line = append_point(line, feeder_x, right.y);
+    }
+    line = append_point(line, right_port_x, right.y);
+    line += "}, color=";
     line += power_wire_color();
     line += ", thickness=";
     line += power_line_thickness_text();
@@ -462,7 +508,7 @@ fn unit_bus_graphics(layout, members) {
             power_rail_x() + 75,
             label_y + 20
         )
-        + ", textString=\"POWER BUS\", textColor=" + power_rail_color() + ", fontSize=" + DIAGRAM_TITLE_FONT_SIZE_TEXT + ")";
+        + ", textString=\"POWER BUS\", textColor=" + power_rail_color() + ", fontSize=" + DIAGRAM_BUS_FONT_SIZE_TEXT + ")";
     rail + "," + label
 }
 

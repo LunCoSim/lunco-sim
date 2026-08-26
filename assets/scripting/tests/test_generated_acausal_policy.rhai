@@ -8,14 +8,13 @@ fn require(condition, message) {
     if !condition { throw message; }
 }
 
-fn require_distinct_branch_lanes(layout, hub_path, message) {
-    let lanes = [];
+fn require_no_overlap(layout, hub_path, message) {
+    let occupied = [];
     for item in layout.members {
         if item.path == hub_path { continue; }
-        let side = if item.x < power_rail_x() { "left" } else { "right" };
-        let lane = side + ":" + item.y.to_string();
-        if lanes.contains(lane) { throw message; }
-        lanes.push(lane);
+        let position = item.x.to_string() + ":" + item.y.to_string();
+        if occupied.contains(position) { throw message; }
+        occupied.push(position);
     }
 }
 
@@ -41,6 +40,8 @@ fn test_generated_acausal_policy(net) {
     require(!source.contains("%name"), "opaque generated instance labels leaked into the UI");
     require(source.contains("Electrical network"), "root diagram title is missing");
     require(source.contains("POWER BUS"), "unit bus annotation is missing");
+    require(source.contains("fontSize=22"), "diagram title font is too small");
+    require(source.contains("fontSize=18"), "power bus label font is too small");
     require(source.contains("power_system"), "single-unit instance name is not readable");
     require(source.contains("model PowerSystem"), "single-unit class name is not readable");
     require(!source.contains("Unit_" + net.model_name), "encoded unit class name leaked into the UI");
@@ -97,8 +98,8 @@ fn test_repeated_power_components() {
         require(!occupied.contains(key), "topology layout placed members on top of one another");
         occupied.push(key);
     }
-    require_distinct_branch_lanes(layout, "/Rig/Battery_A",
-        "bus branches must use distinct vertical lanes");
+    require_no_overlap(layout, "/Rig/Battery_A",
+        "repeated power members must not overlap");
     let hub = position(layout, "/Rig/Battery_A");
     require(hub.x == HUB_X && hub.y == BUS_Y,
         "highest-incidence topology member must own the bus hub position");
@@ -202,8 +203,34 @@ fn test_many_power_components() {
                 "topology branches must leave the bus on a declared side");
         }
     }
-    require_distinct_branch_lanes(layout, "/Rover/Battery",
-        "large topology layout must keep every branch in its own lane");
+    require_no_overlap(layout, "/Rover/Battery",
+        "large topology layout must keep every branch position distinct");
+    let motor_x = [];
+    let min_motor_y = 0;
+    let max_motor_y = 0;
+    let first_motor = true;
+    for item in layout.members {
+        if !item.path.contains("/Motor_") { continue; }
+        if !motor_x.contains(item.x) { motor_x.push(item.x); }
+        if first_motor {
+            min_motor_y = item.y;
+            max_motor_y = item.y;
+            first_motor = false;
+        } else {
+            if item.y < min_motor_y { min_motor_y = item.y; }
+            if item.y > max_motor_y { max_motor_y = item.y; }
+        }
+    }
+    require(motor_x.len > 1,
+        "repeated motors must use multiple compact columns");
+    require(max_motor_y - min_motor_y <= BRANCH_ROW_SPACING * 2,
+        "repeated motors must stay within a compact grid height");
+    let motor_wire = power_bus_annotation(
+        #{ left_path: "/Rover/Battery", right_path: "/Rover/Motor_0" },
+        layout
+    );
+    require(motor_wire.contains("{-73,0}") && motor_wire.contains("{-73,80}"),
+        "power wiring must use the motor bank feeder lane");
     true
 }
 

@@ -288,6 +288,14 @@ the shared `ModelicaEngine`; this keeps LunCo visual resolution on the same
 source/AST path as every other Modelica class without making the generated
 policy or UI depend on MSL.
 
+The electrical unit presentation is compact for repeated common-pin members.
+The Rhai policy packs source and load banks into deterministic near-square grids,
+uses larger title and component-label fonts, and routes each member through its
+own feeder lane to the shared power rail. This is only Modelica `Placement` and
+`Line` annotation data; the USD collection and Modelica `connect()` equations
+remain the topology authority, and the generic canvas flow animation reads the
+declared `Pin.i` values from the live model state.
+
 The network's own authored `outputs:soc` is the runtime contract — `get(elec, "soc")`
 reads the value forwarded from the child unit.
 
