@@ -1202,6 +1202,7 @@ fn on_save_as_document(
     };
     let document = host.document();
     let source = document.source().to_string();
+    #[cfg(feature = "ui")]
     let suggested_name = {
         let name = document.origin().display_name();
         if name.to_ascii_lowercase().ends_with(".usda")
