@@ -13,7 +13,7 @@ use crate::pretty::{
     VariableDecl,
 };
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_doc::DocumentId;
 use util::{resolve_doc, strip_same_package_prefix};
 
@@ -103,6 +103,26 @@ pub enum ApiOp {
         to_component: String,
         to_port: String,
         line_points: Vec<f32>,
+    },
+    SetConnectionLineStyle {
+        class: String,
+        from_component: String,
+        from_port: String,
+        to_component: String,
+        to_port: String,
+        #[serde(default)]
+        color: Option<[u8; 3]>,
+        #[serde(default)]
+        thickness: Option<f64>,
+        #[serde(default)]
+        smooth_bezier: Option<bool>,
+    },
+    ReverseConnection {
+        class: String,
+        from_component: String,
+        from_port: String,
+        to_component: String,
+        to_port: String,
     },
     SetPlacement {
         class: String,
@@ -402,15 +422,32 @@ pub struct ApplyModelicaOps {
 }
 
 #[on_command(ApplyModelicaOps)]
-pub fn on_apply_modelica_ops(trigger: On<ApplyModelicaOps>, mut commands: Commands) {
+pub fn on_apply_modelica_ops(
+    trigger: On<ApplyModelicaOps>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
     let raw = trigger.event().doc;
-    let ops = trigger.event().ops.clone();
+    let api_ops = trigger.event().ops.clone();
+    let mut internal = Vec::with_capacity(api_ops.len());
+    let mut invalid = Vec::new();
+    for (index, op) in api_ops.iter().enumerate() {
+        match api_op_to_internal(op) {
+            Some(op) => internal.push(op),
+            None if matches!(op, ApiOp::Noop) => {}
+            None => invalid.push(index),
+        }
+    }
+    if !invalid.is_empty() {
+        return Err(format!(
+            "ApplyModelicaOps: invalid operation(s) at index(es) {invalid:?}; no operations applied"
+        ));
+    }
+    let count = internal.len();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, raw) else {
             bevy::log::warn!("[ApplyModelicaOps] no doc for id {}", raw);
             return;
         };
-        let internal: Vec<ModelicaOp> = ops.iter().filter_map(api_op_to_internal).collect();
         if internal.is_empty() {
             return;
         }
@@ -421,6 +458,9 @@ pub fn on_apply_modelica_ops(trigger: On<ApplyModelicaOps>, mut commands: Comman
             lunco_twin_journal::AuthorTag::for_tool("api"),
         );
     });
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "queued": true, "operations": count });
+    Ok(ack)
 }
 
 fn api_op_to_internal(op: &ApiOp) -> Option<ModelicaOp> {
@@ -524,6 +564,42 @@ fn api_op_to_internal(op: &ApiOp) -> Option<ModelicaOp> {
                 from,
                 to,
                 points: flat_to_points(line_points),
+            })
+        }
+        ApiOp::SetConnectionLineStyle {
+            class,
+            from_component,
+            from_port,
+            to_component,
+            to_port,
+            color,
+            thickness,
+            smooth_bezier,
+        } => {
+            let from = port_ref_or_none(from_component, from_port)?;
+            let to = port_ref_or_none(to_component, to_port)?;
+            Some(ModelicaOp::SetConnectionLineStyle {
+                class: class.clone(),
+                from,
+                to,
+                color: *color,
+                thickness: *thickness,
+                smooth_bezier: *smooth_bezier,
+            })
+        }
+        ApiOp::ReverseConnection {
+            class,
+            from_component,
+            from_port,
+            to_component,
+            to_port,
+        } => {
+            let from = port_ref_or_none(from_component, from_port)?;
+            let to = port_ref_or_none(to_component, to_port)?;
+            Some(ModelicaOp::ReverseConnection {
+                class: class.clone(),
+                from,
+                to,
             })
         }
         ApiOp::SetPlacement {
@@ -1037,18 +1113,118 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             range_end: range.end as u32,
             replacement: replacement.clone(),
         }),
-        ModelicaOp::ReplaceSource { .. } => None,
-        ModelicaOp::AddClass { .. }
-        | ModelicaOp::RemoveClass { .. }
-        | ModelicaOp::AddShortClass { .. }
-        | ModelicaOp::AddVariable { .. }
-        | ModelicaOp::RemoveVariable { .. }
-        | ModelicaOp::AddEquation { .. }
-        | ModelicaOp::AddIconGraphic { .. }
-        | ModelicaOp::AddDiagramGraphic { .. }
-        | ModelicaOp::SetExperimentAnnotation { .. }
-        | ModelicaOp::SetConnectionLineStyle { .. }
-        | ModelicaOp::ReverseConnection { .. } => None,
+        ModelicaOp::ReplaceSource { new } => Some(ApiOp::ReplaceSource {
+            source: new.clone(),
+        }),
+        ModelicaOp::AddClass {
+            parent,
+            name,
+            kind,
+            description,
+            partial,
+        } => Some(ApiOp::AddClass {
+            parent: parent.clone(),
+            name: name.clone(),
+            kind: class_kind_to_api(*kind),
+            description: description.clone(),
+            partial: *partial,
+        }),
+        ModelicaOp::RemoveClass { qualified } => Some(ApiOp::RemoveClass {
+            qualified: qualified.clone(),
+        }),
+        ModelicaOp::AddShortClass {
+            parent,
+            name,
+            kind,
+            base,
+            prefixes,
+            modifications,
+        } => Some(ApiOp::AddShortClass {
+            parent: parent.clone(),
+            name: name.clone(),
+            kind: class_kind_to_api(*kind),
+            base: base.clone(),
+            prefixes: prefixes.clone(),
+            modifications: modifications
+                .iter()
+                .map(|(name, value)| ApiModification {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+        }),
+        ModelicaOp::AddVariable { class, decl } => Some(ApiOp::AddVariable {
+            class: class.clone(),
+            name: decl.name.clone(),
+            type_name: decl.type_name.clone(),
+            causality: causality_to_api(decl.causality),
+            variability: variability_to_api(decl.variability),
+            flow: decl.flow,
+            modifications: decl
+                .modifications
+                .iter()
+                .map(|(name, value)| ApiModification {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+            value: decl.value.clone().unwrap_or_default(),
+            description: decl.description.clone(),
+        }),
+        ModelicaOp::RemoveVariable { class, name } => Some(ApiOp::RemoveVariable {
+            class: class.clone(),
+            name: name.clone(),
+        }),
+        ModelicaOp::AddEquation { class, eq } => Some(ApiOp::AddEquation {
+            class: class.clone(),
+            lhs: eq.lhs.clone().unwrap_or_default(),
+            rhs: eq.rhs.clone(),
+        }),
+        ModelicaOp::AddIconGraphic { class, graphic } => Some(ApiOp::AddIconGraphic {
+            class: class.clone(),
+            graphic: graphic_to_api(graphic),
+        }),
+        ModelicaOp::AddDiagramGraphic { class, graphic } => Some(ApiOp::AddDiagramGraphic {
+            class: class.clone(),
+            graphic: graphic_to_api(graphic),
+        }),
+        ModelicaOp::SetExperimentAnnotation {
+            class,
+            start_time,
+            stop_time,
+            tolerance,
+            interval,
+        } => Some(ApiOp::SetExperimentAnnotation {
+            class: class.clone(),
+            start_time: *start_time,
+            stop_time: *stop_time,
+            tolerance: *tolerance,
+            interval: *interval,
+        }),
+        ModelicaOp::SetConnectionLineStyle {
+            class,
+            from,
+            to,
+            color,
+            thickness,
+            smooth_bezier,
+        } => Some(ApiOp::SetConnectionLineStyle {
+            class: class.clone(),
+            from_component: from.component.clone(),
+            from_port: from.port.clone(),
+            to_component: to.component.clone(),
+            to_port: to.port.clone(),
+            color: *color,
+            thickness: *thickness,
+            smooth_bezier: *smooth_bezier,
+        }),
+        ModelicaOp::ReverseConnection { class, from, to } => Some(ApiOp::ReverseConnection {
+            class: class.clone(),
+            from_component: from.component.clone(),
+            from_port: from.port.clone(),
+            to_component: to.component.clone(),
+            to_port: to.port.clone(),
+        }),
     }
 }
 
@@ -1058,6 +1234,111 @@ fn internal_placement_to_api(p: Placement) -> ApiPlacement {
         y: p.y,
         width: p.width,
         height: p.height,
+    }
+}
+
+fn class_kind_to_api(kind: ClassKindSpec) -> ApiClassKind {
+    match kind {
+        ClassKindSpec::Model => ApiClassKind::Model,
+        ClassKindSpec::Block => ApiClassKind::Block,
+        ClassKindSpec::Connector => ApiClassKind::Connector,
+        ClassKindSpec::Package => ApiClassKind::Package,
+        ClassKindSpec::Record => ApiClassKind::Record,
+        ClassKindSpec::Function => ApiClassKind::Function,
+        ClassKindSpec::Type => ApiClassKind::Type,
+    }
+}
+
+fn causality_to_api(causality: CausalitySpec) -> ApiCausality {
+    match causality {
+        CausalitySpec::None => ApiCausality::Acausal,
+        CausalitySpec::Input => ApiCausality::Input,
+        CausalitySpec::Output => ApiCausality::Output,
+    }
+}
+
+fn variability_to_api(variability: VariabilitySpec) -> ApiVariability {
+    match variability {
+        VariabilitySpec::Continuous => ApiVariability::Continuous,
+        VariabilitySpec::Discrete => ApiVariability::Discrete,
+        VariabilitySpec::Parameter => ApiVariability::Parameter,
+        VariabilitySpec::Constant => ApiVariability::Constant,
+    }
+}
+
+fn fill_pattern_to_api(pattern: FillPattern) -> ApiFillPattern {
+    match pattern {
+        FillPattern::None => ApiFillPattern::None,
+        FillPattern::Solid => ApiFillPattern::Solid,
+    }
+}
+
+fn line_pattern_to_api(pattern: LinePattern) -> ApiLinePattern {
+    match pattern {
+        LinePattern::Solid => ApiLinePattern::Solid,
+        LinePattern::Dash => ApiLinePattern::Dash,
+        LinePattern::Dot => ApiLinePattern::Dot,
+    }
+}
+
+fn graphic_to_api(graphic: &GraphicSpec) -> ApiGraphic {
+    match graphic {
+        GraphicSpec::Rectangle {
+            x1,
+            y1,
+            x2,
+            y2,
+            line_color,
+            fill_color,
+            fill_pattern,
+        } => ApiGraphic::Rectangle {
+            x1: *x1,
+            y1: *y1,
+            x2: *x2,
+            y2: *y2,
+            line_color: *line_color,
+            fill_color: *fill_color,
+            fill_pattern: fill_pattern_to_api(*fill_pattern),
+        },
+        GraphicSpec::Polygon {
+            points,
+            line_color,
+            fill_color,
+            fill_pattern,
+        } => ApiGraphic::Polygon {
+            points: points.iter().flat_map(|(x, y)| [*x, *y]).collect(),
+            line_color: *line_color,
+            fill_color: *fill_color,
+            fill_pattern: fill_pattern_to_api(*fill_pattern),
+        },
+        GraphicSpec::Line {
+            points,
+            color,
+            thickness,
+            pattern,
+        } => ApiGraphic::Line {
+            points: points.iter().flat_map(|(x, y)| [*x, *y]).collect(),
+            color: *color,
+            thickness: *thickness,
+            pattern: line_pattern_to_api(*pattern),
+        },
+        GraphicSpec::Text {
+            x1,
+            y1,
+            x2,
+            y2,
+            text,
+            color,
+            font_size,
+        } => ApiGraphic::Text {
+            x1: *x1,
+            y1: *y1,
+            x2: *x2,
+            y2: *y2,
+            text: text.clone(),
+            color: *color,
+            font_size: *font_size,
+        },
     }
 }
 

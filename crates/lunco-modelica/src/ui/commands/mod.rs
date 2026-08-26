@@ -41,7 +41,6 @@ pub use nav::{
     SetZoom,
 };
 pub use plot::{AddSignalToPlot, NewPlotPanel};
-pub use sim::SetModelInput;
 // `Exit` now lives in `lunco_api::session` — see `util`.
 
 pub struct ModelicaCommandsPlugin;
@@ -120,7 +119,6 @@ register_commands!(
     doc::on_save_active_document_as,
     doc::on_save_as_document,
     doc::on_save_document,
-    sim::on_set_model_input,
     nav::on_set_view_mode,
     nav::on_set_zoom,
     doc::on_undo,

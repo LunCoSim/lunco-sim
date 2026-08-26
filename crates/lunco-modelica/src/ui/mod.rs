@@ -684,12 +684,6 @@ impl Plugin for ModelicaUiPlugin {
             });
         }
 
-        // Reflect-registered query providers exposed over the
-        // ApiQueryRegistry (cf. spec 032). Feature-gated because the
-        // registry only exists when `lunco-api` is enabled.
-        #[cfg(feature = "lunco-api")]
-        app.add_plugins(crate::api_queries::ModelicaApiQueriesPlugin);
-
         // Edit events (`ModelicaApiEditPlugin`), the doc registry, the journal
         // wire, and `drain_document_changes` now live in `ModelicaCorePlugin`
         // (build_modelica_core) so a headless server journals Modelica edits

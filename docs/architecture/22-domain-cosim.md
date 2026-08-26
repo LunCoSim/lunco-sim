@@ -30,7 +30,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 
 Every participant's state is exposed as **named scalar ports** through the shared
 **`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`GetPort`/
-`SetPort`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
+`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
 and sensors are exposed declaratively via the `AVIAN` spec table (an `AvianGroup`
 per kind), not a mirror component. The available ports:
 
@@ -237,7 +237,8 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 |---|---|---|
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
-| **Live inputs** — high-frequency, latest-wins | parameter scrubs during a run, joystick/throttle (`SetModelInput`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied directly (e.g. `sim.rs::apply_set_model_input` bypasses the event bus by design). Never a result-returning command. |
+| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied through the shared port command observer. The reflected command is the same path for API, Rhai, UI, and network input. |
+| **Modelica input injection** — discrete | `SetModelInput` | the reflected Modelica command, registered by the UI-free Modelica core and applied through the shared input helper. |
 
 Rule of thumb: **commands start/stop/configure a run and one-shot actions;
 the simulation runs directly once started; live continuous inputs ride

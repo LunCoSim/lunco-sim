@@ -63,7 +63,7 @@ pub use suggestion::*;
 // the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
 fn endpoint_ready_on_add<T: Component>(
     trigger: On<Add, T>,
@@ -177,6 +177,13 @@ fn reset_scene_state(
 
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .register(
+                "ReleasePort",
+                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+            );
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
             .register_type::<ForceActuator>()
@@ -198,7 +205,7 @@ impl Plugin for CoSimPlugin {
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<diagnostics::CosimDiagnostics>();
         // Manual setpoints that outrank the wiring fabric until they expire —
-        // without it, a `SetPort` on a WIRED input lives less than one tick.
+        // without it, a `SetPorts` write on a WIRED input lives less than one tick.
         app.init_resource::<connection::PortHolds>();
         // A lifecycle command may retire a producer after its SetPorts trigger
         // was emitted but before its deferred write lands. Keep that stale write
@@ -697,6 +704,20 @@ pub struct SetPorts {
     pub tick: u64,
 }
 
+/// Release one manual input-port hold before its normal timeout.
+///
+/// This is a discrete command beside the high-frequency [`SetPorts`] control
+/// stream. The reflected `Entity` field keeps API, Rhai, UI, and network
+/// callers on the same entity-resolution and authority path.
+#[Command]
+pub struct ReleasePort {
+    /// The entity whose hold is released.
+    #[authz_target]
+    pub target: Entity,
+    /// Input-port name.
+    pub name: String,
+}
+
 /// Observer for [`SetPorts`]: applies each `(name, value)` via the
 /// [`PortRegistry`] — the single dispatch that reaches Modelica `SimComponent`
 /// inputs, an `InputPorts` surface (throttle/steer/brake, …),
@@ -818,4 +839,14 @@ fn on_set_ports(
     });
 }
 
-register_commands!(on_set_ports);
+#[on_command(ReleasePort)]
+fn on_release_port(
+    trigger: On<ReleasePort>,
+    mut holds: ResMut<connection::PortHolds>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    holds.release(cmd.target, &cmd.name);
+    Ok(Ack::new(OpId::new()))
+}
+
+register_commands!(on_set_ports, on_release_port);

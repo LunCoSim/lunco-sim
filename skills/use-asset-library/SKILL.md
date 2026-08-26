@@ -258,7 +258,9 @@ express clamps as `der(x) = expr` with `max()`/`min()`.
 [`validate-assets`](../validate-assets/SKILL.md) enforces this as an error;
 `assets/models/LunCo/Electrical/Battery.mo` plus the reusable rover electrical
 assemblies are the worked examples. Rhai is event and mission glue only; an
-`on_tick` is appropriate in tests, not as an actuator or numerical bridge.
+`on_tick` is supported as an exceptional fixed-step observer or discrete
+controller, but it is not a continuous numerical bridge or the default mission
+sequencer. Keep equations in Modelica and ordinary progression in task/events.
 
 ## Regenerate the web manifest
 

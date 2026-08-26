@@ -4,6 +4,11 @@
 //! across the simulation, including physical properties, celestial timing,
 //! and the core plugin registration.
 
+// The shared `#[Command]` macro addresses this crate through
+// `::lunco_core`, including when it expands here. This self-alias keeps core
+// commands on exactly the same macro/reflection path as plugin commands.
+extern crate self as lunco_core;
+
 pub mod architecture;
 /// Atomic re-parenting helpers for SOI/Grid migration.
 pub mod attach;
@@ -81,8 +86,8 @@ pub use telemetry::*;
 // path resolution (`lunco_core::Severity` would hit bevy's private import).
 // An explicit item outranks both globs.
 pub use commands::{
-    Ack, ActiveCommandId, ClientCommandPolicy, CommandOutcome, CommandResults, EditIntent,
-    MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
+    Ack, ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
+    EditIntent, MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
 };
 pub use identity::Provenance;
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -91,8 +96,8 @@ pub use markers::{
     ActuatorDrivenJoint, CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath,
     EmbeddedScenarioSource, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
     PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter,
-    TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
-    TRIGGER_COLLISION_LAYER,
+    TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS,
+    SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{

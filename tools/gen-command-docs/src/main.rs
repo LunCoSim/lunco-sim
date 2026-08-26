@@ -451,7 +451,7 @@ fn main() {
     md.push_str("     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> -->\n\n");
     md.push_str("# Command Reference\n\n");
     md.push_str(
-        "Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one\n\
+        "Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one\n\
          bus, reachable from the **HTTP API** (`POST /api/commands`, `{\"command\":\"…\",\"params\":{…}}`),\n\
          **MCP**, and **rhai** (`cmd(\"CommandName\", #{ … })`). This page is generated from the\n\
          **runtime schema** the app itself advertises, so every command below is one you can\n\

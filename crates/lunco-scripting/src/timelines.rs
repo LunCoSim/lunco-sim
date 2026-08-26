@@ -264,6 +264,7 @@ impl ApiQueryProvider for ListTimelinesProvider {
     fn name(&self) -> &'static str {
         "ListTimelines"
     }
+
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let names = world
             .get_resource::<TimelineStore>()
@@ -279,6 +280,7 @@ impl ApiQueryProvider for GetTimelineProvider {
     fn name(&self) -> &'static str {
         "GetTimeline"
     }
+
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(

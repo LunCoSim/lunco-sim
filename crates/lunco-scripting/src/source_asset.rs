@@ -58,8 +58,8 @@ impl Plugin for PythonSourceAssetPlugin {
 }
 
 /// Raw text of a `.rhai` file — the file-backed twin of
-/// [`lunco_core::EmbeddedScenarioSource`] (inline `lunco:script`). Lets a scene
-/// reference a scenario by `lunco:scriptPath` and keep the source as an
+/// [`lunco_core::EmbeddedScenarioSource`] (inline `info:sourceCode`). Lets a scene
+/// reference a scenario by `info:sourceAsset` and keep the source as an
 /// editable, hot-reloadable `.rhai` file instead of a string baked into USD.
 #[cfg(feature = "rhai")]
 #[derive(Asset, TypePath, Debug, Clone)]

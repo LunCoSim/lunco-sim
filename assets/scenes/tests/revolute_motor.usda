@@ -15,8 +15,8 @@
 # applies no torque about the hinge axis — the arm stays level and the
 # angular motor can freely yaw it in the XZ plane.
 #
-# Verify: the joint auto-exposes port `angle`. `SetPort {api_id:<hinge>,
-# name:"angle", value:1.2}` should drive `apply_joint_drives` →
+# Verify: the joint auto-exposes port `angle`. `SetPorts {target:<hinge>,
+# writes:[["angle", 1.2]]}` should drive `apply_joint_drives` →
 # motor.target_position, and the Arm should yaw to ~1.2 rad about Y.
 #
 # Loaded by `target/debug/luncosim test --scene scenes/tests/revolute_motor.usda`.

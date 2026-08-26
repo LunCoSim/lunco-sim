@@ -28,13 +28,20 @@
 //!   retry, or surface to the user.
 
 use crate::ids::make_id_53;
-use bevy::prelude::{Reflect, Resource};
-// The `#[reflect(Event, Default)]` on `SpawnEntity` below names these types by
-// bare ident (that is how the reflect derive resolves them), so they must be in
-// scope here. `#[Command]` gets them from its callers' `use bevy::prelude::*`.
+use crate::Command;
 use bevy::ecs::reflect::ReflectEvent;
+use bevy::prelude::{Reflect, Resource};
 use bevy::reflect::std_traits::ReflectDefault;
 use serde::{Deserialize, Serialize};
+
+/// Reflected type marker emitted by [`crate::Command`].
+///
+/// The API discovery walk uses the same authoritative command abstraction as
+/// local observers and Rhai. Keeping this marker in reflected type metadata
+/// means commands defined by an external plugin are exposed without a crate
+/// name heuristic or per-command registration table.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApiCommandMarker;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
@@ -465,21 +472,17 @@ impl MarkClientLocalExt for bevy::app::App {
 /// is a *wire* command: `lunco-networking` declares its channel
 /// (`declare_channel::<SpawnEntity>`), which needs nothing but the type. The
 /// handler (`on_spawn_entity_command`) lives with the catalog it spawns from, in
-/// `lunco-luncosim-edit`, and that crate re-exports this type so existing call sites
-/// are unchanged. Keeping the *definition* here is what lets the networking crate
+/// `lunco-scene-commands`. Keeping the *definition* here is what lets the networking crate
 /// drop its dependency on the 13.4k-LOC editor — an edge that used to drag the
 /// whole editor closure (→ modelica → workspace → doc-bevy) into every networking
 /// build for exactly two symbols (review A6).
 ///
-/// `reflect_default` semantics (hand-written here — `#[Command]` cannot expand
-/// inside `lunco-core` itself, since it emits absolute `::lunco_core::…` paths):
-/// API/rhai callers may omit optional fields — a missing `rotation` defaults to
-/// `None` (→ identity). Position is always expressed in the current semantic
-/// [`crate::ActivePhysicsFrame`]; callers never pass a Bevy grid entity or perform
-/// BigSpace hierarchy conversion themselves.
-#[allow(missing_docs)]
-#[derive(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug, Serialize, Deserialize)]
-#[reflect(Event, Default)]
+/// `reflect_default` semantics: API/rhai callers may omit optional fields — a
+/// missing `rotation` defaults to `None` (→ identity). Position is always
+/// expressed in the current semantic [`crate::ActivePhysicsFrame`]; callers
+/// never pass a Bevy grid entity or perform BigSpace hierarchy conversion
+/// themselves.
+#[Command(reflect_default)]
 pub struct SpawnEntity {
     /// The catalog entry ID (e.g. "ball_dynamic", "skid_rover").
     pub entry_id: String,

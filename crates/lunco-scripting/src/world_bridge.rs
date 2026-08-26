@@ -1,24 +1,28 @@
 //! World-bound rhai execution — the bridge that lets scripts read ECS state and
 //! drive the simulation.
 //!
-//! # The three verbs
+//! # The world channels
 //!
-//! A script gets exactly three ways to touch the world, mirroring the
+//! A script gets two mutation/read channels to touch the world, mirroring the
 //! engine-wide channel model:
 //!
-//! - **`cmd(name, #{params})`** — *write*. Triggers an [`ApiCommandEvent`], the
+//! - **`cmd(name, #{params})`** — *operation*. Triggers an [`ApiCommandEvent`], the
 //!   SAME entry point the HTTP API / MCP use. It dispatches by name over the
 //!   reflection registry that the `#[Command]` macro auto-populates, so EVERY
 //!   command (twin / usd / modelica / cosim / rover / future) is reachable with
 //!   **zero per-command binding** — add a `#[Command]`, scripts see it for free.
-//!   Writes go through commands so they replicate + pass networking RBAC exactly
-//!   like any other command; the script runs host-authoritative (same trust as
-//!   a local API client).
-//! - **`world_pos(id)` / `get(id, "Comp.field")`** — *read*. Synchronous,
+//!   Commands go through the same dispatch and authority path as any other
+//!   command; client-scoped scripts are restricted to the explicitly local or
+//!   predictive command policy.
+//! - **`query(name, #{params})`** — *read*. Calls a registered read-only
+//!   `ApiQueryProvider`; the same registry is exposed through schema/catalog
+//!   discovery so a client does not need a hardcoded list.
+//! - **`world_pos(id)` / `get(id, "Comp.field")`** — synchronous reflected reads.
 //!   reflection-based reads of live ECS state. `world_pos` is the one
 //!   float-origin-correct (big_space) position read; `get` is the generic
 //!   component-field reader (the finished `EntityProxy`).
-//! - events (`emit`/`on_event`) land in P2 — reusing `TelemetryEvent`.
+//! - **`emit` / `on_event`** — discrete event production and consumption using
+//!   `TelemetryEvent`; delivery is intentionally one fixed-step late.
 //!
 //! # Execution context
 //!
@@ -399,7 +403,7 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 ///
 /// [`compile_with_script_consts`] is the other half: it folds bare `X`. Neither
 /// subsumes the other, and both apply to EVERY script — scenario, lesson, inline
-/// `lunco:script` — because they sit on the single compile path in
+/// `info:sourceCode` — because they sit on the single compile path in
 /// [`ScriptRuntime::compile`]. Tutorials are not special: `StartTutorial` triggers
 /// `RunScenario`, which lands here like anything else.
 ///
@@ -729,7 +733,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         "register_hook",
         |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {
             let authorized = bridge_core::with_world(|world| {
-                bridge_core::enforce_script_authority(
+                bridge_core::enforce_script_mutation(
                     world,
                     bridge_core::capability::POLICY_MUTATE,
                     None,
@@ -766,7 +770,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // Rust seam's built-in). Returns whether a hook was actually removed.
     engine.register_fn("unregister_hook", |id: ImmutableString| -> bool {
         let authorized = bridge_core::with_world(|world| {
-            bridge_core::enforce_script_authority(
+            bridge_core::enforce_script_mutation(
                 world,
                 bridge_core::capability::POLICY_MUTATE,
                 None,
@@ -819,15 +823,15 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // set(id, "Component.field", value) -> bool — the WRITE twin of get(). Applies
     // `value` straight onto the reflected field (native → reflect, no JSON), the
     // mirror of the read path. Coerces by the field's type (scalars widen, arrays
-    // → glam vec/quat). Host-only, so it's authoritative; the change replicates
-    // via normal component sync. Returns false (and logs why) on a bad
+    // → glam vec/quat). Host-side scripts may use it when authorized; the change
+    // replicates via normal component sync. Returns false (and logs why) on a bad
     // entity/path/type — so a scenario can branch on the result.
     engine.register_fn("set", |id: i64, path: ImmutableString, value: Dynamic| -> bool {
         match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
             Ok(()) => true,
             Err(e) => {
                 // Reflection missed — fall back to the co-sim port registry (the
-                // same path wires and `SetPort` use). Ports are scalar, so coerce
+                // same path wires and `SetPorts` use). Ports are scalar, so coerce
                 // the value to f64; a non-numeric set genuinely failed.
                 let scalar = value.as_float().ok().or_else(|| value.as_int().ok().map(|i| i as f64));
                 if let Some(v) = scalar {
@@ -849,7 +853,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     });
 
     // param(id, "key", default) -> f64 — read a per-prim numeric script param
-    // (USD `lunco:params`) via ScriptParams. The typed, fast per-instance-config
+    // (USD `lunco:param:<key>`) via ScriptParams. The typed, fast per-instance-config
     // read; falls back to `default` when absent. Use this, NOT name(me) scanning.
     engine.register_fn(
         "param",
@@ -889,7 +893,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // set_setting("Resource.field", value) -> bool — write a GLOBAL setting (the
     // resource twin of set()). Makes every reflect-registered resource field
-    // tunable from a scenario with no per-setting command. Host-authoritative.
+    // tunable from a host-side scenario with no per-setting command.
     engine.register_fn(
         "set_setting",
         |path: ImmutableString, value: Dynamic| -> bool {
@@ -970,7 +974,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         bridge_core::query(&RhaiBuilder, name.as_str(), map_to_json(params))
     });
     engine.register_fn("query", |name: ImmutableString| -> Dynamic {
-        bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::Value::Null)
+        bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
     // find(name) -> id (i64), or -1 if no entity has that Name.
@@ -1469,7 +1473,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // importer is `None` and a bare import is canonicalized
                         // against the default root, i.e. the wrong place.
                         //
-                        // A script with NO asset id (inline `lunco:script`, a
+                        // A script with NO asset id (inline `info:sourceCode`, a
                         // `RunScenario` string, a generated timeline) is left
                         // unsourced on purpose: rhai then reports `None`, the
                         // resolver takes its explicit "no anchor" branch, and a
@@ -2366,7 +2370,7 @@ mod tests {
         let engine = engine_with_sibling("twin://ep1/shot_camera.rhai", "fn framing() { 7 }");
         let src = r#"import "shot_camera" as cam; cam::framing()"#;
 
-        // Unsourced (an inline `lunco:script` / `RunScenario` string): the
+        // Unsourced (an inline `info:sourceCode` / `RunScenario` string): the
         // importer is `None`, so `shot_camera` canonicalizes against the default
         // root and MUST NOT silently find the twin's file.
         let anonymous = super::compile_with_script_consts(&engine, src).unwrap();

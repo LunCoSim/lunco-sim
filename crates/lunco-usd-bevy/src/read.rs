@@ -127,6 +127,14 @@ pub trait UsdRead {
     /// Named `type_name` to distinguish it from authoring-layer helpers.
     fn type_name(&self, prim: &SdfPath) -> Option<String>;
 
+    /// Composed USD `kind` metadata of the prim (for example
+    /// `"component"`, `"assembly"`, or `"subcomponent"`).
+    ///
+    /// `kind` is standard prim metadata, not an attribute. Keeping this read
+    /// on the composed USD seam preserves opinions from references, variants,
+    /// and other composition arcs.
+    fn kind(&self, prim: &SdfPath) -> Option<String>;
+
     /// The default-time composed value of attribute `name` on `prim`, owned.
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
 
@@ -482,6 +490,15 @@ impl UsdRead for StageView<'_> {
             .ok()
             .flatten()
             .map(|t| t.to_string())
+    }
+
+    fn kind(&self, prim: &SdfPath) -> Option<String> {
+        self.stage()
+            .prim(prim.clone())
+            .kind()
+            .ok()
+            .flatten()
+            .map(|kind| kind.to_string())
     }
 
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {

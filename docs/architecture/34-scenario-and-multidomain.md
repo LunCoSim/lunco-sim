@@ -22,7 +22,7 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | One program per prim | a `LunCoProgramAPI` prim (or `info:*` authored in place) + `info:sourceAsset` → `SimComponent`; the engine follows the extension | ✅ |
 | Wiring (SSP Connection) | a native USD connection on the consumer — `inputs:x.connect = </Other.outputs:y>` → `SimConnection`; same form within a prim and across prims | ✅ |
 | Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); the model connects `inputs:g` to it | ✅ |
-| Many scripts in one world | each `LunCoProgramAPI` prim → own `EmbeddedScenarioSource` → independent rhai | ✅ |
+| Many scripts in one world | each owner may have one executable Rhai `LunCoProgramAPI`; different owners remain independent | ✅; duplicate executable programs on one owner are rejected visibly |
 | Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
@@ -39,7 +39,11 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 > every mechanism in this table.
 
 **Conclusion:** "several models / several scripts in the world" needs **no core
-change** — it is the SSP one-program-prim-per-domain pattern below.
+change** — it is the SSP one-program-prim-per-domain pattern below. The current
+runtime has one `ScriptedModel` slot per ECS owner. If two executable Rhai
+program prims target the same owner, USD projection reports the ambiguity and
+attaches neither; authors must split ownership or compose the policy into one
+program. This prevents order-dependent last-writer-wins behavior.
 
 ## Decision 1 — Multi-domain vehicle = one program prim per domain + connections (SSP)
 
@@ -124,11 +128,12 @@ and publishes the result causally into the other.
 
 ## Decision 2 — One canonical input-write path (collapse API onto ports)
 
-Today there are **two** ways to set a model input, and they fight:
+Every public mutation now uses the existing command/port substrate:
 
-- `SetModelInput` API / `apply_set_model_input` → writes `ModelicaModel.inputs`
-  **directly**.
-- `SetPort` / wires / rhai `set(id,name,v)` → `PortRegistry::write_port` →
+- `SetModelInput` is a reflected Modelica command owned by the UI-free core;
+  its shared helper writes through `PortRegistry` whenever the entity exposes
+  a cosimulation port.
+- `SetPorts` / wires / rhai `set(id,name,v)` → `PortRegistry::write_port` →
   `SimComponent.inputs`.
 
 `sync_modelica_inputs` copies `SimComponent.inputs → ModelicaModel.inputs` **every
@@ -137,16 +142,16 @@ cosim'd entity. (This is why engine-cut-via-`set_input` silently fails on the
 lander, and why the embedded script's `set_input(...)` — which isn't even a
 registered rhai verb — is dead.)
 
-**Fix — make the `PortRegistry` the single write surface:**
+The `PortRegistry` remains the single write surface for cosim entities:
 
-1. Reimplement `apply_set_model_input` to **port-first**: if the entity exposes a
+1. `apply_set_model_input` is **port-first**: if the entity exposes a
    writable port of that name (`PortRegistry::write_port` succeeds) use it; else
    fall back to the direct `ModelicaModel.inputs` write (bare workbench / batch
    models with no `SimComponent`).
-2. rhai `set()` already routes through `write_port` — **no rhai change needed**
+2. rhai `set()` already routes through `write_port` — **no second input API**
    for correctness. (Only fix the *content* of the embedded scene script:
    `set_input(me,…)` → `set(me,…)`.)
-3. Net: `SetModelInput`, `SetPort`, rhai `set()`, Python, and wires all converge
+3. Net: `SetModelInput`, `SetPorts`, rhai `set()`, Python, and wires all converge
    on `SimComponent.inputs` for cosim'd entities → the cosim value *is* the value
    everyone sees → no clobber, one source of truth. The MCP `set_input` tool
    keeps its ergonomic name + input-name validation but now actually sticks.

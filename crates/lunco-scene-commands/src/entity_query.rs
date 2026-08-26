@@ -24,7 +24,8 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::GlobalEntityId;
+use lunco_core::{CatalogEntryId, GlobalEntityId, UsdPrimKind};
+use lunco_usd_bevy::UsdPrimPath;
 
 /// `QueryEntity { id }` → that entity's name, kind, pose.
 pub struct QueryEntityProvider;
@@ -57,6 +58,9 @@ impl ApiQueryProvider for QueryEntityProvider {
                 Has<lunco_core::ControlBinding>,
                 Option<&lunco_core::CelestialBody>,
                 Option<&Transform>,
+                Option<&CatalogEntryId>,
+                Option<&UsdPrimKind>,
+                Option<&UsdPrimPath>,
             )>,
             lunco_physics::SimulationPoseQuery,
         )> = SystemState::new(world);
@@ -67,17 +71,10 @@ impl ApiQueryProvider for QueryEntityProvider {
             );
         };
 
-        let (name, accepts_commands, body, transform) =
-            q_meta.get(entity).unwrap_or((None, false, None, None));
-        // NOTE: the reported kind string is deliberately unchanged — a lander accepts
-        // commands and has always reported as "rover" here.
-        let kind = if accepts_commands {
-            "rover"
-        } else if body.is_some() {
-            "planet"
-        } else {
-            "unknown"
-        };
+        let (name, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) = q_meta
+            .get(entity)
+            .unwrap_or((None, false, None, None, None, None, None));
+        let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
 
         let Some((pos, rot)) = poses.pose(entity) else {
             return ApiResponse::error(
@@ -97,6 +94,10 @@ impl ApiQueryProvider for QueryEntityProvider {
             "api_id": raw,
             "name": name.map(|n| n.as_str()).unwrap_or(""),
             "type": kind,
+            "control_bound": accepts_commands,
+            "celestial_body": body.is_some(),
+            "catalog_id": catalog_id.map(|id| id.0.as_str()),
+            "usd_prim_path": prim_path.map(|path| path.path.as_str()),
             "position": [pos.x, pos.y, pos.z],
             // The frame `position` is in, named on the wire: a client holding a
             // bare triple has no way to know whether it may hand it back.

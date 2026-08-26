@@ -12,23 +12,19 @@
 //!     (`task`, `mission`, `on_event`, …).
 //!   - `prelude` — ergonomic helpers authored in `prelude.rhai` (name + params).
 //!   - `tools`   — registered `name::fn` tool libraries (incl. file-loaded ones).
-//!   - `commands`— every reflected `#[Command]` (the `cmd("…")` targets) + fields.
-//!   - `queries` — every registered `ApiQueryProvider` (the `query("…")` targets).
+//!   - `commands`— every reflected API command (the `cmd("…")` targets) + fields.
+//!   - `queries` — every registered read-only provider.
+//!   - `reflection` — reflected component/resource types and their fields.
 //!
-//! TODO(autocomplete): build the completion *engine* on top of this — a
-//! `ScriptComplete { prefix, limit? }` query that filters + ranks this surface
-//! into kind-tagged candidates (`{ label, kind, detail }`) so every editor shares
-//! one correct, testable matcher instead of re-filtering the raw catalog.
-//! Candidate sources are already here (VERBS/HOOKS consts, the prelude AST walk,
-//! `lunco_tools::index`, `discover_commands`, the query registry). The egui popup
-//! UI is a further, separate consumer — and note the Modelica editor found egui
-//! `TextEdit`-overlapping popups fight upstream focus/selection bugs
-//! (`lunco-modelica/.../code_editor.rs`), so an external/LSP editor is the better
-//! first client. There is currently NO in-app rhai editor at all.
+//! `ScriptComplete { prefix, limit? }` is the lightweight completion query over
+//! this same surface. UI/LSP clients can consume it without reimplementing the
+//! matcher.
 
 #![cfg(feature = "rhai")]
 
+use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::prelude::*;
+use bevy::reflect::TypeInfo;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, ApiVisibility};
 use lunco_api::schema::ApiResponse;
 
@@ -43,6 +39,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. Runs synchronously; `data` carries handler-assigned values (a spawned gid, etc.).",
     ),
     (
+        "to_json",
+        "to_json(#{value})",
+        "string",
+        "Serialize a Rhai map/array into JSON for commands whose contract carries a JSON string.",
+    ),
+    (
         "get",
         "get(id, \"Component.field\")",
         "value | ()",
@@ -52,7 +54,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "set",
         "set(id, \"Component.field\", value)",
         "bool",
-        "WRITE. The mirror of get(): write a value straight onto a reflected component field (native → reflect, no JSON). Coerces by field type (int→float, [x,y,z]→Vec3). Host-authoritative; replicates via component sync. false on bad path/type.",
+        "WRITE. The mirror of get(): write a value straight onto a reflected component field (native → reflect, no JSON). Coerces by field type (int→float, [x,y,z]→Vec3). Host-side and authority-gated; replicates via component sync. false on bad path/type.",
     ),
     (
         "get_setting",
@@ -77,6 +79,72 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "query(name, #{params})",
         "value | ()",
         "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). The read twin of cmd(). () if missing/errored.",
+    ),
+    (
+        "vadd",
+        "vadd(a, b)",
+        "[x,y,z] | ()",
+        "Pure vector addition; returns () for invalid/non-finite vectors.",
+    ),
+    (
+        "vsub",
+        "vsub(a, b)",
+        "[x,y,z] | ()",
+        "Pure vector subtraction.",
+    ),
+    (
+        "vcross",
+        "vcross(a, b)",
+        "[x,y,z] | ()",
+        "Pure vector cross product.",
+    ),
+    (
+        "vscale",
+        "vscale(a, scalar)",
+        "[x,y,z] | ()",
+        "Pure vector scaling.",
+    ),
+    (
+        "vlen",
+        "vlen(a)",
+        "f64 | ()",
+        "Pure vector length.",
+    ),
+    (
+        "vdot",
+        "vdot(a, b)",
+        "f64 | ()",
+        "Pure vector dot product.",
+    ),
+    (
+        "vnorm",
+        "vnorm(a)",
+        "[x,y,z] | ()",
+        "Pure safe normalization.",
+    ),
+    (
+        "clamp",
+        "clamp(value, lo, hi)",
+        "f64",
+        "Finite-safe scalar clamp.",
+    ),
+    (
+        "qrot",
+        "qrot(quaternion, vector)",
+        "[x,y,z] | ()",
+        "Rotate a vector by an xyzw quaternion.",
+    ),
+    (
+        "angle_deg",
+        "angle_deg(a, b)",
+        "f64 | ()",
+        "Unsigned angle between directions in degrees.",
+    ),
+    (
+        "yaw_delta_deg",
+        "yaw_delta_deg(previous, current)",
+        "f64 | ()",
+        "Signed per-step heading delta in degrees.",
     ),
     (
         "world_pos",
@@ -127,6 +195,24 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Direct, registered child entity ids (empty if none).",
     ),
     (
+        "owner_of",
+        "owner_of(id)",
+        "i64 | ()",
+        "READ. Session currently controlling the entity, if any.",
+    ),
+    (
+        "controller",
+        "controller(id)",
+        "string | ()",
+        "READ. Role of the current controller, if any.",
+    ),
+    (
+        "is_controlled",
+        "is_controlled(id)",
+        "bool",
+        "READ. Whether a human or autopilot currently controls the entity.",
+    ),
+    (
         "list_entities",
         "list_entities()",
         "[#{ id, name, type, pos, catalog_id }]",
@@ -157,6 +243,24 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks next tick. `value` may be float/int/bool/string.",
     ),
     (
+        "register_hook",
+        "register_hook(id, entry, source)",
+        "bool",
+        "PRIVILEGED POLICY. Install a deterministic Rhai policy hook; requires Operator authority.",
+    ),
+    (
+        "unregister_hook",
+        "unregister_hook(id)",
+        "bool",
+        "PRIVILEGED POLICY. Remove an installed policy hook; requires Operator authority.",
+    ),
+    (
+        "list_hooks",
+        "list_hooks()",
+        "[#{id, backend, deterministic}]",
+        "READ. List installed policy hooks.",
+    ),
+    (
         "subscribe",
         "subscribe(name)",
         "()",
@@ -182,6 +286,24 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Monotonic simulation seconds since startup.",
     ),
     (
+        "param",
+        "param(id, key, default?)",
+        "f64 | ()",
+        "READ. Read the authored USD `lunco:param:<key>` value from ScriptParams.",
+    ),
+    (
+        "twin_root",
+        "twin_root()",
+        "string",
+        "READ. Absolute root of the active Twin, or an empty string.",
+    ),
+    (
+        "is_unattended",
+        "is_unattended()",
+        "bool",
+        "READ. Whether the current run has no interactive controller.",
+    ),
+    (
         "rand",
         "rand()",
         "f64",
@@ -201,6 +323,175 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let mut entries = registry
+        .iter()
+        .filter_map(|registration| {
+            let is_component = registration.data::<ReflectComponent>().is_some();
+            let is_resource = registration.data::<ReflectResource>().is_some();
+            if !is_component && !is_resource {
+                return None;
+            }
+            let fields = match registration.type_info() {
+                TypeInfo::Struct(info) => info
+                    .iter()
+                    .map(|field| {
+                        serde_json::json!({
+                            "name": field.name(),
+                            "type": field.type_path(),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            Some(serde_json::json!({
+                "type": registration.type_info().type_path_table().short_path(),
+                "kind": if is_resource { "resource" } else { "component" },
+                "readable": true,
+                "writable": is_component || is_resource,
+                "fields": fields,
+            }))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_unstable_by(|a, b| a["type"].as_str().cmp(&b["type"].as_str()));
+    entries
+}
+
+fn prelude_surface() -> Vec<serde_json::Value> {
+    let mut engine = rhai::Engine::new();
+    // This engine only introspects the embedded prelude. Keep imports
+    // fail-closed: completion must not read arbitrary files from the process
+    // working directory.
+    engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
+    crate::rhai_limits::apply(&mut engine);
+    crate::world_bridge::compile_prelude(&engine)
+        .map(|ast| {
+            let mut functions: Vec<serde_json::Value> = ast
+                .iter_functions()
+                .map(|function| {
+                    serde_json::json!({
+                        "name": function.name,
+                        "params": function.params,
+                    })
+                })
+                .collect();
+            functions.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+            functions
+        })
+        .unwrap_or_default()
+}
+
+fn tool_surface() -> Vec<serde_json::Value> {
+    lunco_tools::index()
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "name": info.name,
+                "backend": info.backend,
+                "functions": info.functions,
+            })
+        })
+        .collect()
+}
+
+/// Completion query over the same runtime catalog used by authoring tools.
+struct ScriptCompleteProvider;
+
+impl ApiQueryProvider for ScriptCompleteProvider {
+    fn name(&self) -> &'static str {
+        "ScriptComplete"
+    }
+
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let prefix = params
+            .get("prefix")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let limit = params
+            .get("limit")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(50)
+            .clamp(1, 200) as usize;
+        let mut candidates = VERBS
+            .iter()
+            .map(|(name, signature, _, doc)| {
+                serde_json::json!({
+                    "label": name,
+                    "kind": "verb",
+                    "detail": signature,
+                    "documentation": doc,
+                })
+            })
+            .chain(HOOKS.iter().map(
+                |(name, doc)| serde_json::json!({ "label": name, "kind": "hook", "detail": doc }),
+            ))
+            .collect::<Vec<_>>();
+        candidates.extend(prelude_surface().into_iter().map(|function| {
+            serde_json::json!({
+                "label": function["name"],
+                "kind": "prelude",
+                "detail": function["params"],
+            })
+        }));
+        candidates.extend(tool_surface().into_iter().flat_map(|tool| {
+            let namespace = tool["name"].as_str().unwrap_or_default().to_owned();
+            let backend = tool["backend"].as_str().unwrap_or_default().to_owned();
+            let functions = tool["functions"].as_array().cloned().unwrap_or_default();
+            functions.into_iter().filter_map(move |function| {
+                let signature = function.as_str()?;
+                let function_name = signature.split('/').next().unwrap_or(signature);
+                Some(serde_json::json!({
+                    "label": format!("{namespace}::{function_name}"),
+                    "kind": "tool",
+                    "detail": format!("{backend} {signature}"),
+                }))
+            })
+        }));
+        let type_registry = world.resource::<AppTypeRegistry>().clone();
+        let commands = {
+            let registry = type_registry.read();
+            let visibility = world.get_resource::<ApiVisibility>();
+            lunco_api::discover_commands(&registry, visibility)
+        };
+        candidates.extend(commands.into_iter().map(|command| {
+            serde_json::json!({
+                "label": command.name,
+                "kind": "command",
+                "detail": command.fields.iter().map(|field| field.name.clone()).collect::<Vec<_>>().join(", "),
+            })
+        }));
+        candidates.extend(
+            lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>())
+                .into_iter()
+                .map(|query| {
+                    serde_json::json!({
+                        "label": query,
+                        "kind": "query",
+                        "detail": "read-only structured provider",
+                    })
+                }),
+        );
+        candidates.extend(reflected_surface(world).into_iter().map(|entry| {
+            serde_json::json!({
+                "label": entry["type"],
+                "kind": entry["kind"],
+                "detail": "reflected type",
+            })
+        }));
+        candidates.retain(|candidate| {
+            candidate["label"]
+                .as_str()
+                .is_some_and(|label| label.to_ascii_lowercase().starts_with(&prefix))
+        });
+        candidates.sort_unstable_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
+        candidates.truncate(limit);
+        ApiResponse::ok(serde_json::json!({ "prefix": prefix, "candidates": candidates }))
+    }
+}
+
 /// Lifecycle hooks a persistent scenario *defines* (not verbs it calls).
 const HOOKS: &[(&str, &str)] = &[
     (
@@ -217,7 +508,7 @@ const HOOKS: &[(&str, &str)] = &[
     ),
     (
         "on_tick",
-        "fn on_tick(self) — test-only bounded observer; production progression belongs in task(self).",
+        "fn on_tick(self) — exceptional fixed-step hook; use for sampled observers or discrete controllers, not continuous equations or ordinary mission sequencing.",
     ),
     (
         "on_stop",
@@ -250,37 +541,11 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             .map(|(name, doc)| serde_json::json!({ "name": name, "doc": doc }))
             .collect();
 
-        // Prelude helpers — compiled and introspected under the runtime policy.
-        let prelude: Vec<serde_json::Value> = {
-            let mut engine = rhai::Engine::new();
-            // Replace rhai's default `FileModuleResolver` before compiling
-            // anything: it reads arbitrary files relative to the process CWD,
-            // so a prelude `import` would escape the sandbox. The limits do
-            // NOT close this hole — the third engine in this crate to need the
-            // same pairing (see `backend.rs` and `world_bridge.rs`).
-            //
-            // Empty resolver rather than `AssetModuleResolver`: this engine only
-            // introspects the prelude for the catalog, never runs authored
-            // script, so "no import resolves" is the correct fail-closed answer.
-            engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
-            crate::rhai_limits::apply(&mut engine);
-            crate::world_bridge::compile_prelude(&engine)
-                .map(|ast| {
-                    let mut fns: Vec<serde_json::Value> = ast
-                        .iter_functions()
-                        .map(|f| serde_json::json!({ "name": f.name, "params": f.params }))
-                        .collect();
-                    fns.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-                    fns
-                })
-                .unwrap_or_default()
-        };
-
-        // Tool libraries (incl. file-loaded ones).
-        let tools: Vec<serde_json::Value> = lunco_tools::index()
-            .into_iter()
-            .map(|i| serde_json::json!({ "name": i.name, "backend": i.backend, "functions": i.functions }))
-            .collect();
+        // Prelude helpers and tool libraries (incl. file-loaded ones) use the
+        // same helpers as `ScriptComplete`, keeping both discovery surfaces in
+        // lockstep.
+        let prelude = prelude_surface();
+        let tools = tool_surface();
 
         // Reflected commands (cmd targets) — reuse the canonical discovery walk,
         // respecting API visibility so internal commands stay hidden.
@@ -292,13 +557,13 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         };
         let commands = serde_json::to_value(&commands).unwrap_or_default();
 
-        // Registered query providers (query targets).
-        let mut queries: Vec<String> = world
-            .resource::<ApiQueryRegistry>()
-            .names()
-            .map(|s| s.to_string())
-            .collect();
-        queries.sort();
+        // Registered read-only providers (query targets), from the same
+        // registry the runtime executes.
+        let queries = serde_json::to_value(lunco_api::discover_queries(Some(
+            world.resource::<ApiQueryRegistry>(),
+        )))
+        .unwrap_or_default();
+        let reflection = reflected_surface(world);
 
         ApiResponse::ok(serde_json::json!({
             "verbs": verbs,
@@ -307,6 +572,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             "tools": tools,
             "commands": commands,
             "queries": queries,
+            "reflection": reflection,
         }))
     }
 }
@@ -317,6 +583,9 @@ pub fn register_queries(app: &mut App) {
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ScriptingCatalogProvider);
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(ScriptCompleteProvider);
 }
 
 #[cfg(test)]
@@ -339,7 +608,7 @@ mod tests {
             other => panic!("expected Ok, got {other:?}"),
         };
 
-        // Verbs include the three core channels.
+        // Verbs include the command and query channels.
         let verbs = data["verbs"].as_array().unwrap();
         for v in ["cmd", "get", "query", "world_pos", "emit"] {
             assert!(
@@ -388,5 +657,6 @@ mod tests {
         // Commands/queries keys exist (arrays; empty in this bare world is fine).
         assert!(data["commands"].is_array());
         assert!(data["queries"].is_array());
+        assert!(data["reflection"].is_array());
     }
 }

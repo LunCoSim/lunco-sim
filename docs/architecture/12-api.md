@@ -87,8 +87,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `DescribeModel` | `{"doc": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
 | `SnapshotVariables` | `{"doc": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, twin, MSL, and open docs. |
-| `SetModelInput` | `{"doc": u64, "name": string, "value": f64}` | Set a model input value (returns success/error payload). |
-| `CopyShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
+| `GetShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 
 ---
@@ -214,6 +213,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | **Time** | `ControlAnimation` | Play/pause/scrub/rate the USD animation preview (independent of the physics clock). |
 | **Modelica** | `CompileModel` | Compile a specific class in a document. |
+| | `SetModelInput` | Inject one discrete input value through the shared Modelica input path. |
 | | `RunActiveModel` | Start/Resume simulation of the active model. |
 | | `PauseActiveModel` | Pause simulation. |
 | | `ResetActiveModel` | Reset simulation to `t=0`. |
@@ -480,10 +480,11 @@ There are **two response shapes** behind `POST /api/commands`:
    `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,
    `ListOpenDocuments` (and future entries from spec 033). Domain
    crates register implementations of `ApiQueryProvider` against the
-   `ApiQueryRegistry`; the executor checks the registry first when
-   handling an `ExecuteCommand` request, runs the provider deferred
-   via `commands.queue` so it has `&mut World` access, and returns
-   the resulting `ApiResponse::Ok { data }` to the transport.
+   `ApiQueryRegistry`; the executor checks the reflected command namespace
+   first and only uses the query registry when no reflected command has that
+   name. It runs the provider deferred via `commands.queue` so it has
+   `&mut World` access, and returns the resulting `ApiResponse::Ok { data }`
+   to the transport.
 
 The wire format is identical for both — `{"type":"ExecuteCommand","command":"...","params":{...}}` —
 so callers don't need to know which path their command takes. The

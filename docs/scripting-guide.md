@@ -183,8 +183,11 @@ fn on_stop(me)       { brake(me); }                      // teardown: hot-reload
 ```
 
 - Define any subset. `on_stop` is where you stop actuators / release claims.
-- Use `task` for fixed-tick behavior and `on_event` for external events. A
-  hand-written `on_tick` loop is not the production mission authoring path.
+- Use `task` for ordinary fixed-tick behavior and `on_event` for external
+  events. Production `on_tick` is supported for exceptional sampled observers
+  and discrete controllers; it runs once per fixed step before task/mission
+  evaluation and must not replace continuous Modelica equations or normal
+  mission sequencing.
 
 ## 4. The everyday verbs
 
@@ -195,15 +198,21 @@ You'll use these constantly (the complete table is in
 | Verb | Purpose |
 |---|---|
 | `cmd(name, #{params})` | **WRITE** — fire any command by name (spawn, possess, set input…). Returns `#{ id, ok, data, error }`. |
-| `query(name, #{params})` | **READ** — call a query provider (Raycast, Nearest, GroundHeight…). |
+| `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight…). |
+| `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, and source for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`). |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` next tick). |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
-| `list_entities()` | every entity (`#{id,name,type,pos}`) — filter/select in-script. |
+| `list_entities()` | every entity (`#{id,name,type,catalog_id,usd_prim_path,pos}`) — identity comes from USD/catalog data; filter/select in-script. |
 
-> **`set` vs `cmd`.** Use `set` to tune a *value* (a field, a config knob) — a direct
-> reflected write, host-authoritative. Use `cmd` for an *operation* with side effects
+> **`set` vs `cmd`.** Use `set` to tune a reflected value. When `set`
+> falls through to a scalar port it is a raw write and has no persistent hold;
+> use `cmd("SetPorts", #{target: id, writes: [[name, value]]})` when wiring must
+> be overridden until the shared hold expires; use `cmd("ReleasePort", ... )` to
+> end that hold early. Direct
+> writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd`
+> for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
 
 ## 5. Making it move: navigation & sensing
@@ -241,6 +250,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 |---|---|---|
 | `cmd(name, #{params})` | `#{ id, ok, data, error }` | **WRITE** — fire any `#[Command]` by name (synchronous; `data` carries assigned values like a spawned gid). The full list is the [command reference](./commands-reference.md). |
 | `query(name, #{params})` | value \| `()` | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …) |
+| `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id` |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
 | `set(id, "Comp.field", value)` | bool | reflected component **write** — the mirror of `get`; coerces by field type (int→float, `[x,y,z]`→Vec3); `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
@@ -253,7 +263,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
 | `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |
 | `is_controlled(id)` | bool | is any session (human or autopilot) driving it |
-| `list_entities()` | `[#{id,name,type,pos}]` | every registered entity (filter/select in-script) |
+| `list_entities()` | `[#{id,name,type,catalog_id,usd_prim_path,pos}]` | every registered entity; `type` is the projected USD kind, not a control-component heuristic |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
@@ -269,9 +279,11 @@ contract). Both directions are native: `get`/`get_setting` build rhai values
 straight from reflect, and `set`/`set_setting` write rhai values straight back —
 no JSON round-trip on the read or write path.
 
-> **`set` vs `cmd`.** Use `set`/`set_setting` to tune a *value* (a field, a config
-> knob) — it's a direct reflected write, host-authoritative because scenarios run
-> host-only, and the change replicates through normal component sync. Use `cmd` for
+> **`set` vs `cmd`.** Use `set`/`set_setting` to tune a reflected value.
+> A scalar-port fallback is a raw write, not a persistent hold; use
+> `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a hold. Direct
+> writes are host-authoritative and
+> unavailable to client-scoped scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
 > material, anything an observer must react to). Settings are only reachable if
 > their type is `register_type`'d with `#[reflect(Component)]` / `#[reflect(Resource)]`.
@@ -542,7 +554,7 @@ produces the same sequence — no explicit seeding needed.
 | [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via the task kernel |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | a linear task-tree sequence |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
-| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and no `on_tick` loop |
+| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and the default no-`on_tick` style |
 | [`script_first_robot.rhai`](../assets/scripting/examples/script_first_robot.rhai) | USD component assembly plus a Modelica control graph batch |
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |

@@ -320,7 +320,7 @@ per-backend duplication" endgame, applied where it pays.
 
 `lunco-cosim/systems/propagate.rs` — `CompiledWiring::rebuild` resolves every wire
 source and every distinct target once; the accumulate/write phases exchange by
-handle. One-shot name callers (API `Get/SetPort`, scripting, the inspector) are
+handle. One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
 unchanged — they don't need resolution and pay no migration cost.
 
 ### Follow-ups

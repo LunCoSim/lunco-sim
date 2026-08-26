@@ -442,7 +442,7 @@ impl CompiledWiring {
 ///    order. A target with no such input port is a dangling wire — reported,
 ///    not silently dropped.
 ///
-/// Undriven input ports are never touched, so a manual `SetPort` hold survives.
+/// Undriven input ports are never touched, so a manual `SetPorts` hold survives.
 ///
 /// ## Per-target network gating
 ///
@@ -649,7 +649,7 @@ pub fn propagate_connections(
         if !peer_simulates(world, t.entity) {
             continue;
         }
-        // A HELD port is not driven by its wire. Without this, a `SetPort` on a
+        // A HELD port is not driven by its wire. Without this, a `SetPorts` write on a
         // wired input is overwritten by the next propagation tick — the write
         // "succeeds" and nothing happens, which is indistinguishable from a
         // broken port to whoever sent it.

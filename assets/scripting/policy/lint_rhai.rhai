@@ -1,9 +1,8 @@
 // Rhai lint policy — authored rules over `{ path, kind, source, ... }`.
 //
-// Production Rhai is orchestration: events, commands, and mission sequencing.
-// Continuous numerical work belongs in Modelica or a native signal/control
-// substrate. Test scenarios may use on_tick because advancing and observing the
-// simulation is precisely what those scripts test.
+// Production Rhai owns discrete policy and orchestration. on_tick is supported
+// as an exceptional fixed-step hook for sampled observers and discrete control;
+// continuous numerical work remains in Modelica or a native signal substrate.
 
 fn finding(rule, severity, subject, message) {
     let f = #{};
@@ -24,12 +23,12 @@ fn production_on_tick(facts) {
     if is_test_scenario(facts.path) { return out; }
     if !facts.source.contains("fn on_tick(") { return out; }
 
-    let message = "declares on_tick outside assets/scenarios/tests — production Rhai ";
-    message += "must be event-driven; move continuous math/control to Modelica or ";
-    message += "native signal code, and express propagation with authored connections.";
+    let message = "declares on_tick outside assets/scenarios/tests — allowed only as an ";
+    message += "exceptional fixed-step observer or discrete controller; keep continuous ";
+    message += "equations/control in Modelica and ordinary sequencing in task/events.";
     out.push(finding(
         "production-rhai-on-tick",
-        "error",
+        "warning",
         facts.path,
         message
     ));

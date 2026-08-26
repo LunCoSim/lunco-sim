@@ -36,6 +36,8 @@
 //! being fetched.
 
 use bevy::prelude::*;
+use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
 
 /// Marker components used by `lunco-cosim`'s integration tests to tag a
@@ -54,6 +56,79 @@ pub struct PythonBalloonMarker;
 #[derive(Resource, Default)]
 pub struct SpawnCatalog {
     pub entries: Vec<SpawnableEntry>,
+}
+
+/// Structured read of the runtime spawn catalog.
+///
+/// SpawnEntity accepts an entry_id; scripts and remote clients must be able
+/// to discover those ids from the same catalog that the command validates.
+/// This provider deliberately reports authored/discovered data only.
+pub struct SpawnCatalogProvider;
+
+impl ApiQueryProvider for SpawnCatalogProvider {
+    fn name(&self) -> &'static str {
+        "ListSpawnCatalog"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        let Some(catalog) = world.get_resource::<SpawnCatalog>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "ListSpawnCatalog: SpawnCatalog resource is not present",
+            );
+        };
+        let mut entries: Vec<_> = catalog
+            .entries
+            .iter()
+            .map(|entry| {
+                let source = match &entry.source {
+                    SpawnSource::UsdFile(path) => serde_json::json!({
+                        "kind": "usd_file",
+                        "path": path,
+                    }),
+                };
+                serde_json::json!({
+                    "entry_id": entry.id,
+                    "name": entry.display_name,
+                    "category": entry.category,
+                    "spawn_lift": entry.spawn_lift,
+                    "default_transform": {
+                        "position": [
+                            entry.default_transform.translation.x,
+                            entry.default_transform.translation.y,
+                            entry.default_transform.translation.z,
+                        ],
+                        "rotation": [
+                            entry.default_transform.rotation.x,
+                            entry.default_transform.rotation.y,
+                            entry.default_transform.rotation.z,
+                            entry.default_transform.rotation.w,
+                        ],
+                        "scale": [
+                            entry.default_transform.scale.x,
+                            entry.default_transform.scale.y,
+                            entry.default_transform.scale.z,
+                        ],
+                    },
+                    "source": source,
+                })
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a["entry_id"].as_str().cmp(&b["entry_id"].as_str()));
+        let count = entries.len();
+        ApiResponse::ok(serde_json::json!({
+            "entries": entries,
+            "count": count,
+        }))
+    }
+}
+
+/// Register the catalog query beside the catalog resource owner.
+pub fn register_query(app: &mut App) {
+    app.init_resource::<ApiQueryRegistry>();
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(SpawnCatalogProvider);
 }
 
 impl SpawnCatalog {
@@ -632,6 +707,41 @@ mod tests {
     fn test_default_catalog_is_empty() {
         // Nothing hardcoded — every spawnable is discovered from project USD.
         assert!(SpawnCatalog::default().entries.is_empty());
+    }
+
+    #[test]
+    fn spawn_catalog_provider_exposes_the_command_authority() {
+        let mut world = World::new();
+        world.insert_resource(SpawnCatalog {
+            entries: vec![
+                SpawnableEntry {
+                    id: "z-last".into(),
+                    display_name: "Last".into(),
+                    category: "Other".into(),
+                    source: SpawnSource::UsdFile("z.usda".into()),
+                    spawn_lift: 1.5,
+                    default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
+                },
+                SpawnableEntry {
+                    id: "a-first".into(),
+                    display_name: "First".into(),
+                    category: "Other".into(),
+                    source: SpawnSource::UsdFile("a.usda".into()),
+                    spawn_lift: 0.25,
+                    default_transform: Transform::default(),
+                },
+            ],
+        });
+
+        let response = SpawnCatalogProvider.execute(&mut world, &serde_json::Value::Null);
+        let data = match response {
+            ApiResponse::Ok { data: Some(data) } => data,
+            other => panic!("expected catalog response, got {other:?}"),
+        };
+        assert_eq!(data["count"], 2);
+        assert_eq!(data["entries"][0]["entry_id"], "a-first");
+        assert_eq!(data["entries"][1]["entry_id"], "z-last");
+        assert_eq!(data["entries"][0]["source"]["kind"], "usd_file");
     }
 
     #[test]

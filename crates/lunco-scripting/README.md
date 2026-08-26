@@ -35,9 +35,12 @@ fn on_event(me, evt) { /* a TelemetryEvent arrived */ }
 fn on_stop(me)       { brake(me); }                          // teardown
 ```
 
-New mission scripts should not hand-write a fixed-tick `on_tick` loop. The
-task tree supplies deterministic fixed-tick progression without putting the
-cursor, event delivery, or dwell timing in user policy.
+New mission scripts should normally use the task tree and events. Production
+`on_tick` is supported as an exceptional fixed-step hook for sampled observers
+or discrete controllers; it must not become a continuous equation bridge or
+replace ordinary task sequencing. The task tree supplies deterministic
+fixed-tick progression without putting the cursor, event delivery, or dwell
+timing in user policy.
 
 Every task node has an explicit `kind` discriminator; missing/unknown kinds and
 fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).

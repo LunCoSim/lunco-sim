@@ -5,15 +5,15 @@
 
 # Command Reference
 
-Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one
-bus, reachable from the **HTTP API** (`POST /api/commands`, `{"type":"ExecuteCommand","command":"…","params":{…}}`),
+Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one
+bus, reachable from the **HTTP API** (`POST /api/commands`, `{"command":"…","params":{…}}`),
 **MCP**, and **rhai** (`cmd("CommandName", #{ … })`). This page is generated from the
 **runtime schema** the app itself advertises, so every command below is one you can
 actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**179 commands** across **24** crates. 21 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**189 commands** across **26** crates. 1 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -23,18 +23,22 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scene editing & authoring**
 
-- [`lunco-luncosim-edit`](#lunco-luncosim-edit) (8 commands)
-- [`lunco-scene-commands`](#lunco-scene-commands) (16 commands)
+- [`lunco-luncosim-edit`](#lunco-luncosim-edit) (10 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (20 commands)
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (3 commands)
-- [`lunco-usd-bevy`](#lunco-usd-bevy) (2 commands)
+- [`lunco-usd`](#lunco-usd) (4 commands)
+- [`lunco-usd-bevy`](#lunco-usd-bevy) (5 commands)
 - [`lunco-usd-sim`](#lunco-usd-sim) (3 commands)
 
 **Modelica modeling & simulation**
 
 - [`lunco-modelica`](#lunco-modelica) (43 commands)
+
+**Co-simulation**
+
+- [`lunco-cosim`](#lunco-cosim) (2 commands)
 
 **Vessels, mobility & control**
 
@@ -43,27 +47,23 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Avatar & possession**
 
-- [`lunco-avatar`](#lunco-avatar) (7 commands)
+- [`lunco-avatar`](#lunco-avatar) (9 commands)
 
 **Workbench UI & panels**
 
-- [`lunco-workbench`](#lunco-workbench) (31 commands)
+- [`lunco-workbench`](#lunco-workbench) (35 commands)
 
 **Tutorials & HUD**
 
-- [`lunco-tutorial`](#lunco-tutorial) (3 commands)
+- [`lunco-tutorial`](#lunco-tutorial) (4 commands)
 
 **Scripting & scenarios**
 
-- [`lunco-scripting`](#lunco-scripting) (9 commands)
+- [`lunco-scripting`](#lunco-scripting) (8 commands)
 
 **Documents & twins**
 
 - [`lunco-doc-bevy`](#lunco-doc-bevy) (7 commands)
-
-**Networking**
-
-- [`lunco-networking`](#lunco-networking) (11 commands)
 
 **Time & clock**
 
@@ -86,11 +86,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-api`](#lunco-api) (2 commands)
 
+**Core**
+
+- [`lunco-core`](#lunco-core) (1 command)
+
 **Other (source location unknown)**
 
-- [`?`](#?) (1 command)
+- [`lunco-assets`](#lunco-assets) (2 commands)
 - [`lunco-luncosim`](#lunco-luncosim) (2 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
+- [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workspace`](#lunco-workspace) (4 commands)
 
 ---
@@ -144,6 +149,22 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API id from `ListEntities` — `u64` "Pattern B", resolved in the  observer via `ApiEntityRegistry` (same as `FocusEntityById`). `0`  clears the selection. |
 | `extend` | `bool` |  If true, maintains the previous selection and adds this entity to it (like Shift-click) |
 | `toggle` | `bool` |  If true, toggles the selection state of the entity (like Cmd/Ctrl-click) |
+
+#### `SelectEntityByPath`
+
+ Select a composed USD prim by its authored path.
+
+ The path is resolved against the live `UsdPrimPath` projection rather than
+ an episode-specific entity id. This keeps scripted presentation commands
+ stable across scene reloads and across duplicated asset instances.
+
+- *defined in:* `crates/lunco-luncosim-edit/src/selection.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |   |
+| `extend` | `bool` |   |
+| `toggle` | `bool` |   |
 
 #### `SetSpawnDiagnostics`
 
@@ -207,7 +228,38 @@ actually call, with the fields the deserializer actually accepts. See the
 | `velocity` | `bool` |  Velocity arrows on every dynamic body when `enabled`. |
 | `force` | `bool` |  Force arrows on every dynamic body when `enabled`. Ignored  for bodies without a `ConstantForce`. |
 
+#### `TogglePhysicsGizmo`
+
+ Toggle the selected-body dynamics / frames gizmo.
+
+ `#[Command(default)]` → all-false; pass only the flags you want on.
+ Rhai: `cmd("TogglePhysicsGizmo", #{show_mass: true, show_forces: true})`.
+ Leaves `newtons_per_meter` untouched.
+
+- *defined in:* `crates/lunco-luncosim-edit/src/physics_gizmo.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `show_mass` | `bool` |  CoM + inertia layer. |
+| `show_forces` | `bool` |  Force-arrows layer. |
+| `show_frames` | `bool` |  Body-frame triads layer. |
+
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
+
+#### `AddRuntimeWaypoint`
+
+ A runtime waypoint appended to a spawned vessel's patrol.
+
+ The target is an [`Entity`] deliberately: the API/Rhai command dispatcher
+ resolves the stable `GlobalEntityId` supplied by callers before this handler
+ runs, just like the other scene commands.
+
+- *defined in:* `crates/lunco-scene-commands/src/runtime_waypoint.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  Spawned rover root receiving the waypoint. |
+| `position` | `[f64 ; 3]` |  Waypoint origin in the semantic active physics frame. Cell and render  hierarchy details are resolved by this command boundary; the shared  marker's overlap Sensor is positioned at the same physical point. |
 
 #### `CreateShader`
 
@@ -292,6 +344,21 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API id from `ListEntities` — `u64` "Pattern B", resolved in the observer  via `ApiEntityRegistry`; see [`MoveEntity`]'s `entity_id` for why it  stays `u64` and isn't auto-converted by the id codec. |
 | `distance` | `f32` |  Camera distance from the target, metres. `<= 0` → default 6. |
 
+#### `FocusEntityByPath`
+
+ Set the render-free runtime focus to the composed USD prim at `path`.
+
+ This is separate from the editor's `SelectEntityByPath`: a headless
+ recorder has no Inspector, gizmo, or picking state to maintain, but
+ runtime-authored surfaces still need a stable subject for scoped telemetry.
+ The authored USD path remains stable across entity ids and scene reloads.
+
+- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Absolute composed USD prim path (for example `/World/Lander`). |
+
 #### `ImportShader`
 
  Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
@@ -321,8 +388,8 @@ actually call, with the fields the deserializer actually accepts. See the
  1. Switches the body to `RigidBody::Kinematic` (if it has a
     `RigidBody`) so Avian treats the new pose as authoritative
     rather than fighting back via integration.
- 2. Converts the target once into the entity's actual parent and BigSpace
-    cell/local storage.
+ 2. Converts the active-frame target once into the entity's actual parent
+    and BigSpace cell/local storage.
  3. Lets the BigSpace physics bridge derive Avian's pose from that one
     authoritative storage write.
  4. Sets a one-tick `LinearVelocity` consistent with the move so
@@ -337,7 +404,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`),  resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.   Deliberately `u64`, not `Entity` — this is "**Pattern B**". The  type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)  auto-converts only `Entity`-typed fields, so a `u64` field opts out and  is resolved here instead. NOT migrated to `Entity` because this command  is `#[Command(default)]`, which derives `Default`, and `Entity` has no  `Default`. Leaving it `u64` is a cleanliness leftover, not a  names/correctness issue — the codec no longer keys off field names at  all, so this `u64` is simply ignored by it. (An earlier comment here  blamed the resolver "dropping the generation"; that was stale — the  codec preserves index+generation via `Entity::to_bits()`.) |
-| `translation` | `[f64; 3]` | Target translation in the semantic active physics frame. The runtime converts it once into the entity's actual parent and BigSpace cell/local storage. The f64 wire form preserves precision across API and network round trips. |
+| `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
 
 #### `ReloadShader`
 
@@ -371,6 +438,38 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 - *fields:* none — call with `RescanSpawnCatalog` (no params)
+
+#### `RotateEntity`
+
+ Set an entity's world ORIENTATION — the rotational twin of [`MoveEntity`].
+
+ Reachable as `cmd("RotateEntity", #{entity_id, rotation: [x, y, z, w]})`, or
+ `set_world_rotation(id, q)` from the rhai prelude. The quaternion is the same
+ `[x, y, z, w]` form `world_rotation(id)` returns and `qrot` consumes, so a
+ script can read an orientation, transform it, and write it back without ever
+ converting representation.
+
+ The public quaternion is expressed in [`lunco_core::ActivePhysicsFrame`], the
+ same semantic frame as `MoveEntity`. Rotation is not frame-invariant: a
+ rotating body Grid and a rotated assembly parent both change the local
+ quaternion that must be stored on the entity. The observer performs that
+ hierarchy conversion once.
+
+ Written through `Transform`, never through avian's `Rotation`, for exactly
+ the reason `MoveEntity` never hand-writes `Position`:
+ `BigSpacePhysicsBridgePlugin::pose_to_position` fires on the external
+ `Transform` write and derives the physics pose from it (carrying it to
+ jointed descendants); a hand-written `Rotation` is a second, wronger opinion
+ that the bridge's writeback then undoes. The body is pinned Kinematic for the
+ move, as `MoveEntity` does, so the solver treats the new pose as
+ authoritative rather than fighting it.
+
+- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`). `u64`  rather than `Entity` for the same reason `MoveEntity` uses one:  `#[Command(default)]` derives `Default`, and `Entity` has none. |
+| `rotation` | `[f64 ; 4]` |  Target world orientation as `[x, y, z, w]`. Normalised on arrival — a  quaternion that has been interpolated or sampled is unit only to float  tolerance, and refusing it would make this fail for poses that are  perfectly usable. A degenerate (near-zero) quaternion IS refused: it  names no orientation, and silently substituting identity would spin the  body to an attitude the caller never asked for. |
 
 #### `RunLint`
 
@@ -433,7 +532,9 @@ actually call, with the fields the deserializer actually accepts. See the
    `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
    `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
    so this gives independent per-wheel control. Motor torque and no-load speed
-   are authored on the composed motor/gearbox prim, not on the wheel.
+   are owned by the composed Modelica motor prim; edit its authored
+   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
+   addressing a wheel-local drive parameter.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
@@ -442,28 +543,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`), same  resolution path as [`MoveEntity`] — `u64` "Pattern B", resolved in the  observer; see [`MoveEntity`]'s `entity_id` for why it stays `u64`. |
 | `property` | `String` |  Property name (see struct docs). |
 | `value` | `String` |  Value; comma-separated `r,g,b` for colors, a single float for params,  an asset path for `shader`, `true`/`false` for `visible`. |
-
-#### `SetUsdAttribute`
-
-Author a standard USD attribute in the active document's runtime layer. This is
-the generic authoring command used by data-driven Rhai tools; it does not create
-a LunCo-specific geometry schema.
-
-```jsonc
-{"type":"ExecuteCommand","command":"SetUsdAttribute",
- "params":{"path":"/World/Guide","name":"points",
-           "type_name":"point3f[]","value":"[(0,0,0),(1,0,0)]"}}
-```
-
-The prim must belong to the active document. The document validates the USD
-type and literal, journals the edit, and re-composes the live stage.
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` | Absolute USD prim path. |
-| `name` | `String` | Standard USD attribute name. |
-| `type_name` | `String` | USD type name, such as `point3f[]`. |
-| `value` | `String` | USDA literal, except raw `string` values. |
 
 #### `SetShaderSource`
 
@@ -480,6 +559,25 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
 | `source` | `String` |  New WGSL source text. |
+
+#### `SetUsdAttribute`
+
+ Author one standard USD attribute in the active document's runtime layer.
+
+ This is the generic authoring verb for data-driven editor tools. It does not
+ add a LunCo schema or mutate an ECS component: the USD type and literal are
+ passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
+ remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
+ `point3f[] points` without a Rust handler for every geometry type.
+
+- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Absolute USD prim path owned by the active document. |
+| `name` | `String` |  Attribute name, for example `points` or `inputs:radius`. |
+| `type_name` | `String` |  USD type name, for example `point3f[]`, `float`, or `token`. |
+| `value` | `String` |  USD literal, exactly as it would appear in USDA (except `string`, which  is raw content according to `UsdOp::SetAttribute`'s contract). |
 
 #### `SetUsdConnection`
 
@@ -537,6 +635,23 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
 | `op` | `UsdOp` |  Operation to apply. |
+
+#### `ApplyUsdOps`
+
+ Apply one authored intent that lowers to several USD operations.
+
+ This is the command boundary for program construction, component assembly,
+ and other compound edits: UI, Rhai and API callers all submit the same typed
+ operation list, which is journalled as one undo unit and observed by the live
+ projector only after the document reaches its complete shape.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  Target document. |
+| `label` | `String` |  Human-readable undo/journal label. |
+| `ops` | `Vec < UsdOp >` |  Ordered primitive USD operations comprising the one intent. |
 
 #### `AttachComponent`
 
@@ -633,6 +748,20 @@ type and literal, journals the edit, and re-composes the live stage.
 | `path` | `String` |  The path prim's USD path (e.g. `/World/Shots/Shot01`), or just its leaf  (`Shot01`). |
 | `action` | `CameraPathAction` |  Play, pause, or rewind. |
 
+#### `ObserveAvatar`
+
+ Explicitly show the local avatar camera.
+
+- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *fields:* none — call with `ObserveAvatar` (no params)
+
+#### `ResumeCameraDirector`
+
+ Return presentation ownership to the authored camera director.
+
+- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *fields:* none — call with `ResumeCameraDirector` (no params)
+
 #### `SetActiveCamera`
 
  Switch the viewport's active camera to the `SceneCamera` whose `Name` matches.
@@ -640,6 +769,19 @@ type and literal, journals the edit, and re-composes the live stage.
  Works with no avatar present. `name` matches the full USD prim path *or*
  its leaf, so a cutscene can `set_camera("ChaseCam")` to reach
  `/World/Rover/ChaseCam`, or `set_camera("WideShot")` for a scene camera.
+
+- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `String` |  Camera name (full USD prim path or its leaf). |
+
+#### `SetUserCamera`
+
+ Explicit operator selection of a named authored camera.
+
+ Unlike [`SetActiveCamera`], this takes ownership from the authored director
+ until [`ResumeCameraDirector`] is requested.
 
 - *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
 
@@ -681,16 +823,17 @@ type and literal, journals the edit, and re-composes the live stage.
  reloads the asset from disk and spawns a fresh root entity. Existing
  pipelines (`sync_usd_visuals`, `process_usd_cosim_prims`, the
  avian/sim translators) take it from there. The canonical `WorldGrid`
- entity is used as the parent — i.e. the `BigSpace` host stays put
- across reloads; malformed or duplicate world-shell state is reported
- instead of selecting an arbitrary grid.
+ is used as the parent — i.e. the `BigSpace` host stays put across
+ reloads. Invalid world-shell topology is reported rather than repaired
+ or resolved by entity order.
 
  Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
  for every entity carrying a `ModelicaModel` (the Modelica worker
- drops its `steppers` / `cached_models` / `sim_streams` entries) and
- drops `ScriptRegistry::documents` entries for every `ScriptedModel`.
- Without this, repeated reloads accumulate stale steppers and parsed
- scripts indefinitely.
+ drops its `steppers` / `cached_models` / `sim_streams` entries). Scene-owned
+ Rhai documents are stopped and closed by the shared `SceneTeardown` owner;
+ independent API/editor documents remain open until their explicit close.
+ Without these ownership boundaries, repeated reloads accumulate stale
+ workers or make an unrelated interactive document disappear.
 
 - *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
 
@@ -759,35 +902,41 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `AddSignalToPlot`
 
-*(no description — add a `///` doc on the struct)*
+ Add one signal to an existing plot panel.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/plot.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `plot` | `u64` |   |
-| `signal` | `String` |   |
+| `plot` | `u64` |  `VizId` of the target plot panel. |
+| `signal` | `String` |  Signal name to add. |
 
 #### `ApplyModelicaOps`
 
-*(no description — add a `///` doc on the struct)*
+ Apply a batch of document ops in one shot — the API's bulk editing verb.
+ Use it instead of a stream of single-op commands when several edits belong
+ together: they land as one undo group, and the document is only re-parsed
+ once at the end.
 
 - *defined in:* `crates/lunco-modelica/src/api/mod.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `ops` | `Vec < ApiOp >` |   |
+| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `ops` | `Vec < ApiOp >` |  Ops to apply, in order. |
 
 #### `AutoArrangeDiagram`
 
-*(no description — add a `///` doc on the struct)*
+ Lay the class's components out on a deterministic grid and persist the
+ positions as one undo-able batch of `SetPlacement` ops — Dymola's
+ **Edit → Auto Arrange**. The passive open-time fallback stacks components at
+ the origin, so this is how an imported model gets a readable diagram.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc` | `DocumentId` |  Document to arrange; unassigned (`0` over the API) = active. |
 
 #### `CancelExperiment`
 
@@ -804,7 +953,10 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `CompileModel`
 
-*(no description — add a `///` doc on the struct)*
+ Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
+ an already-compiled, unmodified model skips the worker dispatch unless
+ `force`. Never changes `paused`; type/parse/DAE errors land in
+ `WorkbenchState.compilation_error` and surface in the Diagnostics panel.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
 
@@ -882,16 +1034,18 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `DisconnectComponents`
 
-*(no description — add a `///` doc on the struct)*
+ Delete the `connect(from, to)` equation joining two component ports. The
+ inverse of `ConnectComponents`; a connection that isn't there is a logged
+ no-op.
 
 - *defined in:* `crates/lunco-modelica/src/api/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `class` | `String` |   |
-| `from` | `String` |   |
-| `to` | `String` |   |
+| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `class` | `String` |  Class within the document that owns the connection. |
+| `from` | `String` |  Source port, `"<component>.<port>"`. |
+| `to` | `String` |  Target port, `"<component>.<port>"`. |
 
 #### `DuplicateModelFromReadOnly`
 
@@ -927,35 +1081,38 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `FitCanvas`
 
-*(no description — add a `///` doc on the struct)*
+ Zoom and pan the canvas so the whole diagram fits the viewport.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc` | `DocumentId` |  Document to fit; unassigned (`0` over the API) = active. |
 
 #### `FocusComponent`
 
-*(no description — add a `///` doc on the struct)*
+ Centre the canvas on one named component — how a screenshot or a review
+ walkthrough targets a specific part of a large diagram.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `name` | `String` |   |
-| `padding` | `f32` |   |
+| `doc` | `DocumentId` |  Document to focus in; unassigned (`0` over the API) = active. |
+| `name` | `String` |  Component instance name as it appears in the diagram. |
+| `padding` | `f32` |  Margin in canvas units to leave around the component. |
 
 #### `FocusDocumentByName`
 
-*(no description — add a `///` doc on the struct)*
+ Focus the first open tab whose title contains `pattern` — the way an agent
+ says "switch to the rocket model" without knowing document ids. No match is
+ a logged no-op, not an error.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `pattern` | `String` |   |
+| `pattern` | `String` |  Case-insensitive substring of the tab title. Empty = no-op. |
 
 #### `FormatDocument`
 
@@ -969,17 +1126,23 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `GetFile`
 
-*(no description — add a `///` doc on the struct)*
+ Read a file's text and echo it to the log between `-- BEGIN --` /
+ `-- END --` markers. A diagnostic for API callers that cannot see the host
+ filesystem — it does NOT open a document (use `Open` for that). Goes through
+ `lunco-storage`, so it works in the browser build too.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |   |
+| `path` | `String` |  Path to read, resolved the same way document sources are. |
 
 #### `InspectActiveDoc`
 
-*(no description — add a `///` doc on the struct)*
+ Dump the active document's registry state to the log — id, source length,
+ parse status, linked entities. A debugging verb for "what does the app
+ actually think is open?", taking no parameters because it always targets
+ whatever the user is looking at.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/inspect.rs`
 - *fields:* none — call with `InspectActiveDoc` (no params)
@@ -1001,15 +1164,17 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `NewPlotPanel`
 
-*(no description — add a `///` doc on the struct)*
+ Open a new plot panel. With `source` set it duplicates that plot's signal
+ bindings and picked series — "open another view of this, then diverge" —
+ otherwise it starts from `signals`.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/plot.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `title` | `String` |   |
-| `signals` | `Vec < String >` |   |
-| `source` | `u64` |   |
+| `title` | `String` |  Panel title. Empty = derived from `source` (`"<title> (copy)"`), or a  default when there is no source. |
+| `signals` | `Vec < String >` |  Signal names to plot initially. |
+| `source` | `u64` |  `VizId` of a plot to clone bindings from. `0` = start empty. |
 
 #### `Open`
 
@@ -1023,14 +1188,16 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `OpenClass`
 
-*(no description — add a `///` doc on the struct)*
+ Act on a class by its fully-qualified name — how the Package Browser opens
+ a library model without the caller knowing document ids. `action` decides
+ whether it is drilled into for viewing or copied into an editable document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `qualified` | `String` |   |
-| `action` | `ClassAction` |   |
+| `qualified` | `String` |  Fully-qualified class path, e.g. `"Modelica.Electrical.Analog.Basic.Resistor"`. |
+| `action` | `ClassAction` |  `View` (default) drills into the class; `Duplicate { name }` copies it  into a new editable document — the route for editing a read-only  library model. |
 
 #### `OpenInNewView`
 
@@ -1044,15 +1211,15 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `PanCanvas`
 
-*(no description — add a `///` doc on the struct)*
+ Pan the diagram canvas by an offset, leaving zoom alone.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `x` | `f32` |   |
-| `y` | `f32` |   |
+| `doc` | `DocumentId` |  Document to pan; unassigned (`0` over the API) = active. |
+| `x` | `f32` |  Horizontal offset in canvas units. |
+| `y` | `f32` |  Vertical offset in canvas units. |
 
 #### `PauseActiveModel`
 
@@ -1093,15 +1260,22 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `RemoveModelicaComponent`
 
-*(no description — add a `///` doc on the struct)*
+ Remove a component instance from a class.
+
+ Removes ONLY the declaration. Any `connect(...)` equation still naming the
+ component is left behind and will fail to compile, so issue the matching
+ `DisconnectComponents` calls FIRST — that is the order the canvas uses
+ (orphan-edge removals precede the node removal, so rumoca can still resolve
+ the connect spans). Batch both through `ApplyModelicaOps` to keep them in
+ one undo group.
 
 - *defined in:* `crates/lunco-modelica/src/api/component.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `class` | `String` |   |
-| `name` | `String` |   |
+| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `class` | `String` |  Class within the document that declares the component. |
+| `name` | `String` |  Component instance name to remove. |
 
 #### `RenameExperiment`
 
@@ -1241,35 +1415,42 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Push a runtime input value into a compiled model's stepper.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/sim.rs`
+ This command is owned by the UI-free Modelica core, so the same reflected
+ command is available to headless API hosts, the workbench, Rhai, and any
+ future transport. Its observer queues the exclusive port/model write using
+ the same helper as the canvas path.
+
+- *defined in:* `crates/lunco-modelica/src/model_commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `name` | `String` |   |
-| `value` | `f64` |   |
+| `doc` | `DocumentId` |  Document id; zero selects the documented active-document default. |
+| `name` | `String` |  Declared Modelica input name. |
+| `value` | `f64` |  Runtime input value. |
 
 #### `SetViewMode`
 
-*(no description — add a `///` doc on the struct)*
+ Switch how a document is rendered — source text, diagram canvas, icon, or
+ documentation.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `mode` | `String` |   |
+| `doc` | `DocumentId` |  Document to switch; unassigned (`0` over the API) = active. |
+| `mode` | `String` |  One of `"text"`, `"diagram"`, `"icon"`, or `"docs"`. Anything else  leaves the mode unchanged. |
 
 #### `SetZoom`
 
-*(no description — add a `///` doc on the struct)*
+ Set the diagram canvas zoom factor directly, bypassing scroll-wheel steps —
+ for scripted captures that need a repeatable framing.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
-| `zoom` | `f32` |   |
+| `doc` | `DocumentId` |  Document whose canvas to zoom; unassigned (`0` over the API) = active. |
+| `zoom` | `f32` |  Zoom factor, `1.0` = 100%. |
 
 #### `Undo`
 
@@ -1280,6 +1461,54 @@ type and literal, journals the edit, and re-composes the live stage.
 | Field | Type | Description |
 |---|---|---|
 | `doc` | `DocumentId` |   |
+
+## Co-simulation
+
+### `lunco-cosim` <a id="lunco-cosim"></a>
+
+#### `ReleasePort`
+
+ Release one manual input-port hold before its normal timeout.
+
+ This is a discrete command beside the high-frequency [`SetPorts`] control
+ stream. The reflected `Entity` field keeps API, Rhai, UI, and network
+ callers on the same entity-resolution and authority path.
+
+- *defined in:* `crates/lunco-cosim/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The entity whose hold is released. |
+| `name` | `String` |  Input-port name. |
+
+#### `SetPorts`
+
+ The ONE generic control command: write a batch of named input ports on
+ `target`, applied through [`PortRegistry::write_port`]. This is the whole of
+ vessel control — there are no dedicated rover/lander command verbs and no
+ axis/`VesselIntent` vocabulary. "Controlling" anything means writing its
+ command input ports:
+ - a wheeled rover exposes `throttle`/`steer`/`brake` (its `InputPorts`
+   input surface, via the core input-port backend); a mix system projects them
+   onto its actuator ports,
+ - a cosim-flown lander exposes its Modelica command inputs (`throttle`/`pitch`/
+   `roll`/`yaw`) via the [`SimComponent`] backend,
+ - a crane/door/factory arm exposes whatever input ports it declares.
+
+ The same command is emitted by the keyboard input path
+ (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
+ so every surface drives every controllable thing identically. `seq`/`tick`
+ carry the prediction bookkeeping (host ack + client input log); it rides
+ `SyncChannel::ControlStream` over the network.
+
+- *defined in:* `crates/lunco-cosim/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The entity whose input ports are written. |
+| `writes` | `Vec < (String, f64) >` |  `(port_name, value)` writes to apply this tick. Undeclared names are  dropped by `PortRegistry` (strict per-backend) — the write stays a no-op,  but when the target exposes a port surface WITHOUT that name the drop is  recorded once per `(entity, port)` in [`CosimDiagnostics::faults`] (M12),  so a typo'd port from the API/script/autopilot surfaces instead of  vanishing. A binding may still name ports a given vessel doesn't have. |
+| `seq` | `u32` |   |
+| `tick` | `u64` |   |
 
 ## Vessels, mobility & control
 
@@ -1407,7 +1636,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  `held = true` is "stuck" (the key is down and stays down); `held = false` is
  "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
- The named intent is the USD control vocabulary (`forward`, `thrust`, `action`, `yaw_left`,
+ The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
  …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
  `Controls` profile binds.
 
@@ -1415,9 +1644,9 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`, `thrust`, `action`, `release`, …). |
+| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
 | `held` | `bool` |  `true` = hold it down, `false` = release it. |
-| `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command surface). An intent is meaningless without its target: two spawns of one asset are two distinct entities, and a targetless intent is rejected. Over the API this takes the target's `api_id` — the `GlobalEntityId` reported by `ListEntities` — and is resolved to the live entity. |
+| `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command  surface). An intent is meaningless without its target: two spawns of one  asset are two distinct entities, and a targetless intent is rejected. Over  the API this takes the target's `api_id` — the `GlobalEntityId` reported by  `ListEntities` — and is resolved to the live entity. |
 
 ## Avatar & possession
 
@@ -1477,9 +1706,9 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `avatar` | `Option < Entity >` |  The avatar entity taking possession — a user's *local* representation in  the world, used only to bind the chase camera. `None` for headless or  direct API control with no avatar: the host-side authority claim keys on  `target`, so possession works fully without one. |
+| `avatar` | `Option < Entity >` |  The avatar entity taking possession — this process's *local* embodiment  in the world, used only to bind the chase camera. `None` for headless or  direct API control with no camera binding. |
 | `target` | `Entity` |  The entity to possess (becomes the controlled vessel). |
-| `bind_camera` | `bool` |  Whether possession also rebinds the local avatar's camera to the chase rig — the default interactive behaviour. `false` claims control authority only: a recording scenario can drive the vessel through ports while an authored camera path owns the view. If camera binding is requested, `avatar` must be the explicit local avatar or the scene's authoritative `TheLocalAvatar`; an absent or invalid local avatar is reported as an error. |
+| `bind_camera` | `bool` |  Whether possession also rebinds the avatar's camera to the chase rig —  the default, interactive behaviour. `false` claims control authority  only: what a recording scenario wants, where the script drives the  vessel through ports while an authored camera path owns the view.  A camera bind with no explicit avatar resolves only the authoritative  `TheLocalAvatar` slot. It fails visibly when that slot is empty; it never  selects an arbitrary `Avatar` entity. |
 
 #### `ReleaseVessel`
 
@@ -1493,6 +1722,37 @@ type and literal, journals the edit, and re-composes the live stage.
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  The avatar entity releasing possession. |
+
+#### `ReturnFromOrbit`
+
+ Return the local camera from a celestial orbit view to the exact camera
+ mode and BigSpace frame from which that view was entered.
+
+ Unlike [`ReleaseVessel`], this is a presentation transition: it does not
+ release control authority or remove a `ControllerLink`.
+
+- *defined in:* `crates/lunco-avatar/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The local avatar camera returning from orbit view. |
+
+#### `SetCameraInput`
+
+ Tune pointer-to-camera response while the application is running.
+
+ Omitted fields retain their current persisted value. The same typed
+ [`crate::CameraInputSettings`] resource drives free, surface, chase, and
+ body-orbit cameras; this command is the API/script boundary for changing it
+ without introducing a second transient set of camera constants.
+
+- *defined in:* `crates/lunco-avatar/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `look_radians_per_pointer_unit` | `Option < f32 >` |  Camera radians per pointer-motion unit before behavior-specific scaling. |
+| `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
+| `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
 
 #### `ShowNotification`
 
@@ -1530,7 +1790,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Activate a registered [`Perspective`](crate::Perspective) by its
  `PerspectiveId` string. The luncosim ships `sandbox_view`, `rover_build`,
- and `modelica_analyze`. Unknown ids are a logged no-op.
+ and `modelica_analyze`. Unknown ids produce a user-visible status error.
 
 - *defined in:* `crates/lunco-workbench/src/perspective_command.rs`
 
@@ -1550,14 +1810,14 @@ type and literal, journals the edit, and re-composes the live stage.
  rather than advertising a `take_photo` that captures nothing.
 
  `default`: `target` must have a reflect default or the executor's constructibility guard
- drops a no-param call — `photo()` in `control.rhai` sends `{}`. The default (`None`) is
- exactly the documented "capture from the active scene camera".
+ drops a no-param call — `photo()` in `control.rhai` sends `{}`. The default (`None`) means
+ capture the explicitly resolved active scene camera.
 
 - *defined in:* `crates/lunco-workbench/src/screenshot.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Option < Entity >` |  Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved active scene camera; an absent, ambiguous, or inactive camera is an error. Window and offscreen image targets are captured directly; an unsupported target is an error. HTTP calls wait for the PNG and return `{path}`; internal Rhai/behavior-tree triggers remain fire-and-forget. |
+| `target` | `Option < Entity >` |  Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved  active scene camera. |
 
 #### `CaptureScreenshot`
 
@@ -1567,8 +1827,8 @@ type and literal, journals the edit, and re-composes the live stage.
  not advertise a command it cannot execute — `DiscoverSchema` (and hence the MCP tool list
  and the generated command reference) only sees it when this plugin is added.
 
- The reflected fields are the executable API contract used by the handler and generated command
- schema.
+ The reflected fields are the executable API contract used by the handler and generated
+ command schema.
 
 - *defined in:* `crates/lunco-workbench/src/screenshot.rs`
 
@@ -1607,22 +1867,22 @@ type and literal, journals the edit, and re-composes the live stage.
  Like [`OpenFile`], the workbench owns only the typed struct — the
  behaviour is domain-specific and lives in the domain crate
  (`lunco-modelica` encodes the active model's source into a URL
- fragment). Over the HTTP API the same name is served by a *query*
- that **returns** the link in its `data` payload instead of touching a
- clipboard (a headless server has none); see the query registry.
+ fragment). The headless HTTP API exposes the read-only `GetShareLink`
+ query separately; it returns the URL in its `data` payload instead of
+ touching a clipboard.
 
 - *defined in:* `crates/lunco-workbench/src/file_ops.rs`
 - *fields:* none — call with `CopyShareLink` (no params)
 
 #### `FocusPanel`
 
- Bring a registered singleton panel forward in the dock.
+ Bring a registered singleton panel forward in the dock, mounting it in its
+ authored default slot when it is currently closed.
 
  `id` is matched against [`Panel::id`]'s static string (e.g.
- `"modelica_experiments"`, `"modelica_telemetry"`). No-op when the
- panel isn't currently in the dock — callers that need to *open*
- a closed panel should use the View-menu route or fire the
- existing perspective preset.
+ `"modelica_experiments"`, `"modelica_telemetry"`). An unregistered panel
+ is a no-op; a registered closed panel is opened in its authored default
+ slot.
 
  Exposed as a typed command so HTTP automation can deterministically
  reach a tab before screenshotting / driving it.
@@ -1650,6 +1910,17 @@ type and literal, journals the edit, and re-composes the live stage.
 
 - *defined in:* `crates/lunco-workbench/src/window_command.rs`
 - *fields:* none — call with `MinimizeWindow` (no params)
+
+#### `OpenEphemeralSource`
+
+ Open an ephemeral generated document in the read-only source viewer.
+
+- *defined in:* `crates/lunco-workbench/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `uri` | `String` |  URI shown as the document identity. |
+| `text` | `String` |  Complete generated source text. |
 
 #### `OpenSourceView`
 
@@ -1824,7 +2095,7 @@ type and literal, journals the edit, and re-composes the live stage.
 | Field | Type | Description |
 |---|---|---|
 | `mode` | `Option < String >` |  `"dark"` / `"light"` (case-insensitive). When `None`, toggles. |
-| `persist` | `Option < bool >` |  `false` = apply for this session only, leave `settings.json` alone. Default `true`. |
+| `persist` | `Option < bool >` |  `false` = apply for this session only, leave `settings.json` alone.  Default `true` (the historical behavior). |
 
 #### `SetTourStep`
 
@@ -1833,8 +2104,7 @@ type and literal, journals the edit, and re-composes the live stage.
  Rhai: `coach(index, total, anchor, title, body)`. The controls emit
  `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip` on the event bus,
  which the tour script advances on (a script can simulate a click with
- `emit("cmd:TutorialNext", 0)`). Action requirements are Rhai lesson data and
- are evaluated by the lesson's `on_event`; they are not command parameters.
+ `emit("cmd:TutorialNext", 0)`).
 
 - *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
 
@@ -1947,9 +2217,41 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `enabled` | `bool` |  `true` enables the HUD; `false` hides it. |
 
+#### `TutorialBack`
+
+ Return to the previous guided tutorial step.
+
+- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *fields:* none — call with `TutorialBack` (no params)
+
+#### `TutorialNext`
+
+ Advance a guided tutorial step through the shared typed-command bus.
+ The command projector supplies the established `cmd:TutorialNext` event
+ consumed by authored Rhai tours.
+
+- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *fields:* none — call with `TutorialNext` (no params)
+
+#### `TutorialSkip`
+
+ Stop the current guided tutorial tour.
+
+- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *fields:* none — call with `TutorialSkip` (no params)
+
 ## Tutorials & HUD
 
 ### `lunco-tutorial` <a id="lunco-tutorial"></a>
+
+#### `ResetTutorialProgress`
+
+ Clear persisted completion and first-run state without changing the loaded
+ scene. This is the explicit recovery path for a shared settings file whose
+ tutorial history no longer matches the user's current installation.
+
+- *defined in:* `crates/lunco-tutorial/src/lib.rs`
+- *fields:* none — call with `ResetTutorialProgress` (no params)
 
 #### `SetSubsystemEnabled`
 
@@ -1966,30 +2268,20 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `SkipTutorial`
 
- Stop the current tutorial: clear the HUD (hint, objectives, spotlight, coach
- card), stop its host, and clear a world owned by that tutorial through the
- normal scene lifecycle. A UI-only tutorial leaves an unrelated loaded scene
- alone. `cmd("SkipTutorial")`.
+ Stop the current tutorial: clear the HUD, synchronously stop its host, and
+ clear a world declared by that lesson through the normal scene lifecycle.
+ A UI-only lesson leaves an unrelated loaded world alone.
+ `cmd("SkipTutorial")`.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`
 - *fields:* none — call with `SkipTutorial` (no params)
 
-#### `ResetTutorialProgress`
-
- Clear persisted tutorial completion and first-run onboarding state without
- changing the currently loaded scene. This is the explicit recovery command
- when the shared settings file no longer matches the installed curriculum.
-
-- *defined in:* `crates/lunco-tutorial/src/lib.rs`
-- *fields:* none — call with `ResetTutorialProgress` (no params)
-
 #### `StartTutorial`
 
- Start a tutorial by id: resolve its authored curriculum entry, mount its
- declared world through the scene lifecycle, and run its `.rhai` on the host
- after the scene transaction completes. The single launch path — menu, F1,
- HTTP API, MCP, and other scripts (`cmd("StartTutorial", #{ id })`) all route
- here.
+ Start a tutorial by id: resolve its authored scenario, mount its declared
+ world if any, and run it on the host after the scene transaction completes.
+ The single launch path — menu, F1, HTTP API, MCP, and other scripts
+ (`cmd("StartTutorial", #{ id })`) all route here.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`
 
@@ -2036,21 +2328,28 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `RunRhai`
 
-*(no description — add a `///` doc on the struct)*
+ Run a rhai snippet against the live world — the scripting escape hatch when
+ no typed command covers what you need.
+
+ The result arrives on the next `Update`: rhai needs full `World` access,
+ which an observer cannot hold, so the handler enqueues the snippet and the
+ exclusive `drain_world_scripts` system runs it before answering the
+ deferred API request with the real stdout. `Update` is intentional because
+ kinematic celestial warp freezes `FixedUpdate`.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `code` | `String` |   |
+| `code` | `String` |  rhai source to evaluate. The scripting prelude is in scope. |
 
 #### `RunScenario`
 
  Attach a persistent rhai scenario to an entity — the scenario-loading entry
  point for the API / MCP / UI / ROS2. Registers the source as a
- `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`. A
- production mission normally returns a `task(me)` tree; optional lifecycle and
- event hooks handle setup, telemetry, and teardown.
+ `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`, so the
+ per-entity runtime can build a native `task(me)` tree and run optional
+ lifecycle/event hooks.
 
  Idempotent + HOT-RELOAD: re-running on an entity that already has a scenario
  reuses its document id and bumps the generation, so `tick_rhai_models`
@@ -2081,15 +2380,19 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `RunTimeline`
 
  Run a declarative **mission timeline** on an entity — Layer 2 of the
- task-tree authoring surface. The timeline is pure DATA (`timeline` is a JSON
- string: either a `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`),
- so a mission is authorable/storable/shippable without writing rhai. The
- handler lowers it to the generic task executor and attaches it via the same
- path as `RunScenario` — so hot-reload, per-entity state, and
- `TASK_COMPLETE`/`TASK_FAILED` telemetry come from the native task driver.
+ sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
+ `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
+ authorable/storable/shippable without writing rhai. The handler lowers it to
+ a generated `task(me)` source that calls the prelude's `compile_timeline`
+ and hands the resulting tree to the native behavior kernel. It attaches via
+ the same path as `RunScenario` — so hot-reload, per-entity state, and
+ `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
 
  Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
- `{cmd,params}`, `{emit,value}`, `{wait}`, `{wait_event}`.
+ `{move_to_entity,speed,radius}`, `{possess}`, `{brake,secs}`,
+ `{cmd,params}`, `{emit,value}`, `{wait}`, `{wait_event}`. Each step must
+ contain exactly one operation field; the operation word is the timeline
+ discriminator and common fields are validated separately below.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 
@@ -2098,25 +2401,12 @@ type and literal, journals the edit, and re-composes the live stage.
 | `target` | `Entity` |   |
 | `timeline` | `String` |  JSON: a steps array, or an object with a `steps` array (and optional `name`). |
 
-#### `SetPorts`
-
-*(no description — add a `///` doc on the struct)*
-
-- *defined in:* `crates/lunco-scripting/tests/rhai_rover_live_test.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Entity` |   |
-| `writes` | `Vec < (String, f64) >` |   |
-| `seq` | `u32` |   |
-| `tick` | `u64` |   |
-
 #### `SetScenarioPaused`
 
  Pause or resume the scenario attached to `target` (sets `ScriptedModel.paused`).
- Paused Rhai scenarios stop native task progression (and event-driven policy)
- while retaining their state; resume continues where they left off. The clean
- API form of toggling the `paused` field; language-agnostic.
+ Paused scenarios skip fixed-step task/lifecycle execution (rhai) or backend
+ execution (python) but keep their state — resume continues where they left
+ off. The clean API form of toggling the `paused` field; language-agnostic.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 
@@ -2174,7 +2464,7 @@ type and literal, journals the edit, and re-composes the live stage.
  and create the actual document. The workbench's default observer only
  handles the empty-kind resolution.
 
- Lives here (not in the egui workbench) so headless / luncosim / server
+ Lives here (not in the egui workbench) so headless / sandbox / server
  binaries can dispatch document creation by `kind` without the UI
  shell — the picker-driven path is a workbench concern, the typed verb
  is a document-lifecycle concern.
@@ -2199,7 +2489,7 @@ type and literal, journals the edit, and re-composes the live stage.
  and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
- Lives here (not in the egui workbench) so headless / luncosim / server
+ Lives here (not in the egui workbench) so headless / sandbox / server
  binaries can open files by path; only the empty-path picker dispatch
  stays in the workbench.
 
@@ -2225,7 +2515,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Request the owning domain persist the document **to a new location**.
 
- `path` semantics mirror [`OpenFile`](lunco_doc_bevy::OpenFile):
+ `path` semantics mirror [`OpenFile`]:
 
  - **Empty** → the observer fires
    [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)
@@ -2284,130 +2574,6 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `doc` | `DocumentId` |  The document whose most recent op should be undone. |
 
-## Networking
-
-### `lunco-networking` <a id="lunco-networking"></a>
-
-#### `JoinServer`
-
- Join a networked session at `address` (`host:port` — a hostname like
- `lunica.lunco.space:5888` or an `ip:port`). The same typed command the
- in-sim *Connect* button, the HTTP API, MCP, and the CLI all dispatch — the
- networking internals establish the connection. Replaces any current one.
-
-- *defined in:* `crates/lunco-networking/src/client.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `address` | `String` |   |
-| `digest` | `String` |  Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace  tolerated). Empty ⇒ fall back to the ambient digest source  ([`client_cert_digest`]: `LUNCO_CERT_DIGEST` on native, the URL `#hash` on  wasm). A browser joining a self-signed LAN host by IP must supply this. |
-
-#### `LeaveServer`
-
- Leave the current session and return to single-player (local luncosim).
-
-- *defined in:* `crates/lunco-networking/src/client.rs`
-- *fields:* none — call with `LeaveServer` (no params)
-
-#### `PromoteScenario`
-
- Command: materialize the currently-loaded downloaded scenario into an
- **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
- running scene to it. The counterpart to the default read-only consume — "keep
- & edit this scenario". Empty `folder` = a GUI should present a folder picker
- first. Native-only in effect: web has no ambient folder filesystem (File
- System Access is a TODO); the wasm path logs and no-ops.
-
- Local action (not networked) — it promotes *this* peer's local download.
-
-- *defined in:* `crates/lunco-networking/src/scenario_sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `folder` | `String` |  Target folder that becomes the new Twin's root. |
-
-#### `SetAllowFreeMovement`
-
- Set Allow Free Movement command.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetFollowMode`
-
- Set Follow Mode command.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetFollowOptIn`
-
- Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetObserveMode`
-
- Set Observe Mode command.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetTargetClient`
-
- Set Target Client command.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Option < u64 >` |   |
-
-#### `SetTeachMode`
-
- Set Teach Mode command.
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetVisualLead`
-
- Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
- `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
- render-lead strength while driving, no rebuild.
-
-- *defined in:* `crates/lunco-networking/src/prediction.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `Option < bool >` |   |
-| `yaw_rate` | `Option < f32 >` |   |
-| `speed` | `Option < f32 >` |   |
-| `lead_secs` | `Option < f32 >` |   |
-
-#### `SharePerspective`
-
- Share Perspective command (Look-At).
-
-- *defined in:* `crates/lunco-networking/src/sync.rs`
-- *fields:* none — call with `SharePerspective` (no params)
-
 ## Time & clock
 
 ### `lunco-time` <a id="lunco-time"></a>
@@ -2452,8 +2618,8 @@ type and literal, journals the edit, and re-composes the live stage.
  * **animation preview** → playhead 0, playing, 1×;
  * **transport** → Playing at 1×;
  * **mission calendar** → the authored mission origin, with any kinematic warp
-   preview cleared. The mission origin is preserved so scene loading can apply
-   its `SetMissionEpoch` afterward.
+   preview cleared. The mission origin itself is preserved so a scene load can
+   apply its `SetMissionEpoch` afterward.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
@@ -2524,8 +2690,8 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Leave the current body's surface and return to orbit view.
 
- Teleports the camera to 3x body radius altitude and switches to
- `OrbitCamera` mode, re-parenting to the EMB Grid.
+ Opens a transactional `OrbitCamera` view in the body's explicit star-fixed
+ orbit grid. Returning restores the avatar's exact prior surface frame.
 
 - *defined in:* `crates/lunco-celestial/src/commands.rs`
 
@@ -2572,7 +2738,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  - **`sun_yaw` / `sun_pitch`** — direction of the single `DirectionalLight`
    in radians, using the same `EulerRot::YXZ` (yaw-then-pitch) convention as
-   the luncosim settings panel. A small negative `sun_pitch` (e.g. `-0.15`,
+   the sandbox settings panel. A small negative `sun_pitch` (e.g. `-0.15`,
    ~8.5° above the horizon) gives long, raking lunar shadows; `-0.8` is a
    high ~46° sun with short shadows.
  - **`ambient_brightness`** — the [`GlobalAmbientLight`] level (the *real*
@@ -2594,7 +2760,7 @@ type and literal, journals the edit, and re-composes the live stage.
 | `ambient_brightness` | `Option < f32 >` |  Global ambient brightness (cd/m²-scaled). `None` keeps current. |
 | `exposure_ev100` | `Option < f32 >` |  Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).  Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current. |
 | `earthshine_color` | `Option < [f32 ; 3] >` |  [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).  `None` keeps current. |
-| `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras. `None` keeps current; zero disables bloom. A non-zero value enables the HDR target required by the effect. Applied render-side (`lunco_render_bevy::env_light`). |
+| `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras. `None` keeps current; zero disables  bloom and a non-zero value enables the HDR target required by the effect.   **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is  `bevy_post_process`, and this crate must not name it. That observer  writes the render intent, whose binder owns the concrete post-process  component. |
 
 ## Terrain
 
@@ -2602,14 +2768,16 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `BrushTerrain`
 
-*(no description — add a `///` doc on the struct)*
+ Raise or lower terrain with a radial brush, recorded as a named edit layer
+ so it can be removed later. Document-free terrains only — a doc-backed
+ terrain's edits are authored to its USD layer instead.
 
 - *defined in:* `crates/lunco-terrain-surface/src/terrain.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `x` | `f32` |   |
-| `z` | `f32` |   |
+| `x` | `f32` |  Brush centre, world X. |
+| `z` | `f32` |  Brush centre, world Z. |
 | `radius` | `f32` |   |
 | `amplitude` | `f32` |   |
 | `id` | `String` |  Optional stable id for the edit (so it can be removed later). Empty = auto. |
@@ -2678,25 +2846,6 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `id` | `String` |   |
 
-#### `SetTerrainRenderingQuality`
-
- Edit the persisted terrain rendering-quality fields from the API/scripts. The
- command updates only supplied fields and rejects the complete candidate when
- any value is invalid; it never silently selects a lower preset.
-
-- *defined in:* `crates/lunco-terrain-surface/src/stream_viz.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `tile_resolution` | `Option < usize >` | Streamed tile vertices per side. |
-| `cinematic_resolution` | `Option < usize >` | Frozen/cinematic tile vertices per side. |
-| `pixel_error` | `Option < f64 >` | Screen-space refinement error in pixels. |
-| `max_depth` | `Option < u8 >` | Deepest streamed quadtree level. |
-| `probe_resolution` | `Option < usize >` | Samples per side for node-error measurement. |
-| `bakes_per_frame` | `Option < usize >` | Interactive tile bakes admitted per frame. |
-| `max_inflight_bakes` | `Option < usize >` | In-flight bake backpressure cap. |
-| `tile_budget` | `Option < usize >` | Maximum selected tiles per terrain. |
-
 #### `SetTerrainOverlay`
 
  Arm / re-tune the terrain analysis overlay at runtime (MCP / scripting / UI).
@@ -2720,6 +2869,29 @@ type and literal, journals the edit, and re-composes the live stage.
 | `opacity` | `Option < f32 >` |   |
 | `lod_depth` | `Option < bool >` |  Switch the overlay to the LOD-depth view (still needs `enabled`). |
 
+#### `SetTerrainRenderingQuality`
+
+ Edit the persisted terrain rendering-quality fields through the same typed
+ command bus used by the Graphics settings menu. Omitted values remain
+ unchanged; an invalid candidate is rejected as a whole instead of being
+ clamped into an undocumented quality level.
+
+- *defined in:* `crates/lunco-terrain-surface/src/stream_viz.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `tile_resolution` | `Option < usize >` |   |
+| `cinematic_resolution` | `Option < usize >` |   |
+| `pixel_error` | `Option < f64 >` |   |
+| `max_depth` | `Option < u8 >` |   |
+| `probe_resolution` | `Option < usize >` |   |
+| `bakes_per_frame` | `Option < usize >` |   |
+| `max_inflight_bakes` | `Option < usize >` |   |
+| `tile_budget` | `Option < usize >` |   |
+| `cover_edits_per_frame` | `Option < usize >` |   |
+| `hysteresis_ratio` | `Option < f64 >` |   |
+| `morph_start_ratio` | `Option < f64 >` |   |
+
 #### `SpawnDemTerrain`
 
  Build a DEM terrain from a site directory at **native resolution**. `uri`
@@ -2740,7 +2912,7 @@ type and literal, journals the edit, and re-composes the live stage.
 | `window_m` | `f32` |   |
 | `target_res` | `u32` |  Visual-quality downsample target (samples per side). `0` = native (no  decimation). Re-issue the command with a different value to rebuild the  same site at another quality and compare. |
 | `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of  one static mesh; collider/physics unchanged. Production visual path. |
-| `collider_ring` | `bool` |  Stream a per-rover canonical-res collider ring instead of one static  full-DEM collider (replaces it — physics rides the streamed tiles). |
+| `collider_ring` | `bool` |  Stream a canonical-res collider ring around runtime physical support  footprints instead of one static full-DEM collider (replaces it — physics  rides the streamed tiles). |
 | `crater_density` | `f32` |  Convenience: add a crater layer at this density (craters per hectare). `0`  (default) = no craters. The USD path instead composes layers as child prims  (see [`crate::terrain_layers`]); this is for the quick command path. |
 
 ## Obstacle fields
@@ -2749,13 +2921,15 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `UpdateObstacleFieldSpec`
 
-*(no description — add a `///` doc on the struct)*
+ Replace the obstacle-field spec and regenerate the field. The whole spec is
+ sent, not a delta, so a caller that means to change one knob must send the
+ others back unchanged. Journaled as a `DomainKind::ObstacleField` op.
 
 - *defined in:* `crates/lunco-obstacle-field/src/plugin.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `spec` | `ObstacleFieldSpec` |   |
+| `spec` | `ObstacleFieldSpec` |  The complete new spec — density, seed, extent, size distribution. |
 
 ## API & schema
 
@@ -2792,21 +2966,66 @@ type and literal, journals the edit, and re-composes the live stage.
 - *defined in:* `crates/lunco-api/src/session.rs`
 - *fields:* none — call with `Ping` (no params)
 
-## Other (source location unknown)
+## Core
 
-### `?` <a id="?"></a>
+### `lunco-core` <a id="lunco-core"></a>
 
 #### `SpawnEntity`
 
-*(no description — add a `///` doc on the struct)*
+ Spawn an entity from the catalog at a given world position.
 
+ **Why the type lives in `lunco-core` and the handler does not.** `SpawnEntity`
+ is a *wire* command: `lunco-networking` declares its channel
+ (`declare_channel::<SpawnEntity>`), which needs nothing but the type. The
+ handler (`on_spawn_entity_command`) lives with the catalog it spawns from, in
+ `lunco-scene-commands`. Keeping the *definition* here is what lets the networking crate
+ drop its dependency on the 13.4k-LOC editor — an edge that used to drag the
+ whole editor closure (→ modelica → workspace → doc-bevy) into every networking
+ build for exactly two symbols (review A6).
+
+ `reflect_default` semantics (hand-written here — `#[Command]` cannot expand
+ inside `lunco-core` itself, since it emits absolute `::lunco_core::…` paths):
+ API/rhai callers may omit optional fields — a missing `rotation` defaults to
+ `None` (→ identity). Position is always expressed in the current semantic
+ [`crate::ActivePhysicsFrame`]; callers never pass a Bevy grid entity or perform
+ BigSpace hierarchy conversion themselves.
+
+- *defined in:* `crates/lunco-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |   |
-| `entry_id` | `String` |   |
-| `position` | `Vec3` |   |
-| `rotation` | `Quat>` |   |
+| `entry_id` | `String` |  The catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
+| `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
+| `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
+
+## Other (source location unknown)
+
+### `lunco-assets` <a id="lunco-assets"></a>
+
+#### `CancelDataset`
+
+ Cancel a declared dataset download. The operation remains owned until its
+ worker returns, after which the row becomes requestable again.
+
+- *defined in:* `crates/lunco-assets/src/datasets.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |  Globally unique dataset id from [`DatasetEntry::id`]. |
+
+#### `RequestDataset`
+
+ User intent to start a declared dataset download.
+
+ The UI emits this event instead of mutating [`DatasetRegistry`] directly;
+ the registry remains the only owner of download authorisation and task
+ lifecycle.
+
+- *defined in:* `crates/lunco-assets/src/datasets.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |  Globally unique dataset id from [`DatasetEntry::id`]. |
 
 ### `lunco-luncosim` <a id="lunco-luncosim"></a>
 
@@ -2840,8 +3059,8 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SetRhaiPolicy`
 
  Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
- USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
- underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
+ USD prim under `<mounted-root>/Policies/<name>` in ONE call, instead of
+ hand-issuing the underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
  syncs to every peer → the projector activates it** (registers the rhai hook; at
  `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
  editing `info:sourceCode`) **hot-replaces the hook live** — dynamic rhai
@@ -2860,8 +3079,8 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `String` |  Prim name under `/World/Policies` (the identity for hot-replace); defaults to  a sanitized `seam` when empty. |
-| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or a  `lunco:driveKernel` id a rover points at. |
+| `name` | `String` |  Prim name under the mounted scene's `Policies` scope (the identity for  hot-replace); defaults to a sanitized `seam` when empty. |
+| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, a  `lunco:driveKernel` id a rover points at, or `"synth.<name>"` for a  generated Modelica source/unit/layout policy. |
 | `entry` | `String` |  The rhai entry function name. |
 | `source` | `String` |  The rhai source defining `entry` (+ helpers). |
 | `deterministic` | `bool` |  Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)  must be `true`; the host-only authorize gate may be `false`. |
@@ -2894,7 +3113,22 @@ type and literal, journals the edit, and re-composes the live stage.
 | `enabled` | `Option < bool >` |   |
 | `rate_hz` | `Option < f64 >` |   |
 | `retention` | `Option < usize >` |   |
+| `atol` | `Option < f64 >` |  Absolute tolerance for the subsystem default numeric deadband. Applies  only when `channel` is `None`; a named channel uses `deadband` as its  explicit absolute override. |
+| `rtol` | `Option < f64 >` |  Relative tolerance for the subsystem default numeric deadband. Applies  only when `channel` is `None`. |
 | `deadband` | `Option < f64 >` |   |
+
+### `lunco-viz` <a id="lunco-viz"></a>
+
+#### `SetTelemetryBrowserView`
+
+*(no description — add a `///` doc on the struct)*
+
+- *defined in:* `crates/lunco-viz/src/telemetry_browser.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `filter` | `String` |   |
+| `signal` | `String` |   |
 
 ### `lunco-workspace` <a id="lunco-workspace"></a>
 
@@ -2959,8 +3193,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
 ---
 
-<!-- 179 commands from the runtime schema; scanned 746 .rs files for docs (0 parse failure(s) skipped).
-     In the schema but no `#[Command]` struct found in source (macro-generated?): SpawnEntity
+<!-- 189 commands from the runtime schema; scanned 672 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Report, RunPython, SetActiveUsdViewport, SpawnThing, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: JoinServer, LeaveServer, PromoteScenario, RecoverVessel, RunPython, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

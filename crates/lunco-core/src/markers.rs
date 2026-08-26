@@ -64,6 +64,16 @@ pub struct Callsign(pub String);
 #[reflect(Component)]
 pub struct CatalogEntryId(pub String);
 
+/// The standard USD kind token projected onto an ECS entity.
+///
+/// Identity and type come from USD composition, not from whether an entity
+/// happens to have a control component or a celestial marker. Keeping the
+/// authored token beside CatalogEntryId lets generic scripting/API consumers
+/// report the same kind for authored and runtime-spawned entities.
+#[derive(Component, Debug, Clone, Reflect, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct UsdPrimKind(pub String);
+
 /// Marker: this camera's **pose is owned by an authored cinematic driver** (a
 /// USD camera path), not by the interactive camera stack.
 ///
@@ -208,11 +218,11 @@ impl Default for HorizonShadowTerrain {
     }
 }
 
-/// A per-entity scenario source EMBEDDED in USD (`custom string lunco:script`),
+/// A per-entity scenario source embedded in USD (`uniform string info:sourceCode`),
 /// awaiting attachment to the runtime.
 ///
 /// The USD loader (`lunco-usd-bevy`) stamps this when a prim carries a
-/// `lunco:script` attribute; `lunco-scripting` drains it — attaching the source
+/// `info:sourceCode` attribute; `lunco-scripting` drains it — attaching the source
 /// as a rhai `ScriptedModel` and removing the marker — so a scenario travels
 /// WITH the Twin/scene and starts running when its entity spawns.
 ///
@@ -316,12 +326,12 @@ pub const CELESTIAL_COLLISION_LAYER: u32 = 1 << 8;
 pub const NON_PHYSICAL_QUERY_LAYERS: u32 = TRIGGER_COLLISION_LAYER | CELESTIAL_COLLISION_LAYER;
 
 /// Per-prim numeric **script parameters**, authored in USD as
-/// `custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"` and read by a
+/// `custom float lunco:param:wmax = 1.05` (one attribute per key) and read by a
 /// script via the native `param(me, "wmax", default)` verb (a HashMap lookup —
 /// fast, typed, no fragile `name(me).contains(...)` string scanning).
 ///
 /// This is how a reusable script gets PER-INSTANCE config: one script drives many
-/// prims, each carrying its own `lunco:params`, instead of inferring its role from
+/// prims, each carrying its own `lunco:param:<key>`, instead of inferring its role from
 /// its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
 /// `lunco-core` so loader and scripting runtime share it (same pattern as
 /// [`TriggerZone`]).

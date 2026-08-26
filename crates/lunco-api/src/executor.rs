@@ -9,7 +9,7 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use crate::{
-    discovery::{discover_commands, discover_queries},
+    discovery::{discover_commands, discover_queries, is_api_command},
     queries::{ApiQueryRegistry, ApiVisibility},
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
@@ -80,6 +80,7 @@ pub fn api_request_observer(
         Option<&Name>,
         Has<lunco_core::ControlBinding>,
         Option<&lunco_core::CelestialBody>,
+        Option<&lunco_core::UsdPrimKind>,
     )>,
     // Which commands answer later, on the correlation id. Populated by whichever crate owns
     // them (`register_deferred_command`), never by name here.
@@ -549,23 +550,87 @@ fn execute_request(
         Option<&Name>,
         Has<lunco_core::ControlBinding>,
         Option<&lunco_core::CelestialBody>,
+        Option<&lunco_core::UsdPrimKind>,
     )>,
     deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
     match request {
         ApiRequest::ExecuteCommand { command, params } => {
+            // Visibility gate — commands marked hidden in `ApiVisibility`
+            // are reachable inside the app (GUI, observers, tests) but
+            // invisible to external callers. Reject with the same
+            // `CommandNotFound` an unknown name produces, so the
+            // external surface looks identical to "this command does
+            // not exist on this binary."
+            if visibility.is_hidden(command) {
+                return Some(ApiResponse::error(
+                    ApiErrorCode::CommandNotFound,
+                    format!("Command '{}' not found or not API-accessible", command),
+                ));
+            }
+
+            // Reflected commands own the public mutation namespace. The read
+            // provider namespace is consulted only when no reflected command
+            // owns the name, so a future command cannot be silently shadowed
+            // by a provider registered earlier.
+            let registration = type_registry.get_with_short_type_path(command);
+            let is_public_command = registration
+                .map(|r| is_api_command(r, Some(visibility)))
+                .unwrap_or(false);
+
+            // Query registry — read-only endpoints that return data. Domain
+            // crates register providers via `ApiQueryRegistry::register`. The
+            // provider runs deferred via `commands.queue` so it can take
+            // `&mut World`; the response is fired back via `ApiResponseEvent`
+            // when the queue flushes.
+            if !is_public_command {
+                if let Some(provider) = query_registry.get(command) {
+                    let params = params.clone();
+                    commands.queue(move |world: &mut World| {
+                        let response = provider.execute(world, &params);
+                        world.commands().trigger(ApiResponseEvent {
+                            response,
+                            correlation_id,
+                        });
+                    });
+                    return None; // response deferred
+                }
+            }
+
+            if !is_public_command {
+                return Some(ApiResponse::error(
+                    ApiErrorCode::CommandNotFound,
+                    format!("Command '{}' not found or not API-accessible", command),
+                ));
+            }
+
+            // Validate the params synchronously, here, while the registry is in
+            // hand. A typo'd param must be rejected at the request boundary,
+            // rather than being dropped later by the reflected dispatcher. This
+            // gate also applies to deferred commands: deferral is a response
+            // timing policy, not a different command contract.
+            //
+            // The dispatcher still re-validates (it must: `ApiCommandEvent` can
+            // be triggered in-process too), so this is a gate, not the only
+            // check.
+            if let Some(registration) = registration {
+                if let Err(msg) =
+                    validate_command_params(command, params, registration, type_registry, registry)
+                {
+                    return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
+                }
+            }
+
             // A DEFERRED command answers on this request's correlation id, later. The
             // executor does not know (and must not know) which commands those are — a crate
             // that owns one calls `register_deferred_command::<T>()`. See `DeferredCommands`.
             //
-            // Note the ordering: we only defer for a command that is ALSO registered as a
-            // type below. A binary without the owning plugin therefore falls through to the
-            // ordinary `CommandNotFound` path instead of deferring into silence and hanging
-            // the caller forever.
-            if deferred_commands.is_some_and(|d| d.contains(command))
-                && type_registry.get_with_short_type_path(command).is_some()
-            {
+            // The visibility, type, and validation gates above deliberately run first. A
+            // hidden command cannot bypass its visibility policy, malformed input is rejected
+            // synchronously, and an absent event registration cannot be parked until a
+            // watchdog timeout.
+            if deferred_commands.is_some_and(|d| d.contains(command)) {
                 commands.insert_resource(PendingApiRequest { correlation_id });
                 // Arm the watchdog BEFORE dispatching: if the handler forgets to answer (or
                 // dies trying), the caller gets a clear error instead of hanging forever.
@@ -587,65 +652,6 @@ fn execute_request(
                 return None; // the handler answers on `correlation_id`
             }
 
-            // Visibility gate — commands marked hidden in `ApiVisibility`
-            // are reachable inside the app (GUI, observers, tests) but
-            // invisible to external callers. Reject with the same
-            // `CommandNotFound` an unknown name produces, so the
-            // external surface looks identical to "this command does
-            // not exist on this binary."
-            if visibility.is_hidden(command) {
-                return Some(ApiResponse::error(
-                    ApiErrorCode::CommandNotFound,
-                    format!("Command '{}' not found or not API-accessible", command),
-                ));
-            }
-
-            // Query registry — endpoints that *return data* (vs typed
-            // Reflect commands which are fire-and-forget). Domain crates
-            // register providers via `ApiQueryRegistry::register`. The
-            // provider runs deferred via `commands.queue` so it can take
-            // `&mut World`; the response is fired back via
-            // `ApiResponseEvent` when the queue flushes.
-            if let Some(provider) = query_registry.get(command) {
-                let params = params.clone();
-                commands.queue(move |world: &mut World| {
-                    let response = provider.execute(world, &params);
-                    world.commands().trigger(ApiResponseEvent {
-                        response,
-                        correlation_id,
-                    });
-                });
-                return None; // response deferred
-            }
-
-            // Validate command exists and has ReflectEvent
-            let registration = type_registry.get_with_short_type_path(command);
-            let has_reflect_event = registration
-                .map(|r| r.data::<bevy::ecs::reflect::ReflectEvent>().is_some())
-                .unwrap_or(false);
-
-            if !has_reflect_event {
-                return Some(ApiResponse::error(
-                    ApiErrorCode::CommandNotFound,
-                    format!("Command '{}' not found or not API-accessible", command),
-                ));
-            }
-
-            // Validate the params synchronously, here, while the registry is in
-            // hand. A typo'd param must be rejected at the request boundary,
-            // rather than being dropped later by the reflected dispatcher.
-            //
-            // The dispatcher still re-validates (it must: `ApiCommandEvent` can
-            // be triggered in-process too), so this is a gate, not the only
-            // check.
-            if let Some(registration) = registration {
-                if let Err(msg) =
-                    validate_command_params(command, params, registration, type_registry, registry)
-                {
-                    return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
-                }
-            }
-
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher
             let command_id = id_counter.next_id();
             commands.trigger(ApiCommandEvent {
@@ -661,23 +667,15 @@ fn execute_request(
                 .entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
-                    let (name, accepts_commands, body) =
-                        q_meta.get(entity).unwrap_or((None, false, None));
-                    // NOTE: the reported `type` string is deliberately unchanged. A lander
-                    // accepts commands and has always been reported as `"rover"` here;
-                    // correcting that is a UI/API change to make deliberately, not a side
-                    // effect of this refactor.
-                    let kind = if accepts_commands {
-                        "rover"
-                    } else if body.is_some() {
-                        "planet"
-                    } else {
-                        "unknown"
-                    };
+                    let (name, accepts_commands, body, usd_kind) =
+                        q_meta.get(entity).unwrap_or((None, false, None, None));
+                    let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
                     serde_json::json!({
                         "api_id": api_id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),
                         "type": kind,
+                        "control_bound": accepts_commands,
+                        "celestial_body": body.is_some(),
                     })
                 })
                 .collect();

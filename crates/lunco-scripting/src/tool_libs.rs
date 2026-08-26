@@ -300,6 +300,7 @@ impl ApiQueryProvider for ListToolLibrariesProvider {
     fn name(&self) -> &'static str {
         "ListToolLibraries"
     }
+
     fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let libs: Vec<serde_json::Value> = lunco_tools::index()
             .into_iter()
@@ -322,6 +323,7 @@ impl ApiQueryProvider for GetToolLibraryProvider {
     fn name(&self) -> &'static str {
         "GetToolLibrary"
     }
+
     fn execute(&self, _world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(

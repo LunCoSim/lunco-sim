@@ -23,7 +23,7 @@
 #   2. Live cosim port. The joint auto-exposes port `displacement` (the runtime
 #      face of PhysxJointStateAPI:linear position / PhysicsDriveAPI:linear
 #      targetPosition):
-#         SetPort {api_id:<Lift>, name:"displacement", value:-0.5}  -> Platform rises to -0.5 m
+#         SetPorts {target:<Lift>, writes:[["displacement", -0.5]]}  -> Platform rises to -0.5 m
 #         GetPort {api_id:<Lift>, name:"displacement"}              -> measured offset (m)
 #
 # Loaded by `target/debug/luncosim test --scene scenes/tests/prismatic_drive.usda`.
