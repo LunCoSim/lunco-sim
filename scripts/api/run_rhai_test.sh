@@ -41,7 +41,10 @@ if [[ -n "$PROBE" ]]; then
 fi
 
 set +e
-OUTPUT="$(python3 scripts/api/rhai_eval.py "$PORT" -e "$PRELUDE" -f "$TEST")"
+CODE="$PRELUDE"
+CODE+=$'\n'
+CODE+="$(<"$TEST")"
+OUTPUT="$(target/debug/luncosim rhai --api "$PORT" --stdout -e "$CODE")"
 CODE=$?
 set -e
 

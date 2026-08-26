@@ -150,7 +150,10 @@ The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeT
 Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in undo/redo logic. Defines the `DocumentHost` container and the atomic `DocumentOp` pattern for state mutation and inversion.
 
 **`lunco-storage`**
-I/O abstraction layer providing a unified `Storage` trait for reading and writing handles. Supports native FS and memory (for tests), with architectural stubs for future browser (OPFS/IndexedDB) and remote backends.
+I/O abstraction layer providing a unified `Storage` trait for reading, writing,
+renaming, entry-kind inspection, and directory preparation through handles.
+Supports native FS and memory (for tests), with the browser localStorage
+backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 
 **`lunco-assets`**
 Unified asset management system. Resolves shared cache locations across git worktrees, downloads external assets via `Assets.toml` with SHA-256 verification, and handles texture pre-processing (resize/convert).
@@ -264,7 +267,10 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 ### Workbench & UI Tools
 
 **`lunco-workbench`**
-The engineering-IDE shell. Handles the docking engine (tabs, splits), perspective presets (Build, Simulate), and the Twin Browser, acting as the primary host for all other domain-specific UI panels.
+The engineering-IDE shell. Handles the docking engine (tabs, splits),
+perspective presets (Build, Simulate), Twin Browser, and picker/command
+adapters. It does not own file bytes or backend I/O; those go through
+`lunco-storage`, while Twin discovery stays in `lunco-workspace`/`lunco-twin`.
 
 **`lunco-ui`**
 Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.

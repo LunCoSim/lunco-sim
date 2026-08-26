@@ -126,7 +126,7 @@ impl Plugin for UsdUiPlugin {
 fn sync_workspace_on_doc_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     let Some(mut workspace) = workspace else {
         return;
@@ -159,7 +159,7 @@ fn sync_workspace_on_doc_opened(
 fn sync_workspace_on_doc_saved(
     trigger: On<DocumentSaved>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     let Some(mut workspace) = workspace else {
         return;
@@ -181,7 +181,7 @@ fn sync_workspace_on_doc_saved(
 /// Remove the Workspace shadow entry when a USD registry document closes.
 fn sync_workspace_on_doc_closed(
     trigger: On<DocumentClosed>,
-    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     let Some(mut workspace) = workspace else {
         return;

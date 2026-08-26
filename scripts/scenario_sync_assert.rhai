@@ -7,7 +7,7 @@
 // separately with the synchronous `ListEntities` API (scripts/api/entities_present.py).
 //
 // The prim paths to check come from `ASSERT_PRIMS`, injected by the harness as a
-// prelude (`rhai_eval.py <port> -e 'let ASSERT_PRIMS = [...];' -f this`). Each
+// prelude (`luncosim rhai --api <port> --stdout -e '<prelude>\n<file>'`). Each
 // entity's Bevy `Name` is its full USD prim path, so `find(path) >= 0` proves the
 // prim is present in this peer's scene graph. Verdict on the LAST line:
 // `SYNC_OK` or `SYNC_FAIL missing: …`.

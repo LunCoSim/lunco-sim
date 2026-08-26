@@ -10,7 +10,8 @@
 #           `scenario://<id>/<scene>`
 #
 # Assertions (both automation surfaces exercised where each actually works):
-#   - HOST  → rhai (`scripts/scenario_sync_assert.rhai` via `rhai_eval.py`): the
+#   - HOST  → rhai (`scripts/scenario_sync_assert.rhai` via the native
+#     `luncosim rhai` client): the
 #     prims in $SYNC_HOST_PRIMS exist in the host's scene graph. Exercises the
 #     rhai path. (The host sim is resumed first so FixedUpdate — and thus
 #     `drain_world_scripts` — ticks; a `--scene`-loaded scene starts paused.)
@@ -127,13 +128,9 @@ grep -q "scenario manifest received" "$CLIENT_LOG" || fail "client never receive
 # Resume the host sim first (a `--scene`-loaded scene starts paused: no-autostart
 # + DEM hold), so `drain_world_scripts` (FixedUpdate) runs the queued snippet.
 echo "==> resuming host sim, then asserting host scene graph via rhai"
-python3 - "$HOST_API" <<'PY'
-import json, sys, urllib.request
-body = json.dumps({"type":"ExecuteCommand","command": "ControlAnimation", "params": {"playing": True}}).encode()
-req = urllib.request.Request(f"http://127.0.0.1:{sys.argv[1]}/api/commands", data=body,
-                            headers={"Content-Type": "application/json"})
-urllib.request.urlopen(req, timeout=5).read()
-PY
+target/debug/luncosim rhai --api "$HOST_API" --stdout -e 'play_animation()' >/dev/null || {
+  fail "host could not be resumed through the native Rhai client"
+}
 # Build the injected `ASSERT_PRIMS` rhai array from $SYNC_HOST_PRIMS.
 primlist=""
 for p in $SYNC_HOST_PRIMS; do primlist="${primlist}\"$p\","; done
@@ -141,7 +138,10 @@ prelude="let ASSERT_PRIMS = [$primlist];"
 verdict=""
 for _ in $(seq 1 20); do
   sleep 1
-  verdict="$(python3 scripts/api/rhai_eval.py "$HOST_API" -e "$prelude" -f scripts/scenario_sync_assert.rhai 2>/dev/null | tail -1)"
+  CODE="$prelude"
+  CODE+=$'\n'
+  CODE+="$(<scripts/scenario_sync_assert.rhai)"
+  verdict="$(target/debug/luncosim rhai --api "$HOST_API" --stdout -e "$CODE" 2>/dev/null | tail -1)"
   [ "$verdict" = "SYNC_OK" ] && break
 done
 echo "    host rhai verdict: ${verdict:-<none>}"

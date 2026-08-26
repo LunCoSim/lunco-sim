@@ -288,7 +288,12 @@ fn runtime_spawn_ops(
             edit_target: LayerId::runtime(),
             parent_path,
             name,
-            type_name: None,
+            // A catalog reference is mounted on an Xform instance root. Keep
+            // that authored root type in the runtime layer so the referenced
+            // root's applied schemas compose onto the same prim; a bare
+            // references arc only contributes the child namespace in the
+            // live stage and leaves the body root typeless.
+            type_name: Some("Xform".to_string()),
             // The runtime layer is authored under the mounted scene. A bare
             // library path would therefore resolve relative to that scene
             // (for example `scenes/tests/structures/...`) instead of the

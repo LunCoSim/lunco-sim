@@ -89,6 +89,7 @@ def Xform "LintSelftest" (
         double3 xformOp:translate = (0, 1.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 500.0
+        bool physics:kinematicEnabled = true
 
         def Cube "Chassis" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -125,6 +126,7 @@ def Xform "LintSelftest" (
             double height = 0.3
             double3 xformOp:translate = (1.0, -0.65, -1.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
+            bool physics:kinematicEnabled = true
             color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
         }
 
@@ -221,6 +223,7 @@ def Xform "LintSelftest" (
                 uniform token[] xformOpOrder = ["xformOp:translate"]
                 float physics:mass = 0.5
                 float3 physics:diagonalInertia = (0.003, 0.003, 0.003)
+                bool physics:kinematicEnabled = true
             }
 
             def PhysicsRevoluteJoint "YawJoint"
@@ -274,6 +277,10 @@ def Xform "LintSelftest" (
     {
         double3 xformOp:translate = (-12.0, 6.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        # This is a lint-only geometry fixture. Keep its deliberately invalid
+        # sprung layout authored, but do not let its malformed joint frames
+        # destabilize the separate runtime escape test before lint can run.
+        bool physics:kinematicEnabled = true
 
         def Cube "Strut" (
             prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
@@ -284,6 +291,7 @@ def Xform "LintSelftest" (
             double3 xformOp:rotateXYZ = (0, 0, 25.0)
             double3 xformOp:scale = (0.15, 7.05, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            bool physics:kinematicEnabled = true
         }
 
         def Cylinder "Foot" (
@@ -295,6 +303,7 @@ def Xform "LintSelftest" (
             double height = 0.08
             double3 xformOp:translate = (5.5, -5.0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
+            bool physics:kinematicEnabled = true
         }
 
         def PhysicsPrismaticJoint "Strut_Spring" (

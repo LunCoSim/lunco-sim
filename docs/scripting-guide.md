@@ -137,8 +137,9 @@ session open and run the source through `RunRhai`:
   assets/scripting/tests/test_usd_query.rhai /SandboxScene/Box
 ```
 
-Both paths avoid a Rust rebuild. The live wrapper can be invoked repeatedly
-after editing the `.rhai` file; it does not restart the simulator. Use
+Both paths avoid a Rust rebuild. The live helper delegates to the native
+`luncosim rhai --stdout` client and can be invoked repeatedly after editing the
+`.rhai` file; it does not restart the simulator. Use
 `RunScenario`/`run_scenario.sh` for a persistent per-entity observer and
 `run_rhai_test.sh` for a one-shot verdict.
 

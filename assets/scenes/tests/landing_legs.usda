@@ -80,6 +80,7 @@ def Xform "LandingLegsTest" (
         # leaves every actuator demand at zero without disabling or replacing
         # any physics component.
         float inputs:attitude_hold = 0.0
+
     }
 
     def Scope "Scenario"

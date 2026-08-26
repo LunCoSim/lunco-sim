@@ -68,7 +68,7 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
-    # The USD rigid-body projection aggregates the four foot colliders into one
+    # The USD rigid-body projection aggregates each leg's foot collider into its
     # Avian compound body. Bind the landing surface at that body boundary so
     # the solver receives the authored friction for the compound, rather than
     # silently falling back to Avian's default because child-only bindings are
@@ -90,12 +90,11 @@ def Xform "DescentLander" (
             # plane, so the contact coefficient must include the pad resistance
             # that real regolith supplies through penetration and ploughing.
             # This is a finite Coulomb contact pair, not a post-touchdown
-            # velocity clamp. The lower dynamic coefficient represents sliding
-            # after the pad breaks static contact; the small static margin lets
-            # a planted pad resist the raked-strut side load without turning the
-            # ground into a kinematic lock.
-            float physics:dynamicFriction = 0.25
-            float physics:staticFriction = 0.30
+            # velocity clamp. The static coefficient is above tan(20 degrees)
+            # so a planted pad can carry the raked-strut side load without
+            # continuously sliding; the lower dynamic value applies after slip.
+            float physics:dynamicFriction = 0.40
+            float physics:staticFriction = 0.50
             float physics:restitution = 0.0
             token physxMaterial:frictionCombineMode = "min"
         }
@@ -1163,17 +1162,17 @@ def Xform "DescentLander" (
     # strut-load visualization; the controller reads the actual native contact
     # force from the Avian body that carries the pad collider.
     #
-    # Each Pad* is an authored rigid body connected to its Leg* by a spherical
-    # joint, so the native contact API is owned by the pad body that meets the
-    # terrain. Reading the Leg* frame would silently miss the contact graph.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
-    float inputs:leg_contact_px.connect = </DescentLander/LegPX/PadPX.outputs:contact>
-    float inputs:leg_contact_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact>
-    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact>
-    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact>
+    # Each Leg* owns its compound contact API; reading the child path would
+    # invent a separate body boundary that the USD rigid-body schema does not
+    # have.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
+    float inputs:leg_contact_px.connect = </DescentLander/LegPX.outputs:contact>
+    float inputs:leg_contact_nx.connect = </DescentLander/LegNX.outputs:contact>
+    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ.outputs:contact>
+    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ.outputs:contact>
     float inputs:leg_displacement_px.connect = </DescentLander/LegPX_Spring.outputs:displacement>
     float inputs:leg_displacement_nx.connect = </DescentLander/LegNX_Spring.outputs:displacement>
     float inputs:leg_displacement_pz.connect = </DescentLander/LegPZ_Spring.outputs:displacement>
@@ -2565,10 +2564,9 @@ def Xform "DescentLander" (
     # still has exactly one DOF: translation along its own axis. The joint frame
     # carries that rake; it is not a hidden revolute or a free visual rotation.
     # The primary strut itself has only the prismatic DOF. The footpad is a
-    # separate rigid body connected by an explicit spherical joint: it follows
-    # the leg while allowing the contact face to settle on terrain without
-    # introducing an unconstrained body. Its authored inverse-rake keeps the
-    # landing face level while the prismatic joint supplies the suspension
+    # rigid collider child of the leg body: it follows the leg without
+    # introducing a second rotational state. Its authored inverse-rake keeps
+    # the landing face level while the prismatic joint supplies the suspension
     # travel.
     #
     # The SHOCK ABSORBER is the standard `PhysicsDriveAPI:linear` on the
@@ -2616,11 +2614,24 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # The leg and its welded footpad are one rigid assembly. The combined
-        # mass properties keep the pad from becoming a second free body.
+        # The leg and its welded footpad are one rigid assembly. The 30 kg
+        # uniform strut and 10 kg square pad are reduced about their
+        # combined centre of mass; the child pad therefore contributes shape,
+        # not a second free-body mass.
+        #
+        #   m = 30 + 10 = 40 kg
+        #   y_com = (30*(-3.525) + 10*(-7.2)) / 40 = -4.44375 m
+        #   I = diag(226.36900, 1.38458, 226.28904) kg m^2 after principal-axis
+        #       reduction; the pad's ±20° tilt contributes a small product term.
+        #
+        # These are the solid-box and strut inertias, pad orientation, and
+        # parallel-axis terms reduced about the compound COM. Keeping the principal values and
+        # axes on the rigid-body owner makes the joint response use the actual
+        # compound mass distribution.
         float physics:mass = 40.0
         float3 physics:centerOfMass = (0, -4.44375, 0)
-        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
+        float3 physics:diagonalInertia = (226.36900, 1.38458, 226.28904)
+        quatf physics:principalAxes = (0.99999988, 0, 0, 0.00048695)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2666,17 +2677,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadPX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
+        def Cube "PadPX" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, -20)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2760,7 +2769,8 @@ def Xform "DescentLander" (
         # Combined strut and welded pad mass properties — see LegPX.
         float physics:mass = 40.0
         float3 physics:centerOfMass = (0, -4.44375, 0)
-        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
+        float3 physics:diagonalInertia = (226.36900, 1.38458, 226.28904)
+        quatf physics:principalAxes = (0.99999988, 0, 0, -0.00048695)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2791,17 +2801,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadNX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
+        def Cube "PadNX" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, 20)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2823,7 +2831,8 @@ def Xform "DescentLander" (
         # Combined strut and welded pad mass properties — see LegPX.
         float physics:mass = 40.0
         float3 physics:centerOfMass = (0, -4.44375, 0)
-        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
+        float3 physics:diagonalInertia = (226.28904, 1.38458, 226.36900)
+        quatf physics:principalAxes = (0.99999988, -0.00048695, 0, 0)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2854,17 +2863,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadPZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
+        def Cube "PadPZ" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (20, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2886,7 +2893,8 @@ def Xform "DescentLander" (
         # Combined strut and welded pad mass properties — see LegPX.
         float physics:mass = 40.0
         float3 physics:centerOfMass = (0, -4.44375, 0)
-        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
+        float3 physics:diagonalInertia = (226.28904, 1.38458, 226.36900)
+        quatf physics:principalAxes = (0.99999988, 0.00048695, 0, 0)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2917,17 +2925,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadNZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
+        def Cube "PadNZ" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (-20, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2935,54 +2941,10 @@ def Xform "DescentLander" (
 
     }
 
-    # ── Footpad ball joints ────────────────────────────────────────────────
-    # Each footpad is an authored rigid body with an explicit spherical joint.
-    # The separate body preserves the pad's terrain-following freedom without
-    # turning an internal collider into an unconnected rigid body.
-    def PhysicsSphericalJoint "PadPX_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegPX>
-        rel physics:body1 = </DescentLander/LegPX/PadPX>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0.017101, -7.153015, 0)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadNX_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegNX>
-        rel physics:body1 = </DescentLander/LegNX/PadNX>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (-0.017101, -7.153015, 0)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadPZ_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegPZ>
-        rel physics:body1 = </DescentLander/LegPZ/PadPZ>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0, -7.153015, 0.017101)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadNZ_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegNZ>
-        rel physics:body1 = </DescentLander/LegNZ/PadNZ>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0, -7.153015, -0.017101)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
+    # ── Footpad compound colliders ─────────────────────────────────────────
+    # Each pad is a collider child of its leg body. The leg's prismatic joint
+    # owns the only landing-gear DOF; a second pad body and ball joint would
+    # introduce an unconstrained rotational state and split one load path.
 
     # ── Landing-gear suspension ──
     #
@@ -3034,6 +2996,14 @@ def Xform "DescentLander" (
     # The former drives the load glow; the latter
     # feeds touchdown guidance from the collider that actually meets the terrain.
 
+    # Suspension numbers are dimensional and derived from the authored moving
+    # mass, not chosen as solver stabilisers. Each leg carries about
+    # 4000 kg * 1.6249 m/s^2 / 4 = 1625 N at rest. With k = 4000 N/m the
+    # static compression is 0.406 m. For a 40 kg moving assembly,
+    # c_critical = 2*sqrt(k*m) = 800 N s/m, so c = 1600 N s/m is damping
+    # ratio 2 (overdamped, with no artificial hull drag). The 12000 N force
+    # limit is 7.4 times the static leg load and remains finite for touchdown
+    # impulse authority while the joint stroke limit remains -0.8..0 m.
     def PhysicsPrismaticJoint "LegPX_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
     )
@@ -3056,9 +3026,9 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
@@ -3079,9 +3049,9 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
@@ -3098,9 +3068,9 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
@@ -3117,9 +3087,9 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:maxForce = 12000.0
     }
 
 }

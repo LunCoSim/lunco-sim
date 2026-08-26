@@ -60,17 +60,408 @@ pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupport
 /// changes the physical result and cannot be a hidden application fallback.
 pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 
-/// The authored target velocity of a native Avian prismatic drive.
+/// Bounds for the live solver-resolution diagnostic control.
 ///
-/// Avian 0.7's native prismatic motor currently compares body-centre relative
-/// velocity with a drive target, while USD joint state semantics measure the
-/// relative velocity of the two joint anchors. The USD bridge keeps the
-/// authored value here and derives Avian's per-step motor target from it before
-/// the native XPBD joint is prepared. It is runtime state, not a USD schema or
-/// a second constraint.
-#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
-#[reflect(Component, Debug)]
-pub struct PrismaticDriveTargetVelocity(pub f64);
+/// These are deliberately separate from [`DEFAULT_SUBSTEP_COUNT`]. A scenario
+/// may temporarily vary the Avian resolution while diagnosing a scene, but the
+/// authored/runtime contract remains eight unless the application owner changes
+/// that default in this crate.
+pub const MIN_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 1;
+pub const MAX_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 64;
+
+/// Read the live Avian solver resolution.
+pub fn solver_substeps(world: &World) -> Option<u32> {
+    world
+        .get_resource::<avian3d::prelude::SubstepCount>()
+        .map(|count| count.0)
+}
+
+/// Change solver resolution for a live diagnostic run.
+///
+/// The mutation is immediate and therefore takes effect at the next solver
+/// schedule. Invalid values are rejected at this owner; there is no silent
+/// clamp or fallback. Callers should restore the value explicitly after a
+/// comparison if they want to continue under the production contract.
+pub fn set_solver_substeps(world: &mut World, count: u32) -> Result<(), String> {
+    if !(MIN_DIAGNOSTIC_SUBSTEP_COUNT..=MAX_DIAGNOSTIC_SUBSTEP_COUNT).contains(&count) {
+        return Err(format!(
+            "solver substeps must be in {MIN_DIAGNOSTIC_SUBSTEP_COUNT}..={MAX_DIAGNOSTIC_SUBSTEP_COUNT}, got {count}"
+        ));
+    }
+    if world
+        .get_resource::<avian3d::prelude::SubstepCount>()
+        .is_none()
+    {
+        return Err("Avian SubstepCount resource is not installed".to_string());
+    };
+    world.resource_mut::<avian3d::prelude::SubstepCount>().0 = count;
+    Ok(())
+}
+
+/// Live contact-material coefficients for a physics entity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactFrictionParameters {
+    /// Kinetic Coulomb coefficient, used after relative sliding starts.
+    pub dynamic: f64,
+    /// Static Coulomb coefficient, used while relative tangential speed is zero.
+    pub static_coefficient: f64,
+}
+
+/// Change one entity's contact friction for a live diagnostic run.
+///
+/// The component is the Avian contact-material owner used by the USD bridge;
+/// no separate script-side material cache is created. The combine rule and
+/// authored USD remain unchanged, so this is an explicit in-memory experiment
+/// and is not a persistence path.
+pub fn set_contact_friction(
+    world: &mut World,
+    entity: Entity,
+    friction: ContactFrictionParameters,
+) -> Result<(), String> {
+    use avian3d::prelude::Friction;
+
+    if !friction.dynamic.is_finite()
+        || !friction.static_coefficient.is_finite()
+        || friction.dynamic < 0.0
+        || friction.static_coefficient < 0.0
+        || friction.dynamic > avian3d::math::Scalar::MAX as f64
+        || friction.static_coefficient > avian3d::math::Scalar::MAX as f64
+    {
+        return Err(format!(
+            "invalid contact friction: coefficients must be finite, non-negative, and representable by Avian, got {friction:?}"
+        ));
+    }
+    let Some(mut value) = world.get_mut::<Friction>(entity) else {
+        return Err(format!("entity {entity:?} has no Avian Friction component"));
+    };
+    value.dynamic_coefficient = friction.dynamic as avian3d::math::Scalar;
+    value.static_coefficient = friction.static_coefficient as avian3d::math::Scalar;
+    Ok(())
+}
+
+/// Read one entity's live Avian contact friction, if authored/projected.
+pub fn contact_friction_snapshot(
+    world: &World,
+    entity: Entity,
+) -> Option<ContactFrictionParameters> {
+    let value = world.get::<avian3d::prelude::Friction>(entity)?;
+    Some(ContactFrictionParameters {
+        dynamic: value.dynamic_coefficient as f64,
+        static_coefficient: value.static_coefficient as f64,
+    })
+}
+
+/// Live relative joint-damping coefficients for a physics joint.
+///
+/// Avian applies these as a dimensionless rate over the physics interval, so
+/// both fields have units of s^-1. They are not force-drive coefficients and do
+/// not replace the joint's geometric constraint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JointDampingParameters {
+    pub linear: f64,
+    pub angular: f64,
+}
+
+fn has_supported_joint(world: &World, entity: Entity) -> bool {
+    world.get::<avian3d::prelude::FixedJoint>(entity).is_some()
+        || world
+            .get::<avian3d::prelude::PrismaticJoint>(entity)
+            .is_some()
+        || world
+            .get::<avian3d::prelude::RevoluteJoint>(entity)
+            .is_some()
+        || world
+            .get::<avian3d::prelude::SphericalJoint>(entity)
+            .is_some()
+        || world
+            .get::<avian3d::prelude::DistanceJoint>(entity)
+            .is_some()
+}
+
+/// Add or replace Avian's native relative joint damping for a live diagnostic
+/// run. The joint entity must already carry one of Avian's supported joint
+/// components; this function never creates or replaces a constraint.
+pub fn set_joint_damping(
+    world: &mut World,
+    entity: Entity,
+    damping: JointDampingParameters,
+) -> Result<(), String> {
+    if !damping.linear.is_finite()
+        || !damping.angular.is_finite()
+        || damping.linear < 0.0
+        || damping.angular < 0.0
+        || damping.linear > avian3d::math::Scalar::MAX as f64
+        || damping.angular > avian3d::math::Scalar::MAX as f64
+    {
+        return Err(format!(
+            "invalid joint damping: rates must be finite, non-negative, and representable by Avian, got {damping:?}"
+        ));
+    }
+    if !has_supported_joint(world, entity) {
+        return Err(format!("entity {entity:?} has no supported Avian joint"));
+    }
+
+    let value = avian3d::prelude::JointDamping {
+        linear: damping.linear as avian3d::math::Scalar,
+        angular: damping.angular as avian3d::math::Scalar,
+    };
+    if let Some(mut existing) = world.get_mut::<avian3d::prelude::JointDamping>(entity) {
+        *existing = value;
+    } else {
+        world.entity_mut(entity).insert(value);
+    }
+    Ok(())
+}
+
+/// Read Avian's native relative joint damping. An installed joint without a
+/// `JointDamping` component has the documented lossless default of zero.
+pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDampingParameters> {
+    if !has_supported_joint(world, entity) {
+        return None;
+    }
+    let value = world
+        .get::<avian3d::prelude::JointDamping>(entity)
+        .copied()
+        .unwrap_or_default();
+    Some(JointDampingParameters {
+        linear: value.linear as f64,
+        angular: value.angular as f64,
+    })
+}
+
+/// Aggregate the live Avian contacts owned by one physics entity.
+///
+/// This is deliberately a read-only diagnostic at the physics boundary. It
+/// reports the effective manifold coefficient and the impulses Avian retained
+/// for the next warm start; it does not infer a force or mutate the solver.
+/// `pair_count` includes overlapping AABBs, while `touching_pair_count` and the
+/// impulse fields include only actual touching contacts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContactDebugSnapshot {
+    pub pair_count: u32,
+    pub touching_pair_count: u32,
+    pub manifold_count: u32,
+    pub max_friction: f64,
+    pub total_normal_impulse: f64,
+    pub normal_impulse_vector: [f64; 3],
+    pub max_normal_speed: f64,
+    pub max_tangent_speed: f64,
+    pub max_penetration: f64,
+    pub total_warm_start_tangent_impulse: f64,
+    pub contact_normal: [f64; 3],
+    pub contact_point: [f64; 3],
+}
+
+pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDebugSnapshot> {
+    use avian3d::prelude::{AngularVelocity, ContactGraph, LinearVelocity};
+
+    let graph = world.get_resource::<ContactGraph>()?;
+    let mut snapshot = ContactDebugSnapshot::default();
+    for pair in graph.contact_pairs_with(entity) {
+        snapshot.pair_count += 1;
+        if !pair.is_touching() {
+            continue;
+        }
+        snapshot.touching_pair_count += 1;
+        for manifold in &pair.manifolds {
+            snapshot.manifold_count += 1;
+            snapshot.max_friction = snapshot.max_friction.max(manifold.friction as f64);
+            snapshot.contact_normal = [
+                manifold.normal.x as f64,
+                manifold.normal.y as f64,
+                manifold.normal.z as f64,
+            ];
+            let normal_impulse = manifold.normal * manifold.total_normal_impulse();
+            snapshot.normal_impulse_vector[0] += normal_impulse.x as f64;
+            snapshot.normal_impulse_vector[1] += normal_impulse.y as f64;
+            snapshot.normal_impulse_vector[2] += normal_impulse.z as f64;
+            for point in &manifold.points {
+                snapshot.total_normal_impulse += point.normal_impulse as f64;
+                snapshot.max_normal_speed = snapshot
+                    .max_normal_speed
+                    .max(point.normal_speed.abs() as f64);
+                snapshot.max_penetration = snapshot.max_penetration.max(point.penetration as f64);
+                let velocity_at = |body: Option<Entity>, anchor: avian3d::math::Vector| {
+                    let Some(body) = body else {
+                        return avian3d::math::Vector::ZERO;
+                    };
+                    let linear = world
+                        .get::<LinearVelocity>(body)
+                        .map_or(avian3d::math::Vector::ZERO, |velocity| velocity.0);
+                    let angular = world
+                        .get::<AngularVelocity>(body)
+                        .map_or(avian3d::math::Vector::ZERO, |velocity| velocity.0);
+                    linear + angular.cross(anchor)
+                };
+                let relative =
+                    velocity_at(pair.body2, point.anchor2) - velocity_at(pair.body1, point.anchor1);
+                let tangent = relative - manifold.normal * relative.dot(manifold.normal);
+                snapshot.max_tangent_speed =
+                    snapshot.max_tangent_speed.max(tangent.length() as f64);
+                snapshot.total_warm_start_tangent_impulse +=
+                    point.warm_start_tangent_impulse.length() as f64;
+                snapshot.contact_point = [
+                    point.point.x as f64,
+                    point.point.y as f64,
+                    point.point.z as f64,
+                ];
+            }
+        }
+    }
+    Some(snapshot)
+}
+
+/// A dimensional force-drive description for a prismatic joint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrismaticDriveParameters {
+    /// Linear stiffness in N/m.
+    pub stiffness: f64,
+    /// Linear damping in N·s/m.
+    pub damping: f64,
+    /// Maximum actuator force in N.
+    pub max_force: f64,
+}
+
+/// Convert a dimensional force spring into Avian's stable spring-damper model.
+///
+/// USD's `physics:type = "force"` coefficients remain the public physical
+/// contract. Avian receives the equivalent implicit representation when a
+/// driven mass is available, preserving the authored force law while avoiding
+/// an explicit stiff-force update at the fixed-step boundary.
+pub fn force_drive_motor_model(
+    stiffness: f64,
+    damping: f64,
+    driven_mass: f64,
+) -> avian3d::prelude::MotorModel {
+    if stiffness > 0.0 && driven_mass > 0.0 {
+        let omega = (stiffness / driven_mass).sqrt();
+        avian3d::prelude::MotorModel::SpringDamper {
+            frequency: omega / std::f64::consts::TAU,
+            damping_ratio: damping / (2.0 * (stiffness * driven_mass).sqrt()),
+        }
+    } else {
+        avian3d::prelude::MotorModel::ForceBased { stiffness, damping }
+    }
+}
+
+/// Recover force-equivalent coefficients from an Avian motor model.
+///
+/// Acceleration-based motors intentionally return `None`: their coefficients
+/// are accelerations and the effective mass depends on the live joint geometry,
+/// so presenting them as newtons would be dimensionally false.
+pub fn motor_model_force_coefficients(
+    model: avian3d::prelude::MotorModel,
+    driven_mass: f64,
+) -> Option<(f64, f64)> {
+    match model {
+        avian3d::prelude::MotorModel::ForceBased { stiffness, damping } => {
+            Some((stiffness, damping))
+        }
+        avian3d::prelude::MotorModel::SpringDamper {
+            frequency,
+            damping_ratio,
+        } if driven_mass > 0.0 => {
+            let omega = std::f64::consts::TAU * frequency;
+            Some((
+                driven_mass * omega * omega,
+                driven_mass * 2.0 * damping_ratio * omega,
+            ))
+        }
+        avian3d::prelude::MotorModel::AccelerationBased { .. }
+        | avian3d::prelude::MotorModel::SpringDamper { .. } => None,
+    }
+}
+
+/// A live prismatic-drive readout, in the same dimensional units used by USD.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrismaticDriveSnapshot {
+    pub enabled: bool,
+    /// `"force"` for a force-equivalent drive, `"acceleration"` when the
+    /// authored motor coefficients are acceleration-based rather than N/m.
+    pub model: &'static str,
+    pub target_position: f64,
+    pub target_velocity: f64,
+    pub stiffness: f64,
+    pub damping: f64,
+    pub max_force: f64,
+}
+
+/// Replace a prismatic joint's dimensional force-drive coefficients in place.
+///
+/// The target position/velocity are intentionally preserved: position commands
+/// remain on the joint's existing co-simulation ports, while this operation
+/// changes only the physical drive law. The joint entity must already carry the
+/// native Avian joint; no replacement constraint is created.
+pub fn set_prismatic_drive(
+    world: &mut World,
+    entity: Entity,
+    drive: PrismaticDriveParameters,
+) -> Result<(), String> {
+    use avian3d::prelude::{ComputedMass, Mass, PrismaticJoint};
+
+    if !drive.stiffness.is_finite()
+        || !drive.damping.is_finite()
+        || !drive.max_force.is_finite()
+        || drive.stiffness < 0.0
+        || drive.damping < 0.0
+        || drive.max_force <= 0.0
+    {
+        return Err(format!(
+            "invalid prismatic drive: stiffness/damping must be non-negative and max_force positive, got {drive:?}"
+        ));
+    }
+    let joint = world
+        .get::<PrismaticJoint>(entity)
+        .ok_or_else(|| format!("entity {entity:?} has no PrismaticJoint"))?;
+    let driven_mass = world
+        .get::<Mass>(joint.body2)
+        .map(|mass| mass.0 as f64)
+        .or_else(|| {
+            world
+                .get::<ComputedMass>(joint.body2)
+                .map(|mass| mass.value() as f64)
+        })
+        .ok_or_else(|| format!("prismatic joint {entity:?} has no driven-body mass"))?;
+    let model = force_drive_motor_model(drive.stiffness, drive.damping, driven_mass);
+    let Some(mut joint) = world.get_mut::<PrismaticJoint>(entity) else {
+        return Err(format!("entity {entity:?} has no PrismaticJoint"));
+    };
+    joint.motor.enabled = true;
+    joint.motor.motor_model = model;
+    joint.motor.max_force = drive.max_force;
+    Ok(())
+}
+
+/// Read a prismatic drive as dimensional stiffness/damping, regardless of
+/// whether Avian stores its equivalent implicit spring-damper representation.
+pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<PrismaticDriveSnapshot> {
+    use avian3d::prelude::{ComputedMass, Mass, MotorModel, PrismaticJoint};
+
+    let joint = world.get::<PrismaticJoint>(entity)?;
+    let mass = world
+        .get::<Mass>(joint.body2)
+        .map(|mass| mass.0 as f64)
+        .or_else(|| {
+            world
+                .get::<ComputedMass>(joint.body2)
+                .map(|mass| mass.value() as f64)
+        })
+        .unwrap_or(0.0);
+    let model = match joint.motor.motor_model {
+        MotorModel::AccelerationBased { .. } => "acceleration",
+        _ => "force",
+    };
+    let (stiffness, damping) = motor_model_force_coefficients(joint.motor.motor_model, mass)?;
+    Some(PrismaticDriveSnapshot {
+        enabled: joint.motor.enabled,
+        model,
+        target_position: joint.motor.target_position,
+        target_velocity: joint.motor.target_velocity,
+        stiffness: stiffness as f64,
+        damping: damping as f64,
+        max_force: joint.motor.max_force as f64,
+    })
+}
 
 /// Avian runs one biased contact solve and one relaxation solve per substep.
 /// `ContactPoint::normal_impulse` accumulates the full clamped normal impulse
@@ -444,8 +835,9 @@ impl Plugin for PhysicsGatePlugin {
             // the published component in the same Update schedule.
             .add_systems(Update, ApplyDeferred.in_set(PhysicsSupportSet::Apply))
             // Physics owns both readiness and the solver-resolution contract.
-            // Avian's resource is the single runtime reader; no app-level
-            // duplicate or target-specific selection is permitted.
+            // Avian's resource is the single runtime reader and live diagnostic
+            // target; no app-level duplicate or target-specific selection is
+            // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsStepRequest>()
@@ -488,6 +880,150 @@ mod tests {
             DEFAULT_SUBSTEP_COUNT
         );
         assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
+    }
+
+    #[test]
+    fn live_substep_control_is_bounded_and_keeps_one_source_in_sync() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            avian3d::prelude::PhysicsPlugins::default(),
+            PhysicsGatePlugin,
+        ));
+
+        set_solver_substeps(app.world_mut(), 16).expect("valid diagnostic value");
+        assert_eq!(solver_substeps(app.world()), Some(16));
+
+        assert!(set_solver_substeps(app.world_mut(), 0).is_err());
+        assert!(set_solver_substeps(app.world_mut(), MAX_DIAGNOSTIC_SUBSTEP_COUNT + 1).is_err());
+        assert_eq!(solver_substeps(app.world()), Some(16));
+    }
+
+    #[test]
+    fn live_contact_friction_control_validates_and_updates_the_native_component() {
+        use avian3d::prelude::Friction;
+
+        let mut world = World::new();
+        let entity = world.spawn(Friction::new(0.4)).id();
+
+        assert_eq!(
+            contact_friction_snapshot(&world, entity),
+            Some(ContactFrictionParameters {
+                dynamic: 0.4,
+                static_coefficient: 0.4,
+            })
+        );
+        set_contact_friction(
+            &mut world,
+            entity,
+            ContactFrictionParameters {
+                dynamic: 0.8,
+                static_coefficient: 1.0,
+            },
+        )
+        .expect("valid diagnostic friction");
+        let snapshot = contact_friction_snapshot(&world, entity).expect("friction snapshot");
+        assert!((snapshot.dynamic - 0.8).abs() < 1e-6);
+        assert!((snapshot.static_coefficient - 1.0).abs() < 1e-6);
+
+        assert!(set_contact_friction(
+            &mut world,
+            entity,
+            ContactFrictionParameters {
+                dynamic: -0.1,
+                static_coefficient: 1.0,
+            },
+        )
+        .is_err());
+        assert_eq!(contact_friction_snapshot(&world, entity), Some(snapshot));
+    }
+
+    #[test]
+    fn live_joint_damping_control_adds_only_avian_native_damping() {
+        use avian3d::prelude::{JointDamping, Mass};
+
+        let mut world = World::new();
+        let hull = world.spawn_empty().id();
+        let leg = world.spawn(Mass(40.0)).id();
+        let joint = world
+            .spawn(avian3d::prelude::PrismaticJoint::new(hull, leg))
+            .id();
+
+        assert_eq!(
+            joint_damping_snapshot(&world, joint),
+            Some(JointDampingParameters {
+                linear: 0.0,
+                angular: 0.0,
+            })
+        );
+        set_joint_damping(
+            &mut world,
+            joint,
+            JointDampingParameters {
+                linear: 0.5,
+                angular: 4.0,
+            },
+        )
+        .expect("valid diagnostic damping");
+        assert_eq!(
+            world.get::<JointDamping>(joint).copied(),
+            Some(JointDamping {
+                linear: 0.5,
+                angular: 4.0,
+            })
+        );
+        assert!(set_joint_damping(
+            &mut world,
+            joint,
+            JointDampingParameters {
+                linear: -0.1,
+                angular: 1.0,
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn force_drive_conversion_preserves_the_authored_units() {
+        let motor = force_drive_motor_model(4000.0, 1600.0, 40.0);
+        match motor {
+            avian3d::prelude::MotorModel::SpringDamper {
+                frequency,
+                damping_ratio,
+            } => {
+                assert!((frequency - 10.0 / std::f64::consts::TAU).abs() < 1e-12);
+                assert!((damping_ratio - 2.0).abs() < 1e-12);
+            }
+            other => panic!("expected implicit force-equivalent drive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prismatic_drive_can_be_tuned_without_replacing_the_joint() {
+        use avian3d::prelude::Mass;
+
+        let mut world = World::new();
+        let hull = world.spawn_empty().id();
+        let leg = world.spawn(Mass(40.0)).id();
+        let joint = world
+            .spawn(avian3d::prelude::PrismaticJoint::new(hull, leg))
+            .id();
+
+        set_prismatic_drive(
+            &mut world,
+            joint,
+            PrismaticDriveParameters {
+                stiffness: 4000.0,
+                damping: 1600.0,
+                max_force: 12000.0,
+            },
+        )
+        .expect("joint drive should accept dimensional values");
+        let snapshot = prismatic_drive_snapshot(&world, joint).expect("drive snapshot");
+        assert_eq!(snapshot.model, "force");
+        assert!((snapshot.stiffness - 4000.0).abs() < 1e-6);
+        assert!((snapshot.damping - 1600.0).abs() < 1e-6);
+        assert!((snapshot.max_force - 12000.0).abs() < 1e-6);
     }
 
     #[test]

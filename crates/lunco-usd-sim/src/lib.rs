@@ -3954,6 +3954,25 @@ fn animate_proxy_physical_wheels(
 #[derive(Component)]
 pub struct UsdSimProcessed;
 
+/// Allow a live prim to be projected again after its composed simulation
+/// schemas change.
+///
+/// A runtime reference can initially arrive as a typeless visual root while
+/// its referenced layer closure is still loading.  The sim projector marks
+/// that root processed, so a later schema resync must clear the marker before
+/// the normal projection pass can publish its authored control surface,
+/// wheel wiring, or other simulation components.
+pub fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
+    if world.get::<UsdSimProcessed>(entity).is_none() {
+        return false;
+    }
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return false;
+    };
+    entity_mut.remove::<UsdSimProcessed>();
+    true
+}
+
 /// Marker: this prim's link/celestial vocabulary has been projected to components.
 #[derive(Component)]
 struct CelestialProjected;

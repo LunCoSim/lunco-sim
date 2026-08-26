@@ -6,8 +6,9 @@
 // scenario. Test code must not ride along in production scripts; a harness
 // concatenates these libs ahead of a test file explicitly — either
 // `cargo test -p lunco-scripting --test rhai_test_harness` for the pure suites,
-// or `scripts/api/rhai_eval.py -e "$(cat lib/*.rhai)" -f <test>` for the ones
-// needing a live stage (the shape `scripts/scenario_sync_test.sh` uses).
+// or `target/debug/luncosim rhai --api <port> --stdout -e "<prelude>\n<test>"`
+// for the ones needing a live stage (the shape `scripts/scenario_sync_test.sh`
+// uses).
 //
 // ## Why every helper returns a string
 //

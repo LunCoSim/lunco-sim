@@ -1604,8 +1604,8 @@ type and literal, journals the edit, and re-composes the live stage.
  Produce a shareable link for the active document and copy it to the
  clipboard.
 
- Like [`OpenFile`], the workbench owns only the typed struct — the
- behaviour is domain-specific and lives in the domain crate
+ Like [`OpenFile`], this is a typed shell command whose behaviour is
+ domain-specific and lives in the domain crate
  (`lunco-modelica` encodes the active model's source into a URL
  fragment). Over the HTTP API the same name is served by a *query*
  that **returns** the link in its `data` payload instead of touching a
@@ -1722,7 +1722,8 @@ type and literal, journals the edit, and re-composes the live stage.
 
  1. Validates inputs (new_name non-empty, no path separators, source
     exists, target doesn't already exist).
- 2. Performs `std::fs::rename` on the absolute paths.
+ 2. Performs the move through `lunco-storage` on the backend handles for the
+    absolute paths; the workbench does not call `std::fs`.
  3. Re-scans the affected Twin via [`Twin::reload`] so the file
     index reflects disk.
  4. Patches every open Document whose `DocumentOrigin::File { path }`

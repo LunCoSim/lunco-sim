@@ -9,7 +9,7 @@
 // identical to a suspension in a screenshot.
 //
 // WHY IT IS NOT PART OF `landing_legs_test`. A leg lives in a mechanism: four
-// raked sliders, four gimballed pads, four contacts and a hull. When such a gear
+// raked sliders, four rigid child pads, four contacts and a hull. When such a gear
 // does not stroke, "the joint is broken" and "the mechanism is over-constrained"
 // look the same from outside. Here each joint carries one mass, with no contact
 // and no second load path, so a failure has exactly one meaning.
@@ -57,6 +57,14 @@ fn on_start(me) {
     this.leglike = find("/PrismaticSpringTest/StrutLegLike");
     this.bob_leglike = find("/PrismaticSpringTest/BobLegLike");
     this.leglike_x0 = ();
+    this.scene_mounts = 0;
+    this.scene_mount_name = "";
+    for entity in list_entities() {
+        if entity.name.starts_with("Scene:") {
+            this.scene_mounts += 1;
+            this.scene_mount_name = entity.name;
+        }
+    }
 
     print("[strut] ── raked prismatic springs, isolated ─────────────────");
     print("[strut] extension joint gid=" + this.ext + "  compression gid=" + this.comp);
@@ -98,6 +106,8 @@ fn on_tick(me) {
             comp_pos: world_pos(this.bob_comp),
             leglike_stroke: xl,
             leglike_dx: if pl == () || this.leglike_x0 == () { () } else { pl[0] - this.leglike_x0 },
+            scene_mounts: this.scene_mounts,
+            scene_mount_name: this.scene_mount_name,
         });
     }
 }
@@ -118,6 +128,11 @@ fn on_tick(me) {
 //                    means the joint failed open rather than stiff.
 fn verdict(s) {
     let f = [];
+    f.push(t_true(s.scene_mounts == 1,
+        "expected exactly one active scene root, got " + s.scene_mounts +
+        " — competing raw/doc-backed mounts indicate a broken loading sequence"));
+    f.push(t_true(s.scene_mount_name.starts_with("Scene:twin://"),
+        "active scene root was not mounted through its Twin URI: " + s.scene_mount_name));
     f.push(t_present(s.ext_stroke, "extension strut displacement port"));
     f.push(t_present(s.ext_force, "extension strut force port"));
     f.push(t_present(s.comp_stroke, "compression strut displacement port"));

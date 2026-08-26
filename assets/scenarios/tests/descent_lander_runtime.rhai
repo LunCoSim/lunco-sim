@@ -37,10 +37,12 @@ fn on_start(me) {
     this.rcs = find("/LanderTest/Lander/AttitudePropulsion");
     this.lander = find("/LanderTest/Lander");
     this.gnc = find("/LanderTest/Lander/GNC");
-    this.pad_px = find("/LanderTest/Lander/LegPX/PadPX");
-    this.pad_nx = find("/LanderTest/Lander/LegNX/PadNX");
-    this.pad_pz = find("/LanderTest/Lander/LegPZ/PadPZ");
-    this.pad_nz = find("/LanderTest/Lander/LegNZ/PadNZ");
+    // Contact is owned by each Leg* rigid body. Pad* is only its welded
+    // collider child and has no independent runtime contact surface.
+    this.leg_px = find("/LanderTest/Lander/LegPX");
+    this.leg_nx = find("/LanderTest/Lander/LegNX");
+    this.leg_pz = find("/LanderTest/Lander/LegPZ");
+    this.leg_nz = find("/LanderTest/Lander/LegNZ");
     this.rover = find("/LanderTest/SkidRover");
     this.goal = find("/LanderTest/RoverTarget3");
     this.event_sources_ok = true;
@@ -113,8 +115,8 @@ fn on_tick(me) {
         }
     }
 
-    if high(this.pad_px, "contact") && high(this.pad_nx, "contact") &&
-       high(this.pad_pz, "contact") && high(this.pad_nz, "contact") {
+    if high(this.leg_px, "contact") && high(this.leg_nx, "contact") &&
+       high(this.leg_pz, "contact") && high(this.leg_nz, "contact") {
         this.native_contacts_seen = true;
     }
     if high(this.lander, "all_legs_contact") {

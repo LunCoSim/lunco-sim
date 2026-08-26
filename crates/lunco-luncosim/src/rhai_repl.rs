@@ -14,32 +14,44 @@
 //! rhai> set_camera("OrbitView")
 //!
 //! # one-shot
-//! luncosim rhai -e 'load_scene("scenes/luncosim/lander_cinematic.usda"); pause()'
+//! luncosim rhai --api 4101 -e 'load_scene("scenes/luncosim/lander_cinematic.usda"); pause()'
 //!
 //! # pipe a whole script (sent as ONE snippet, so multi-line blocks work)
-//! cat cutscene.rhai | luncosim rhai
+//! cat cutscene.rhai | luncosim rhai --api 4101
+//!
+//! # shell-harness output (stdout only, nonzero on transport/Rhai failure)
+//! luncosim rhai --api 4101 --stdout -e 'print("TESTS_OK 1")'
 //! ```
 //!
-//! Snippet output (`print`/`notify`) surfaces in the running app's log / HUD, not
-//! here — the HTTP reply is the command ack. That's fine for the primary use:
+//! Snippet output (`print`/`notify`) is captured in the HTTP reply. The default
+//! mode prints the complete acknowledgement; `--stdout` prints only the captured
+//! script output for shell harnesses. That's fine for the primary use:
 //! sending ordered command sequences (the thing the one-fetch-at-a-time API made
 //! awkward).
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::net::TcpStream;
 
+#[derive(Clone, Copy, Debug, Default)]
+enum OutputMode {
+    #[default]
+    Json,
+    Stdout,
+}
+
 /// If the process was invoked as `luncosim rhai [...]`, run the REPL/one-shot
-/// client and return `true` (the caller should exit WITHOUT launching the GUI).
-/// Returns `false` for a normal launch so `main` falls through to the app.
-pub fn run_if_requested() -> bool {
+/// client and return its exit status. Returns `None` for a normal launch so
+/// `main` falls through to the app.
+pub fn run_if_requested() -> Option<i32> {
     let args: Vec<String> = std::env::args().collect();
     if !args.iter().skip(1).any(|a| a == "rhai") {
-        return false;
+        return None;
     }
 
     let mut port = lunco_core::session::DEFAULT_API_PORT;
     let mut one_shot: Option<String> = None;
     let mut file: Option<String> = None;
+    let mut output = OutputMode::Json;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -57,26 +69,27 @@ pub fn run_if_requested() -> bool {
                 file = args.get(i + 1).cloned();
                 i += 1;
             }
+            "--stdout" => output = OutputMode::Stdout,
             _ => {}
         }
         i += 1;
     }
 
-    run(port, one_shot, file);
-    true
+    Some(run(port, one_shot, file, output))
 }
 
-fn run(port: u16, one_shot: Option<String>, file: Option<String>) {
+fn run(port: u16, one_shot: Option<String>, file: Option<String>, output: OutputMode) -> i32 {
     if let Some(code) = one_shot {
-        submit(port, &code);
-        return;
+        return submit(port, &code, output);
     }
     if let Some(path) = file {
         match std::fs::read_to_string(&path) {
-            Ok(src) => submit(port, &src),
-            Err(e) => eprintln!("rhai: cannot read {path}: {e}"),
+            Ok(src) => return submit(port, &src, output),
+            Err(e) => {
+                eprintln!("rhai: cannot read {path}: {e}");
+                return 2;
+            }
         }
-        return;
     }
 
     let stdin = io::stdin();
@@ -85,9 +98,9 @@ fn run(port: u16, one_shot: Option<String>, file: Option<String>) {
         // multi-line blocks (`seq([...])`) stay intact.
         let mut src = String::new();
         if stdin.lock().read_to_string(&mut src).is_ok() && !src.trim().is_empty() {
-            submit(port, &src);
+            return submit(port, &src, output);
         }
-        return;
+        return 0;
     }
 
     // Interactive line REPL.
@@ -96,6 +109,7 @@ fn run(port: u16, one_shot: Option<String>, file: Option<String>) {
          `restart_scene()`, `set_camera(\"OrbitView\")`.  Ctrl-D / :q to quit)"
     );
     let mut line = String::new();
+    let mut status = 0;
     loop {
         eprint!("rhai> ");
         io::stderr().flush().ok();
@@ -115,17 +129,54 @@ fn run(port: u16, one_shot: Option<String>, file: Option<String>) {
         if matches!(code, ":q" | "quit" | "exit") {
             break;
         }
-        submit(port, code);
+        status = status.max(submit(port, code, output));
+    }
+    status
+}
+
+fn submit(port: u16, code: &str, output: OutputMode) -> i32 {
+    match post(port, code) {
+        Ok(body) => match output {
+            OutputMode::Json => {
+                println!("{body}");
+                response_status(&body, false)
+            }
+            OutputMode::Stdout => response_status(&body, true),
+        },
+        Err(e) => {
+            eprintln!("rhai: request failed (is a luncosim running with --api {port}?): {e}");
+            2
+        }
     }
 }
 
-fn submit(port: u16, code: &str) {
-    match post(port, code) {
-        Ok(body) => println!("{body}"),
-        Err(e) => {
-            eprintln!("rhai: request failed (is a luncosim running with --api {port}?): {e}");
+/// Decode the one API response shape owned by `RunRhai`. Keeping this in the
+/// native client means shell callers do not need another JSON/Rhai transport
+/// implementation. `--stdout` prints exactly the captured script output.
+fn response_status(body: &str, stdout_only: bool) -> i32 {
+    let Ok(response) = serde_json::from_str::<serde_json::Value>(body) else {
+        eprintln!("rhai: API returned invalid JSON: {body}");
+        return 2;
+    };
+    if let Some(error) = response.get("error") {
+        eprintln!("RHAI_ERROR: {error}");
+        return 4;
+    }
+    let Some(stdout) = response
+        .get("data")
+        .and_then(|data| data.get("stdout"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        eprintln!("rhai: RunRhai returned no captured stdout: {response}");
+        return 2;
+    };
+    if stdout_only && !stdout.is_empty() {
+        print!("{stdout}");
+        if !stdout.ends_with('\n') {
+            println!();
         }
     }
+    0
 }
 
 /// POST a `RunRhai` command carrying `code` to the running luncosim's HTTP API and

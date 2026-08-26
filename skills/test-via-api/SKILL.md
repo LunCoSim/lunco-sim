@@ -43,8 +43,9 @@ events plus the resulting live state and emit a real verdict. Parsing or
 
 For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
-the test libraries and calls `RunRhai` on the existing production session, so
-editing and rerunning the test does not restart the app. Use `run_scenario.sh`
+the test libraries and delegates to the native `luncosim rhai --stdout` client,
+which calls `RunRhai` on the existing production session. Editing and rerunning
+the test does not restart the app. Use `run_scenario.sh`
 when the assertion should remain attached as a persistent observer.
 
 For an interactive tour, keep one production session and use `StartTutorial`

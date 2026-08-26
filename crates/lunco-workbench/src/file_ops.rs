@@ -1,12 +1,13 @@
 //! Shell-level file-workflow commands.
 //!
-//! Verbs that span every domain — Open, Save All, Save as Twin — live
-//! here so all three apps (`lunica`, `luncosim`,
-//! `luncosim`) get the same File menu, keybinds, and HTTP API
-//! shape from one place. Domain-specific commands (`SaveDocument`,
+//! Shell-level file workflow lives here so all windowed apps get the same
+//! picker, menu, keybind, and HTTP command shape. The generic `OpenFile`
+//! command is defined by `lunco-doc-bevy`; folder/Twin scanning is owned by
+//! `lunco-workspace`; and document bytes are read by the owning domain through
+//! `lunco-storage`. Domain-specific commands (`SaveDocument`,
 //! `SaveAsDocument`, `CloseDocument`) stay in `lunco-doc-bevy`; their
-//! observers continue to live in domain crates because writing a
-//! Modelica `.mo` and writing a USD `.usda` differ in details.
+//! observers continue to live in domain crates because writing a Modelica
+//! `.mo` and writing a USD `.usda` differ in details.
 //!
 //! ## Pattern
 //!
@@ -18,8 +19,8 @@
 //!
 //! ## What this module ships
 //!
-//! - The verbs it still OWNS ([`OpenFile`], [`SaveAll`], [`SaveAsTwin`]) as
-//!   typed commands.
+//! - Shell-only commands such as [`SaveAll`], [`SaveAsTwin`], and the picker
+//!   requests.
 //! - The picker-resolution router ([`on_pick_resolved`]) that turns a
 //!   [`crate::picker::PickResolved`] event into the matching typed verb with the
 //!   chosen path filled in.
@@ -33,13 +34,13 @@
 //!
 //! ## What's deferred
 //!
-//! - **[`OpenFile`] observer** handles scene files here (via
-//!   `spawn_twin_from_scene`) and otherwise defers to domain crates; it will
-//!   become a generic classifier-and-dispatch when a second domain contributes.
-//! - [`SaveAll`] dispatches the domain-owned save commands for every open
-//!   document, promoting drafts into the active Twin when one exists.
-//! - [`SaveAsTwin`] uses the workspace-owned [`CreateTwin`] command and then
-//!   asks each domain to serialize its open documents into the new root.
+//! - **[`OpenFile`]** is defined by `lunco-doc-bevy`; its empty-path picker
+//!   entry is wired here, while extension-specific observers own loading.
+//!   USD also owns scene-root resolution and the doc-first scene mount, which
+//!   prevents the shell from mounting the same file through a second path.
+//! - [`SaveAll`] dispatches domain-owned save commands; [`SaveAsTwin`]
+//!   delegates manifest creation to the workspace-owned [`CreateTwin`]
+//!   command and serialization to document owners.
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
@@ -48,8 +49,8 @@ use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
 use crate::picker::{PickFollowUp, PickHandle, PickMode, PickResolved};
 use lunco_workspace::open::{
-    drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace, AddTwin, CreateTwin,
-    OpenFolder, OpenTwin, PendingTwinOpens, TwinOpenMode,
+    drain_pending_twin_opens, AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin,
+    PendingTwinOpens,
 };
 use lunco_workspace::{FileRenamed, WorkspaceResource};
 
@@ -69,19 +70,18 @@ pub struct ShowOpenFilePicker {}
 #[Command(default)]
 pub struct ShowOpenFolderPicker {}
 
-// `NewDocument` and `OpenFile` are document-lifecycle verbs, not UI: they
-// moved to `lunco-doc-bevy` (the non-egui document layer) so headless /
-// luncosim / server binaries can dispatch them by `kind` / `path` without
-// pulling the workbench shell. The document-lifecycle verbs remain owned by
-// `lunco-doc-bevy`; this module
-// only installs the workbench-specific observers and picker dispatch.
+// `NewDocument` and `OpenFile` are document-lifecycle verbs, not UI: their
+// types live in `lunco-doc-bevy` so headless / luncosim / server binaries can
+// dispatch them by `kind` / `path` without pulling the workbench shell. This
+// module only installs the workbench-specific default-kind and picker
+// adapters.
 use lunco_doc_bevy::{NewDocument, OpenFile};
 
 /// Produce a shareable link for the active document and copy it to the
 /// clipboard.
 ///
-/// Like [`OpenFile`], the workbench owns only the typed struct — the
-/// behaviour is domain-specific and lives in the domain crate
+/// Like [`OpenFile`], this is a typed shell command whose behaviour is
+/// domain-specific and lives in the domain crate
 /// (`lunco-modelica` encodes the active model's source into a URL
 /// fragment). Over the HTTP API the same name is served by a *query*
 /// that **returns** the link in its `data` payload instead of touching a
@@ -122,7 +122,7 @@ pub struct RenameOpenDocument {
 ///
 /// 1. Validates inputs (new_name non-empty, no path separators, source
 ///    exists, target doesn't already exist).
-/// 2. Performs `std::fs::rename` on the absolute paths.
+/// 2. Asks [`lunco_storage`] to rename backend handles for the absolute paths.
 /// 3. Re-scans the affected Twin via [`Twin::reload`] so the file
 ///    index reflects disk.
 /// 4. Patches every open Document whose `DocumentOrigin::File { path }`
@@ -259,52 +259,6 @@ fn on_create_twin_pick(trigger: On<CreateTwin>, mut commands: Commands) {
     }
 }
 
-#[on_command(OpenFile)]
-fn on_open_file(
-    trigger: On<OpenFile>,
-    _registry: Res<DocumentKindRegistry>,
-    workspace: Res<WorkspaceResource>,
-    mut pending: ResMut<PendingTwinOpens>,
-) {
-    let path = trigger.event().path.clone();
-    if path.is_empty() {
-        warn!("[OpenFile] fired with empty path — ignoring (use ShowOpenFilePicker for dialog)");
-        return;
-    }
-    // A scene file is opened through its ROOT (see `spawn_twin_from_scene`), so
-    // File→Open on a `.usda` anywhere on disk works — including outside the
-    // workspace `assets/` dir — with no separate "Open Scene" command. Scheme
-    // paths (`lunco://`, `twin://`, `mem://`) already name their root and are
-    // handled by the USD-side observer.
-    if is_scene_path(&path) && !is_path_inside_open_twin(std::path::Path::new(&path), &workspace) {
-        // VS Code semantics, same as OpenFolder: opening replaces the workspace
-        // root rather than accumulating one per scene. The active root survives
-        // until the candidate scan succeeds.
-        spawn_twin_from_scene(std::path::Path::new(&path), &mut pending, "OpenFile");
-    }
-}
-
-/// An authored layer inside the current Twin is a partial update target, not a
-/// request to replace the workspace. Domain `OpenFile` observers still receive
-/// the command and refresh their document/derived state.
-fn is_path_inside_open_twin(path: &std::path::Path, workspace: &WorkspaceResource) -> bool {
-    workspace
-        .twins()
-        .any(|(_, twin)| path.starts_with(&twin.root))
-}
-
-/// A bare filesystem path to a USD scene — the case that must be opened through
-/// its root. Scheme paths already carry their root, so they are excluded.
-fn is_scene_path(path: &str) -> bool {
-    if lunco_assets::has_scheme(path) {
-        return false;
-    }
-    let lower = path.to_ascii_lowercase();
-    [".usda", ".usdc", ".usdz", ".usd"]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
-}
-
 /// The ONE thing about opening a Twin that needs a window: choosing which one.
 ///
 /// The open pipeline itself lives in `lunco_workspace::open` — it walks a
@@ -323,39 +277,6 @@ fn on_open_twin_pick(trigger: On<OpenTwin>, mut commands: Commands) {
         mode: PickMode::OpenFolder,
         on_resolved: PickFollowUp::OpenTwin,
     });
-}
-
-/// Open the root that owns `scene` and select that scene.
-///
-/// Opening a scene file *is* opening its root — USD references are relative, so
-/// a scene loaded without its root cannot resolve co-located assets. The root is
-/// [`lunco_twin::root_for_file`]: the nearest `twin.toml` ancestor, else the
-/// containing folder (a folder-Twin, a first-class mode, no manifest required).
-///
-/// This is why a scene anywhere on disk opens with no new command: `OpenFile`
-/// routes here and reuses the same mount as Open Folder / Open Twin.
-///
-/// Stays in this crate (rather than beside the rest of the pipeline in
-/// `lunco_workspace::open`) because resolving the root-relative path needs
-/// `lunco_assets`, which the workspace crate does not depend on. It reaches the
-/// shared scan through [`spawn_twin_scan`].
-pub(crate) fn spawn_twin_from_scene(
-    scene: &std::path::Path,
-    pending: &mut PendingTwinOpens,
-    log_tag: &str,
-) {
-    let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
-    let root = lunco_twin::root_for_file(&abs);
-    let rel = abs
-        .strip_prefix(&root)
-        .map(lunco_assets::asset_path::slashed)
-        .unwrap_or_else(|_| {
-            abs.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
 }
 
 /// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].
@@ -459,10 +380,7 @@ fn on_rename_twin_entry(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = trigger;
-        warn!(
-            "[RenameTwinEntry] rename not yet supported on wasm — needs \
-             lunco_storage::Storage::rename + IndexedDB backend (W1/W2)"
-        );
+        warn!("[RenameTwinEntry] rename not supported on wasm for filesystem-path Twin entries");
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -499,11 +417,32 @@ fn on_rename_twin_entry(
             return;
         };
         let old_rel = std::path::PathBuf::from(&ev.relative_path);
-        let old_abs = twin_root.join(&old_rel);
-        if !old_abs.exists() {
-            warn!("[RenameTwinEntry] source missing: {}", old_abs.display());
+        if old_rel.as_os_str().is_empty()
+            || !old_rel
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            warn!(
+                "[RenameTwinEntry] relative_path must stay within the Twin: {}",
+                old_rel.display()
+            );
             return;
         }
+        let old_abs = twin_root.join(&old_rel);
+        let old_kind = match lunco_storage::entry_kind_file_sync(&old_abs) {
+            Ok(kind) => kind,
+            Err(lunco_storage::StorageError::NotFound) => {
+                warn!("[RenameTwinEntry] source missing: {}", old_abs.display());
+                return;
+            }
+            Err(error) => {
+                warn!(
+                    "[RenameTwinEntry] cannot inspect source {}: {error}",
+                    old_abs.display()
+                );
+                return;
+            }
+        };
         let new_abs = old_abs
             .parent()
             .map(|p| p.join(new_name))
@@ -512,17 +451,27 @@ fn on_rename_twin_entry(
             // No-op (user submitted the existing name) — silent.
             return;
         }
-        if new_abs.exists() {
-            warn!(
-                "[RenameTwinEntry] target already exists: {}",
-                new_abs.display()
-            );
-            return;
+        match lunco_storage::entry_kind_file_sync(&new_abs) {
+            Ok(_) => {
+                warn!(
+                    "[RenameTwinEntry] target already exists: {}",
+                    new_abs.display()
+                );
+                return;
+            }
+            Err(lunco_storage::StorageError::NotFound) => {}
+            Err(error) => {
+                warn!(
+                    "[RenameTwinEntry] cannot inspect target {}: {error}",
+                    new_abs.display()
+                );
+                return;
+            }
         }
-        let is_dir = old_abs.is_dir();
-        if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
+        let is_dir = matches!(old_kind, lunco_storage::StorageEntryKind::Directory);
+        if let Err(e) = lunco_storage::rename_file_sync(&old_abs, &new_abs) {
             warn!(
-                "[RenameTwinEntry] fs::rename {} -> {} failed: {e}",
+                "[RenameTwinEntry] storage rename {} -> {} failed: {e}",
                 old_abs.display(),
                 new_abs.display()
             );
@@ -627,7 +576,11 @@ fn on_save_as_twin(
         return;
     }
     let root = std::path::PathBuf::from(&folder);
-    if root.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+    let manifest_path = root.join(lunco_twin::MANIFEST_FILENAME);
+    if matches!(
+        lunco_storage::entry_kind_file_sync(&manifest_path),
+        Ok(lunco_storage::StorageEntryKind::File) | Ok(lunco_storage::StorageEntryKind::Directory)
+    ) {
         warn!(
             "[SaveAsTwin] `{}` already contains {} — choose a new Twin folder",
             root.display(),
@@ -635,9 +588,17 @@ fn on_save_as_twin(
         );
         return;
     }
-    if root.exists() && !root.is_dir() {
-        warn!("[SaveAsTwin] `{}` is not a folder", root.display());
-        return;
+    match lunco_storage::entry_kind_file_sync(&root) {
+        Ok(lunco_storage::StorageEntryKind::File) => {
+            warn!("[SaveAsTwin] `{}` is not a folder", root.display());
+            return;
+        }
+        Ok(lunco_storage::StorageEntryKind::Directory)
+        | Err(lunco_storage::StorageError::NotFound) => {}
+        Err(error) => {
+            warn!("[SaveAsTwin] cannot inspect `{}`: {error}", root.display());
+            return;
+        }
     }
     let Some(workspace) = workspace else {
         warn!("[SaveAsTwin] no workspace is installed");
@@ -819,7 +780,7 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
 // non-Command event (`PickResolved`) and is added directly in the
 // plugin's `build`. `OpenFile` is also absent: the observer that
 // loads `.mo` content lives in `lunco-modelica` and registers itself
-// there; the workbench owns only the typed struct.
+// there; the workbench owns only the picker entry point.
 register_commands!(
     on_add_folder_to_workspace_pick,
     on_add_twin_pick,
@@ -843,16 +804,16 @@ pub struct FileOpsPlugin;
 impl Plugin for FileOpsPlugin {
     fn build(&self, app: &mut App) {
         register_all_commands(app);
-        // OpenFile is owned by this crate but its observer lives in
-        // domain crates (modelica today). Register the type here so
-        // HTTP-API introspection sees it even before any domain
-        // crate registers an observer. Idempotent — re-registration
-        // by a domain's `register_commands!()` is a no-op.
+        // OpenFile is defined by lunco-doc-bevy, but the shell registers its
+        // reflected type so a GUI-only host advertises the shared picker
+        // command before a domain-specific observer is installed. No bytes
+        // are read here; domain plugins own the observers.
         app.register_type::<OpenFile>();
         // CopyShareLink: workbench owns the typed struct so HTTP-API
         // introspection sees it; the observer lives in lunco-modelica.
         app.register_type::<CopyShareLink>();
-        app.add_observer(on_open_file);
+        // USD scene-root resolution is owned by `lunco-usd` so GUI and
+        // headless launches use the same doc-first world-mount path.
         app.add_observer(on_pick_resolved);
         // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks
         // a `Task<Result<TwinMode, _>>` in `PendingTwinOpens`; this

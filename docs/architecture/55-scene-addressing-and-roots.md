@@ -45,13 +45,12 @@ Each conversion site implements its own partial rules:
   asset-relative, **refuses** anything outside `assets/`.
 - `twin_source_for_workspace_scene` (same file) — asset-relative → `twin://`,
   but only for roots already registered.
-- `load_startup_scene` (`lunco-luncosim/src/lib.rs`) — walks up for `twin.toml`,
-  opens the Twin, registers it, mounts doc-first. **This is the only place that
-  actually does the right thing**, and it is reachable only from `--scene` at boot.
-- `on_open_file` (`lunco-usd/src/commands.rs`) — routes `OpenFile` to
-  `spawn_scene_root_world`, which funnels back into the refusing normalizer.
+- `load_startup_scene` (`lunco-luncosim/src/lib.rs`) and the USD `on_open_file`
+  observer (`lunco-usd/src/commands.rs`) both resolve the owning root, register
+  it, and enter the same doc-first `LoadScene` path.
 
-So the capability exists, once, in the least reusable place.
+The root resolver and async Twin scan are shared; only the entry-point adapter
+differs (startup configuration versus the typed `OpenFile` command).
 
 ### The root cause
 
@@ -151,7 +150,9 @@ implementation:
 
 `OpenFile` is already the UI's File→Open command and already accepts an
 arbitrary path, so opening any `.usda` anywhere works from the UI with **no new
-command and no new UI surface**.
+command and no new UI surface**. The USD observer resolves the owning folder,
+uses the shared asynchronous Twin scan, selects the requested file, and lets
+the `TwinAdded` observer perform the same doc-first mount as startup.
 
 ### Why `LoadScene` does not take filesystem paths
 

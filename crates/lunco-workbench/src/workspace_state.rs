@@ -400,7 +400,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// to the raw path bytes when canonicalization fails (e.g. the folder
 /// was deleted).
 pub fn workspace_state_path(twin_root: &Path) -> PathBuf {
-    let canonical = std::fs::canonicalize(twin_root).unwrap_or_else(|_| twin_root.to_path_buf());
+    let canonical = lunco_storage::canonicalize_file_path(twin_root)
+        .unwrap_or_else(|_| twin_root.to_path_buf());
     let key = fnv1a64(canonical.to_string_lossy().as_bytes());
     lunco_assets::user_config_dir()
         .join("workspace-state")
@@ -786,7 +787,7 @@ fn persist_workspace_state(world: &mut World) {
     let key = format!(
         "{:016x}",
         fnv1a64(
-            std::fs::canonicalize(&state.twin_root)
+            lunco_storage::canonicalize_file_path(&state.twin_root)
                 .unwrap_or_else(|_| state.twin_root.clone())
                 .to_string_lossy()
                 .as_bytes(),

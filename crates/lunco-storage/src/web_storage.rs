@@ -29,7 +29,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Storage, StorageError, StorageHandle, StorageResult};
+use crate::{Storage, StorageEntryKind, StorageError, StorageHandle, StorageResult};
 
 /// Browser-`localStorage` backend. Zero-sized — all state lives in the
 /// origin's `localStorage`, shared across every `WebStorage` instance
@@ -96,6 +96,34 @@ impl Storage for WebStorage {
         }
         ls.remove_item(&key)
             .map_err(|_| StorageError::Io(std::io::Error::other("localStorage remove failed")))
+    }
+
+    async fn entry_kind(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind> {
+        if !self.exists(handle).await {
+            return Err(StorageError::NotFound);
+        }
+        Ok(StorageEntryKind::File)
+    }
+
+    async fn ensure_directory(&self, _handle: &StorageHandle) -> StorageResult<()> {
+        // localStorage keys have no physical parent directories.
+        Ok(())
+    }
+
+    async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
+        let from_key = Self::key(from)?;
+        let to_key = Self::key(to)?;
+        let ls = Self::local_storage()?;
+        let Some(value) = ls.get_item(&from_key).ok().flatten() else {
+            return Err(StorageError::NotFound);
+        };
+        ls.set_item(&to_key, &value).map_err(|_| {
+            StorageError::Io(std::io::Error::other(
+                "localStorage rename destination failed",
+            ))
+        })?;
+        ls.remove_item(&from_key)
+            .map_err(|_| StorageError::Io(std::io::Error::other("localStorage rename failed")))
     }
 
     async fn exists(&self, handle: &StorageHandle) -> bool {

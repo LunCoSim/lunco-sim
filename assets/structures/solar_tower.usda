@@ -78,13 +78,12 @@ def Xform "SolarTower" (
         bool physics:collisionEnabled = true
     }
 
-    # Yaw head — the rotating body (body1 of the declared revolute joint).
-    # The panel is a visual-only child, so it swings with the head without
-    # becoming a second body. Keeping the head as a real body is required by
-    # UsdPhysics: a joint endpoint must resolve to a rigid body. Controllers
-    # should drive the joint's angle, not write this body's transform directly.
+    # Yaw head — the rotating part (body1 of the declared revolute joint).
+    # It is a dynamic rigid body even though the panel is visual-only: hierarchy
+    # is not attachment, and the revolute joint is the authoritative mount.
+    # Sits above the mast top (5.2 m).
     def Cylinder "YawHead" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Y"
@@ -93,7 +92,9 @@ def Xform "SolarTower" (
         double3 xformOp:translate = (0, 5.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
-        float physics:mass = 50.0
+        float physics:mass = 20.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:collisionEnabled = true
 
         # Vertical PV panel — thin cube standing on edge, solar_panel
         # shader. Visual-only child of the head, so it swings with the

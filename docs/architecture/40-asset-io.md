@@ -2,11 +2,15 @@
 
 > Status: Active · Audience: contributors writing crates that read or write assets
 
-**TL;DR.** Domain crates read assets through `bevy::asset::AssetServer` —
-never `std::fs::read*`, `std::thread::spawn`, `std::time::Instant`, or
-`tokio::fs`. These are denied by clippy **on the wasm target**, which is the only
-place they are actually true (see *Enforcement layers*); a wasm build gate in CI
-catches anything that slips through (transitive deps, std API drift).
+**TL;DR.** Domain crates read shippable assets through
+`bevy::asset::AssetServer`; user-data bytes and mutations go through
+`lunco-storage`; asset identity, resolution, and cache policy belong to
+`lunco-assets`. `lunco-workbench` may own picker and command routing, but it
+must not perform backend I/O itself. Never use `std::fs::read*`,
+`std::thread::spawn`, `std::time::Instant`, or `tokio::fs` in a wasm-shipped
+path. These are denied by clippy **on the wasm target**, which is the only
+place they are actually true (see *Enforcement layers*); a wasm build gate in
+CI catches anything that slips through (transitive deps, std API drift).
 
 ---
 
@@ -69,6 +73,28 @@ Wins beyond wasm support:
   `https://`, `lunco://`), so swapping out where the bytes come
   from doesn't ripple into domain code.
 
+## Ownership boundary for files
+
+“File operations” is not one responsibility. Keep the semantic owner and the
+backend owner separate:
+
+| Concern | Owner | Workbench role |
+|---|---|---|
+| Asset identity, URI resolution, and content-addressed caches | `lunco-assets` | none |
+| Read/write/rename/delete, entry metadata, directory preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
+| Twin manifest semantics and recursive file index | `lunco-twin` | render the index and send intents |
+| Open-root/session policy and async Twin admission | `lunco-workspace` | provide the picker seam only |
+| Menus, dialogs, keybinds, and command/API adapters | `lunco-workbench` | owns this shell workflow |
+| USDA/Modelica serialization and format-specific follow-up edits | the owning domain crate | dispatch the domain command |
+
+Thus `lunco-workbench::file_ops` is intentionally still a module, but it is a
+shell name, not an I/O owner. For example, `RenameTwinEntry` validates the
+command and updates workspace state; the actual move and entry inspection use
+`lunco-storage`. Screenshot/recording PNGs are encoded in the workbench's
+render-bound code, then their bytes are written through the same storage API.
+This keeps native filesystem paths and browser storage from becoming two
+different loading/saving sequences.
+
 ## Asset loaders we maintain
 
 | Loader | Asset type | Where | Extensions |
@@ -86,8 +112,11 @@ the dispatch logic lives in the consumer.
 Three classes of crate legitimately bypass `AssetServer`:
 
 - **Filesystem-owning crates.** `lunco-assets` (download/extract/cache
-  pipeline), `lunco-storage` (user-data persistence). Both are
-  native-only by design.
+  pipeline), `lunco-storage` (user-data persistence), and `lunco-twin`
+  (Twin-folder traversal and manifest semantics). These are the owners of
+  their respective filesystem concerns; the workbench and domain consumers
+  call their APIs. `lunco-storage` supplies the native backend and the wasm
+  backend where the same logical operation exists.
 - **Build scripts.** `*-build.rs` runs on the host at compile time.
 - **Native-only binaries.** Worker subprocesses like `build_msl_assets`
   that never compile to wasm32.

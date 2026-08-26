@@ -212,8 +212,9 @@ wrapper:
 ./scripts/api/run_rhai_test.sh 4101 assets/scripting/tests/test_usd_query.rhai /SandboxScene/Box
 ```
 
-The wrapper sends the test through `RunRhai`; edit the `.rhai` file and run it
-again in the same API session. Keep generic command/lifecycle/cache tests in
+The helper assembles the prelude and delegates to the native `luncosim rhai
+--stdout` client, which sends the test through `RunRhai`; edit the `.rhai` file
+and run it again in the same API session. Keep generic command/lifecycle/cache tests in
 Rust, and move authored mission or vehicle outcomes into a discovered
 `scenes/tests` + `scenarios/tests` pair.
 

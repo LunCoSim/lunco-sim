@@ -1,6 +1,6 @@
 // ── Selection toolkit (write targeting/selection algorithms in rhai) ─────────
 //
-// list_entities() returns #{ id, name, type, pos } per entity, so selection is
+// list_entities() returns #{ id, name, type, pos, catalog_id } per entity, so selection is
 // idiomatic functional rhai over the built-in filter/map/reduce/sort_by. These
 // are the reusable PRIMITIVES — compose them or write your own; all are policy,
 // hot-reloadable, no Rust rebuild. Deeper per-entity reads use get(id, "Comp.f").
@@ -23,6 +23,16 @@ fn kind(id) {
 
 /// All entities of a kind, as list_entities() records (#{id,name,type,pos}).
 fn all_of_type(t) { list_entities().filter(|e| e.type == t) }
+
+/// Resolve the first entity authored from a catalog entry, or -1 when it is
+/// not currently materialized. Catalog identity is stable across runtime
+/// spawn paths; display names are not an identity contract.
+fn find_catalog(catalog_id) {
+    for entity in list_entities() {
+        if entity.catalog_id == catalog_id { return entity.id; }
+    }
+    -1
+}
 
 /// The list element with the smallest `metric.call(e)`, or () if empty.
 fn min_by(list, metric) {

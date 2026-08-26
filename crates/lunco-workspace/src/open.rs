@@ -12,14 +12,16 @@
 //! open pipeline is not duplicated; there is one implementation and one seam.
 //!
 //! The same split covers [`OpenFolder`], [`AddFolderToWorkspace`] and
-//! [`AddTwin`]. `OpenFile` stays in the workbench: it resolves scene paths and
-//! opens documents, and reaches this module through [`spawn_twin_scan`].
+//! [`AddTwin`]. The generic [`lunco_doc_bevy::OpenFile`] command is defined by
+//! the document layer; the USD adapter resolves scene paths and reaches this
+//! module through [`spawn_twin_scan`].
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_core::{
     on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
+use lunco_storage::{StorageEntryKind, StorageError};
 use lunco_twin::{TwinError, TwinManifest, TwinMode, UsdManifest};
 
 use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
@@ -55,6 +57,17 @@ fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
     }
 }
 
+fn inspect_path(path: &std::path::Path) -> Result<StorageEntryKind, StorageError> {
+    lunco_storage::entry_kind_file_sync(path)
+}
+
+fn storage_io(error: StorageError) -> std::io::Error {
+    match error {
+        StorageError::Io(error) => error,
+        other => std::io::Error::other(other.to_string()),
+    }
+}
+
 /// Write a new Twin manifest at `path` without indexing the folder.
 ///
 /// The write is deliberately separate from [`create_twin`]: command callers
@@ -76,11 +89,29 @@ fn write_new_twin_manifest(
         });
     }
     let manifest_path = path.join(lunco_twin::MANIFEST_FILENAME);
-    if manifest_path.is_file() {
-        return Err(TwinError::AlreadyExists(path.to_path_buf()));
+    match inspect_path(&manifest_path) {
+        Ok(StorageEntryKind::File) | Ok(StorageEntryKind::Directory) => {
+            return Err(TwinError::AlreadyExists(path.to_path_buf()));
+        }
+        Err(StorageError::NotFound) => {}
+        Err(error) => {
+            return Err(TwinError::Io {
+                path: manifest_path,
+                source: storage_io(error),
+            });
+        }
     }
-    if path.exists() && !path.is_dir() {
-        return Err(TwinError::NotAFileOrFolder(path.to_path_buf()));
+    match inspect_path(path) {
+        Ok(StorageEntryKind::Directory) | Err(StorageError::NotFound) => {}
+        Ok(StorageEntryKind::File) => {
+            return Err(TwinError::NotAFileOrFolder(path.to_path_buf()));
+        }
+        Err(error) => {
+            return Err(TwinError::Io {
+                path: path.to_path_buf(),
+                source: storage_io(error),
+            });
+        }
     }
     let fallback = path
         .file_name()
@@ -114,7 +145,6 @@ pub fn create_twin(path: &std::path::Path, name: &str) -> Result<TwinMode, TwinE
 
 /// Create a new Twin folder and asynchronously add it to the workspace.
 /// Empty `path` means "ask the windowed workbench for a folder".
-#[derive(Clone, Debug)]
 #[Command(default)]
 pub struct CreateTwin {
     /// Target Twin folder. The manifest is created here; missing ancestors are
@@ -175,7 +205,7 @@ fn on_open_twin(
     }
     let folder = std::path::Path::new(&path);
     let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
-    if !manifest.is_file() {
+    if !matches!(inspect_path(&manifest), Ok(StorageEntryKind::File)) {
         let detail = format!(
             "OpenTwin failed: `{path}` has no {} — use OpenFolder for plain folders",
             lunco_twin::MANIFEST_FILENAME
@@ -215,7 +245,10 @@ fn on_open_folder(
         return;
     }
     let folder = std::path::Path::new(&path);
-    if folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+    if matches!(
+        inspect_path(&folder.join(lunco_twin::MANIFEST_FILENAME)),
+        Ok(StorageEntryKind::File)
+    ) {
         info!(
             "[OpenFolder] {} contains {} — routing to OpenTwin",
             path,
@@ -253,7 +286,10 @@ fn on_add_folder_to_workspace(
         return; // windowed hosts answer this with a picker
     }
     let folder = std::path::Path::new(&path);
-    if folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+    if matches!(
+        inspect_path(&folder.join(lunco_twin::MANIFEST_FILENAME)),
+        Ok(StorageEntryKind::File)
+    ) {
         info!(
             "[AddFolderToWorkspace] {} contains {} — routing to AddTwin",
             path,
@@ -291,7 +327,10 @@ fn on_add_twin(
         return; // windowed hosts answer this with a picker
     }
     let folder = std::path::Path::new(&path);
-    if !folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+    if !matches!(
+        inspect_path(&folder.join(lunco_twin::MANIFEST_FILENAME)),
+        Ok(StorageEntryKind::File)
+    ) {
         let detail = format!(
             "AddTwin failed: `{path}` has no {} — use AddFolderToWorkspace for plain folders",
             lunco_twin::MANIFEST_FILENAME
@@ -315,7 +354,7 @@ pub enum TwinOpenMode {
 /// Close every open folder/Twin, firing [`TwinClosed`] for each.
 ///
 /// Shared by the replace-semantics openers ([`OpenTwin`], [`OpenFolder`], and
-/// the workbench's `OpenFile`-on-a-scene), so "replacing the workspace" means
+/// USD's `OpenFile`-on-a-scene adapter), so "replacing the workspace" means
 /// the same thing everywhere.
 fn close_all_open_folders(
     workspace: &mut WorkspaceResource,

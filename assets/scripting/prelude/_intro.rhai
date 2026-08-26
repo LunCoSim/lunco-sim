@@ -14,8 +14,9 @@
 //   get(id, "Comp.field")         read:  reflected field; vectors/quats come
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
 //                                        structs as maps
-//   list_entities() -> [#{id,name,type,pos}]  (type+pos enable in-rhai selection)
+//   list_entities() -> [#{id,name,type,pos,catalog_id}]  (catalog_id is authored identity)
 //   find(name) -> id              lookup: id of the entity named `name` (-1 if none)
+//   find_catalog(id) -> id        lookup: first entity spawned from catalog id, or -1
 //   name(id) -> string            lookup: reverse of find — id back to its Name, or ()
 //   parent(id) -> id              tree:   parent's id, or () if none/unregistered
 //   children(id) -> [id, ...]     tree:   ids of direct registered children
@@ -28,4 +29,3 @@
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled
 // into core. Add helpers freely — no Rust rebuild required.
-

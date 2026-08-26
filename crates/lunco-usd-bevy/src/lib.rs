@@ -3076,6 +3076,16 @@ impl DefaultPrim {
         Some(Self { data, path })
     }
 
+    /// The authored `defaultPrim` path, absolute in the source layer.
+    ///
+    /// Runtime reference authoring uses this path explicitly because the live
+    /// stage must compose the source root's applied schemas onto a newly
+    /// defined instance prim; an implicit default-prim reference composes the
+    /// child namespace but leaves that instance root typeless.
+    pub fn path(&self) -> &SdfPath {
+        &self.path
+    }
+
     /// Raw default-time value of `attr`, as authored.
     pub fn value(&self, attr: &str) -> Option<&Value> {
         let attr_path = self.path.append_property(attr).ok()?;

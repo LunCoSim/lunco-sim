@@ -17,8 +17,8 @@ fn main() -> lunco_luncosim::AppExit {
     // `luncosim rhai [...]` is a client mode: talk to an already-running
     // instance over its `--api` port instead of opening a second window.
     #[cfg(not(target_family = "wasm"))]
-    if lunco_luncosim::rhai_repl::run_if_requested() {
-        return lunco_luncosim::AppExit::Success;
+    if let Some(code) = lunco_luncosim::rhai_repl::run_if_requested() {
+        std::process::exit(code);
     }
 
     // `luncosim --validate <path>…` is a one-shot pre-flight. It must run before

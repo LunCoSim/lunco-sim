@@ -50,8 +50,8 @@ fn on_tick(me) {
         return;
     }
 
-    if this.rover_a < 0 { this.rover_a = find("Ackermann Rover"); }
-    if this.rover_b < 0 { this.rover_b = find("Skid Rover"); }
+    if this.rover_a < 0 { this.rover_a = find_catalog("ackermann_rover"); }
+    if this.rover_b < 0 { this.rover_b = find_catalog("skid_rover"); }
     if this.rover_a < 0 || this.rover_b < 0 {
         if this.elapsed > 20.0 {
             this.done = true;

@@ -351,8 +351,8 @@ pub fn capture_gizmo_start(
     }
 
     if captured_any {
-        // A selected lander is an articulation: legs and pads are separate
-        // dynamic bodies coupled to the root. Holding the entire physics world
+        // A selected lander is an articulation: the leg bodies are coupled to
+        // the root and carry welded footpad colliders. Holding the entire physics world
         // is the only atomic capture boundary available to Avian; changing only
         // the root to Kinematic leaves live joints to integrate against a pose
         // the gizmo is mutating, which creates unbounded impulses.

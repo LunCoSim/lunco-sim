@@ -397,7 +397,7 @@ fn deliver_screenshot(
 
     if let Some(path) = save_path {
         // save_to_file mode — the response was already sent; just write the file.
-        if let Err(e) = dyn_img.save(&path) {
+        if let Err(e) = save_png(std::path::Path::new(&path), &dyn_img) {
             error!("[screenshot] failed to save to '{path}': {e}");
             if let Some(cid) = completion_correlation_id {
                 commands.trigger(ApiResponseEvent {
@@ -711,7 +711,7 @@ fn safe_screenshot_path(requested: &std::path::Path) -> Result<String, String> {
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .ok_or_else(|| "cannot determine screenshot output root".to_string())?;
-    let root = std::fs::canonicalize(&root)
+    let root = lunco_storage::canonicalize_file_path(&root)
         .map_err(|error| format!("screenshot output root is unavailable: {error}"))?;
     let candidate = if requested.is_absolute() {
         requested.to_path_buf()
@@ -724,7 +724,7 @@ fn safe_screenshot_path(requested: &std::path::Path) -> Result<String, String> {
     let parent = candidate
         .parent()
         .ok_or_else(|| "screenshot path has no parent directory".to_string())?;
-    let parent = std::fs::canonicalize(parent)
+    let parent = lunco_storage::canonicalize_file_path(parent)
         .map_err(|error| format!("screenshot parent directory is unavailable: {error}"))?;
     if !parent.starts_with(&root) {
         return Err(format!(
@@ -732,14 +732,29 @@ fn safe_screenshot_path(requested: &std::path::Path) -> Result<String, String> {
             root.display()
         ));
     }
-    if candidate.exists() {
-        let resolved = std::fs::canonicalize(&candidate)
+    if matches!(
+        lunco_storage::entry_kind_file_sync(&candidate),
+        Ok(lunco_storage::StorageEntryKind::File) | Ok(lunco_storage::StorageEntryKind::Directory)
+    ) {
+        let resolved = lunco_storage::canonicalize_file_path(&candidate)
             .map_err(|error| format!("cannot resolve screenshot path: {error}"))?;
         if !resolved.starts_with(&root) {
             return Err("screenshot path resolves outside the output root".to_string());
         }
     }
     Ok(candidate.to_string_lossy().into_owned())
+}
+
+/// Encode a captured image as PNG and persist the bytes through the active
+/// storage backend. `DynamicImage::save` takes a native path directly, which
+/// would bypass storage and cannot work for browser-backed handles.
+fn save_png(path: &std::path::Path, image: &image::DynamicImage) -> Result<(), String> {
+    let mut png_bytes = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|error| format!("PNG encode failed: {error}"))?;
+    lunco_storage::write_file_sync(path, &png_bytes)
+        .map_err(|error| format!("storage write failed: {error}"))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1081,7 +1096,7 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
         dir.clone()
     };
     if !dir_to_create.as_os_str().is_empty() {
-        if let Err(e) = std::fs::create_dir_all(&dir_to_create) {
+        if let Err(e) = lunco_storage::ensure_directory_sync(&dir_to_create) {
             error!(
                 "[offline-record] failed to create output directory {}: {e}",
                 dir_to_create.display()
@@ -1143,7 +1158,7 @@ fn activate_recording(
             state.output_dir.display(),
             fallback.display(),
         );
-        if let Err(e) = std::fs::create_dir_all(&fallback) {
+        if let Err(e) = lunco_storage::ensure_directory_sync(&fallback) {
             error!(
                 "[offline-record] fallback directory {} could not be created ({e}) — \
                  aborting the shot",
@@ -1732,7 +1747,7 @@ fn deliver_offline_frame(
         let path = state
             .output_dir
             .join(format!("frame_{:06}.png", state.frame_index));
-        if let Err(e) = dyn_img.save(&path) {
+        if let Err(e) = save_png(&path, &dyn_img) {
             error!(
                 "[offline-record] failed to save frame {} ({e}) — aborting recording to \
                  avoid a sequence with holes in it",
@@ -1757,7 +1772,7 @@ fn deliver_offline_frame(
         let path = state
             .output_dir
             .join(format!("frame_{:06}.png", state.frame_index));
-        if let Err(e) = dyn_img.save(&path) {
+        if let Err(e) = save_png(&path, &dyn_img) {
             error!(
                 "[offline-record] failed to save frame {} ({e}) — aborting recording to \
                  avoid a sequence with holes in it",

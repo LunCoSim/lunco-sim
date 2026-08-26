@@ -899,7 +899,6 @@ pub fn run() -> u8 {
     {
         gate.enabled = true;
     }
-
     let mut ticks = 0u64;
     let mut early_exit = false;
     let mut sim_seconds = 0.0f64;

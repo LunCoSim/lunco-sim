@@ -54,7 +54,6 @@ use bevy::prelude::*;
 
 use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
-use lunco_physics::PrismaticDriveTargetVelocity;
 
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";
@@ -319,27 +318,15 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
     if !j.motor.enabled {
         return None;
     }
-    let (stiffness, damping) = match j.motor.motor_model {
-        MotorModel::ForceBased { stiffness, damping } => (stiffness, damping),
-        MotorModel::SpringDamper {
-            frequency,
-            damping_ratio,
-        } => {
-            // Recover the newton coefficients from the mass-scaled form. `body2` is
-            // the driven body (the loader builds `new(body0, body1)`, so avian's
-            // body2 is the authored driven body1). No mass ⇒ no honest force.
-            let m = world.get::<Mass>(j.body2)?.0 as f64;
-            let omega = std::f64::consts::TAU * frequency;
-            (m * omega * omega, m * 2.0 * damping_ratio * omega)
-        }
-        MotorModel::AccelerationBased { .. } => return None,
-    };
+    // Recover the dimensional force law from the same owner that converts USD
+    // force drives to Avian's implicit representation. Acceleration-based
+    // motors deliberately produce no newton reading.
+    let mass = world.get::<Mass>(j.body2)?.0 as f64;
+    let (stiffness, damping) =
+        lunco_physics::motor_model_force_coefficients(j.motor.motor_model, mass)?;
     let x = read_measured_displacement(world, entity)?;
     let v = read_measured_slide_rate(world, entity)?;
-    let target_velocity = world
-        .get::<PrismaticDriveTargetVelocity>(entity)
-        .map_or(j.motor.target_velocity, |target| target.0);
-    let f = stiffness * (j.motor.target_position - x) + damping * (target_velocity - v);
+    let f = stiffness * (j.motor.target_position - x) + damping * (j.motor.target_velocity - v);
     // The motor cannot pull harder than its saturation, so neither may the number
     // the strut reports about itself.
     let max = j.motor.max_force;
@@ -364,9 +351,6 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bo
         j.motor.enabled = true;
         j.motor.target_position = value;
         j.motor.target_velocity = 0.0;
-    }
-    if let Some(mut target) = world.get_mut::<PrismaticDriveTargetVelocity>(entity) {
-        target.0 = 0.0;
     }
     let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
         return false;

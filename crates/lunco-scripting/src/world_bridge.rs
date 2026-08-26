@@ -848,6 +848,313 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         }
     });
 
+    // physics_substeps() / set_physics_substeps(n) — live diagnostic access to
+    // Avian's actual solver resource. This is intentionally not a persisted
+    // setting or a hidden production fallback: a script must opt into the
+    // change, the owner validates the range, and the caller can restore the
+    // production value explicitly after an A/B run.
+    engine.register_fn("physics_substeps", || -> i64 {
+        match bridge_core::with_world(|world| lunco_physics::solver_substeps(world)).flatten() {
+            Some(value) => value as i64,
+            None => {
+                warn!("[rhai] physics_substeps failed: no Avian SubstepCount in scope");
+                -1
+            }
+        }
+    });
+    engine.register_fn("set_physics_substeps", |value: i64| -> bool {
+        if value < 0 || value > u32::MAX as i64 {
+            warn!("[rhai] set_physics_substeps rejected out-of-range integer {value}");
+            return false;
+        }
+        let result = bridge_core::with_world(|world| {
+            bridge_core::enforce_script_authority(
+                world,
+                bridge_core::capability::SETTING_MUTATE,
+                None,
+            )?;
+            lunco_physics::set_solver_substeps(world, value as u32)
+        });
+        match result {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                warn!("[rhai] set_physics_substeps failed: {error}");
+                false
+            }
+            None => {
+                warn!("[rhai] set_physics_substeps failed: no world in scope");
+                false
+            }
+        }
+    });
+
+    // contact_friction(id) / set_contact_friction(id, dynamic, static) — live
+    // material diagnostics. These mutate the projected Avian component in
+    // place, so a script can test the contact law without adding a second
+    // material registry or rewriting the authored USD.
+    engine.register_fn("contact_friction", |id: i64| -> Dynamic {
+        if id < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let friction = lunco_physics::contact_friction_snapshot(world, entity)?;
+            let mut map = Map::new();
+            map.insert("dynamic".into(), Dynamic::from_float(friction.dynamic));
+            map.insert(
+                "static".into(),
+                Dynamic::from_float(friction.static_coefficient),
+            );
+            Some(Dynamic::from_map(map))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "set_contact_friction",
+        |id: i64, dynamic: f64, static_coefficient: f64| -> bool {
+            if id < 0 {
+                warn!("[rhai] set_contact_friction rejected negative entity id {id}");
+                return false;
+            }
+            let result = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_authority(
+                    world,
+                    bridge_core::capability::FIELD_MUTATE,
+                    Some(id as u64),
+                )?;
+                let entity = bridge_core::resolve_entity(world, id as u64)
+                    .ok_or_else(|| format!("unknown entity {id}"))?;
+                lunco_physics::set_contact_friction(
+                    world,
+                    entity,
+                    lunco_physics::ContactFrictionParameters {
+                        dynamic,
+                        static_coefficient,
+                    },
+                )
+            });
+            match result {
+                Some(Ok(())) => true,
+                Some(Err(error)) => {
+                    warn!("[rhai] set_contact_friction({id}) failed: {error}");
+                    false
+                }
+                None => {
+                    warn!("[rhai] set_contact_friction({id}) failed: no world in scope");
+                    false
+                }
+            }
+        },
+    );
+
+    // joint_damping(id) / set_joint_damping(id, linear, angular) — live access
+    // to Avian's native relative-rate damping. This adds or updates only the
+    // damping component on an existing joint; it never creates a second
+    // constraint or persists a script experiment into USD.
+    engine.register_fn("joint_damping", |id: i64| -> Dynamic {
+        if id < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let damping = lunco_physics::joint_damping_snapshot(world, entity)?;
+            let mut map = Map::new();
+            map.insert("linear".into(), Dynamic::from_float(damping.linear));
+            map.insert("angular".into(), Dynamic::from_float(damping.angular));
+            Some(Dynamic::from_map(map))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "set_joint_damping",
+        |id: i64, linear: f64, angular: f64| -> bool {
+            if id < 0 {
+                warn!("[rhai] set_joint_damping rejected negative entity id {id}");
+                return false;
+            }
+            let result = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_authority(
+                    world,
+                    bridge_core::capability::FIELD_MUTATE,
+                    Some(id as u64),
+                )?;
+                let entity = bridge_core::resolve_entity(world, id as u64)
+                    .ok_or_else(|| format!("unknown entity {id}"))?;
+                lunco_physics::set_joint_damping(
+                    world,
+                    entity,
+                    lunco_physics::JointDampingParameters { linear, angular },
+                )
+            });
+            match result {
+                Some(Ok(())) => true,
+                Some(Err(error)) => {
+                    warn!("[rhai] set_joint_damping({id}) failed: {error}");
+                    false
+                }
+                None => {
+                    warn!("[rhai] set_joint_damping({id}) failed: no world in scope");
+                    false
+                }
+            }
+        },
+    );
+
+    // contact_debug(id) — read-only solver evidence for a live A/B run. The
+    // pair count includes broad-phase overlaps; touching and impulse fields are
+    // narrow-phase contacts only. No script-side contact state is retained.
+    engine.register_fn("contact_debug", |id: i64| -> Dynamic {
+        if id < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let snapshot = lunco_physics::contact_debug_snapshot(world, entity)?;
+            let mut map = Map::new();
+            map.insert(
+                "pair_count".into(),
+                Dynamic::from_int(snapshot.pair_count as i64),
+            );
+            map.insert(
+                "touching_pair_count".into(),
+                Dynamic::from_int(snapshot.touching_pair_count as i64),
+            );
+            map.insert(
+                "manifold_count".into(),
+                Dynamic::from_int(snapshot.manifold_count as i64),
+            );
+            map.insert(
+                "max_friction".into(),
+                Dynamic::from_float(snapshot.max_friction),
+            );
+            map.insert(
+                "total_normal_impulse".into(),
+                Dynamic::from_float(snapshot.total_normal_impulse),
+            );
+            map.insert(
+                "normal_impulse_vector".into(),
+                Dynamic::from_array(
+                    snapshot
+                        .normal_impulse_vector
+                        .into_iter()
+                        .map(Dynamic::from_float)
+                        .collect(),
+                ),
+            );
+            map.insert(
+                "max_normal_speed".into(),
+                Dynamic::from_float(snapshot.max_normal_speed),
+            );
+            map.insert(
+                "max_tangent_speed".into(),
+                Dynamic::from_float(snapshot.max_tangent_speed),
+            );
+            map.insert(
+                "max_penetration".into(),
+                Dynamic::from_float(snapshot.max_penetration),
+            );
+            map.insert(
+                "total_warm_start_tangent_impulse".into(),
+                Dynamic::from_float(snapshot.total_warm_start_tangent_impulse),
+            );
+            map.insert(
+                "contact_normal".into(),
+                Dynamic::from_array(
+                    snapshot
+                        .contact_normal
+                        .into_iter()
+                        .map(Dynamic::from_float)
+                        .collect(),
+                ),
+            );
+            map.insert(
+                "contact_point".into(),
+                Dynamic::from_array(
+                    snapshot
+                        .contact_point
+                        .into_iter()
+                        .map(Dynamic::from_float)
+                        .collect(),
+                ),
+            );
+            Some(Dynamic::from_map(map))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+
+    // joint_drive(id) / set_joint_drive(id, k, c, max_force) — the live
+    // dimensional drive surface. Position commands remain on the joint's
+    // existing `displacement` port; this operation changes only the authored
+    // force law so a Rhai observer can run controlled A/B sweeps without a
+    // process restart.
+    engine.register_fn("joint_drive", |id: i64| -> Dynamic {
+        if id < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let drive = lunco_physics::prismatic_drive_snapshot(world, entity)?;
+            let mut map = Map::new();
+            map.insert("enabled".into(), Dynamic::from_bool(drive.enabled));
+            map.insert("model".into(), Dynamic::from(drive.model));
+            map.insert(
+                "target_position".into(),
+                Dynamic::from_float(drive.target_position),
+            );
+            map.insert(
+                "target_velocity".into(),
+                Dynamic::from_float(drive.target_velocity),
+            );
+            map.insert("stiffness".into(), Dynamic::from_float(drive.stiffness));
+            map.insert("damping".into(), Dynamic::from_float(drive.damping));
+            map.insert("max_force".into(), Dynamic::from_float(drive.max_force));
+            Some(Dynamic::from_map(map))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "set_joint_drive",
+        |id: i64, stiffness: f64, damping: f64, max_force: f64| -> bool {
+            if id < 0 {
+                warn!("[rhai] set_joint_drive rejected negative entity id {id}");
+                return false;
+            }
+            let result = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_authority(
+                    world,
+                    bridge_core::capability::FIELD_MUTATE,
+                    Some(id as u64),
+                )?;
+                let entity = bridge_core::resolve_entity(world, id as u64)
+                    .ok_or_else(|| format!("unknown entity {id}"))?;
+                lunco_physics::set_prismatic_drive(
+                    world,
+                    entity,
+                    lunco_physics::PrismaticDriveParameters {
+                        stiffness,
+                        damping,
+                        max_force,
+                    },
+                )
+            });
+            match result {
+                Some(Ok(())) => true,
+                Some(Err(error)) => {
+                    warn!("[rhai] set_joint_drive({id}) failed: {error}");
+                    false
+                }
+                None => {
+                    warn!("[rhai] set_joint_drive({id}) failed: no world in scope");
+                    false
+                }
+            }
+        },
+    );
+
     // param(id, "key", default) -> f64 — read a per-prim numeric script param
     // (USD `lunco:params`) via ScriptParams. The typed, fast per-instance-config
     // read; falls back to `default` when absent. Use this, NOT name(me) scanning.

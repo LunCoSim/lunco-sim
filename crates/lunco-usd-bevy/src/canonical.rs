@@ -327,22 +327,76 @@ impl CanonicalStage {
         lunco_usd_compose::canonicalize_at(asset_path, Some(&anchor))
     }
 
-    /// Author a `references = @asset_path@` arc onto the prim at `path` (root
-    /// edit target), turning it into a **referenced spawn**: PCP composes the
-    /// referenced asset's default prim under `path`. Fires the change sink so the
-    /// projection bridge instantiates the composed subtree. The referenced
-    /// asset's layer closure must already be resolvable — inject it first via
-    /// [`add_layer_bytes`](Self::add_layer_bytes) (or it was loaded with the
-    /// scene). openusd exposes no typed `add_reference`, so this authors the
-    /// `references` field metadata directly (the live-stage counterpart of
-    /// [`author::author_reference`](crate::author::author_reference), which
-    /// writes the same field into the document's `sdf::Data`).
+    fn reference_for_loaded_asset(
+        &self,
+        asset_path: &str,
+    ) -> anyhow::Result<openusd::sdf::Reference> {
+        use anyhow::anyhow;
+        let reference_id = self.canonical_reference_id(asset_path);
+        let source = self
+            .resolver_bytes
+            .as_ref()
+            .and_then(|shared| shared.borrow().get(&reference_id).cloned())
+            .ok_or_else(|| anyhow!("reference source `{asset_path}` is not loaded"))?;
+        let source = std::str::from_utf8(&source)
+            .map_err(|e| anyhow!("reference source `{asset_path}` is not UTF-8: {e}"))?;
+        let default_prim = crate::DefaultPrim::parse(source)
+            .ok_or_else(|| anyhow!("reference source `{asset_path}` has no valid defaultPrim"))?;
+        Ok(openusd::sdf::Reference {
+            asset_path: asset_path.to_string(),
+            prim_path: default_prim.path().clone(),
+            ..Default::default()
+        })
+    }
+
+    /// Define a referenced runtime instance in one atomic root-layer edit.
+    ///
+    /// The prim definition and reference must become visible to the live
+    /// projection together. Separate authoring commits briefly expose a
+    /// typeless instance root; its one-shot Avian observer can then mark the
+    /// entity processed before the referenced root schemas arrive.
+    pub(crate) fn author_referenced_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+        asset_path: &str,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let reference = self.reference_for_loaded_asset(asset_path)?;
+        self.stage
+            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                let edit = &mut edits[0];
+                let mut prim = openusd::sdf::PrimSpec::new(
+                    edit.data_mut(),
+                    path.clone(),
+                    openusd::sdf::Specifier::Def,
+                    type_name.unwrap_or_default(),
+                )?;
+                prim.set(
+                    openusd::sdf::FieldKey::References.as_str(),
+                    openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::explicit(
+                        [reference.clone()],
+                    )),
+                );
+                Ok(())
+            })
+            .map_err(|e| anyhow!("author referenced prim {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author a reference to the source asset's `defaultPrim` at `path` (root
+    /// edit target), turning it into a **referenced spawn**. The target path is
+    /// authored explicitly from the already-injected source layer rather than
+    /// relying on the empty-path default-prim sentinel: openusd's live
+    /// incremental composition otherwise grafts the child namespace but does
+    /// not carry the source root's applied schemas onto the new instance prim.
+    /// Fires the change sink so the projection bridge instantiates the composed
+    /// subtree. The referenced asset's layer closure must already be resolvable
+    /// — inject it first via [`add_layer_bytes`](Self::add_layer_bytes) (or it
+    /// was loaded with the scene).
     pub(crate) fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let reference = openusd::sdf::Reference {
-            asset_path: asset_path.to_string(),
-            ..Default::default()
-        };
+        let reference = self.reference_for_loaded_asset(asset_path)?;
         // Merge into any existing `references` list-op (`UsdReferences::AddReference`
         // semantics) — an unconditional set would erase prior arcs on the prim.
         self.stage
@@ -576,6 +630,17 @@ impl StageProjector<'_> {
     /// Replay a `DefinePrim` op — see [`CanonicalStage::author_prim`].
     pub fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
         self.0.author_prim(path, type_name)
+    }
+
+    /// Replay an atomic referenced runtime spawn — define the instance root and
+    /// author its explicit source `defaultPrim` reference together.
+    pub fn author_referenced_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+        asset_path: &str,
+    ) -> anyhow::Result<()> {
+        self.0.author_referenced_prim(path, type_name, asset_path)
     }
 
     /// Replay a `RemovePrim` op — see [`CanonicalStage::remove_prim_at`].
@@ -1084,8 +1149,9 @@ mod authoring_tests {
         let mut cs = CanonicalStage::from_recipe(&recipe).expect("build scene stage");
         let _ = cs.drain_changes();
 
-        // The rover asset (with a defaultPrim so a bare reference targets it).
-        const ROVER: &str = "#usda 1.0\n(\n    defaultPrim = \"RoverRoot\"\n)\ndef Xform \"RoverRoot\"\n{\n    def Cube \"Body\"\n    {\n    }\n}\n";
+        // The rover asset has a defaultPrim and a root schema. The live
+        // author must preserve both on the runtime instance root.
+        const ROVER: &str = "#usda 1.0\n(\n    defaultPrim = \"RoverRoot\"\n)\ndef Xform \"RoverRoot\" (\n    prepend apiSchemas = [\"PhysicsRigidBodyAPI\"]\n)\n{\n    def Cube \"Body\"\n    {\n    }\n}\n";
 
         // The reference id PCP will demand === what we inject the bytes under.
         let asset_path = "rover.usda";
@@ -1104,10 +1170,8 @@ mod authoring_tests {
         );
 
         let spawn = SdfPath::new("/World/rover_1").unwrap();
-        cs.author_prim(&spawn, Some("Xform"))
-            .expect("define the spawn prim");
-        cs.author_reference(&spawn, asset_path)
-            .expect("author the reference arc");
+        cs.author_referenced_prim(&spawn, Some("Xform"), asset_path)
+            .expect("author the referenced spawn atomically");
 
         // The sink reports the spawn path as resynced (the projector reconciles it).
         assert!(
@@ -1123,6 +1187,15 @@ mod authoring_tests {
         assert!(
             cs.view().has_prim(&body),
             "the referenced rover's Body child must compose under the runtime spawn"
+        );
+        assert_eq!(
+            cs.view().type_name(&spawn).as_deref(),
+            Some("Xform"),
+            "the runtime reference root must retain its authored type"
+        );
+        assert!(
+            cs.view().has_api_schema(&spawn, "PhysicsRigidBodyAPI"),
+            "the runtime reference root must retain its applied schemas"
         );
     }
 

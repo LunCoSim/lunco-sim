@@ -83,8 +83,9 @@ is replaced by a weaker string-level check.
    ./scripts/api/run_rhai_test.sh 4101 assets/scripting/tests/test_usd_query.rhai /SandboxScene/Box
    ```
 
-   The wrapper prepends the generic assertion/USD libraries, sends the source
-   through the live API, and returns `TESTS_OK`/`TESTS_FAIL`. Editing the Rhai
+   The helper prepends the generic assertion/USD libraries, delegates transport
+   to the native `luncosim rhai --stdout` client, and returns
+   `TESTS_OK`/`TESTS_FAIL`. Editing the Rhai
    file and invoking it again needs neither a Rust rebuild nor an app restart.
    Stop the session with the typed API `Exit` command when finished.
 

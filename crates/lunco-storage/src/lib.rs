@@ -99,6 +99,19 @@ pub enum StorageError {
 /// Result alias for storage operations.
 pub type StorageResult<T> = Result<T, StorageError>;
 
+/// The kind of entry addressed by a storage handle.
+///
+/// Directory identity is part of the storage backend rather than a caller
+/// probing a native path. Backends without directory semantics must report
+/// [`StorageError::Unsupported`] instead of guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageEntryKind {
+    /// A regular file/blob entry.
+    File,
+    /// A directory/container entry.
+    Directory,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handle — opaque address into a storage backend
 // ─────────────────────────────────────────────────────────────────────────────
@@ -294,6 +307,66 @@ pub fn delete_file_sync(path: &Path) -> StorageResult<()> {
     WebStorage::new().delete_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
+/// Resolve a native file path through the storage boundary.
+///
+/// This is used for path identity/security checks that must agree with the
+/// backend used for the subsequent read or write. On wasm there is no native
+/// path to canonicalize, so the explicit handle spelling is returned.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn canonicalize_file_path(path: &Path) -> StorageResult<PathBuf> {
+    std::fs::canonicalize(path).map_err(StorageError::Io)
+}
+
+/// Wasm counterpart of [`canonicalize_file_path`]. Browser storage keys are
+/// logical paths, not native filesystem paths.
+#[cfg(target_arch = "wasm32")]
+pub fn canonicalize_file_path(path: &Path) -> StorageResult<PathBuf> {
+    Ok(path.to_path_buf())
+}
+
+/// Ensure a directory exists through the active storage backend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ensure_directory_sync(path: &Path) -> StorageResult<()> {
+    FileStorage::new().ensure_directory_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
+/// Browser counterpart of [`ensure_directory_sync`]. Browser storage has no
+/// native directory tree; writes create their logical keys directly.
+#[cfg(target_arch = "wasm32")]
+pub fn ensure_directory_sync(_path: &Path) -> StorageResult<()> {
+    Ok(())
+}
+
+/// Identify a path through the platform's default file backend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn entry_kind_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
+    FileStorage::new().entry_kind_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
+/// Wasm counterpart of [`entry_kind_file_sync`].
+#[cfg(target_arch = "wasm32")]
+pub fn entry_kind_file_sync(path: &Path) -> StorageResult<StorageEntryKind> {
+    WebStorage::new().entry_kind_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
+/// Move a path through the platform's default file backend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn rename_file_sync(from: &Path, to: &Path) -> StorageResult<()> {
+    FileStorage::new().rename_sync(
+        &StorageHandle::File(from.to_path_buf()),
+        &StorageHandle::File(to.to_path_buf()),
+    )
+}
+
+/// Wasm counterpart of [`rename_file_sync`].
+#[cfg(target_arch = "wasm32")]
+pub fn rename_file_sync(from: &Path, to: &Path) -> StorageResult<()> {
+    WebStorage::new().rename_sync(
+        &StorageHandle::File(from.to_path_buf()),
+        &StorageHandle::File(to.to_path_buf()),
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The trait
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +429,36 @@ pub trait Storage: Send + Sync {
     /// caveats as [`Storage::write_sync`].
     fn delete_sync(&self, handle: &StorageHandle) -> StorageResult<()> {
         futures_lite::future::block_on(self.delete(handle))
+    }
+
+    /// Identify the entry addressed by `handle`.
+    async fn entry_kind(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind>;
+
+    /// Synchronous convenience wrapper around [`Storage::entry_kind`].
+    fn entry_kind_sync(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind> {
+        futures_lite::future::block_on(self.entry_kind(handle))
+    }
+
+    /// Ensure a directory/container exists for a handle.
+    ///
+    /// Backends without directory semantics may return `Ok(())`; writes to
+    /// their logical keys do not need a physical parent directory.
+    async fn ensure_directory(&self, handle: &StorageHandle) -> StorageResult<()>;
+
+    /// Synchronous convenience wrapper around [`Storage::ensure_directory`].
+    fn ensure_directory_sync(&self, handle: &StorageHandle) -> StorageResult<()> {
+        futures_lite::future::block_on(self.ensure_directory(handle))
+    }
+
+    /// Move an entry from one handle to another without changing its bytes.
+    /// Backends that do not support a native move return
+    /// [`StorageError::Unsupported`] rather than emulating it with a
+    /// read/write/delete sequence.
+    async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()>;
+
+    /// Synchronous convenience wrapper around [`Storage::rename`].
+    fn rename_sync(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
+        futures_lite::future::block_on(self.rename(from, to))
     }
 
     /// Cheap "does this exist?" probe. Backends that can't implement

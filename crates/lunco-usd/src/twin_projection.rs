@@ -42,9 +42,10 @@
 //! again. This keeps runtime projection state bounded without discarding work
 //! the user explicitly opened or authored.
 //!
-//! Scope: the **default twin scene** uses the document overlay. Arbitrary
-//! `OpenFile` scenes retain their additive stage mount, while scheme-qualified
-//! sources (`mem://` / `bundled://`) remain directly addressable assets.
+//! Scope: the **default Twin scene** uses the document overlay. An explicit
+//! file outside the active Twin first opens its owning root and then follows
+//! that same doc-first mount. Files inside the active Twin remain document-only;
+//! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
 use crate::document::UsdDocument;
 use std::collections::{HashMap, HashSet};
@@ -1380,11 +1381,10 @@ fn spawn_prim_op(
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                if let Err(e) = cs
-                    .projector()
-                    .author_prim(&sp, type_name.as_deref())
-                    .and_then(|_| cs.projector().author_reference(&sp, &asset_path))
-                {
+                let result =
+                    cs.projector()
+                        .author_referenced_prim(&sp, type_name.as_deref(), &asset_path);
+                if let Err(e) = result {
                     warn!("[twin] referenced spawn {prim_path}: {e}");
                 }
             }
@@ -1715,18 +1715,38 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             continue;
         };
-        let Some(cs) = world
-            .get_non_send::<CanonicalStages>()
-            .and_then(|s| s.get(item.scene_id))
-        else {
-            continue; // scene stage gone — drop the spawn
+        let result = {
+            let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(item.scene_id))
+            else {
+                continue; // scene stage gone — drop the spawn
+            };
+            // Inject the closure bytes so PCP can resolve the reference, then author.
+            cs.add_layer_bytes(recipe.bytes.clone());
+            let result = cs.projector().author_referenced_prim(
+                &sp,
+                item.type_name.as_deref(),
+                &item.asset_path,
+            );
+            if result.is_ok() {
+                // Apply the transform after the prim/reference exists. This is the
+                // ordering guarantee for first-use referenced markers and spawned
+                // vehicles alike.
+                if let Some(translate) = item.translate {
+                    if let Err(e) = cs.projector().author_translate(&sp, translate) {
+                        warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
+                    } else {
+                        crate::live_consume::mark_live_translate(
+                            world,
+                            item.scene_id,
+                            item.prim_path.clone(),
+                        );
+                    }
+                }
+            }
+            result
         };
-        // Inject the closure bytes so PCP can resolve the reference, then author.
-        cs.add_layer_bytes(recipe.bytes.clone());
-        let result = cs
-            .projector()
-            .author_prim(&sp, item.type_name.as_deref())
-            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path));
         if let Err(e) = result {
             warn!(
                 "[twin] referenced spawn {} (post-fetch): {e}",
@@ -1734,20 +1754,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             );
             continue;
         }
-        // Apply the transform after the prim/reference exists. This is the
-        // ordering guarantee for first-use referenced markers and spawned
-        // vehicles alike.
-        if let Some(translate) = item.translate {
-            if let Err(e) = cs.projector().author_translate(&sp, translate) {
-                warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
-            } else {
-                crate::live_consume::mark_live_translate(
-                    world,
-                    item.scene_id,
-                    item.prim_path.clone(),
-                );
-            }
-        }
+        crate::live_consume::reproject_physics_if_needed(world, item.scene_id, &item.prim_path);
     }
     world.resource_mut::<PendingRefSpawns>().items.extend(still);
 }

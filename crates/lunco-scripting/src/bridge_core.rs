@@ -449,7 +449,7 @@ pub fn with_world<R>(f: impl FnOnce(&mut World) -> R) -> Option<R> {
     })
 }
 
-fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
+pub(crate) fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
     world
         .get_resource::<ApiEntityRegistry>()?
         .resolve(&GlobalEntityId::from_raw(gid))

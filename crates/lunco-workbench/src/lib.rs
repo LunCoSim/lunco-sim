@@ -921,9 +921,10 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<picker::PickerPlugin>() {
             app.add_plugins(picker::PickerPlugin);
         }
-        // Shell-level file-workflow commands (`OpenFile`, `OpenFolder`,
-        // `OpenTwin`, `SaveAll`, `SaveAsTwin`) + the picker→command
-        // routing observer. Domain crates contribute their own
+        // Shell-level picker/file-workflow commands (`ShowOpenFilePicker`,
+        // `OpenFolder`, `OpenTwin`, `SaveAll`, `SaveAsTwin`) + the
+        // picker→command routing observer. `OpenFile` is the shared document
+        // command; domain crates contribute their own
         // observers for verbs that need domain-specific handling
         // (e.g. modelica's `on_open_file` reads `.mo` content).
         if !app.is_plugin_added::<file_ops::FileOpsPlugin>() {
@@ -3710,7 +3711,7 @@ fn render_layout(
                 // domain observer creates the doc. Ctrl+N fires the
                 // default-resolution path through `EditorIntent`.
                 if ui.button("New Twin…").clicked() {
-                    world.trigger(file_ops::CreateTwin {
+                    world.trigger(lunco_workspace::open::CreateTwin {
                         path: String::new(),
                         name: String::new(),
                         default_scene: String::new(),

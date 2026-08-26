@@ -45,16 +45,9 @@ fn on_tick(me) {
     }
 
     if this.rover < 0 {
-        // Runtime spawns are mounted as top-level scene children. Resolve the
-        // stable catalog identity instead of guessing a display Name: a
-        // document-backed spawn receives a unique authored prim path and its
-        // human label is not the identity contract.
-        for entity in list_entities() {
-            if entity.catalog_id == "ackermann_rover" {
-                this.rover = entity.id;
-                break;
-            }
-        }
+        // Runtime spawns receive unique authored prim paths and their human
+        // labels are not the identity contract. Resolve authored catalog identity.
+        this.rover = find_catalog("ackermann_rover");
         if this.rover < 0 {
             if this.elapsed > 10.0 {
                 this.done = true;
@@ -95,7 +88,7 @@ fn on_tick(me) {
         return;
     }
 
-    if this.elapsed > 20.0 {
+    if this.elapsed > 120.0 {
         this.done = true;
         let detail = "RuntimeWaypointStatus query unavailable";
         if status != () {

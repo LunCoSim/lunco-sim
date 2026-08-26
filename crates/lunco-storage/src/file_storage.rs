@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{Storage, StorageError, StorageHandle, StorageResult};
+use crate::{Storage, StorageEntryKind, StorageError, StorageHandle, StorageResult};
 
 /// Native-filesystem backend.
 ///
@@ -143,6 +143,82 @@ impl Storage for FileStorage {
         }
     }
 
+    async fn entry_kind(&self, handle: &StorageHandle) -> StorageResult<StorageEntryKind> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => {
+                let metadata = std::fs::metadata(path).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        StorageError::NotFound
+                    } else {
+                        StorageError::Io(error)
+                    }
+                })?;
+                if metadata.is_dir() {
+                    Ok(StorageEntryKind::Directory)
+                } else {
+                    Ok(StorageEntryKind::File)
+                }
+            }
+            StorageHandle::Memory(key) => {
+                let map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if map.contains_key(key) {
+                    Ok(StorageEntryKind::File)
+                } else {
+                    Err(StorageError::NotFound)
+                }
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not identify web / remote variants".into(),
+            )),
+        }
+    }
+
+    async fn ensure_directory(&self, handle: &StorageHandle) -> StorageResult<()> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => std::fs::create_dir_all(path).map_err(StorageError::Io),
+            StorageHandle::Memory(_) => Err(StorageError::Unsupported(
+                "Memory handles have no directory container".into(),
+            )),
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not create web / remote directories".into(),
+            )),
+        }
+    }
+
+    async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
+        match (from, to) {
+            #[cfg(not(target_arch = "wasm32"))]
+            (StorageHandle::File(from), StorageHandle::File(to)) => {
+                match std::fs::rename(from, to) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        Err(StorageError::NotFound)
+                    }
+                    Err(e) => Err(StorageError::Io(e)),
+                }
+            }
+            (StorageHandle::Memory(from), StorageHandle::Memory(to)) => {
+                let mut map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let Some(bytes) = map.remove(from) else {
+                    return Err(StorageError::NotFound);
+                };
+                map.insert(to.clone(), bytes);
+                Ok(())
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage cannot rename between these handle kinds".into(),
+            )),
+        }
+    }
+
     async fn exists(&self, handle: &StorageHandle) -> bool {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
@@ -232,6 +308,61 @@ mod tests {
             let s = FileStorage::new();
             let h = StorageHandle::Memory("x".into());
             assert!(s.is_writable(&h).await);
+        });
+    }
+
+    #[test]
+    fn memory_rename_moves_the_entry() {
+        block_on(async {
+            let s = FileStorage::new();
+            let from = StorageHandle::Memory("from".into());
+            let to = StorageHandle::Memory("to".into());
+            s.write(&from, b"payload").await.unwrap();
+            s.rename(&from, &to).await.unwrap();
+            assert!(!s.exists(&from).await);
+            assert_eq!(s.read(&to).await.unwrap(), b"payload");
+        });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn file_rename_moves_the_entry() {
+        block_on(async {
+            let dir = std::env::temp_dir().join("lunco-storage-test-rename");
+            std::fs::create_dir_all(&dir).unwrap();
+            let from_path = dir.join("from.txt");
+            let to_path = dir.join("to.txt");
+            let s = FileStorage::new();
+            let from = StorageHandle::File(from_path.clone());
+            let to = StorageHandle::File(to_path.clone());
+            s.write(&from, b"payload").await.unwrap();
+            s.rename(&from, &to).await.unwrap();
+            assert!(!from_path.exists());
+            assert_eq!(s.read(&to).await.unwrap(), b"payload");
+            let _ = std::fs::remove_file(&to_path);
+        });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn entry_kind_and_directory_creation_stay_in_the_backend() {
+        block_on(async {
+            let root = std::env::temp_dir()
+                .join(format!("lunco-storage-test-kind-{}", std::process::id()));
+            let nested = root.join("nested");
+            let file_path = nested.join("scene.usda");
+            let s = FileStorage::new();
+            let directory = StorageHandle::File(nested.clone());
+            let file = StorageHandle::File(file_path.clone());
+
+            s.ensure_directory(&directory).await.unwrap();
+            assert_eq!(
+                s.entry_kind(&directory).await.unwrap(),
+                StorageEntryKind::Directory
+            );
+            s.write(&file, b"#usda 1.0\n").await.unwrap();
+            assert_eq!(s.entry_kind(&file).await.unwrap(), StorageEntryKind::File);
+            let _ = std::fs::remove_dir_all(root);
         });
     }
 }

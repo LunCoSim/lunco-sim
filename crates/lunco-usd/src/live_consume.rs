@@ -91,6 +91,44 @@ fn find_live_entity(
         .map(|(e, _)| e)
 }
 
+/// Re-project a live prim when a structural edit adds its simulation schemas.
+///
+/// A referenced instance may first appear as a typeless root while its layer
+/// closure is loading. When the closure lands, the root's composed schema is
+/// updated in place and the ordinary child resync does not necessarily include
+/// the already-existing root. Keep the schema transition at this bridge, where
+/// the live stage, ECS entity, and physics owner meet.
+pub(crate) fn reproject_physics_if_needed(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> bool {
+    let Ok(sdf_path) = SdfPath::new(path) else {
+        return false;
+    };
+    let needs_reprojection = world
+        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .is_some_and(|stage| {
+            stage
+                .view()
+                .has_api_schema(&sdf_path, openusd::schemas::physics::tokens::API_RIGID_BODY)
+        });
+    if !needs_reprojection {
+        return false;
+    }
+    let Some(entity) = find_live_entity(world, stage_id, path) else {
+        return false;
+    };
+    let physics_invalidated = lunco_usd_avian::invalidate_usd_physics_projection(world, entity);
+    let sim_invalidated = lunco_usd_sim::invalidate_usd_sim_projection(world, entity);
+    if !physics_invalidated && !sim_invalidated {
+        return false;
+    }
+    crate::twin_projection::refresh_prim_subtree(world, stage_id, path);
+    true
+}
+
 /// Whether a structural notice belongs to a `LunCoProgramAPI` child. Program
 /// prims are authored USD (journalled, saved and replicated), but they have no
 /// visual or physical ECS projection of their own: their source is projected
@@ -836,28 +874,37 @@ pub(crate) fn reconcile_structural_live(
             // also preserves support for a genuine transform whose xform-order
             // authoring arrives as resync with no info-only property notice.
             (true, Some(entity)) => {
-                if !authored_translate_paths.contains(path) {
-                    continue;
-                }
-                let v = {
-                    let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-                        return;
-                    };
-                    let Some(cs) = stages.get(id) else {
-                        return;
-                    };
-                    match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
-                        Ok(Some(transform)) => Some(transform.translation),
-                        Ok(None) => None,
-                        Err(error) => {
-                            error!("[usd] resync transform rejected for {path}: {error}");
-                            None
+                if authored_translate_paths.contains(path) {
+                    let v = {
+                        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+                            return;
+                        };
+                        let Some(cs) = stages.get(id) else {
+                            return;
+                        };
+                        match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
+                            Ok(Some(transform)) => Some(transform.translation),
+                            Ok(None) => None,
+                            Err(error) => {
+                                error!("[usd] resync transform rejected for {path}: {error}");
+                                None
+                            }
                         }
+                    };
+                    if let Some(translate) = v {
+                        seat_authored_translate(world, entity, translate);
                     }
-                };
-                if let Some(translate) = v {
-                    seat_authored_translate(world, entity, translate);
                 }
+
+                // A reference/variant resync can add the body schema to a
+                // prim after its visual entity was first projected. The
+                // structural bridge sees the prim as already live and would
+                // otherwise skip it forever, leaving Avian's one-shot marker
+                // in place with no RigidBody. Ask the owning physics adapter
+                // to consume the newly composed contract, then refresh this
+                // prim so its existing visual observer emits the projection
+                // trigger again.
+                reproject_physics_if_needed(world, id, path);
             }
             _ => {}
         }

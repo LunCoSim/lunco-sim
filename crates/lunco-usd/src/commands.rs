@@ -45,6 +45,7 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
+use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
@@ -635,9 +636,9 @@ fn execute_admitted_load_scene(
     //   exactly the `UsdSceneRoot`, so ask for that instead.
     // - an explicit override names a real prim path, so compare it as one.
     //
-    // Deliberately NOT "any prim from this stage": one stage legitimately mounts
-    // at two different roots (additive `OpenFile` import), and that would silently
-    // drop the second mount.
+    // Deliberately NOT "any prim from this stage": the active simulation owns
+    // one scene root. The editor preview, when present, uses `UsdPreviewOnly`
+    // and is outside this simulation mount identity.
     let new_id = asset_server
         .load::<lunco_usd_bevy::UsdStageAsset>(&path)
         .id();
@@ -851,45 +852,82 @@ fn on_restart_scene_refresh_active_document(
 //
 //   1. `on_open_file_for_usd` — document **registration**: async read via
 //      `lunco-storage`, idempotent allocate into `DocumentRegistry<UsdDocument>`.
-//   2. `on_open_file` (this one) — additive **scene import** (Blender's
-//      File → Append): brings the stage into the running 3D scene so
-//      `UsdSimPlugin` can derive native connection paths (the path
-//      `open_usd_docs_on_twin_asset_mounted` relies on).
+//   2. `on_open_file` (this one) — scene-root selection: external files open
+//      their owning Twin and enter the doc-first mount; files inside the active
+//      Twin remain document-only.
 //
-// `spawn_scene_root_world` loads the stage through the `AssetServer` (by
-// path, no fs), so this half carries no I/O of its own.
+// Only the admitted typed `LoadScene` observer calls `spawn_scene_root_world`,
+// so no OpenFile path can create a second raw stage beside the Twin mount.
 #[on_command(OpenFile)]
-fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
-    let path = trigger.event().path.clone();
+fn on_open_file(
+    trigger: On<OpenFile>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut pending: Option<ResMut<PendingTwinOpens>>,
+    mut commands: Commands,
+) {
+    let raw_path = trigger.event().path.clone();
+    let path = raw_path
+        .strip_prefix("file://")
+        .unwrap_or(&raw_path)
+        .to_string();
     if !is_usd_path(&path) {
         return;
     }
-    // Scheme-qualified sources are direct, read-only asset mounts rather than
-    // file documents. Keep their additive import path; the helper no-ops on a
-    // repeated `(asset, root_prim)` and warns + skips files outside the asset root.
-    if path.starts_with("mem://") || path.starts_with("bundled://") {
-        commands.queue(move |world: &mut World| {
-            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+
+    // A scheme already names its root. Send it through the typed scene
+    // transition so it gets the same admission, teardown, and readiness path
+    // as startup, tutorials, and Twin default scenes.
+    if lunco_assets::has_scheme(&path) {
+        commands.trigger(LoadScene {
+            path,
+            root_prim: String::new(),
         });
         return;
     }
-    // Real file paths DO get a document (allocated asynchronously by
-    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`) for editing.
-    // Mount the scene into the live world through the storage-based async loader
-    // (`spawn_scene_root_world` → `UsdLoader` → `StageRecipe` → `CanonicalStage`)
-    // — the same web-ready path `mem://` / `bundled://` take, so every scene
-    // reads the live composed stage. Doc-overlay projection of runtime edits to
-    // an opened file (the deleted `live_projection`'s job) is folded into the
-    // `twin://` overlay path.
-    //
-    // Only mount when the asset pipeline is present: a headless doc-only context
-    // (API / MCP open, or the open-file unit test) has no `AssetServer`, and the
-    // document still opens through the async read path above.
-    commands.queue(move |world: &mut World| {
-        if world.contains_resource::<bevy::asset::AssetServer>() {
-            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
-        }
-    });
+
+    let Some(workspace) = workspace else {
+        warn!(
+            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
+        );
+        return;
+    };
+    let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+    // A USD file already inside the active Twin is an additive document open;
+    // the Twin browser uses this to inspect reusable layers without replacing
+    // the running world. External scenes replace the workspace at the root.
+    if workspace
+        .twins()
+        .any(|(_, twin)| abs.starts_with(&twin.root))
+    {
+        return;
+    }
+    let Some(pending) = pending.as_deref_mut() else {
+        warn!(
+            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
+        );
+        return;
+    };
+    spawn_twin_from_scene(&abs, pending, "OpenFile");
+}
+
+/// Open the root that owns `scene` and select that scene.
+///
+/// This is the same root-relative scan used by the workbench previously, now
+/// owned by the USD scene domain so GUI and headless `OpenFile` requests cannot
+/// mount one file through competing paths.
+fn spawn_twin_from_scene(scene: &std::path::Path, pending: &mut PendingTwinOpens, log_tag: &str) {
+    let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
+    let root = lunco_twin::root_for_file(&abs);
+    let rel = abs
+        .strip_prefix(&root)
+        .map(lunco_assets::asset_path::slashed)
+        .unwrap_or_else(|_| {
+            abs.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -925,10 +963,14 @@ pub(crate) struct PendingUsdLoads {
 fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     commands.queue(move |world: &mut World| {
-        if path.starts_with("mem://") || path.starts_with("bundled://") {
+        // `file://` is a filesystem spelling, not a registered asset source;
+        // strip it before deciding whether this is an already-addressable
+        // scene URI. Other schemes do not have a filesystem document to read;
+        // `on_open_file` sends them through the typed scene transition.
+        let stripped = path.strip_prefix("file://").unwrap_or(&path);
+        if lunco_assets::has_scheme(stripped) {
             return;
         }
-        let stripped = path.strip_prefix("file://").unwrap_or(&path);
         if !is_usd_path(stripped) {
             return;
         }
@@ -2124,6 +2166,34 @@ mod tests {
     }
 
     #[test]
+    fn open_file_file_uri_creates_document() {
+        let tmp_path = std::env::temp_dir().join("lunco_usd_open_file_uri_test.usda");
+        std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        app.world_mut().trigger(OpenFile {
+            path: format!("file://{}", tmp_path.display()),
+        });
+        for _ in 0..5 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .ids()
+                .count(),
+            1,
+            "file:// USD paths must use the filesystem document reader"
+        );
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
     fn open_file_for_non_usd_path_is_noop() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -2579,10 +2649,18 @@ mod tests {
         });
         app.update();
 
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), source);
         let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
         assert_eq!(
-            registry.host(doc).unwrap().document().canonical_path(),
+            std::fs::read_to_string(&target).unwrap(),
+            registry.host(doc).unwrap().document().source()
+        );
+        assert_eq!(
+            registry
+                .host(doc)
+                .unwrap()
+                .document()
+                .origin()
+                .canonical_path(),
             Some(target.as_path())
         );
         assert!(!registry.host(doc).unwrap().document().is_dirty());

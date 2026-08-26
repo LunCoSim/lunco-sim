@@ -478,23 +478,26 @@ impl Plugin for LunCoScriptingPlugin {
                 Update,
                 world_bridge::drain_world_scripts.run_if(scripts_run_here),
             );
-            // Scene projection and scenario attachment belong in Update, after
-            // USD has materialised the prim markers. A rover opts into a policy
+            // Scene projection materialises the prim markers in Update. Scenario
+            // attachment consumes those markers in the following PreUpdate so it
+            // is visible to the same frame's FixedUpdate lifecycle driver. A rover
+            // opts into a policy
             // through an authored scenario or an explicit RunScenario command;
             // loading a vehicle must not invent control behavior.
             //
             // Attachment is independent of ScenarioExecutionGate: the gate
-            // holds lifecycle hooks, not scene composition. Attaching authored
-            // programs while readiness is closed makes their event
-            // subscriptions live before the first physics tick, so startup
-            // events cannot be lost. Their on_start/on_tick/on_event hooks
-            // remain gated by the FixedUpdate driver below.
+            // holds lifecycle hooks, not scene composition. Consuming the marker
+            // in PreUpdate makes authored programs and their event subscriptions
+            // live before the first physics tick, so startup events cannot be
+            // lost. Their on_start/on_tick/on_event hooks remain gated by the
+            // FixedUpdate driver below.
             app.add_systems(
-                Update,
+                PreUpdate,
                 (
                     // File-referenced scenarios (lunco:scriptPath): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
-                    // Runs before attach so the loaded source attaches same frame.
+                    // Runs before attach so the loaded source attaches in this
+                    // pre-fixed-step boundary once the asset is ready.
                     commands::resolve_embedded_scenario_paths,
                     // USD-embedded scenarios: attach any the loader stamped with
                     // EmbeddedScenarioSource (lunco:script on the prim) so scene-

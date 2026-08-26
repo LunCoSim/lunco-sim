@@ -4,9 +4,8 @@
 // `scenario_sync_assert.rhai` does — libs and parameters injected as a prelude,
 // verdict on the last line, driven from a shell harness:
 //
-//     python3 scripts/api/rhai_eval.py <port> \
-//         -e "$(cat assets/scripting/tests/lib/*.rhai; echo 'let PROBE = "/Some/Prim";')" \
-//         -f assets/scripting/tests/test_usd_query.rhai | tail -1
+//     target/debug/luncosim rhai --api <port> --stdout \
+//         -e "<test-libs>\nlet PROBE = \"/Some/Prim\";\n< this file >" | tail -1
 //
 // `cargo test -p lunco-scripting --test rhai_test_harness` parse-checks this
 // file, so a syntax error here still fails CI without a sandbox.

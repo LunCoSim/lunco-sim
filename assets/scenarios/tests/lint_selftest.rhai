@@ -49,17 +49,10 @@ fn mentions(findings, subject) {
 }
 
 fn on_start(me) {
-    // The scene also contains deliberately dynamic, collider-less bodies so
-    // `dynamic-body-no-collider` is exercised by the authored facts. Those
-    // bodies must raise the real containment boundary when the simulation runs;
-    // accept that terminal fault through the test harness rather than hiding it
-    // or attempting recovery from the malformed fixture.
-    expect_runtime_fault("physics-body-escaped");
     this.t = 0.0;
-    // The production scene-test runner has already completed its explicit stage
-    // and participant-readiness gates before lifecycle execution is enabled. Run
-    // on the first fixed tick so the deliberate dynamic-body fixture can still
-    // reach its declared terminal fault after the lint report is asserted.
+    // The malformed leg is kinematic because this scene tests authored lint
+    // facts. The independent escape_containment scene owns the dynamic escape
+    // boundary, so this scenario can complete its lint verdict deterministically.
     this.lint_at = 0.0;
     this.phase = "wait";
 
@@ -272,12 +265,9 @@ fn on_tick(me) {
     f.push(t_true(!mentions(findings, "/LintSelftest/HealthyMotor"),
         "a finding names /LintSelftest/HealthyMotor, a correctly collected member"));
 
-    // Do not emit the ordinary scene verdict here. The same fixture deliberately
-    // contains the two dynamic collider-less bodies above, so the production
-    // runner must continue until its declared terminal physics fault is raised.
-    // A normal verdict would stop the runner before that boundary was observed.
-    // Keep the assertion result explicit in the log; the runner owns the final
-    // PASS/FAIL result for this negative scene through ExpectedRuntimeFaults.
+    // This scene owns the lint contract only. The dynamic escape boundary has
+    // its own production fixture (`escape_containment`), so a successful lint
+    // assertion is the complete verdict here.
     let real = [];
     for check in f {
         if check != "" { real.push(check); }
@@ -291,5 +281,6 @@ fn on_tick(me) {
         return;
     }
     print("TESTS_OK " + f.len());
-    print("LINT SELFTEST: PASS (lint assertions; awaiting expected terminal fault)");
+    print("LINT SELFTEST: PASS");
+    emit("LINT_SELFTEST", "PASS");
 }

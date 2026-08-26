@@ -8,7 +8,7 @@
 # Two raked prismatic springs, one mass on each. Nothing else.
 #
 # This is the instrument, not a vehicle. A landing leg lives inside a mechanism —
-# four raked sliders, four gimballed pads, four ground contacts, a hull — and when
+# four raked sliders, four rigid child pads, four ground contacts, a hull — and when
 # such a gear does not stroke there are two very different explanations:
 #
 #   1. the JOINT does not do what it was authored to do (a loader or frame bug), or

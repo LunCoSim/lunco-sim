@@ -22,7 +22,7 @@
 //!
 //! The USD-touching suites (`test_usd_query.rhai`, and the model invariants in
 //! the moonbase repo) need a loaded stage, so they stay live-only — run via
-//! `rhai_eval.py` from a shell harness, in the style of
+//! the native `luncosim rhai --stdout` client from a shell harness, in the style of
 //! `scripts/scenario_sync_test.sh`. This file parse-checks them so a typo there
 //! still fails in CI without a sandbox.
 

@@ -18,11 +18,12 @@ scene is **owned, loaded, rendered, and edited**. The short version:
 > stage *document* plus its active Run state. You don't load files into the
 > world; the world is a projection of the Twin.**
 >
-> A **loose** `.usda` is not an exception: opening one materialises an
-> *ephemeral Twin* around it (VS Code's open-file-vs-open-folder model; spec
-> 14's *"implicit Twin materialised on workspace open"*). Same pipeline, same
-> invariant — a loose file is the degenerate Twin, promotable to a real folder
-> Twin with `SaveAsTwin`.
+> A **loose** `.usda` is not an exception: opening one resolves its owning
+> folder (the nearest `twin.toml`, otherwise the file's parent), scans that
+> folder, and selects the file as the Twin's default scene. The resulting
+> folder Twin enters the same doc-first `twin://…` mount used by startup and
+> tutorial loads. The folder may later be promoted to a manifest-backed Twin
+> with `SaveAsTwin`.
 
 This aligns with the canonical layer model in
 [`14-simulation-layers.md`](14-simulation-layers.md) (*"Twin is the control
@@ -148,14 +149,14 @@ startup (spec 14: *"one implicit Twin materialised on workspace open"*).
 | Open entry point | Result |
 |---|---|
 | **Open Twin…** (folder) | real Twin (`root_path`, `twin.toml`, scenarios, runs) → designated stage active → Grid |
-| **Open Scene…** (loose `.usda`) | **ephemeral Twin** (`root_path = None`, anchoring uses the file's own parent dir) → that file's document active → Grid |
+| **Open Scene…** (loose `.usda`) | owning folder is resolved and opened as a folder or manifest-backed Twin → document-first `twin://…` scene becomes active → Grid |
 | **New scene** | ephemeral Twin → untitled stage document active → Grid |
 
-The ephemeral Twin has no `twin.toml` / scenarios / runs on disk; its active
-stage is the loose file's `UsdDocument` (already opened by `on_open_file` as
-`DocumentOrigin::File`). It is still runnable (implicit Scenario/Run, spec 14)
-and saveable (`SaveDocument` writes the `.usda`). **`SaveAsTwin`** promotes it
-to a real folder Twin.
+For a folder without `twin.toml`, the active stage is the selected file's
+`UsdDocument` and the folder remains browseable without manifest-backed
+scenarios or runs. The file is still opened through `DocumentOrigin::File` and
+saveable with `SaveDocument`. **`SaveAsTwin`** adds the manifest-backed Twin
+metadata when the user wants it.
 
 ## Which stage opens — scene resolution
 
@@ -187,7 +188,7 @@ declared starting scene**. Nothing else is inferred.
 | **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — user double-clicks a `.usda` to load it |
 | **Open Twin** (`twin.toml`) | same folder browser | **auto-loads `[usd] default_scene`** |
 | **Twin** with no `default_scene` | same folder browser | none — behaves like a folder; warn "no starting scene declared" |
-| **Loose `.usda`** (orphan) | just that file | that file (ephemeral Twin, above) |
+| **Loose `.usda`** (orphan) | owning folder | that file, selected during the folder scan |
 
 Opening a Twin **is** opening its folder — same browser, same file list — with
 the single addition that `default_scene` is loaded automatically. A folder
@@ -195,9 +196,9 @@ loads nothing until the user picks a file; the Twin's manifest *is* that pick,
 pre-declared.
 
 Whether loaded automatically (Twin) or by the user's double-click (folder), a
-scene loads as a **single root** (the `LoadScene` / `SetActiveStage` path —
-clear-and-replace, one `UsdPrimPath` root under the Grid). Loading another
-scene re-points that single active stage; it never stacks.
+scene loads as a **single root** (the typed `SceneTransitionIntent` →
+`LoadScene` path — clear-and-replace, one `UsdPrimPath` root under the Grid).
+Loading another scene re-points that single active stage; it never stacks.
 
 On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
 `lunco-usd/src/commands.rs`), exactly **one** stage resolves per the table above,
@@ -228,7 +229,7 @@ section.
 | User intent | Operation | Surface |
 |---|---|---|
 | **Open a Twin** | Open a folder → designated stage becomes active → Grid renders it | existing `OpenFolder`/`OpenTwin` + folder picker |
-| **Open a loose scene** | Open a `.usda` → ephemeral Twin → that file's document becomes the active stage → Grid | `OpenFile` (registers the doc) + `OpenScene`/`SetActiveStage` (makes it the world) |
+| **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
 | **Add object / import** | author into the current stage: `ApplyUsdOp { active_stage, AddReference{…} }` (primitives: `AddPrim`); recompose into Grid; saved into the Twin by `SaveDocument` | existing `ApplyUsdOp` + one new `UsdOp` |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |

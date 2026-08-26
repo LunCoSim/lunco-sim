@@ -170,7 +170,6 @@ mod tests {
     use super::*;
     use bevy::ecs::system::SystemState;
     use bevy::math::{DQuat, DVec3};
-    use big_space::prelude::Grid;
 
     fn read(world: &mut World, entity: Entity) -> Option<(GridPos, GridRot)> {
         let mut state: SystemState<SimulationPoseQuery> = SystemState::new(world);

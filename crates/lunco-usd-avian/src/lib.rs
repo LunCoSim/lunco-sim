@@ -85,6 +85,26 @@ pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ScenePhysicsOwned;
 
+/// Invalidate the one-shot USD physics projection for a prim whose composed
+/// schemas changed after its visual entity was created.
+///
+/// A live reference can add `PhysicsRigidBodyAPI` to an already-existing
+/// instance root. The USD visual projection is then refreshed from the live
+/// stage, and this owner-level invalidation lets the Avian observer read the
+/// newly composed body contract once more. Physics components are deliberately
+/// left intact; the caller only uses this for a prim that was previously
+/// typeless and therefore had no Avian body to replace.
+pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> bool {
+    if world.get::<RigidBody>(entity).is_some() {
+        return false;
+    }
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return false;
+    };
+    entity_mut.remove::<UsdAvianProcessed>();
+    true
+}
+
 pub mod lint;
 pub use lint::{physics_facts, USD_LINT_DOMAIN};
 
@@ -219,101 +239,11 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     }
 }
 
-/// Express a USD prismatic-drive target in the velocity basis used by Avian's
-/// native motor.
-///
-/// USD joint velocity is the relative velocity of the two joint anchors:
-/// `((v₂ + ω₂×r₂) - (v₁ + ω₁×r₁)) · axis`. Avian 0.7's prismatic motor uses
-/// only `(v₂ - v₁) · axis`. For an offset or raked landing leg those are not
-/// the same quantity, so feeding the authored target directly into Avian makes
-/// body rotation look like slider motion and the native motor injects energy.
-///
-/// The component stores the authored target; this system changes only Avian's
-/// transient motor target and recomputes it from the current native state every
-/// physics tick. It therefore remains bounded, non-accumulating, and leaves
-/// Avian's native joint/drive/XPBD realization as the sole constraint owner.
-fn native_prismatic_target_velocity(
-    authored_target: f64,
-    axis: DVec3,
-    angular_velocity1: DVec3,
-    anchor_offset1: DVec3,
-    angular_velocity2: DVec3,
-    anchor_offset2: DVec3,
-) -> Option<f64> {
-    if !authored_target.is_finite() || !axis.is_finite() || axis == DVec3::ZERO {
-        return None;
-    }
-    let anchor_rotation_rate = (angular_velocity2.cross(anchor_offset2)
-        - angular_velocity1.cross(anchor_offset1))
-    .dot(axis.normalize());
-    let native_target = authored_target - anchor_rotation_rate;
-    native_target.is_finite().then_some(native_target)
-}
-
-fn correct_prismatic_drive_target_velocity(
-    mut joints: Query<(
-        &mut PrismaticJoint,
-        &lunco_physics::PrismaticDriveTargetVelocity,
-    )>,
-    rotations: Query<&Rotation>,
-    angular_velocities: Query<&AngularVelocity>,
-    centers_of_mass: Query<&ComputedCenterOfMass>,
-) {
-    for (mut joint, authored) in &mut joints {
-        let Some(local_anchor1) = joint.local_anchor1() else {
-            continue;
-        };
-        let Some(local_anchor2) = joint.local_anchor2() else {
-            continue;
-        };
-        let Some(local_basis1) = joint.local_basis1() else {
-            continue;
-        };
-        let Ok(rotation1) = rotations.get(joint.body1) else {
-            continue;
-        };
-        let Ok(rotation2) = rotations.get(joint.body2) else {
-            continue;
-        };
-        let com1 = centers_of_mass
-            .get(joint.body1)
-            .map_or(DVec3::ZERO, |com| com.0);
-        let com2 = centers_of_mass
-            .get(joint.body2)
-            .map_or(DVec3::ZERO, |com| com.0);
-        let r1 = rotation1.0 * (local_anchor1 - com1);
-        let r2 = rotation2.0 * (local_anchor2 - com2);
-        let omega1 = angular_velocities
-            .get(joint.body1)
-            .map_or(DVec3::ZERO, |velocity| velocity.0);
-        let omega2 = angular_velocities
-            .get(joint.body2)
-            .map_or(DVec3::ZERO, |velocity| velocity.0);
-        let Some(native_target_velocity) = native_prismatic_target_velocity(
-            authored.0,
-            rotation1.0 * local_basis1 * joint.slider_axis,
-            omega1,
-            r1,
-            omega2,
-            r2,
-        ) else {
-            continue;
-        };
-        joint.motor.target_velocity = native_target_velocity;
-    }
-}
-
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(JointAttachPlugin);
-        app.add_systems(
-            avian3d::schedule::PhysicsSchedule,
-            correct_prismatic_drive_target_velocity
-                .in_set(avian3d::dynamics::solver::schedule::SolverSystems::PrepareJoints)
-                .before(avian3d::dynamics::solver::xpbd::prepare_xpbd_joint::<PrismaticJoint>),
-        );
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
@@ -348,7 +278,6 @@ impl Plugin for UsdAvianPlugin {
 
         app.register_type::<ShouldBeDynamic>()
             .register_type::<filtered_pairs::SharedTireContact>()
-            .register_type::<lunco_physics::PrismaticDriveTargetVelocity>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
@@ -423,31 +352,6 @@ fn project_mobility_to_rigid_body(
 #[cfg(test)]
 mod mobility_tests {
     use super::*;
-
-    #[test]
-    fn prismatic_drive_target_uses_anchor_velocity_basis() {
-        let native = native_prismatic_target_velocity(
-            0.0,
-            DVec3::Y,
-            DVec3::ZERO,
-            DVec3::ZERO,
-            DVec3::Z,
-            DVec3::X,
-        )
-        .expect("valid drive basis");
-        assert!((native + 1.0).abs() < 1.0e-12);
-
-        let unchanged = native_prismatic_target_velocity(
-            0.25,
-            DVec3::Y,
-            DVec3::ZERO,
-            DVec3::ZERO,
-            DVec3::Z,
-            DVec3::ZERO,
-        )
-        .expect("valid drive basis");
-        assert!((unchanged - 0.25).abs() < 1.0e-12);
-    }
 
     #[test]
     fn projects_declared_mobility_but_never_overrides_a_managed_body() {
@@ -653,18 +557,11 @@ impl JointDrive {
         let damping = self.damping.unwrap_or(0.0);
         match self.drive_type.unwrap_or(DriveType::Force) {
             DriveType::Acceleration => MotorModel::AccelerationBased { stiffness, damping },
-            DriveType::Force => match self.driven_mass {
-                Some(m) if m > 0.0 && stiffness > 0.0 => {
-                    let omega = (stiffness / m).sqrt();
-                    MotorModel::SpringDamper {
-                        frequency: omega / std::f64::consts::TAU,
-                        damping_ratio: damping / (2.0 * (stiffness * m).sqrt()),
-                    }
-                }
-                // No mass, or a pure damper (no stiffness to blow up): the explicit
-                // form is safe and there is nothing to convert through.
-                _ => MotorModel::ForceBased { stiffness, damping },
-            },
+            DriveType::Force => lunco_physics::force_drive_motor_model(
+                stiffness,
+                damping,
+                self.driven_mass.unwrap_or(0.0),
+            ),
         }
     }
 
@@ -1480,7 +1377,6 @@ fn extract_avian_prim(
     let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);
     let has_collision_api = reader.has_api_schema(sdf_path, ptok::API_COLLISION);
     let has_terrain_api = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
-
     // ── TERRAIN ── static collider + TerrainTile; mesh DEMs defer their collider.
     if has_terrain_api {
         if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
@@ -2973,14 +2869,6 @@ fn build_usd_physics_joints(
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
-                commands.entity(joint_entity).try_insert(
-                    lunco_physics::PrismaticDriveTargetVelocity(
-                        pending
-                            .drive
-                            .and_then(|drive| drive.target_velocity)
-                            .unwrap_or(0.0),
-                    ),
-                );
                 true
             }
             "PhysicsRevoluteJoint" => {
