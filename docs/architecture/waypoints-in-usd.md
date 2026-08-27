@@ -103,7 +103,11 @@ and projects that render pose with the active camera. Route projection does not
 draw a second label, subtract active-frame positions from camera positions, or
 reimplement distance/coordinate conversion. This keeps a label attached to its
 waypoint when celestial parents rotate and leaves the route snapshot responsible
-only for terrain-grid ribbon geometry and visited-marker state.
+only for terrain-grid ribbon geometry and visited-marker state. The editor's
+waypoint authoring helper writes this contract for every new authored marker;
+runtime-only markers attach the same data-only `UsdBillboard` contract to their
+shared USD marker root and use their synthetic route key for `{index}`. Both
+paths therefore feed the same renderer without a route-specific label path.
 
 `BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
 metadata" as an intended channel.

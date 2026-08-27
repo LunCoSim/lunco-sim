@@ -198,8 +198,14 @@ sampling and mesh rebuild run only for an active `TrajectoryView` (`is_visible &
 user_visible`); a hidden authored orbit must not consume orbital or GPU budget.
 The per-vertex time-fade buffer is stamped by epoch, path, sampling range, and
 vertex count, so an unchanged or paused clock does not reallocate and re-upload
-the full color attribute. Active overlays may still update when a warped epoch
-actually changes; an existing active curve is held whenever the Celestial domain
-is in high-rate transport (including an independently scaled Celestial clock),
-so high-rate clock transport cannot turn its mesh rebuild into a periodic frame
-stall. The body and frame poses continue to use the current epoch.
+the full color attribute. An existing active curve also holds its stamped fade
+while the Celestial domain is in high-rate transport (including an independently
+scaled Celestial clock); a newly-created or structurally changed path still
+initializes its buffer once. High-rate clock transport therefore cannot turn
+either trajectory geometry or its color buffer into a periodic frame stall. The
+body and frame poses continue to use the current epoch. Ephemeris sampling,
+spline tessellation, and alpha-buffer construction are compute tasks; the main
+schedule only polls completed results and commits the already-prepared mesh
+attributes. Anchored curve alignment reads the already-solved tracked/reference
+frame pose through `lunco_core::coords::pose_in_grid`; it does not evaluate
+ephemeris endpoints again for presentation.

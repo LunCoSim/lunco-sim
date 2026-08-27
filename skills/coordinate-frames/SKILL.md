@@ -62,6 +62,10 @@ generic billboard renderer consume its propagated `GlobalTransform`. Do not
 project a route snapshot's active-frame coordinates yourself, subtract them from
 a camera pose, or add a second distance calculation. The terrain-grid/BigSpace
 hierarchy and the existing billboard path already own that conversion.
+Editor-created waypoints use the canonical USD billboard authoring helper;
+runtime-only waypoints attach the same `UsdBillboard` data to the shared marker
+root. Keep both paths on this one renderer and use the existing synthetic runtime
+key for the label index rather than adding a waypoint-specific overlay.
 
 ## Do not patch symptoms
 

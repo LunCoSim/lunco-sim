@@ -104,12 +104,61 @@ const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
 /// The authored asset reference used by waypoint marker prims
 /// (`lunco://vessels/markers/waypoint.usda`).
 pub const WAYPOINT_MARKER_ASSET: &str = "lunco://vessels/markers/waypoint.usda";
+/// The one label contract used by editor-authored and runtime waypoint
+/// markers. The generic billboard renderer expands these tokens from the
+/// marker entity's propagated pose; no route code projects or measures labels.
+pub const WAYPOINT_BILLBOARD_TEXT: &str = "Waypoint {index}\\n{lat:.5}, {lon:.5}\\n{height:.1} m";
+/// Label lift above a waypoint origin, in canonical metres.
+pub const WAYPOINT_BILLBOARD_OFFSET_Y: f32 = 4.0;
+/// Label cutoff, in canonical metres. Keep this explicit in generated USD so
+/// authored and runtime markers use the same presentation contract.
+pub const WAYPOINT_BILLBOARD_FADE_END: f32 = 1200.0;
 /// Scope (under the scene root) holding a scene's waypoint MARKER prims.
 /// Scene-authored routes use this name (`/Traverse/Route/W0`), so a dropped
 /// waypoint joins the same scope rather than inventing a parallel one.
 pub const WAYPOINT_ROUTE_SCOPE: &str = "Route";
 /// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
 pub const WAYPOINT_MISSION_PROGRAM: &str = "Mission";
+
+/// Author the generic billboard attributes for a waypoint prim.
+///
+/// This is the single authoring helper for waypoint label metadata. Runtime
+/// marker instances use the same constants to construct the data-only
+/// [`lunco_usd_sim::billboard::UsdBillboard`] component consumed by the one
+/// generic overlay renderer.
+pub fn waypoint_billboard_ops(path: impl Into<String>) -> [UsdOp; 4] {
+    let path = path.into();
+    [
+        UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: path.clone(),
+            name: "lunco:billboard".into(),
+            type_name: "bool".into(),
+            value: "true".into(),
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: path.clone(),
+            name: "lunco:billboard:text".into(),
+            type_name: "string".into(),
+            value: WAYPOINT_BILLBOARD_TEXT.into(),
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: path.clone(),
+            name: "lunco:billboard:offsetY".into(),
+            type_name: "float".into(),
+            value: WAYPOINT_BILLBOARD_OFFSET_Y.to_string(),
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path,
+            name: "lunco:billboard:fadeEnd".into(),
+            type_name: "float".into(),
+            value: WAYPOINT_BILLBOARD_FADE_END.to_string(),
+        },
+    ]
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // LayerId — names a layer in a stage's layer stack
@@ -4277,5 +4326,57 @@ def Xform \"Traverse\" (\n\
             moved.is_ok(),
             "moving a variant-authored waypoint must be accepted, got {moved:?} —              the editor addresses prims by COMPOSED path, so document validation              cannot be a flat per-layer spec lookup"
         );
+    }
+
+    #[test]
+    fn waypoint_billboard_ops_author_the_generic_contract() {
+        let ops = waypoint_billboard_ops("/Traverse/Route/W7");
+
+        assert!(matches!(
+            &ops[0],
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                value,
+                ..
+            } if path == "/Traverse/Route/W7"
+                && name == "lunco:billboard"
+                && type_name == "bool"
+                && value == "true"
+        ));
+        assert!(matches!(
+            &ops[1],
+            UsdOp::SetAttribute {
+                name,
+                type_name,
+                value,
+                ..
+            } if name == "lunco:billboard:text"
+                && type_name == "string"
+                && value == WAYPOINT_BILLBOARD_TEXT
+        ));
+        assert!(matches!(
+            &ops[2],
+            UsdOp::SetAttribute {
+                name,
+                type_name,
+                value,
+                ..
+            } if name == "lunco:billboard:offsetY"
+                && type_name == "float"
+                && value == &WAYPOINT_BILLBOARD_OFFSET_Y.to_string()
+        ));
+        assert!(matches!(
+            &ops[3],
+            UsdOp::SetAttribute {
+                name,
+                type_name,
+                value,
+                ..
+            } if name == "lunco:billboard:fadeEnd"
+                && type_name == "float"
+                && value == &WAYPOINT_BILLBOARD_FADE_END.to_string()
+        ));
     }
 }

@@ -109,6 +109,7 @@ pub fn draw_billboard_overlay(
         screen: egui::Pos2,
         text: String,
         distance: f64,
+        fade_end: f32,
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
@@ -152,6 +153,7 @@ pub fn draw_billboard_overlay(
             screen: egui::pos2(viewport.x, viewport.y) + origin,
             text,
             distance,
+            fade_end: bb.fade_end,
         });
     }
 
@@ -160,7 +162,7 @@ pub fn draw_billboard_overlay(
     for d in &drawn {
         // Fade with distance so far labels recede instead of all shouting
         // equally; never fully transparent before `fade_end` drops it outright.
-        let fade = (1.0 - (d.distance as f32 / 1200.0)).clamp(0.25, 1.0);
+        let fade = (1.0 - (d.distance as f32 / d.fade_end)).clamp(0.25, 1.0);
         let alpha = (255.0 * fade) as u8;
         let c = theme.tokens.text;
         let color = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
