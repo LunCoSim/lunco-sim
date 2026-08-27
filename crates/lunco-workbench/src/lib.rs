@@ -5382,6 +5382,13 @@ fn register_graphics_settings_menu(world: &mut World) {
             }
             ui.label(
                 egui::RichText::new(
+                    "High is the highest shipped visual budget; USD-authored sky and lunar surface shaders remain authoritative.",
+                )
+                .weak()
+                .small(),
+            );
+            ui.label(
+                egui::RichText::new(
                     "Presets only suggest values. The fields below are authoritative and are never silently downgraded to another preset.",
                 )
                 .weak()

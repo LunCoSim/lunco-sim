@@ -43,7 +43,8 @@ luncosim --record-offline take.mp4 --record-fps 30
 
 # Windowless (offscreen): full GPU render stack, NO window/egui; renders into an
 # offscreen target and EXITS BY ITSELF when the take drains
-luncosim --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 300
+luncosim --api 4101 --offscreen --render-quality high \
+  --record-offline take.mp4 --record-fps 30 --record-frames 300
 ```
 
 | Flag | Meaning |
@@ -53,6 +54,7 @@ luncosim --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 3
 | `--record-frames N` | Stop automatically after N frames. |
 | `--offscreen` | Windowless GPU mode. The scene renders into an offscreen target image; the process exits when the recording drains. Also usable with `--api` for a windowless interactive instance (API `CaptureScreenshot` reads the offscreen target). |
 | `--record-size WxH` | Offscreen target resolution (default 1280x720 — the windowed default, so offscreen takes match windowed ones). |
+| `--render-quality <low\|balanced\|high>` | Explicit renderer quality for this process. `high` is the highest shipped preset and raises shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. It does not replace shader sources authored by the USD scene. |
 
 After the authored camera contract is present, offscreen recording holds virtual time
 for a one-second cold-GPU render warm-up before numbering frame 0. This fence lets
@@ -64,6 +66,12 @@ Scene test observers use the same separation: a Rhai test under
 observer through `LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list`
 uses the declaration to route headless tests to the deterministic CPU runner
 and graphics tests to the offscreen renderer.
+
+The graphics runner selects `--render-quality high` by default. Set
+`RENDER_QUALITY=balanced` or `RENDER_QUALITY=low` for a deliberate comparison.
+The ordinary Summer Space School behavior scripts remain CPU/headless tests;
+invoke an offscreen run when the acceptance criterion includes shadows, sky, or
+lunar-surface appearance.
 
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
 explicit active presentation camera, an authored `LocalAvatar` presentation camera,

@@ -7,10 +7,11 @@
 //! component types, so it never forms a cycle and never drags the `bevy_pbr`
 //! render pipeline into the slim web/Modelica binaries.
 //!
-//! Today it owns [`sun::LunarSunShadow`] (the canonical sun-shadow spec). It is
-//! the intended home for the rest of the render-look roadmap — exposure /
-//! earthshine, anti-aliasing, sky/Earth, and the `RenderSettings` window
-//! backing.
+//! It owns [`sun::LunarSunShadow`] (the canonical sun-shadow spec) and the
+//! persisted [`quality::RenderingQualitySettings`] budget consumed by the
+//! render-capable crates. The remaining render-look roadmap includes deeper
+//! exposure/earthshine controls, additional authored sky/Earth looks, and
+//! further Graphics UI refinements.
 
 pub mod appearance;
 pub mod camera;

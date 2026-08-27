@@ -22,7 +22,8 @@ is a function of frame index, never machine speed. Full design:
 ```sh
 # Windowless: no window/egui, renders offscreen, EXITS BY ITSELF when done
 target/debug/luncosim --api 4101 \
-  --offscreen --record-offline ~/.cache/take.mp4 --record-fps 30 --record-frames 300
+  --offscreen --render-quality high \
+  --record-offline ~/.cache/take.mp4 --record-fps 30 --record-frames 300
 
 # Windowed variant (records the live window; you stop it, or pass --record-frames)
 target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps 30
@@ -42,6 +43,9 @@ target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps
 
 - `--offscreen` is GPU-full windowless — NOT `--no-ui` (which drops the GPU and
   cannot capture anything).
+- `--render-quality high` selects the highest shipped renderer budget for the
+  process: shadows, sky cubemap, lunar terrain LOD, and tessellation. USD still
+  owns the authored terrain/sky shader sources; this flag does not swap them.
 - No workbench exists, so the recorder activates the scene's first **authored**
   `SceneCamera` (e.g. the luncosim `WideShot`). A scene with no authored camera
   records black and logs a warning — author a camera, don't fight the picker.

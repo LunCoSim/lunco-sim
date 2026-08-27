@@ -196,7 +196,11 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
                 camera_tone_map: ToneMap::AgX,
-                camera_msaa: MsaaLevel::X4,
+                // Keep the highest profile on the stable offscreen path: X4 made the
+                // large streamed Summer Space School terrain capture render black on
+                // the supported RTX 5060, while the rest of this profile remains above
+                // Balanced for shadows, sky, terrain, and geometry.
+                camera_msaa: MsaaLevel::X2,
                 camera_exposure_ev100: 16.0,
                 render_failure_quiet_period_secs: 0.5,
                 render_failure_give_up_after_secs: 5.0,

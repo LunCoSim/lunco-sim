@@ -143,6 +143,19 @@ and tiles at the same quality still share one.
 That is the answer for "higher quality near the rover" and for "this landing site has
 a real orbital raster, the rest of the Moon does not."
 
+### Renderer-wide quality presets
+
+The renderer-wide `RenderingQualitySettings` section owns budgets that affect all
+GPU-backed views: shadow maps and casters, the horizon-shadow cache, camera MSAA
+and bloom, the sky cubemap, terrain LOD/caches, and geometric tessellation. Its
+highest shipped preset is `RenderingQuality::High`; the CLI can select it for a
+process with `--render-quality high`.
+
+This setting is a budget choice, not a shader-identity switch. USD remains the
+authority for the scene's `ShaderLook` and authored WGSL source. A Summer Space
+School scene can therefore keep its authored lunar terrain and starfield shaders
+while the high preset supplies the largest renderer budgets around them.
+
 ---
 
 ## When six slots really are not enough

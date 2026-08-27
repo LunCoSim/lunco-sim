@@ -11,6 +11,7 @@
 #
 #   ./scripts/run_render_scene_tests.sh
 #   ./scripts/run_render_scene_tests.sh hdri
+#   RENDER_QUALITY=balanced ./scripts/run_render_scene_tests.sh hdri
 #
 # RENDER_FRAMES is intentionally small. The render assertions are about settled
 # scene state, not an animation sequence; the recorder's readiness gate waits
@@ -25,6 +26,8 @@ BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-120}"
 RENDER_FRAMES="${RENDER_FRAMES:-3}"
 RENDER_SIZE="${RENDER_SIZE:-320x180}"
+RENDER_QUALITY="${RENDER_QUALITY:-high}"
+RENDER_API_PORT="${RENDER_API_PORT:-4103}"
 RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
 LOG_DIR="target/scene-tests"
 RENDER_ROOT="$LOG_DIR/render"
@@ -37,6 +40,17 @@ fi
 
 if ! [[ "$RENDER_FRAMES" =~ ^[1-9][0-9]*$ ]]; then
     echo "render scene gate: RENDER_FRAMES must be a positive integer" >&2
+    exit 2
+fi
+case "$RENDER_QUALITY" in
+    low|balanced|high) ;;
+    *)
+        echo "render scene gate: RENDER_QUALITY must be low, balanced, or high" >&2
+        exit 2
+        ;;
+esac
+if ! [[ "$RENDER_API_PORT" =~ ^[1-9][0-9]*$ && "$RENDER_API_PORT" -le 65535 ]]; then
+    echo "render scene gate: RENDER_API_PORT must be a valid TCP port" >&2
     exit 2
 fi
 if [[ "$RENDER_SIZE" != *x* ]]; then
@@ -91,7 +105,8 @@ for scene in "${SCENES[@]}"; do
 
     echo "==> render $name"
     timeout --kill-after=10 "$RENDER_TIMEOUT" \
-        "$BIN" --offscreen \
+        "$BIN" --api "$RENDER_API_PORT" --offscreen \
+        --render-quality "$RENDER_QUALITY" \
         --record-offline "$output" \
         --record-frames "$RENDER_FRAMES" \
         --record-size "$RENDER_SIZE" \

@@ -98,6 +98,8 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `--headless-max-speed` | With `--no-ui` (or the headless server launcher), run the fixed simulation lattice as fast as the CPU and causal participants permit. This removes wall-clock pacing; it does not bypass the co-simulation barrier. |
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
 | `--scene <PATH>` | Load a specific USD scene from a relative or absolute filesystem path. Startup resolves its owning root and mounts it through the canonical `twin://` address. Without it, luncosim starts with an empty persistent world shell. |
+| `--render-profile <standard\|fast>` | Select the startup compatibility profile. `fast` uses unlit, texture-free materials and disables HDR, bloom, and MSAA. |
+| `--render-quality <low\|balanced\|high>` | Override the Graphics quality for this process. `high` is the highest shipped visual preset, raising shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
 | `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |
 | `--log-diag` | Enable Bevy's `LogDiagnosticsPlugin` to print FPS, FrameTime, and physics stats to the console. |
@@ -109,6 +111,26 @@ actually parses, so prefer it if this table and the binary ever disagree.
 
 Measuring FPS? Always pass `--no-vsync --no-throttle` — otherwise you are timing
 the compositor and the unfocused power-save throttle, not the renderer.
+
+### GPU-backed visual tests
+
+`luncosim test` is intentionally headless and therefore does not render visuals.
+For a Summer Space School visual smoke test or capture, run the same production
+binary through the offscreen GPU path and select the explicit highest-quality
+preset:
+
+```bash
+target/debug/luncosim --api 4107 --offscreen --render-quality high \
+  --record-offline ~/.cache/lunco/summer-space-school/high-quality \
+  --record-frames 3 --record-size 1280x720 \
+  --scene /path/to/space-school-twin/sim/scenes/traverse.usda
+```
+
+Use a free API port. The quality preset controls renderer budgets, including
+shadows, the sky cubemap, lunar terrain LOD and tessellation; USD remains the
+owner of the scene's authored shader sources (such as the Summer Space School
+terrain and starfield shaders). The local graphics scene gate uses this preset by
+default; set `RENDER_QUALITY=balanced` when a lower-budget comparison is needed.
 
 ## Interactive Controls
 
