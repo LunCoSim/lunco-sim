@@ -61,7 +61,7 @@
 //   facts.collections[] #{ path, parent, name, members[] }
 //       standard computed collection membership from the composed stage.
 //
-//   facts.network_scopes[] #{ path, parent, members[], synthesizer,
+//   facts.network_roots[] #{ path, parent, members[], synthesizer,
 //                             modelica_member_count,
 //                             units[], dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
@@ -149,7 +149,7 @@ fn lint_usd(facts) {
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
-    for f in connector_requires_network_scope(facts) { out.push(f); }
+    for f in connector_requires_network_root(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
     for f in nested_link_node(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
@@ -438,7 +438,7 @@ fn epoch_api_requires_authored_time(facts) {
 
 /// A connector WIRE only has meaning inside the one generated Modelica island
 /// that owns its `connect()` equations. A `connectors:*.connect` authored outside
-/// every network scope is a PHANTOM WIRE: it reads as wired in USD while no
+/// every network root is a PHANTOM WIRE: it reads as wired in USD while no
 /// solver ever receives the topology.
 ///
 /// DECLARING a connector is not wiring one. `custom token connectors:p` with no
@@ -447,28 +447,28 @@ fn epoch_api_requires_authored_time(facts) {
 /// `components/mobility/motor.usda` declares its pin unconditionally and
 /// `rocker_bogie.usda` wires it only in the `power = "battery"` variant; every
 /// rover ships defaulting to `power = "infinite"`, which wires nothing at all and
-/// authors no `Electrical` collection to be a member of.
+/// authors no network collection to be a member of.
 ///
 /// MEASURED: reading the declaration as the fault reported 314 errors across the
 /// shipped tree — every motor of every rover, plus the tutorials — none of which
 /// was fixable without either wiring a battery the scene deliberately omits or
 /// stripping the pin from the catalogue part that owns it.
-fn connector_requires_network_scope(facts) {
+fn connector_requires_network_root(facts) {
     let out = [];
     for program in facts.connector_programs {
         if program.connected.is_empty() { continue; }
         let collected = false;
-        for scope in facts.network_scopes {
+        for scope in facts.network_roots {
             for member in scope.members {
                 if member == program.path { collected = true; }
             }
         }
         if collected { continue; }
-        let m = "connects connectors:* outside a CollectionAPI:components network scope — ";
+        let m = "connects connectors:* outside a CollectionAPI:components network root — ";
         m += "the wire is authored but no compiler network owns it, so no connect() ";
         m += "equation is generated and the pin is solved as if unconnected. Include ";
         m += "this Modelica program in exactly one network, or drop the connection.";
-        out.push(finding("connector-requires-network-scope", "error", program.path, m));
+        out.push(finding("connector-requires-network-root", "error", program.path, m));
     }
     out
 }
@@ -503,7 +503,7 @@ fn unsupported_program_prim_type(facts) {
 /// It cannot generate equations and would otherwise be silently skipped.
 fn empty_component_network(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         // A non-default synthesizer owns the collection contract.  It may
         // legitimately contain physical USD members rather than Modelica
         // facets (for example the authored actuator-wrench allocator), so the
@@ -513,7 +513,7 @@ fn empty_component_network(facts) {
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
         m += " Add the Modelica component facets to";
-        m += " collection:components:includes or remove the empty network scope.";
+        m += " collection:components:includes or remove the empty network root.";
         out.push(finding("empty-component-network", "error", scope.path, m));
     }
     out
@@ -523,7 +523,7 @@ fn empty_component_network(facts) {
 /// instead of disguising it as an empty compiler network.
 fn invalid_component_collection(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         if scope.collection_error == "" { continue; }
         let m = "has an invalid CollectionAPI:components definition — ";
         m += scope.collection_error;
@@ -541,7 +541,7 @@ fn invalid_component_collection(facts) {
 /// reports the exact runtime error without selecting a fallback domain.
 fn invalid_network_synthesizer(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         if scope.synthesizer_error == "" { continue; }
         let m = "cannot select a domain owner for its CollectionAPI:components scope — ";
         m += scope.synthesizer_error;
@@ -555,7 +555,7 @@ fn invalid_network_synthesizer(facts) {
 /// programs belong in the collection working set.
 fn invalid_network_program_source(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         if !is_modelica_network(scope) { continue; }
         for member in scope.invalid_program_sources {
             let m = "is not a sourceAsset-backed .mo program —";
@@ -571,7 +571,7 @@ fn invalid_network_program_source(facts) {
 /// connection list.
 fn invalid_modelica_causal_cardinality(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         // Boundary cardinality is part of the selected synthesizer's public
         // contract.  Only the default acausal-network synthesizer promises
         // scalar Modelica input/output semantics here.
@@ -589,7 +589,7 @@ fn invalid_modelica_causal_cardinality(facts) {
 /// properties with that same source cannot be distinguished safely.
 fn ambiguous_modelica_boundary(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         if !is_modelica_network(scope) { continue; }
         for subject in scope.ambiguous_boundary_sources {
             let m = "has multiple network inputs resolving to one composed source —";
@@ -604,11 +604,11 @@ fn ambiguous_modelica_boundary(facts) {
 /// generated Modelica wrapper, changing Kirchhoff topology silently.
 fn dangling_network_connector(facts) {
     let out = [];
-    for scope in facts.network_scopes {
+    for scope in facts.network_roots {
         if !is_modelica_network(scope) { continue; }
         for connector in scope.dangling_connectors {
             let m = "targets a connector outside its CollectionAPI:components working set —";
-            m += " include the target component or move the connection into the correct network scope.";
+            m += " include the target component or move the connection into the correct network root.";
             out.push(finding("dangling-network-connector", "error", connector, m));
         }
     }

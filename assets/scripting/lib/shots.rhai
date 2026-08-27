@@ -140,6 +140,7 @@ fn shot(spec) {
         // why the per-frame callback is gated on `f >= 0` rather than assuming the
         // `StartOfflineRecording` above has already landed.
         #{
+            kind: "step",
             act: |m| {
                 let f = shot_frame();
                 if f >= 0 && frame != () && (last_captured_frame < 0 || last_captured_frame != f) {
@@ -160,6 +161,7 @@ fn shot(spec) {
         // recorder's own observable state instead of a bet on command ordering.
         // The `act` is guarded so the stop is issued once, not re-issued while waiting.
         #{
+            kind: "step",
             act: |m| { if shot_frame() >= 0 { shot_end(); } },
             done: |m| shot_frame() < 0,
         },

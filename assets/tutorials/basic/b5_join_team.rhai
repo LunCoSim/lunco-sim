@@ -7,13 +7,13 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Joining your team",     body: "On the day you'll each be on a laptop, 1–2 drivers per team. This 60-second tour shows how to get onto the shared world and take your rover. Next / Back below — Skip anytime." },
-        #{ anchor: "",                      title: "Connect to the server", body: "Open Network in the top menu bar and enter the workshop server address and access key supplied by the instructor. You join as an authenticated Observer first, so you can watch before requesting control." },
-        #{ anchor: "panel.center",          title: "Find your rover",       body: "Your team's rover is the one in your team colour at your start marker. Hold " + input_hint("look_button") + " and drag to look around the world." },
-        #{ anchor: "panel.right_inspector", title: "Take control",          body: "Select your rover, then click Possess in the Inspector or Command Deck. One driver holds control at a time; a teammate can take over after you release." },
-        #{ anchor: "panel.right_inspector", title: "Check your rover",      body: "With the rover selected, the Inspector shows its class and tuning — which variant you drew (Explorer LT / Standard / Hauler) changes how it climbs and tips." },
-        #{ anchor: "panel.side_browser",    title: "Watch your telemetry",  body: "Use Telemetry in the left dock to inspect the selected rover's live ports. The current client shows its own readable state; team-wide authority and peer dashboards are not part of this lesson." },
-        #{ anchor: "",                      title: "You're on the team",     body: "Connect through Network, select the right rover, request possession, read its live ports, and use Disconnect or Leave Server when the session ends. A scored run requires a separate event setup." },
+        #{ anchor: "",                      title: "Join your team",        body: "This tour shows the team-session flow. Use Next to move through the steps; use Back to review one." },
+        #{ anchor: "",                      title: "Connect to the server", body: "Open Network in the top menu. Enter the server address and access key from your instructor, then connect." },
+        #{ anchor: "panel.center",          title: "Find your rover",       body: "Find the rover in your team colour at its start marker. Hold " + input_hint("look_button") + " and drag to look around." },
+        #{ anchor: "panel.right_inspector", title: "Take control",          body: "Select your rover. Click Possess in Inspector or Command Deck. Only one driver controls a rover at a time." },
+        #{ anchor: "panel.right_inspector", title: "Check the setup",       body: "With the rover selected, read its class and tuning in Inspector. Explorer LT, Standard, and Hauler handle differently." },
+        #{ anchor: "panel.side_browser",    title: "Read live telemetry",   body: "Open Telemetry in the left dock. Select a port and read the rover's current values while it is moving." },
+        #{ anchor: "",                      title: "End the session",        body: "When the session ends, open Network and click Disconnect or Leave Server. Click Continue when you are ready for the Space School track." },
     ]
 }
 

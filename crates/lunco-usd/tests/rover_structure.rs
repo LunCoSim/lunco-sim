@@ -4,7 +4,7 @@ use bevy::asset::AssetPlugin;
 /// ALL tests load REAL files from disk — no inline USD strings.
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_core::ActuatorPorts;
+use lunco_core::OutputPorts;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
@@ -193,11 +193,11 @@ fn test_all_rover_files_match_procedural() {
         // Find rover
         let mut q = app
             .world_mut()
-            .query_filtered::<Entity, With<ActuatorPorts>>();
+            .query_filtered::<Entity, With<OutputPorts>>();
         let rover = q
             .iter(app.world())
             .next()
-            .unwrap_or_else(|| panic!("{label}: No ActuatorPorts (rover root) entity"));
+            .unwrap_or_else(|| panic!("{label}: No OutputPorts (rover root) entity"));
 
         // Physics. Born Kinematic + `ShouldBeDynamic` until joints resolve and
         // readiness promotes — with no terrain in this world the hold is the
@@ -302,8 +302,8 @@ fn test_all_rover_files_match_procedural() {
         // Actuator ports
         let actuators = app
             .world()
-            .get::<ActuatorPorts>(rover)
-            .unwrap_or_else(|| panic!("{label}: missing ActuatorPorts"));
+            .get::<OutputPorts>(rover)
+            .unwrap_or_else(|| panic!("{label}: missing OutputPorts"));
         assert!(
             actuators.ports.contains_key("drive_left"),
             "{label}: actuators missing drive_left"

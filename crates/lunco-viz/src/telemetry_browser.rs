@@ -1915,10 +1915,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_signal_uses_composed_presentation_path_not_solver_scope() {
+    fn generated_signal_uses_composed_presentation_path_and_network_root() {
         let mut reg = SignalRegistry::default();
-        let electrical_scope = ent(1);
-        let signal = SignalRef::new(electrical_scope, "Motor__FL.p.v");
+        let network_root = ent(1);
+        let signal = SignalRef::new(network_root, "Motor__FL.p.v");
         reg.push_scalar(signal.clone(), 0.0, 24.0);
         reg.update_meta(
             signal,
@@ -1934,7 +1934,7 @@ mod tests {
             |_| None,
             |_| None,
             |entity| {
-                (entity == electrical_scope).then(|| "/SandboxScene/Rover/Electrical".to_string())
+                (entity == network_root).then(|| "/SandboxScene/Rover".to_string())
             },
             |_| false,
             |_| false,
@@ -1944,8 +1944,8 @@ mod tests {
         assert!(
             !rover
                 .children
-                .contains_key("/SandboxScene/Rover/Electrical"),
-            "the generated solver scope is an implementation detail"
+                .contains_key("/SandboxScene/Rover/Power"),
+            "the removed domain child must not reappear as a telemetry node"
         );
         let motor = &rover.children["/SandboxScene/Rover/Motor_FL"];
         assert_eq!(motor.label, "Motor FL");
@@ -1975,7 +1975,7 @@ mod tests {
             |_| None,
             |entity| match entity {
                 e if e == ent(1) => Some("/Traverse/Rover/Motor_L0".into()),
-                e if e == ent(2) => Some("/Traverse/Rover/Electrical".into()),
+                e if e == ent(2) => Some("/Traverse/Rover".into()),
                 _ => None,
             },
             |_| false,
@@ -1984,7 +1984,7 @@ mod tests {
         let rover = &tree.children["/Traverse"].children["/Traverse/Rover"];
         let motor = &rover.children["/Traverse/Rover/Motor_L0"];
         assert_eq!(motor.rows.len(), 2);
-        assert!(!rover.children.contains_key("/Traverse/Rover/Electrical"));
+        assert!(!rover.children.contains_key("/Traverse/Rover/Power"));
     }
 
     #[test]

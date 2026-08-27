@@ -127,7 +127,7 @@ focused Modelica tab.
 
 For electrical generated networks, verify the unit diagram's labelled power
 bus and follow at least one routed `connect(...)` branch through the rail. The
-Rhai policy uses readable `power_system`/`power_unit_N` unit instances and a
+Rhai policy uses readable `network_system`/`network_unit_N` unit instances and a
 topology-derived hub with adaptive branch lanes, so inspect a larger network
 with `FitCanvas` rather than assuming the six-member demo's geometry scales.
 Components that need directional presentation apply
@@ -173,7 +173,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Two kinds of `command` share this envelope:
 
-- **Commands** (fire-and-forget mutations): return `{"data":{"accepted":true}}`.
+- **Commands** (fire-and-forget mutations): return `{"data":{"accepted":true}}`; result-returning commands put their command-specific payload in the same `data` envelope.
   Invalid parameters return HTTP 422; deferred commands return their completed
   result on the same request.
 - **Query providers** (return data): return the payload directly, e.g.

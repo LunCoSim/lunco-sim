@@ -1504,6 +1504,7 @@ pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> 
         command: command.to_string(),
         params,
         id: 0,
+        correlation_id: None,
     });
     true
 }

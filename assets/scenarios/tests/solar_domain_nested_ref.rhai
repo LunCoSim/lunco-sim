@@ -7,14 +7,13 @@
 //   /SolarDomainNestedRef/Direct       + solar, scene → base        (one arc)
 //   /SolarDomainNestedRef/Nested       + solar, scene → profile → base (two arcs)
 //
-// WHAT IS READ. The authored Electrical boundary ports, off the `Electrical`
-// scope. An island that never steps publishes no port at all, so absence is
-// the signal.
+// WHAT IS READ. The authored boundary ports live on each rover root. An island
+// that never steps publishes no port at all, so absence is the signal.
 //
 // WHAT THIS RIG ESTABLISHED, in the order the layers came off:
 //
 //   1. The domain projection rejected every solar rover with `SolarPanel is
-//      outside collection Electrical`. Cause: a sibling `over "SolarPanel"`
+//      outside the rover-root collection`. Cause: a sibling `over "SolarPanel"`
 //      erased the `def` that referenced the component, so the panel composed
 //      with no `LunCoProgramAPI` and `read_network` skipped it. Five assets
 //      fixed; both islands now project from 8 components and compile.
@@ -78,13 +77,13 @@ fn on_start(me) {
     this.drive_until = 0.0;
     this.traced = false;
 
-    this.b_elec = find("/SolarDomainNestedRef/BatteryOnly/Electrical");
-    this.d_elec = find("/SolarDomainNestedRef/Direct/Electrical");
-    this.n_elec = find("/SolarDomainNestedRef/Nested/Electrical");
+    this.b_elec = find("/SolarDomainNestedRef/BatteryOnly");
+    this.d_elec = find("/SolarDomainNestedRef/Direct");
+    this.n_elec = find("/SolarDomainNestedRef/Nested");
     this.d_panel = find("/SolarDomainNestedRef/Direct/SolarPanel");
     this.n_panel = find("/SolarDomainNestedRef/Nested/SolarPanel");
 
-    // The bodies, for the drive phase. Distinct from the `Electrical` scopes
+    // The bodies, for the drive phase. Distinct from the network roots
     // above: `drive` addresses the vehicle, `get` addresses its island.
     this.b_rover = find("/SolarDomainNestedRef/BatteryOnly");
     this.d_rover = find("/SolarDomainNestedRef/Direct");
@@ -194,7 +193,7 @@ fn on_tick(me) {
 
     // ── Phase 2: load the bus ────────────────────────────────────────────────
     // Demand reaches the motors through the island's BOUNDARY INPUTS
-    // (`Electrical.inputs:drive_left|right`, wired from the rover's control
+    // (the rover-root `inputs:drive_left|right`, wired from the rover's control
     // outputs). Those are the wires a too-broad phantom-wire filter once
     // dropped, leaving every motor at zero draw while the island still looked
     // healthy — which is precisely what a parked test cannot see.
@@ -260,7 +259,7 @@ fn on_tick(me) {
     // would be blaming the wrong subsystem, loudly.
     if this.b_draw <= 0.0 {
         let why = "the BASELINE rover (no panel) drew NO motor current under ";
-        why += "full throttle, so `Electrical.inputs:drive_left|right` are ";
+        why += "full throttle, so the rover-root drive inputs are ";
         why += "not reaching the motors on any rover and the solar readings ";
         why += "below measure the wiring, not the panel. Fix the boundary ";
         why += "inputs first";

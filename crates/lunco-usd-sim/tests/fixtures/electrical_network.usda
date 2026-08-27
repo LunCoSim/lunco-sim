@@ -8,24 +8,23 @@
 # A minimal composed network for the projection READER: one wired battery/motor
 # island, plus a part that is installed but electrically unconnected and a
 # boundary output published through it.
-def Xform "Rig"
+def Xform "Rig" (
+    prepend apiSchemas = ["CollectionAPI:components"]
+)
 {
     float outputs:drive_left = 0.0
 
-    def Scope "Electrical" (
-        prepend apiSchemas = ["CollectionAPI:components"]
-    )
-    {
-        float inputs:drive_left.connect = </Rig.outputs:drive_left>
-        float outputs:soc.connect = </Rig/Battery.outputs:soc_out>
-        float outputs:solar_power.connect = </Rig/SolarPanel.outputs:power_out>
-        uniform token collection:components:expansionRule = "explicitOnly"
-        prepend rel collection:components:includes = [
-            </Rig/Battery>,
-            </Rig/Motor>,
-            </Rig/SolarPanel>,
-        ]
-    }
+    # The assembly root is also the network root. USD connections and the
+    # explicit collection identify the network; no domain-named child is needed.
+    float inputs:drive_left.connect = </Rig.outputs:drive_left>
+    float outputs:soc.connect = </Rig/Battery.outputs:soc_out>
+    float outputs:solar_power.connect = </Rig/SolarPanel.outputs:power_out>
+    uniform token collection:components:expansionRule = "explicitOnly"
+    prepend rel collection:components:includes = [
+        </Rig/Battery>,
+        </Rig/Motor>,
+        </Rig/SolarPanel>,
+    ]
 
     def Xform "Battery" (
         prepend apiSchemas = ["LunCoProgramAPI"]
@@ -44,7 +43,7 @@ def Xform "Rig"
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
-        float inputs:demand.connect = </Rig/Electrical.inputs:drive_left>
+        float inputs:demand.connect = </Rig.inputs:drive_left>
         float outputs:electrical_power
         custom token connectors:p
     }

@@ -22,6 +22,11 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`SimPort`** — metadata for a connectable interface point
 - **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
   participant reads/writes through; the cosim engine registers the built-in backends.
+- **`InputPorts` / `OutputPorts`** — an imperative producer's authored command
+  inputs and runtime outputs. `InputPorts` accepts writes; `OutputPorts` is
+  read-only and exposes values written by a producer such as a drive kernel.
+  Generated Modelica outputs remain on `SimComponent` and are not copied into
+  `OutputPorts`.
 - **Avian as a cosim participant** — Avian physics is wired in through a typed-port
   spec table (`AvianGroup`/`AvianPort`) plus a `PendingForces` component, not a
   bespoke `AvianSim` struct.
@@ -42,6 +47,7 @@ per kind), not a mirror component. The available ports:
 | **Avian observations** | Native rigid-body/contact ports plus generic ray ray_distance, ray_hit_valid, hit point/normal, and sample time |
 | **Modelica sensor conversions** | IMU, altimeter, attitude estimator, and touchdown models with authored inputs/outputs wires |
 | **Modelica / hardware** | model `input`/`output` vars; `value` / `raw` |
+| **Imperative producer** | authored `inputs:*` commands and read-only `outputs:*` values through `InputPorts` / `OutputPorts` |
 
 Full closures + the "add a kind = one `AvianGroup` entry" pattern live in
 [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md). USD
@@ -246,6 +252,19 @@ ControlStream.** The result/request correlation machinery (the original deferred
 `CommandResults`) stays on the discrete control surface and never enters
 the per-tick loop. Async completion of long-running runs is reported via
 domain state, so it is an explicit **non-goal** of the command-result store.
+
+A result-returning command puts its command-specific payload in `Ack.data` and
+returns it once on the command response (`{ id, ok, data?, error? }`). This is
+the general response shape for allocated ids, queued status, generated text,
+stdout, and similar request results. It is not a telemetry channel: a value
+that changes during the simulation remains an authored `outputs:<name>` port
+and is read through the port registry or a USD connection.
+
+For authored simulation signals, use the complementary rule: a command enters
+a producer through `inputs:<name>`, and a produced setpoint leaves through
+`outputs:<name>`. The USD connection is the topology authority. `OutputPorts`
+only stores values for an imperative producer; it is not a second signal graph
+and must not shadow a generated Modelica output.
 
 ## Backend registry (dynamic, plugin-driven)
 

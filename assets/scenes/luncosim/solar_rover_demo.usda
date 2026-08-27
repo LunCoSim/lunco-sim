@@ -154,7 +154,7 @@ def Xform "SolarRoverTest" (
             # and lost EVERYTHING this `def` brings — the reference, the children,
             # `LunCoProgramAPI`, `info:sourceAsset`. `read_network` skips a member
             # with no program API, so the runtime blamed the collection instead
-            # (`SolarPanel is outside collection Electrical`) and this demo has
+            # (`SolarPanel is outside the rover-root collection`) and this demo has
             # been shipping with a dead electrical island. See
             # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
             def Xform "SolarPanel" (
@@ -166,11 +166,11 @@ def Xform "SolarRoverTest" (
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
                 # Environment is a runtime provider, not a Modelica component.
-                # Cross the generated-island boundary through Electrical's typed
-                # inputs, then feed the panel from that boundary.
-                float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/Electrical.inputs:sun_mount_z>
+                # Cross the generated-island boundary through the rover root's
+                # typed inputs, then feed the panel from that boundary.
+                float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -213,14 +213,12 @@ def Xform "SolarRoverTest" (
             float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_z>
         }
 
-        # ── Electrical domain (runtime-generated Modelica) ───────────────
-        # The inherited battery variant contributes Battery, motors and this
-        # Scope. This scene contributes the panel and maps its environment probe
-        # through typed network boundary inputs. The probe is a runtime provider,
-        # not a generated Modelica member. No hand-written rover-level `.mo`
-        # duplicates topology.
-        over "Electrical"
-        {
+        # ── Rover network (runtime-generated Modelica) ───────────────────
+        # The inherited battery variant contributes Battery and motors. This
+        # scene contributes the panel and maps its environment probe through
+        # the rover root's typed network boundary. The probe is a runtime
+        # provider, not a generated Modelica member. No hand-written rover-level
+        # `.mo` duplicates topology.
             float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_x>
             float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
             float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
@@ -228,7 +226,6 @@ def Xform "SolarRoverTest" (
             float outputs:solar_available_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:available_power_w>
             float outputs:solar_incidence.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:cos_incidence>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
-        }
 
         # ── Autopilot Script (Rhai) ──
         # Reuses the scene-agnostic rover_autopilot which discovers waypoints

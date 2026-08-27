@@ -32,7 +32,7 @@
 # result was a rover that travelled 0.00 m while its control reached 2.13 m/s —
 # `apply_drive_mix` stood the built-in down exactly as asked and nothing took its
 # place. The same forwarding idiom is already used by `skid_rover.usda`'s own
-# `Electrical` scope (`outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>`).
+# network root with an explicit component collection and member connections.
 #
 # ── Why the model stays in a CHILD prim ──────────────────────────────────────
 #

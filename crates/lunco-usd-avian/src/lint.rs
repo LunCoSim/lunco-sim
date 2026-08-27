@@ -614,7 +614,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     // rhai. Bounded by schema'd prims (hundreds), not by prim count (thousands).
     let mut prims: Vec<H> = Vec::new();
     let mut collections: Vec<H> = Vec::new();
-    let mut network_scopes: Vec<H> = Vec::new();
+    let mut network_roots: Vec<H> = Vec::new();
     for p in &paths {
         if lunco_usd_bevy::program::is_domain_network_root(reader, p) {
             let (members, collection_error) = match reader.collection_members(p, "components") {
@@ -646,7 +646,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             let mut boundary_sources: HashMap<String, Vec<String>> = HashMap::new();
             for attr in reader.attr_names(p) {
                 let connections = reader.connections(p, &attr);
-                if (attr.starts_with("outputs:") && connections.len() != 1)
+                if (lunco_usd_bevy::program::is_network_boundary_output(reader, p, &attr)
+                    && connections.len() != 1)
                     || (attr.starts_with("inputs:") && connections.len() > 1)
                 {
                     invalid_causal_properties.push(format!("{p}.{attr}"));
@@ -756,7 +757,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             }
             let units = graph.connected_components();
-            network_scopes.push(H::map([
+            network_roots.push(H::map([
                 ("path", H::str(p.to_string())),
                 (
                     "parent",
@@ -957,7 +958,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("filtered_pairs", H::Array(filtered_pairs)),
         ("collision_groups", H::Array(collision_groups)),
         ("collections", H::Array(collections)),
-        ("network_scopes", H::Array(network_scopes)),
+        ("network_roots", H::Array(network_roots)),
         ("prims", H::Array(prims)),
         (
             "unsupported_program_prims",
@@ -1452,7 +1453,7 @@ def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
                }
             "#,
         );
-        let scopes = entries(&f, "network_scopes");
+        let scopes = entries(&f, "network_roots");
         let scope = scopes
             .iter()
             .find(|scope| field(scope, "path") == &H::str("/Empty"))
@@ -1473,7 +1474,7 @@ def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
                }
             "#,
         );
-        let scopes = entries(&f, "network_scopes");
+        let scopes = entries(&f, "network_roots");
         let scope = scopes
             .iter()
             .find(|scope| field(scope, "path") == &H::str("/Actuators"))

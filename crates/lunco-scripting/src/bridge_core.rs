@@ -41,13 +41,15 @@ use std::{
 };
 
 use lunco_api::discovery::find_api_command;
-use lunco_api::executor::{authz_target_gid, validate_command_params, ApiCommandEvent};
+use lunco_api::executor::{
+    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
+};
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SessionId, Severity,
+    CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity,
     SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
@@ -512,7 +514,7 @@ pub fn controller_role(gid: u64) -> Option<String> {
 /// Fire a command by name through `ApiCommandEvent` (the same entry point the
 /// HTTP API / MCP use) and return its `{ id, ok, data?, error? }` result as
 /// JSON. `params` is the JSON the API contract expects. Runs SYNCHRONOUSLY (the
-/// bridge flushes) so `data` carries any values the handler assigned.
+/// bridge flushes) so `data` carries any command result data the handler returned.
 pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
@@ -648,6 +650,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             command: name.to_string(),
             params,
             id,
+            correlation_id: None,
         });
         // The dispatcher defers the real trigger via `commands.queue`; flush so
         // it runs NOW and any result-reporting handler records its Ack under
@@ -664,25 +667,6 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
 /// `cmd` as a native value: fire, then convert the JSON result in one pass.
 pub fn cmd<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B::Value {
     build_from_json(b, &cmd_raw(name, params))
-}
-
-fn command_result_json(id: u64, outcome: Option<&CommandOutcome>) -> serde_json::Value {
-    use serde_json::json;
-    match outcome {
-        Some(CommandOutcome::Succeeded(ack)) => {
-            let mut m = json!({ "id": id, "ok": true });
-            if !ack.assigned.is_null() {
-                m["data"] = ack.assigned.clone();
-            }
-            m
-        }
-        Some(CommandOutcome::Failed(msg)) => json!({ "id": id, "ok": false, "error": msg }),
-        Some(CommandOutcome::Rejected(reject)) => {
-            json!({ "id": id, "ok": false, "error": reject.to_string() })
-        }
-        // Accepted but no terminal outcome: fire-and-forget / async → success-no-data.
-        Some(CommandOutcome::Pending) | None => json!({ "id": id, "ok": true }),
-    }
 }
 
 // ── Verbs: query ────────────────────────────────────────────────────────────

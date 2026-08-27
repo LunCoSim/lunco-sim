@@ -2,7 +2,7 @@ use bevy::asset::AssetPlugin;
 /// Integration tests that load REAL assets through the EXACT same pipeline as runtime.
 /// NO inline USD strings. NO manual file reading. Uses AssetServer just like the app.
 use bevy::prelude::*;
-use lunco_core::ActuatorPorts;
+use lunco_core::OutputPorts;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
@@ -229,14 +229,14 @@ fn test_rover_components_via_bevy_pipeline() {
 
         let mut app = load_rover_through_bevy(&p, paths[i]);
 
-        // Find rover entity (a rover root carries `ActuatorPorts`)
+        // Find rover entity (a rover root carries `OutputPorts`)
         let mut q_rover = app
             .world_mut()
-            .query_filtered::<Entity, With<ActuatorPorts>>();
+            .query_filtered::<Entity, With<OutputPorts>>();
         let rover_ent = q_rover
             .iter(app.world())
             .next()
-            .unwrap_or_else(|| panic!("{label}: No entity with ActuatorPorts found"));
+            .unwrap_or_else(|| panic!("{label}: No entity with OutputPorts found"));
 
         // --- REQUIRED COMPONENTS ---
 
@@ -364,8 +364,8 @@ fn test_rover_components_via_bevy_pipeline() {
         // Actuator ports (for command routing)
         let actuators = app
             .world()
-            .get::<ActuatorPorts>(rover_ent)
-            .unwrap_or_else(|| panic!("{label}: Missing ActuatorPorts"));
+            .get::<OutputPorts>(rover_ent)
+            .unwrap_or_else(|| panic!("{label}: Missing OutputPorts"));
         assert!(
             actuators.ports.contains_key("drive_left"),
             "{label}: actuators missing drive_left"
@@ -574,13 +574,13 @@ fn test_rover_sim_processing_after_async_load() {
         }
         app.world_mut().flush();
 
-        // MUST have ActuatorPorts (from PhysxVehicleContextAPI)
+        // MUST have OutputPorts (from PhysxVehicleContextAPI)
         let mut q_act = app
             .world_mut()
-            .query_filtered::<Entity, With<ActuatorPorts>>();
+            .query_filtered::<Entity, With<OutputPorts>>();
         let act_count = q_act.iter(app.world()).count();
         assert!(act_count > 0,
-            "{label}: ActuatorPorts must be present after sim processing. Got {act_count} entities with actuator ports. \
+            "{label}: OutputPorts must be present after sim processing. Got {act_count} entities with output ports. \
             This means the sim system didn't process the rover - likely async loading bug.");
 
         // MUST have a DriveMix (the kernel-selected allocation) after sim processing.
@@ -592,14 +592,14 @@ fn test_rover_sim_processing_after_async_load() {
             Rover won't be able to steer!"
         );
 
-        // MUST have ActuatorPorts
+        // MUST have OutputPorts
         let mut q_vessel = app
             .world_mut()
-            .query_filtered::<Entity, With<ActuatorPorts>>();
+            .query_filtered::<Entity, With<OutputPorts>>();
         let vessel_count = q_vessel.iter(app.world()).count();
         assert!(
             vessel_count > 0,
-            "{label}: ActuatorPorts must be present. Got {vessel_count}."
+            "{label}: OutputPorts must be present. Got {vessel_count}."
         );
 
         // MUST have 4 wheels with WheelRaycast
@@ -755,7 +755,7 @@ fn test_full_scene_loads_with_rovers() {
     // Count rovers — 5 instances from scene references
     let mut q_rovers = app
         .world_mut()
-        .query_filtered::<(Entity, &Name, &UsdPrimPath), With<ActuatorPorts>>();
+        .query_filtered::<(Entity, &Name, &UsdPrimPath), With<OutputPorts>>();
     let rover_info: Vec<_> = q_rovers
         .iter(app.world())
         .map(|(_, n, p)| (n.as_str().to_string(), p.path.clone()))
@@ -773,7 +773,7 @@ fn test_full_scene_loads_with_rovers() {
     // 2 ackermann (1 raycast + 1 physical) = 6
     let mut q_mix = app
         .world_mut()
-        .query_filtered::<Entity, (With<DriveMix>, With<ActuatorPorts>)>();
+        .query_filtered::<Entity, (With<DriveMix>, With<OutputPorts>)>();
     let drivable: usize = q_mix.iter(app.world()).count();
     assert_eq!(
         drivable, 6,
@@ -805,7 +805,7 @@ fn test_full_scene_loads_with_rovers() {
     // Mesh3d (the rover root is an Xform after the Xform-root refactor).
     let mut q_rovers2 = app
         .world_mut()
-        .query_filtered::<Entity, With<ActuatorPorts>>();
+        .query_filtered::<Entity, With<OutputPorts>>();
     let rover_ents: Vec<Entity> = q_rovers2.iter(app.world()).collect();
     let visible_count = rover_ents
         .iter()

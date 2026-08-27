@@ -45,7 +45,7 @@ pub mod btcpp_xml;
 /// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
 pub mod usd_tree;
 use lunco_core::{
-    safe_stop_control_surface, ActuatorPorts, GlobalEntityId, InputPorts, NetworkRole, Port,
+    safe_stop_control_surface, GlobalEntityId, InputPorts, NetworkRole, OutputPorts, Port,
     SessionId, SessionRegistry,
 };
 use lunco_cosim::SetPorts;
@@ -2285,7 +2285,7 @@ pub struct DisengageAutopilot {
 fn on_disengage_autopilot(
     _trigger: On<DisengageAutopilot>,
     mut q: Query<(Entity, &mut Autopilot)>,
-    mut q_control: Query<(Option<&mut InputPorts>, Option<&ActuatorPorts>)>,
+    mut q_control: Query<(Option<&mut InputPorts>, Option<&OutputPorts>)>,
     mut q_ports: Query<&mut Port>,
     mut registry: ResMut<SessionRegistry>,
     holds: Option<ResMut<lunco_cosim::PortHolds>>,
@@ -2358,9 +2358,7 @@ fn on_export_behavior_xml(_t: On<ExportBehaviorXml>) -> Result<Ack, String> {
     let value: serde_json::Value =
         serde_json::from_str(&cmd.spec_json).map_err(|e| format!("ExportBehaviorXml: {e}"))?;
     let xml = btcpp_xml::value_to_xml(&value)?;
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "xml": xml });
-    Ok(ack)
+    Ok(Ack::with_data(OpId::new(), serde_json::json!({ "xml": xml })))
 }
 
 /// Import a BehaviorTree.CPP v4 XML tree back to a JSON [`BehaviorSpec`] — the
@@ -2376,9 +2374,10 @@ pub struct ImportBehaviorXml {
 fn on_import_behavior_xml(_t: On<ImportBehaviorXml>) -> Result<Ack, String> {
     let value = btcpp_xml::xml_to_value(&cmd.xml)?;
     let spec_json = serde_json::to_string(&value).map_err(|e| format!("ImportBehaviorXml: {e}"))?;
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "spec_json": spec_json });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "spec_json": spec_json }),
+    ))
 }
 
 register_commands!(

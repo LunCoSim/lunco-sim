@@ -24,7 +24,7 @@ use super::si_unit_suffix;
 
 /// Resolve the root instance that owns a drilled class in a generated
 /// Modelica document. The solver publishes a drilled unit's values in root
-/// scope (`power_system.Battery.p.i`), while the unit diagram addresses the
+/// root (`network_system.Battery.p.i`), while the unit diagram addresses the
 /// same connector as `Battery.p.i`.
 ///
 /// The projection task already owns the AST, so this stays off the per-frame

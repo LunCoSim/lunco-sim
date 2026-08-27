@@ -2,11 +2,11 @@
 
 fn steps() {
     [
-        #{ anchor: "",                            focus: (),                     title: "Compile & Run",      body: "Time to make a model move. We opened CascadedRCFilter — let's simulate it. Use the Back and Next controls." },
-        #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Two run modes",      body: "Click Run for an interactive compile-and-step session; use the input controls while it runs. Click Fast Run for a headless integration from 0 to t_end that produces a completed result." },
-        #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Live Inputs",        body: "During Run, select an input in Telemetry and drag its slider. Observe the signal change at simulation rate; parameters remain model configuration, not live inputs." },
-        #{ anchor: "panel.modelica_plot",         focus: (),        title: "Watch it move",      body: "Choose a signal for Graphs while Run is active, then repeat with Fast Run to compare a complete 0 → t_end trajectory." },
-        #{ anchor: "",                            focus: (),                     title: "Go further",         body: "Next: sweep parameters without editing source. Continue when you're ready." },
+        #{ anchor: "",                            focus: (),                     title: "Compile and run",      body: "The CascadedRCFilter model is open. Press Next to learn the two run modes." },
+        #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Choose a run mode",      body: "Click Run for interactive stepping and live inputs. Click Fast Run to integrate from 0 to `t_end` in the background." },
+        #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Change a live input",        body: "During Run, select an input in Telemetry and drag its slider. Watch the signal change. Parameters stay part of the model configuration." },
+        #{ anchor: "panel.modelica_plot",         focus: (),        title: "Read the result",      body: "Select a signal in Graphs while Run is active. Then use Fast Run and compare the complete trajectory." },
+        #{ anchor: "",                            focus: (),                     title: "Sweep parameters next",         body: "Click Continue to learn how to test several parameter values without editing source." },
     ]
 }
 

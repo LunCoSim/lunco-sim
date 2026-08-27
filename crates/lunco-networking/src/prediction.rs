@@ -1803,7 +1803,7 @@ pub fn reconcile_owned_prediction(
 /// `SkipContentStamp` guard wouldn't have to be the only thing (see
 /// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
 /// had frozen plain scene-content physics props server-only. Wheeled vehicles
-/// (a rover root, identified by its `ActuatorPorts`) and the possessed rover (`OwnedLocally`)
+/// (a rover root, identified by its `OutputPorts`) and the possessed rover (`OwnedLocally`)
 /// are excluded — they have their own paths. A `Static` prop is left alone.
 /// Client-only.
 pub fn maintain_predicted_dynamic(
@@ -1817,12 +1817,12 @@ pub fn maintain_predicted_dynamic(
             // (`maintain_predicted_vehicles`); a cosim-flown vessel is caught by the
             // `NotPredictable` guard below.
             //
-            // `ActuatorPorts` is the wheeled-vehicle discriminator: only a rover root
+            // `OutputPorts` is the wheeled-vehicle discriminator: only a rover root
             // (`PhysxVehicleContextAPI`) carries an actuator index. A lander/avatar has
             // no hardware actuator ports and so is not excluded here. (`DriveMix` would
             // select the same set, but lives in `lunco-mobility`, which this crate does
             // not depend on — and should not, for one query filter.)
-            Without<lunco_core::ActuatorPorts>,
+            Without<lunco_core::OutputPorts>,
             Without<lunco_core::OwnedLocally>,
             // Stamp the eligibility marker at most once (a promoted body carries
             // both `ContactPredictable` and `PredictedDynamic`).
@@ -1901,11 +1901,11 @@ pub fn maintain_predicted_vehicles(
         (
             With<lunco_core::NetReplicate>,
             // A wheeled vehicle = a rover root, which is exactly what carries an
-            // `ActuatorPorts` actuator index. The `Without<NotPredictable>` guard below
+            // `OutputPorts` output index. The `Without<NotPredictable>` guard below
             // additionally excludes cosim-flown vessels, so this resolves to exactly the
             // locally-simulated rovers. (A lander no longer even reaches this filter: it
             // has no actuator ports of its own.)
-            With<lunco_core::ActuatorPorts>,
+            With<lunco_core::OutputPorts>,
             Without<lunco_core::OwnedLocally>,
             // Stamp eligibility at most once (a promoted rover carries both).
             Without<crate::session::ContactPredictable>,

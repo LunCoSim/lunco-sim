@@ -8,7 +8,7 @@
 //!
 //! | USD Schema | LunCoSim Components | Description |
 //! |---|---|---|
-//! | `PhysxVehicleContextAPI` | `ActuatorPorts` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
+//! | `PhysxVehicleContextAPI` | `OutputPorts` | Runtime output surface for the vehicle root (kind is topology-derived, no `RoverVessel` marker) |
 //! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
 //! | `DriveMix` child scope | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix — one prim per sink port, `lunco:factor:<source>` per command source |
@@ -537,7 +537,7 @@ mod wheel_wiring_tests {
                 stage_handle: stage.clone(),
                 path: "/World/Rover".into(),
             },
-            lunco_core::ActuatorPorts::new(actuators),
+            lunco_core::OutputPorts::new(actuators),
         ));
         world
             .spawn((
@@ -843,7 +843,7 @@ pub struct PendingDifferential {
 ///
 /// # What It Does
 ///
-/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `ActuatorPorts` from the
+/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `OutputPorts` from the
 ///    vehicle root's authored numeric `outputs:*` attributes, plus `Vessel`.
 /// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
 /// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
@@ -2110,10 +2110,12 @@ fn process_usd_sim_prim_read(
     }
 
     // 1. Detect PhysxVehicleContextAPI (The Rover Root)
-    // Stamps `ActuatorPorts` exclusively from numeric `outputs:` attributes
-    // authored on the vehicle root. A vehicle without an authored actuator
-    // surface is under-specified; Rust does not fabricate drive/steer/brake
-    // ports from the fact that a PhysX vehicle schema is present.
+    // Stamps `OutputPorts` from numeric `outputs:` attributes authored on the
+    // vehicle root. Outputs owned by a generated Modelica network remain on its
+    // `SimComponent`; duplicating them into child `Port`s would create a second,
+    // unwritten producer and make a cross-domain connection read zero.
+    // A vehicle without an authored imperative output surface is under-specified;
+    // Rust does not fabricate drive/steer/brake ports from the PhysX schema.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
         info!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
@@ -2135,6 +2137,13 @@ fn process_usd_sim_prim_read(
             // mint a phantom actuator port from `token outputs:surface`. An
             // actuator port carries a number; a shader terminal does not.
             if reader.real(&sdf_path, &attr).is_none() {
+                continue;
+            }
+            if lunco_usd_bevy::program::is_network_boundary_output(
+                reader,
+                &sdf_path,
+                &attr,
+            ) {
                 continue;
             }
             if !port_names.iter().any(|n| n == name) {
@@ -2179,20 +2188,20 @@ fn process_usd_sim_prim_read(
         // refused. That is how you author a wreck or an un-crewed chassis — by
         // composition, not a check.
         //
-        // Only `ActuatorPorts` is stamped here. The `InputPorts` surface is
+        // Only `OutputPorts` is stamped here. The `InputPorts` surface is
         // stamped beside the `ControlBinding` (lunco-usd-bevy, the `Controls`
         // branch) — ONE site, because `try_insert` OVERWRITES: stamping a fresh
         // empty surface from two different systems would let a live re-run of
         // either one wipe the keys `sync_input_ports` had already seeded.
         //
-        // `ActuatorPorts` is a different thing and is NOT the input surface: it
+        // `OutputPorts` is a different thing and is NOT the input surface: it
         // maps ACTUATOR names to their `Port` entities, built above from the
         // vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and
         // they are not the same value (analog command vs discretized gate).
         commands
             .entity(entity)
-            .try_insert(lunco_core::ActuatorPorts::new(port_map));
+            .try_insert(lunco_core::OutputPorts::new(port_map));
     }
 
     // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
@@ -3838,7 +3847,7 @@ fn reconstruct_proxy_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<lunco_core::ActuatorPorts>, Without<PhysicalWheel>),
+        (With<lunco_core::OutputPorts>, Without<PhysicalWheel>),
     >,
     q_bodies: Query<(&RigidBody, &Position, &Rotation), Without<PhysicalWheel>>,
     mut q_wheels: Query<
@@ -3934,7 +3943,7 @@ fn animate_proxy_physical_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<lunco_core::ActuatorPorts>, Without<PhysicalWheel>),
+        (With<lunco_core::OutputPorts>, Without<PhysicalWheel>),
     >,
     q_bodies: Query<(&RigidBody, &Position, &Rotation), Without<PhysicalWheel>>,
     q_parents: Query<&ChildOf>,
@@ -4229,7 +4238,7 @@ fn on_add_usd_sim_prim(
 /// System that wires wheel drive/steer ports to FSW digital ports.
 ///
 /// Runs every frame, checking for `PendingWheelWiring` markers. Once the FSW root entity
-/// exists (has `ActuatorPorts`), it creates [`SimConnection`] entities connecting the
+/// exists (has `OutputPorts`), it creates [`SimConnection`] entities connecting the
 /// wheel's physical ports to the appropriate digital ports. Each end addresses a bare
 /// [`Port`] entity through the cosim port backend's `value` connector.
 ///
@@ -4243,14 +4252,14 @@ fn on_add_usd_sim_prim(
 ///
 /// A wheel without a drive connection is rejected during projection; there is no
 /// inferred drive or steering mapping. A named port that is absent from the
-/// rover's `ActuatorPorts` is reported and left pending until the authored port
+/// rover's `OutputPorts` is reported and left pending until the authored port
 /// exists.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_endpoints: Query<&PortSurface>,
-    // `ActuatorPorts` does double duty here: it LOCATES the vehicle root (only a rover
+    // `OutputPorts` does double duty here: it LOCATES the vehicle root (only a rover
     // root carries one) and it is the actuator index the wiring below looks ports up in.
-    q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::ActuatorPorts)>,
+    q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::OutputPorts)>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -5042,7 +5051,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
-                lunco_core::ActuatorPorts::default(),
+                lunco_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -5131,7 +5140,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
-                lunco_core::ActuatorPorts::default(),
+                lunco_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -5211,7 +5220,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::ZERO,
                     ang,
                 },
-                lunco_core::ActuatorPorts::default(),
+                lunco_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

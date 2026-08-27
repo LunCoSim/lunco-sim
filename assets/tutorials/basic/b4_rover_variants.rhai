@@ -8,12 +8,12 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Three rovers, three feels", body: "Same six wheels, very different behaviour. Three rovers are lined up on the yard — green Explorer LT, amber Standard, red Hauler. Select each one, review its Inspector values, and optionally possess it to compare the ramp." },
-        #{ anchor: "panel.center",          title: "Explorer LT (green)",       body: "Low centre of mass, strong motors, high grip. Planted and forgiving — it climbs the ramp easily and shrugs off a careless turn. The trainer: start here." },
-        #{ anchor: "panel.center",          title: "Standard (amber)",          body: "Neutral centre of mass, moderate power. The honest baseline — it climbs fine and turns fine, but a sloppy cross-slope line will still get away from you." },
-        #{ anchor: "panel.center",          title: "Hauler (red)",              body: "Top-heavy, weak motors, low grip — deliberately awful. It struggles up the ramp and tips at the smallest across-slope steer. If you can drive this one well, you can drive anything." },
-        #{ anchor: "panel.right_inspector", title: "It's all in the USD",        body: "Select any rover: the Inspector shows the exact knobs — centre of mass, mass, torque, friction. The variants are just those numbers overridden on a shared base. Author your own by changing them." },
-        #{ anchor: "",                      title: "Pick your rover",           body: "You've compared the range from forgiving to punishing. Use the Inspector values to explain the handling difference, then continue to the team-session lesson." },
+        #{ anchor: "",                      title: "Compare three rovers",      body: "Three rovers are lined up on the yard: green Explorer LT, amber Standard, and red Hauler. Select each rover and read its Inspector values." },
+        #{ anchor: "panel.center",          title: "Explorer LT (green)",       body: "Select the green Explorer LT. Notice its low centre of mass, strong motors, and high grip. Use it when you want forgiving handling." },
+        #{ anchor: "panel.center",          title: "Standard (amber)",          body: "Select the amber Standard. Compare its mass and motor values with the Explorer LT. It is the balanced baseline for testing." },
+        #{ anchor: "panel.center",          title: "Hauler (red)",              body: "Select the red Hauler. Notice its high centre of mass, weaker motors, and lower grip. Drive it carefully: across-slope steering can tip it." },
+        #{ anchor: "panel.right_inspector", title: "Explain the difference",    body: "Select a rover and read centre of mass, mass, torque, and friction in Inspector. Those authored values explain how each rover handles." },
+        #{ anchor: "",                      title: "Choose a rover",             body: "Pick the rover that fits your next task. Click Continue to learn how to join a team session." },
     ]
 }
 

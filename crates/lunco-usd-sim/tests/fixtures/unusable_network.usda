@@ -9,17 +9,15 @@
 # the source asset required for asynchronous class resolution, and a non-finite
 # constant that would be spelled `NaN` in generated source.
 def Xform "Rig"
+(
+    prepend apiSchemas = ["CollectionAPI:components"]
+)
 {
-    def Scope "Electrical" (
-        prepend apiSchemas = ["CollectionAPI:components"]
-    )
-    {
-        uniform token collection:components:expansionRule = "explicitOnly"
-        prepend rel collection:components:includes = [
-            </Rig/Battery>,
-            </Rig/Motor>,
-        ]
-    }
+    uniform token collection:components:expansionRule = "explicitOnly"
+    prepend rel collection:components:includes = [
+        </Rig/Battery>,
+        </Rig/Motor>,
+    ]
 
     def Xform "Battery" (
         prepend apiSchemas = ["LunCoProgramAPI"]

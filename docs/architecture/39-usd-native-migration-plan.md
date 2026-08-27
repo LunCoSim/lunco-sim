@@ -207,7 +207,7 @@ runtime substrate this phase assumes is already in the `usd` base** (doc 37 §8)
 domain-op selection + scripted merge-policy hook + machine-unique `AuthorTag` + `ApplyUsdOp`→journal — so
 "synthesis rides the journal + `AuthorTag::for_tool("synth")` + `rbac.authorize`" needs no new plumbing.
 
-- **P5.1 — Spike:** author one real `connect()`-based `Electrical.mo` (battery + bus + 2 loads),
+- **P5.1 — Spike:** author one real `connect()`-based generated network (battery + bus + 2 loads),
   `compile_str` → confirm it steps to correct bus voltage/currents (doc 37 §7, §6 caveat: no test proves
   MSL-electrical numeric sim yet). Decide MSL-import vs self-contained on cold-compile feel.
 - **P5.2 [in place] — Netlist-from-USD synthesizer + `SynthesizerRegistry`** (rhai policy + Rust

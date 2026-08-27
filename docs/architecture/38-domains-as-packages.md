@@ -94,16 +94,18 @@ and an edge is an attribute-to-attribute **connection** — with per-domain lega
 "do it by hand" fallback; prefer the standard.) This one structure serves editing, synthesis, and
 validation. See §8.
 
-**(d) Per-domain scope — `def Scope "<Domain>"`.** A vehicle groups its domain content under scopes
-(`Rover/Electrical`, `Rover/Thermal`, `Rover/Comms`) — doc-34 sub-prim-per-model generalized. Each scope
-holds that domain's network + its synthesized program prim (a `LunCoProgramAPI`). Keeps domains
-navigable and separable.
+**(d) Network root and separate domain scopes.** A network is owned by the prim that already
+contains its assembled parts. That prim applies `CollectionAPI:components` and exposes its typed
+`inputs:`/`outputs:` boundary; a domain-named child is not required. Use a child `Scope` only when
+it is a genuinely separate network participant, as with a vessel's thermal model. This keeps the
+scene hierarchy physical while retaining separate solver lifecycles where the equations require
+them.
 
-**(e) Per-domain composition LAYER (the powerful part).** Ride the **canonical layered document**
-(scope stack + per-layer RBAC + `StageSink` projection): each domain can be its own **sublayer**
-(`electrical.usda`, `thermal.usda`) composed onto the vehicle via `over` opinions on shared component
+**(e) Composition layers for network facets (the powerful part).** Ride the **canonical layered
+document** (stage stack + per-layer RBAC + `StageSink` projection): each concern can be its own
+**sublayer** (`network.usda`, `thermal.usda`) composed onto the vehicle via `over` opinions on shared component
 prims. Payoffs, all free from composition:
-- **Per-domain RBAC** — the electrical engineer owns `electrical.usda`; the thermal engineer owns
+- **Per-domain RBAC** — the power engineer owns `power.usda`; the thermal engineer owns
   `thermal.usda`; edits are scoped and attributable (per-layer authorization already designed).
 - **Per-domain enable/mute** — drop a layer to disable a domain; independent authoring; clean diffs.
 - **Separation without duplication** — the *same* `Motor` prim gets its electrical `pin` rels from the
@@ -118,10 +120,12 @@ library prim) declares namespace, connector kinds, part library, and rule-script
 attrs/rels/schemas; all domain knowledge is in the descriptor (USD) + rules (rhai). This is the whole
 point: `lunco-usd` stays domain-agnostic forever.
 
-> Net USD shape: `Rover` (assembly) → `Electrical` scope (network of component prims + `pin` rels +
-> synthesized `Electrical.mo` prim), authored in an `electrical.usda` **layer**, its vocabulary defined
-> by a referenced `Electrical` **domain descriptor** asset, every prim carrying `lunco:electrical:*`
-> attrs + a `LunCoElectricalAPI` label — and the core reading all of it generically.
+> Net USD shape: `Rover` (assembly and, when appropriate, the network root) owns a
+> `CollectionAPI:components` working set and typed boundary ports. A separate `Thermal` scope is
+> used only for the independent thermal solver. The generated Modelica document is transient and
+> named from the owning prim (`generated://Rover.mo` in this example); its vocabulary can still be
+> described by a referenced `Electrical` **domain descriptor** asset, every component can carry
+> `lunco:electrical:*` attrs + a `LunCoElectricalAPI` label, and the core reads all of it generically.
 
 ---
 
@@ -175,7 +179,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
    USD 3D geometry / 2D schematic   (visualization, this section)
 ```
 
-- **USD graph → Modelica** = the electrical synthesizer (doc 37): netlist → `Electrical.mo`. ✅ designed.
+- **USD graph → Modelica** = the electrical synthesizer (doc 37): netlist → a transient generated network document. ✅ designed.
 - **Modelica ↔ Canvas** = `project_scene` + `build_ops_from_events`. ✅ ships.
 - **USD graph ↔ Canvas** = new adapter (§4). Small.
 - **Modelica → USD (visualization)** — the "reuse Modelica visual content" ask. Two flavors:
@@ -218,7 +222,7 @@ sim-driven authored 3D today; for auto-derived 3D geometry once rumoca MultiBody
   a `query("Links")` graph). A comms domain is now authored *on top* of that kernel, exactly as this doc
   argues every domain should be. Nothing about "comms" survives in Rust.
 - **Electrical (doc 37)** = a domain descriptor: namespace `lunco:electrical`, connector kind
-  `electrical.pin` (effort=v/flow=i), parts (MSL `Analog.Basic`), synthesize (netlist→`Electrical.mo`),
+  `electrical.pin` (effort=v/flow=i), parts (MSL `Analog.Basic`), synthesize (netlist→generated network document),
   visualize (schematic icons / sim-driven transforms), editor (schematic canvas), validate (DAE balance).
 - **The two-level rule (doc 37 §1)** — acausal within a domain, causal across — is a *property of the
   descriptor's synthesizer + connector kinds*, not core logic.

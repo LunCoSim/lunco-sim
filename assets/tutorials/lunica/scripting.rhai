@@ -8,11 +8,11 @@
 
 fn steps() {
     [
-        #{ anchor: "",                        focus: (),                   title: "Automate Lunica",   body: "This tour IS a rhai script running live in the workbench. Anything you can click, a script can do. Use the Back and Next controls." },
-        #{ anchor: "",                        focus: (),                   title: "One command bus",   body: "Use the live REPL or open Help in the top menu for the command surface. Dispatch one typed command, for example cmd(\"OpenClass\", #{ qualified: \"CascadedRCFilter\" }). Check the model view afterward; the UI and HTTP/API clients use the same command." },
-        #{ anchor: "",                        focus: (),                   title: "HTTP API & MCP",    body: "Use the API/MCP guidance under Help. Send an ExecuteCommand request to /api/commands with a command and named params, then inspect the response. MCP exposes the same typed operation to an agent; it is not a separate simulation path." },
-        #{ anchor: "panel.modelica_journal",  focus: "modelica_journal",   title: "Journal",           body: "Commands are dispatched through one typed bus. The document journal records authored document operations; it is not a universal replay log for every transient UI or runtime command." },
-        #{ anchor: "",                        focus: (),                   title: "Make it yours",     body: "These tutorials live in assets/tutorials/lunica/*.rhai. Edit one, re-run from the Tutorials menu, and it hot-reloads. Author your own the same way." },
+        #{ anchor: "",                        focus: (),                   title: "Automate Lunica",   body: "This tour is a Rhai script running in the workbench. Scripts can send the same typed commands as the UI. Press Next to continue." },
+        #{ anchor: "",                        focus: (),                   title: "Use the command bus",   body: "Open Help or the live REPL. Send a typed command such as `OpenClass` with a qualified class name, then check the model view." },
+        #{ anchor: "",                        focus: (),                   title: "Use the API or MCP",    body: "Follow the API or MCP guidance under Help. Send `ExecuteCommand` to `/api/commands`, then inspect the response." },
+        #{ anchor: "panel.modelica_journal",  focus: "modelica_journal",   title: "Read the journal",           body: "Open Journal to review authored document operations. It does not record every transient UI or runtime command." },
+        #{ anchor: "",                        focus: (),                   title: "Edit a tutorial",     body: "Tutorial scripts live in `assets/tutorials/lunica`. Edit one, reopen it from Tutorials, and test the change." },
     ]
 }
 

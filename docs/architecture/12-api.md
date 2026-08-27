@@ -141,11 +141,17 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
     let out = backends.get(ScriptLanguage::Python)
         .ok_or("python backend not registered")?
         .eval(&cmd.code)?;
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "stdout": out });
-    Ok(ack)          // Ok → Succeeded, Err → Failed
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "stdout": out }),
+    )) // Ok → Succeeded, Err → Failed
 }
 ```
+
+`Ack.data` is the command's generic response payload. The handler owns its
+structured shape; use it for request results such as allocated ids, queued
+status, generated text, or stdout. Live simulation values do not belong in an
+acknowledgement — expose those as authored USD `outputs:*` ports instead.
 
 Deferred commands answer on the original request. `RunRhai`, for example,
 waits for the next `Update` and returns its captured stdout or error in the
@@ -389,10 +395,24 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 
 ### Success
 
+Commands that return no command-specific data use the accepted response:
+
 ```json
 {
   "data": {
     "accepted": true
+  }
+}
+```
+
+When a typed command returns an `Ack` with data, the same envelope carries that
+payload:
+
+```json
+{
+  "data": {
+    "document_id": 1099511627776,
+    "generation": 3
   }
 }
 ```
@@ -478,14 +498,15 @@ app.run();
 
 ## Architecture
 
-There are **two response shapes** behind `POST /api/commands`:
+There is one response envelope behind `POST /api/commands`. Its `data` is either
+the command result or the result of a read-only provider:
 
 1. **Reflect Event commands** — side effects. `OpenFile`,
    `MoveComponent`, `SetPorts`, etc. The executor reflects on the
    type, deserialises params, and triggers the matching `Event` for
-   domain observers to handle. Returns `{"data":{"accepted":true}}`
-   after validation. Commands that need a result register as deferred and
-   answer on the original request when their result exists.
+   domain observers to handle. A result-returning observer puts its
+   command-specific payload in `Ack.data`; a fire-and-forget observer returns
+   `{"data":{"accepted":true}}`.
 
 2. **Query providers** — return structured data.
    `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,

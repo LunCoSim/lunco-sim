@@ -8,12 +8,12 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      focus: (),                title: "Build from Parts",      body: "The Object Builder is a USD authoring surface: the prim tree, Inspector, viewport, and mount contracts all describe one object. Next / Back below, Skip anytime." },
-        #{ anchor: "panel.side_browser",    focus: "usd_prim_tree",   title: "Select the host",       body: "In the USD prim tree, select Base. Its Inspector shows the host's authored structure and mount sockets." },
-        #{ anchor: "panel.right_inspector", focus: "sandbox_inspector", title: "Snap by contract",     body: "Open Mount in the Inspector. The arm socket already holds Arm, but the part is deliberately misaligned. Click Snap Arm: the plug frame and socket frame determine the placement and joint anchor." },
-        #{ anchor: "panel.right_inspector", focus: "sandbox_inspector", title: "Empty sockets",         body: "The probe socket is empty and advertises a default component asset. On native builds, Attach demo_probe.usda resolves its authored plug and creates the referenced child plus typed joint through the USD command path. Browser builds show this action as native-only because local asset-file inspection is not available there yet." },
-        #{ anchor: "panel.side_browser",    focus: "usd_prim_tree",   title: "Inspect and save",       body: "Select the attached part or joint in the USD tree to inspect the composed result. Save the active Twin/document to persist the authored base-layer edit; reload to verify it survives." },
-        #{ anchor: "",                      focus: (),                title: "One authoring contract", body: "A hierarchy alone is not an attachment: a movable part needs a rigid body, a plug/socket contract, and a typed joint. Object Builder composes those USD facts without a vehicle-specific builder." },
+        #{ anchor: "",                      focus: (),                title: "Build from parts",      body: "Object Builder authors USD parts, sockets, and joints. Press Next to follow one mount." },
+        #{ anchor: "panel.side_browser",    focus: "usd_prim_tree",   title: "Select the host",       body: "In the USD prim tree, select Base. Inspector shows its authored structure and mount sockets." },
+        #{ anchor: "panel.right_inspector", focus: "sandbox_inspector", title: "Snap a mounted arm",     body: "Open Mount in Inspector. Click Snap Arm. The plug and socket frames set the part's position and joint anchor." },
+        #{ anchor: "panel.right_inspector", focus: "sandbox_inspector", title: "Fill an empty socket",         body: "Find the empty probe socket in Mount. On native builds, click Attach demo_probe.usda to create the child and its typed joint." },
+        #{ anchor: "panel.side_browser",    focus: "usd_prim_tree",   title: "Inspect and save",       body: "Select the attached part or joint in the USD tree. Save the active Twin or document, then reload to verify the edit survives." },
+        #{ anchor: "",                      focus: (),                title: "Remember the contract", body: "A hierarchy is not an attachment. A movable part needs a rigid body, a plug/socket contract, and a typed joint." },
     ]
 }
 

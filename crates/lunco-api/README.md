@@ -64,6 +64,12 @@ Content-Type: application/json
 }
 ```
 
+The response envelope contains the command handler's result data when the
+command returns one. A command with no result data returns the `accepted`
+object above. For example, a result-returning command may respond with
+`{"data":{"queued":true,"operations":1}}`. Long-running commands keep the
+same envelope and send their completed result when their owner finishes.
+
 ### Schema Discovery
 
 ```

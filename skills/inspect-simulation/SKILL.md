@@ -66,8 +66,8 @@ compiling; that is different from a valid zero.
 
 ### Fixed-panel rover readout
 
-For a fixed solar deck, list the rover's `…/Electrical` entity and read the
-scope boundaries plus the panel and battery member outputs. The useful minimum
+For a fixed solar deck, list the rover-root network entity and read its
+boundary ports plus the panel and battery member outputs. The useful minimum
 is `solar_power`, `solar_incidence`, panel `power_out`/`generated_current_a`,
 and battery `terminal_current_a`/`soc_out`. A positive mesh count or a visible
 `SolarPanel` prim does not prove that current reaches the battery.

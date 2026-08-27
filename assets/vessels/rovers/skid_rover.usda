@@ -47,7 +47,7 @@ def Xform "SkidRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
+        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE. Its `inputs:` ports (`throttle`/`steer`/`brake`) ARE the set of
@@ -437,19 +437,19 @@ def Xform "SkidRover" (
 
     def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_FL>
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FL>
     }
     def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_FR>
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FR>
     }
     def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_RL>
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RL>
     }
     def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_RR>
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RR>
     }
 
     # --- Comms ---------------------------------------------------------
@@ -570,10 +570,8 @@ def Xform "SkidRover" (
             )
             {
             }
-            def Scope "Electrical" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-            )
-            {
+            # The rover root owns the explicit component collection and its
+            # causal boundary. There is no extra domain-name prim in USD.
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
                 float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
@@ -583,10 +581,6 @@ def Xform "SkidRover" (
                 float outputs:bus_voltage.connect = </SkidRover/PowerSource.outputs:terminal_voltage_v>
                 float outputs:bus_current.connect = </SkidRover/PowerSource.outputs:terminal_current_a>
                 float outputs:bus_power.connect = </SkidRover/PowerSource.outputs:terminal_power_w>
-                float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
-                float outputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
-                float outputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
-                float outputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
                 uniform token collection:components:expansionRule = "explicitOnly"
                 prepend rel collection:components:includes = [
                     </SkidRover/PowerSource>,
@@ -607,30 +601,27 @@ def Xform "SkidRover" (
                     </SkidRover/Shaft_RL>,
                     </SkidRover/Shaft_RR>,
                 ]
-            }
             over "Motor_FL" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </SkidRover.inputs:drive_left>
                 custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
             over "Motor_FR" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </SkidRover.inputs:drive_right>
                 custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
             over "Motor_RL" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </SkidRover.inputs:drive_left>
                 custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
             over "Motor_RR" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </SkidRover.inputs:drive_right>
                 custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
         }
 
         "battery" {
-            def Scope "Electrical" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-            )
-            {
+            # The rover root owns the explicit component collection and its
+            # causal boundary. There is no extra domain-name prim in USD.
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
                 float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
@@ -642,17 +633,11 @@ def Xform "SkidRover" (
                 float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
                 float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
                 float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
-                # Typed Electrical boundary observables for generic consumers.
+                # Typed rover-root boundary observables for generic consumers.
                 # The generated member aliases remain an implementation
                 # surface; authored readers use these USD connections.
                 float outputs:motor_electrical_power.connect = </SkidRover/Motor_FL.outputs:electrical_power>
                 float outputs:motor_terminal_current.connect = </SkidRover/Motor_FL.outputs:terminal_current_a>
-                # Forward each motor's solved `heat` to the electrical boundary so
-                # the thermal island can source it as a cross-domain SimConnection.
-                float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
-                float outputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
-                float outputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
-                float outputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
                 uniform token collection:components:expansionRule = "explicitOnly"
                 prepend rel collection:components:includes = [
                     </SkidRover/Battery>,
@@ -673,26 +658,25 @@ def Xform "SkidRover" (
                     </SkidRover/Shaft_RL>,
                     </SkidRover/Shaft_RR>,
                 ]
-            }
             over "Motor_FL" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </SkidRover.inputs:drive_left>
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
             over "Motor_FR" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </SkidRover.inputs:drive_right>
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
             over "Motor_RL" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </SkidRover.inputs:drive_left>
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
             over "Motor_RR" {
-                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </SkidRover.inputs:drive_right>
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
 
             def LunCoEvent "BatteryDrained" {
-                float inputs:trigger.connect = </SkidRover/Electrical.outputs:battery_drained>
+                float inputs:trigger.connect = </SkidRover.outputs:battery_drained>
                 uniform token lunco:event:name = "battery_drained"
                 uniform token lunco:event:severity = "warning"
                 uniform bool lunco:event:latched = true
@@ -723,15 +707,15 @@ def Xform "SkidRover" (
                 # panel kept `connectors:p` and lost the reference, the children,
                 # `LunCoProgramAPI` and `info:sourceAsset`. The runtime then
                 # blamed the collection — `SolarPanel is outside collection
-                # Electrical` — and every solar rover's island was rejected. See
+                # rover-root collection` — and every solar rover's island was rejected. See
                 # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
                 # Environment is runtime-provided, not a generated Modelica
                 # component. It crosses the electrical island once through its
                 # typed boundary, then the panel consumes that boundary input.
-                float inputs:sun_mount_x.connect = </SkidRover/Electrical.inputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SkidRover/Electrical.inputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SkidRover/Electrical.inputs:sun_mount_z>
+                float inputs:sun_mount_x.connect = </SkidRover.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SkidRover.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SkidRover.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -739,20 +723,17 @@ def Xform "SkidRover" (
                 {
                 }
             }
-            # `Electrical` is contributed only by the battery power variant, a
-            # SIBLING variantSet — a different composition arc, which does merge.
+            # The network collection is contributed only by the battery power
+            # variant, a sibling variantSet whose composition arc does merge.
             # This over therefore expresses a connection when both assembly
             # layers are present, never a panel-side dependency.
-            over "Electrical"
-            {
-                float inputs:sun_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
-                float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
-                float outputs:solar_available_power.connect = </SkidRover/SolarPanel.outputs:available_power_w>
-                float outputs:solar_incidence.connect = </SkidRover/SolarPanel.outputs:cos_incidence>
-                prepend rel collection:components:includes = [</SkidRover/SolarPanel>]
-            }
+            float inputs:sun_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
+            float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
+            float outputs:solar_available_power.connect = </SkidRover/SolarPanel.outputs:available_power_w>
+            float outputs:solar_incidence.connect = </SkidRover/SolarPanel.outputs:cos_incidence>
+            prepend rel collection:components:includes = [</SkidRover/SolarPanel>]
         }
     }
 
@@ -775,10 +756,13 @@ def Xform "SkidRover" (
                 doc = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
-                float inputs:motor_heat_FL.connect = </SkidRover/Electrical.outputs:motor_heat_FL>
-                float inputs:motor_heat_FR.connect = </SkidRover/Electrical.outputs:motor_heat_FR>
-                float inputs:motor_heat_RL.connect = </SkidRover/Electrical.outputs:motor_heat_RL>
-                float inputs:motor_heat_RR.connect = </SkidRover/Electrical.outputs:motor_heat_RR>
+                # Thermal consumes the solved motor outputs directly. The
+                # generated electrical wrapper resolves these member addresses;
+                # no rover-root heat alias is needed.
+                float inputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
+                float inputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
+                float inputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
+                float inputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
 
                 float outputs:motor_temp_left.connect  = </SkidRover/Thermal/MotorThermalLeft.outputs:temp_k>
                 float outputs:motor_temp_right.connect = </SkidRover/Thermal/MotorThermalRight.outputs:temp_k>

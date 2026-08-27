@@ -8,7 +8,7 @@
 # dissipation network. Each part is one Modelica model with its ports declared
 # but UNCONNECTED: the vessel's `Thermal` scope composes these by reference and
 # wires them, exactly as `battery.usda`/`motor.usda` are inert parts collected
-# by a vessel's `Electrical` scope.
+# by the vessel's network-root collection.
 #
 # This file declares no `Thermal` scope and no motor names. A rover with N
 # driven motors authors its own `Scope "Thermal"` (carrying

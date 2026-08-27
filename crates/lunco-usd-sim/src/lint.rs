@@ -34,7 +34,7 @@ pub fn append_network_synthesizer_facts(reader: &StageView<'_>, facts: &mut H) {
     let H::Map(entries) = facts else {
         return;
     };
-    let Some((_, H::Array(scopes))) = entries.iter_mut().find(|(key, _)| key == "network_scopes")
+    let Some((_, H::Array(scopes))) = entries.iter_mut().find(|(key, _)| key == "network_roots")
     else {
         return;
     };
@@ -48,7 +48,7 @@ pub fn append_network_synthesizer_facts(reader: &StageView<'_>, facts: &mut H) {
             set_scope_fact(
                 scope,
                 "synthesizer_error",
-                H::str("network scope path is not a valid absolute USD path"),
+                H::str("network root path is not a valid absolute USD path"),
             );
             continue;
         };
@@ -223,7 +223,7 @@ mod tests {
         let stage = CanonicalStage::from_recipe(&recipe).expect("actuator fixture composes");
         let root = SdfPath::new("/Rig/Actuation").expect("root path");
         let mut facts = H::Map(vec![(
-            "network_scopes".to_string(),
+            "network_roots".to_string(),
             H::Array(vec![H::map([
                 ("path", H::str(root.to_string())),
                 ("synthesizer", H::str("")),
@@ -233,12 +233,12 @@ mod tests {
         append_network_synthesizer_facts(&stage.view(), &mut facts);
 
         let scope = facts
-            .get("network_scopes")
+            .get("network_roots")
             .and_then(|value| match value {
                 H::Array(scopes) => scopes.first(),
                 _ => None,
             })
-            .expect("network scope fact");
+            .expect("network root fact");
         assert_eq!(scope.get("synthesizer"), Some(&H::str("actuator-wrench")));
         assert_eq!(scope.get("synthesizer_error"), Some(&H::str("")));
     }

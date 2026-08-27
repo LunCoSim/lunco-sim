@@ -38,12 +38,12 @@ fn test_generated_acausal_policy(net) {
     require(source.contains("LunCo.Electrical.DCMotor"), "motor class is missing");
     require(source.contains("drive_left"), "boundary input equation is missing");
     require(!source.contains("%name"), "opaque generated instance labels leaked into the UI");
-    require(source.contains("Electrical network"), "root diagram title is missing");
+    require(source.contains("Rig network"), "root diagram title is missing");
     require(source.contains("POWER BUS"), "unit bus annotation is missing");
     require(source.contains("fontSize=22"), "diagram title font is too small");
     require(source.contains("fontSize=18"), "power bus label font is too small");
-    require(source.contains("power_system"), "single-unit instance name is not readable");
-    require(source.contains("model PowerSystem"), "single-unit class name is not readable");
+    require(source.contains("network_system"), "single-unit instance name is not readable");
+    require(source.contains("model NetworkSystem"), "single-unit class name is not readable");
     require(!source.contains("Unit_" + net.model_name), "encoded unit class name leaked into the UI");
     require(!source.contains("Generated unit"), "poster-like unit icon leaked into Modelica");
     require(!source.contains("COMPOSED TOPOLOGY"), "poster graphics leaked into Modelica");
@@ -268,11 +268,11 @@ fn test_multi_unit_layout_uses_local_coordinates() {
     let unit_a_components = ["/Rig/Source_A", "/Rig/Load_A"];
     let unit_b_components = ["/Rig/Source_B", "/Rig/Load_B"];
     let unit_a = #{};
-    unit_a.name = "PowerUnit_1";
+    unit_a.name = "NetworkUnit_1";
     unit_a.source_name = "SourceLoad_A";
     unit_a.components = unit_a_components;
     let unit_b = #{};
-    unit_b.name = "PowerUnit_2";
+    unit_b.name = "NetworkUnit_2";
     unit_b.source_name = "SourceLoad_B";
     unit_b.components = unit_b_components;
     let units = [];
@@ -283,7 +283,7 @@ fn test_multi_unit_layout_uses_local_coordinates() {
     let source_b = position(layout, "/Rig/Source_B");
     require(source_a.x == source_b.x && source_a.y == source_b.y,
         "independent unit diagrams must reuse their local coordinate system");
-    require(unit_position(layout, "PowerUnit_1").x != unit_position(layout, "PowerUnit_2").x,
+    require(unit_position(layout, "NetworkUnit_1").x != unit_position(layout, "NetworkUnit_2").x,
         "root unit instances must retain distinct positions");
     true
 }

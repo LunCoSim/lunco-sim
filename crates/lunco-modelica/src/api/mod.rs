@@ -460,9 +460,10 @@ pub fn on_apply_modelica_ops(
             lunco_twin_journal::AuthorTag::for_tool("api"),
         );
     });
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "queued": true, "operations": count });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "queued": true, "operations": count }),
+    ))
 }
 
 fn api_op_to_internal(op: &ApiOp) -> Option<ModelicaOp> {

@@ -34,7 +34,7 @@ use bevy::prelude::*;
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{safe_stop_control_surface, ActuatorPorts, InputPorts};
+use lunco_core::{safe_stop_control_surface, InputPorts, OutputPorts};
 use std::collections::HashSet;
 
 mod jointed_tire;
@@ -332,7 +332,7 @@ pub struct RaycastMassContribution {
 /// no vehicle-specific path spelling belongs here.
 fn actuator_root_and_local_transform(
     wheel: Entity,
-    roots: &Query<Entity, With<ActuatorPorts>>,
+    roots: &Query<Entity, With<OutputPorts>>,
     parents: &Query<&ChildOf>,
     transforms: &Query<&Transform>,
 ) -> Option<(Entity, Transform)> {
@@ -368,11 +368,11 @@ fn publish_raycast_support_footprints(
     roots: Query<
         Entity,
         (
-            With<ActuatorPorts>,
+            With<OutputPorts>,
             Without<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
-    actuator_roots: Query<Entity, With<ActuatorPorts>>,
+    actuator_roots: Query<Entity, With<OutputPorts>>,
     wheels: Query<(Entity, &WheelRaycast, &Suspension)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
@@ -1150,7 +1150,7 @@ fn apply_wheel_suspension(
     mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
-    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<ActuatorPorts>)>,
+    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<OutputPorts>)>,
 ) {
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
@@ -1867,7 +1867,7 @@ fn sync_input_ports(
 
 /// Apply the vessel-wide brake command independently of drive allocation.
 ///
-/// Every vehicle control surface has an [`ActuatorPorts`] index, whether its
+/// Every vehicle control surface has an [`OutputPorts`] index, whether its
 /// drive outputs are allocated by an imperative [`DriveMix`] or by authored
 /// co-simulation wiring. Braking is a mechanism shared by both cases: it owns
 /// [`InputPorts::brake_active`] (used by the tire solve) and the discrete
@@ -1875,7 +1875,7 @@ fn sync_input_ports(
 /// disable brakes—and the mobility chassis itself—when Modelica owns drive
 /// allocation.
 fn apply_vehicle_brake(
-    mut q: Query<(&mut InputPorts, &ActuatorPorts)>,
+    mut q: Query<(&mut InputPorts, &OutputPorts)>,
     mut q_ports: Query<&mut Port>,
 ) {
     for (mut inputs, actuators) in &mut q {
@@ -1890,13 +1890,13 @@ fn apply_vehicle_brake(
 
 /// System allocating each rover's input ports (`throttle`/`steer`/`brake`, read
 /// from [`InputPorts::values`]) to its actuator [`Port`]s (indexed by
-/// [`ActuatorPorts`]), via the
+/// [`OutputPorts`]), via the
 /// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
 /// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
 /// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
 /// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
-    mut q: Query<(Entity, &mut InputPorts, &ActuatorPorts, &DriveMix)>,
+    mut q: Query<(Entity, &mut InputPorts, &OutputPorts, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
@@ -2007,7 +2007,7 @@ mod raycast_wheel_mass_tests {
         let chassis = app
             .world_mut()
             .spawn((
-                ActuatorPorts::default(),
+                OutputPorts::default(),
                 Mass(1000.0),
                 AngularInertia {
                     principal: Vec3::new(1028.0, 1354.0, 341.0),
@@ -2144,7 +2144,7 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((ActuatorPorts::default(), Mass(1000.0)))
+            .spawn((OutputPorts::default(), Mass(1000.0)))
             .id();
         app.world_mut().spawn((
             WheelRaycast {
@@ -2172,7 +2172,7 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((ActuatorPorts::default(), Mass(1000.0)))
+            .spawn((OutputPorts::default(), Mass(1000.0)))
             .id();
         let rocker = app
             .world_mut()
@@ -2256,7 +2256,7 @@ mod force_law_tests {
             .world_mut()
             .spawn((
                 inputs,
-                ActuatorPorts::new(std::collections::HashMap::from([(
+                OutputPorts::new(std::collections::HashMap::from([(
                     "brake".to_string(),
                     brake_port,
                 )])),
@@ -2809,7 +2809,7 @@ mod suspension_visuals_tests {
                 ComputedCenterOfMass::default(),
                 VelocityIntegrationData::default(),
                 AccumulatedLocalAcceleration::default(),
-                ActuatorPorts::default(),
+                OutputPorts::default(),
             ))
             .id();
 

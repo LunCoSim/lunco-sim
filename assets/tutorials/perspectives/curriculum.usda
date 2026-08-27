@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    """
+    Workbench navigation curriculum.
+
+    This track deliberately has no `lunco:track:perspective`: its lesson
+    teaches the learner to switch between the app's perspectives, so the
+    launcher must not constrain the presentation to one of them.
+    """
+    defaultPrim = "Perspectives"
+    metersPerUnit = 1
+)
+
+def Scope "Perspectives" (
+    prepend apiSchemas = ["LunCoTutorialTrackAPI"]
+)
+{
+    string lunco:track:label = "Workbench Navigation"
+
+    def Scope "Overview" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/perspectives/overview.rhai@
+        string lunco:tutorial:title = "View, Build & Lunica"
+        string lunco:tutorial:blurb = "Learn what each workbench perspective is for and choose the right one for the job."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        uniform token lunco:tutorial:format = "tour"
+        rel lunco:tutorial:next = </LunCoSim/Controls>
+    }
+}

@@ -13,7 +13,7 @@
 const PORT_WAIT_S = 30.0;
 const DRIVE_S = 3.0;
 const ZERO_TOL = 1.0e-6;
-// These names are authored `Electrical.outputs:*` boundary ports in the USD
+// These names are authored rover-root `outputs:*` boundary ports in the USD
 // rover asset. Generated Modelica member identifiers are implementation
 // details and are not a scenario contract.
 const BATTERY_DISCHARGE_POWER = "battery_discharge_power";
@@ -24,7 +24,7 @@ fn on_start(me) {
     this.phase = "wait";
     this.done = false;
     this.rover = find("/BatteryEmptyActuator/Rover");
-    this.elec = find("/BatteryEmptyActuator/Rover/Electrical");
+    this.elec = find("/BatteryEmptyActuator/Rover");
     this.event_seen = false;
     this.drained = ();
     this.max_battery_discharge_power = 0.0;
@@ -44,7 +44,7 @@ fn on_tick(me) {
 
     if this.rover < 0 || this.elec < 0 {
         this.done = true;
-        fail_fast("empty-battery fixture did not compose its rover/electrical scope",
+        fail_fast("empty-battery fixture did not compose its rover/power scope",
                   "BATTERY EMPTY ACTUATOR", "BATTERY_EMPTY_ACTUATOR");
         return;
     }

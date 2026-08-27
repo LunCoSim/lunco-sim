@@ -1193,14 +1193,14 @@ function F end F;
     }
 
     #[test]
-    fn generated_network_name_uses_the_composed_scope_leaf() {
+    fn generated_network_name_uses_the_composed_network_root_leaf() {
         assert_eq!(
-            crate::state::generated_network_display_name("/Rover/Electrical"),
-            "Electrical network"
+            crate::state::generated_network_display_name("/Rover"),
+            "Rover network"
         );
         assert_eq!(
-            crate::state::generated_network_display_name("/Rover/Electrical/"),
-            "Electrical network"
+            crate::state::generated_network_display_name("/Rover/"),
+            "Rover network"
         );
         assert_eq!(
             crate::state::generated_network_display_name("/"),
@@ -1219,10 +1219,10 @@ function F end F;
     fn single_unit_generated_network_opens_member_class() {
         let entry = crate::state::GeneratedModelicaSourceEntry {
             document: DocumentId::new(1),
-            uri: "generated://Rover/Electrical.mo".to_string(),
-            network_root: "/Rover/Electrical".to_string(),
-            model_name: "Rover_Electrical_System".to_string(),
-            source: "model Rover_Electrical_System end Rover_Electrical_System;".to_string(),
+            uri: "generated://Rover.mo".to_string(),
+            network_root: "/Rover".to_string(),
+            model_name: "Rover_System".to_string(),
+            source: "model Rover_System end Rover_System;".to_string(),
             component_paths: Vec::new(),
             units: vec![crate::state::GeneratedModelicaUnit {
                 name: "Unit_Rover_Battery".to_string(),
@@ -1246,9 +1246,9 @@ function F end F;
         );
         assert_eq!(
             crate::state::generated_class_display_name(
-                "SolarRoverTest_x2f_SolarRover_x2f_Electrical_System"
+                "SolarRoverTest_x2f_SolarRover_System"
             ),
-            "SolarRoverTest / SolarRover / Electrical"
+            "SolarRoverTest / SolarRover"
         );
         assert_eq!(
             crate::state::generated_member_display_name(
@@ -1270,10 +1270,10 @@ function F end F;
     fn multi_unit_generated_network_opens_root_class() {
         let entry = crate::state::GeneratedModelicaSourceEntry {
             document: DocumentId::new(1),
-            uri: "generated://Rover/Electrical.mo".to_string(),
-            network_root: "/Rover/Electrical".to_string(),
-            model_name: "Rover_Electrical_System".to_string(),
-            source: "model Rover_Electrical_System end Rover_Electrical_System;".to_string(),
+            uri: "generated://Rover.mo".to_string(),
+            network_root: "/Rover".to_string(),
+            model_name: "Rover_System".to_string(),
+            source: "model Rover_System end Rover_System;".to_string(),
             component_paths: Vec::new(),
             units: vec![
                 crate::state::GeneratedModelicaUnit {
@@ -1294,7 +1294,7 @@ function F end F;
         };
         assert_eq!(
             generated_network_open_class(&entry),
-            "Rover_Electrical_System"
+            "Rover_System"
         );
     }
 }

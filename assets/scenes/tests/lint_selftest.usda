@@ -374,9 +374,10 @@ def Xform "LintSelftest" (
     # A domain network with no components cannot produce any equations.
     # Negative network fixtures are standard USD guide geometry, not live
     # compiler scopes. Their collections and connections stay composed for the
-    # linter, while domain projection remains reserved for non-spatial Scope
-    # prims. The healthy control below deliberately remains a Scope.
-    def Xform "EmptyElectrical" (
+    # linter. Domain projection accepts any prim type carrying the explicit
+    # collection; the healthy control below deliberately remains a Scope to
+    # prove the generic reader is not tied to either type.
+    def Xform "EmptyNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
@@ -401,7 +402,7 @@ def Xform "LintSelftest" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
         custom token connectors:p
     }
-    def Xform "DisconnectedElectrical" (
+    def Xform "DisconnectedNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
@@ -429,7 +430,7 @@ def Xform "LintSelftest" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
         custom token connectors:p
     }
-    def Xform "DanglingElectrical" (
+    def Xform "DanglingNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
@@ -441,7 +442,7 @@ def Xform "LintSelftest" (
     # THE PHANTOM WIRE. Two Modelica programs wired to each other, in no
     # `CollectionAPI:components` scope at all — so no compiler network owns the
     # `connect()` and the pin is solved as if unconnected, while the USD reads
-    # fully wired. `connector-requires-network-scope` exists for exactly this.
+    # fully wired. `connector-requires-network-root` exists for exactly this.
     #
     # It takes a CONNECTION, not a declaration: a bare `custom token connectors:p`
     # is a catalogue part advertising a pin (`OutsideBattery` below, and every
@@ -509,7 +510,7 @@ def Xform "LintSelftest" (
 
     # ── THE CONTROL ─────────────────────────────────────────────────────────
     # One battery (states `p.v`) and one motor (states `p.i`), connected, both in
-    # the collection: the shape every shipped rover's `Electrical` scope has. A rule
+    # the collection: the shape every shipped rover's network root has. A rule
     # that cannot stay silent here fires on the whole fleet, so the scenario asserts
     # that NO finding names any of these three prims.
     def Scope "HealthyBattery" (
@@ -530,7 +531,7 @@ def Xform "LintSelftest" (
         custom token connectors:p.connect = </LintSelftest/HealthyBattery.connectors:p>
     }
 
-    def Scope "HealthyElectrical" (
+    def Scope "HealthyNetwork" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {

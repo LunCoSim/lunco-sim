@@ -1203,7 +1203,7 @@ fn process_usd_cosim_prim_read(
             warn!(
                 "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
                  CollectionAPI:components network, so no Modelica model is generated for it and it \
-                 does not simulate. Add it to a network scope's `collection:components:includes`.",
+                 does not simulate. Add it to a network root's `collection:components:includes`.",
                 prim_path.path
             );
         }
@@ -2538,9 +2538,9 @@ pub fn rewire_usd_connections(
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
     q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
-    // A vessel's actuator ports are child `Port` entities, so an `outputs:` forward
-    // onto one has to write there, not onto the vessel prim.
-    q_actuators: Query<&lunco_core::ActuatorPorts>,
+    // A producer's output ports are child `Port` entities, so an `outputs:`
+    // forward onto one has to write there, not onto the producer prim.
+    q_outputs: Query<&lunco_core::OutputPorts>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
@@ -2704,14 +2704,14 @@ pub fn rewire_usd_connections(
             // Materialised as an ordinary edge whose SINK is X's own storage on this
             // prim, so every existing reader keeps reading the port it always read.
             // A vessel's actuator ports live on child `Port` entities
-            // (`ActuatorPorts`, one `value` scalar each), which is where the write
+            // (`OutputPorts`, one `value` scalar each), which is where the write
             // has to land; anything else writes the name on the prim itself.
             //
             // One hop per authored forward, so a chain resolves as a chain of edges
             // — no walk, and no second resolution path for consumers to disagree
             // about. This is the only reader of output connections: before it,
             // `outputs:*.connect` was authored in three drive-law overlays and in
-            // `skid_rover.usda`'s `Electrical` scope and did nothing at all, which is
+            // the rover network root in `skid_rover.usda` and did nothing at all, which is
             // why the Modelica rover travelled 0.00 m against a control at 2.12 m/s.
             // `outputs:` is UsdShade's namespace too. A Material's `outputs:surface`
             // connects to a Shader terminal — a shading-network edge, not a scalar
@@ -2725,7 +2725,7 @@ pub fn rewire_usd_connections(
             );
             let forward =
                 attr.strip_prefix("outputs:").filter(|_| !shading_prim).map(
-                    |name| match q_actuators.get(entity).ok().and_then(|a| a.get(name)) {
+                    |name| match q_outputs.get(entity).ok().and_then(|outputs| outputs.get(name)) {
                         Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
                         None => (entity, name.to_string()),
                     },
@@ -2772,16 +2772,18 @@ pub fn rewire_usd_connections(
             // at parse time by `domain_projection` and becomes an equation inside
             // the generated model (`soc = <battery>.soc_out;`). Its source prim is
             // a MEMBER of that island with no `SimComponent` of its own, so a
-            // runtime wire could never fire. MEASURED: the electrical islands'
-            // `outputs:soc` / `outputs:solar_power` were reported as five
-            // connections that "never landed" on a scene whose islands were
-            // stepping and publishing those very ports.
+            // root output is consumed by the generated equation rather than a
+            // second runtime wire. A direct cross-domain source such as
+            // `</Rover/Battery.outputs:soc_out>` is different: the member-output
+            // map below resolves it to the generated wrapper's declared output.
+            // This keeps a public root boundary optional and never makes it the
+            // apparent owner of the battery value.
             //
             // ⚠ NOT `inputs:`. A network root's `inputs:` are the island's
             // BOUNDARY — `read_network` declares them `input Real` on the
             // generated model and something OUTSIDE must drive them, which is
             // exactly a runtime wire. `rocker_bogie.usda` authors
-            // `Electrical.inputs:drive_left.connect = </RockerBogie.outputs:drive_left>`;
+            // the rover-root `inputs:drive_left.connect = </RockerBogie.outputs:drive_left>`;
             // skipping that would leave the island's demand inputs permanently
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
@@ -2938,9 +2940,9 @@ pub fn rewire_usd_connections(
                     earth_direction_required.insert(start_element);
                 }
 
-                // ── The SOURCE side of the actuator-port indirection ─────────
+                // ── The SOURCE side of the runtime-output indirection ────────
                 // A vessel's `outputs:drive_left` is not stored on the vessel
-                // prim: `ActuatorPorts` realises it as a child `Port` entity, and
+                // prim: `OutputPorts` realises it as a child `Port` entity, and
                 // that is where `apply_drive_mix` writes. The sink side above has
                 // always redirected onto that child; reading one had no such hop,
                 // so a wire whose SOURCE is a vessel actuator port resolved to the
@@ -2949,7 +2951,7 @@ pub fn rewire_usd_connections(
                 //
                 // MEASURED on `scenes/tests/solar_domain_nested_ref.usda`: the
                 // rover's `throttle` reached 1.0 and the skid kernel wrote both
-                // bank ports, while `Electrical.inputs:drive_left` — wired from
+                // bank ports, while the rover-root drive input — wired from
                 // `</RockerBogie.outputs:drive_left>` — stayed at 0.0 for the whole
                 // run. Every motor drew no current, so a driving rover's battery
                 // never discharged and its bus was solved as if parked. Silent:
@@ -2959,10 +2961,10 @@ pub fn rewire_usd_connections(
                         .get(&start_element)
                         .and_then(|surface| surface.get(&src_conn))
                         .or_else(|| {
-                            q_actuators
+                            q_outputs
                                 .get(start_element)
                                 .ok()
-                                .and_then(|a| a.get(&src_conn))
+                                .and_then(|outputs| outputs.get(&src_conn))
                         })
                     {
                         start_element = port_entity;
@@ -5387,7 +5389,7 @@ mod tests {
     /// declared inputs, no variables.
     fn dispatched_but_unsolved() -> ModelicaModel {
         let mut m = ModelicaModel {
-            model_name: "GeneratedElectrical".into(),
+            model_name: "GeneratedNetwork".into(),
             ..default()
         };
         m.inputs.insert("drive_left".into(), 0.0);

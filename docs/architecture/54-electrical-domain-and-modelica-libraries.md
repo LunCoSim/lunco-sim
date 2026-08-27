@@ -37,13 +37,14 @@ Compiler-network members explicitly author
 Modelica compiler inputs.
 Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector members use
 `connectors:`. Ordinary USD property connections author topology. There is no electrical
-USD schema and no exposed `Pin` prim. An ordinary network `Scope` applies the standard
-multiple-apply `CollectionAPI:components`; that collection is the explicit working set
-for one projected Modelica root model. The built-in network projector derives a
-deterministic program graph from that working set, partitions connected subgraphs into
-named composite units, and emits those units below the root. The Scope remains one
-runtime participant with one public boundary; generated child models are not extra ECS
-entities or an alternate wiring path.
+USD schema and no exposed `Pin` prim. A network root applies the standard multiple-apply
+`CollectionAPI:components`; that collection is the explicit working set for one projected
+Modelica root model. The root may be the vehicle assembly itself when the network belongs
+to that assembly; no domain-named child prim is required. The built-in network projector
+derives a deterministic program graph from that working set, partitions connected
+subgraphs into named composite units, and emits those units below the root. The network
+root remains one runtime participant with one public boundary; generated child models are
+not extra ECS entities or an alternate wiring path.
 
 A circuit is not directional. It is acausal, and Modelica exists precisely to express
 that: a `Pin` with a `flow` variable, connected with `connect()`, makes the tool write
@@ -64,7 +65,7 @@ collection cannot be solved at all (its pins only mean something inside a `conne
 and says so at load rather than sitting inert.
 
 **The network boundary is derived from typed USD structure.** The presence of
-`CollectionAPI:components` identifies the Scope as a Modelica network. Its composed
+`CollectionAPI:components` identifies the prim as a Modelica network root. Its composed
 `connectors:*`, `inputs:` and `outputs:` properties supply the facts. The authored
 `lunco:synthesizer` selector may choose a registered synthesizer, and the existing
 `synth.<name>` hook seam lets a Rhai policy return the generated Modelica source plus
@@ -99,11 +100,11 @@ def Xform "Motor_FL" (
     prepend references = @lunco://components/mobility/motor.usda@</Motor>
 )
 {
-    float inputs:demand.connect = </Rover/Electrical.inputs:drive_left>
+    float inputs:demand.connect = </Rover.inputs:drive_left>
     custom token connectors:p.connect = </Rover/Battery.connectors:p>
 }
 
-def Scope "Electrical" (
+def Xform "Rover" (
     prepend apiSchemas = ["CollectionAPI:components"]
 )
 {
@@ -118,7 +119,7 @@ def Scope "Electrical" (
 }
 ```
 
-Acausal inside the generated DAE; causal at the Scope boundary, where cosim crosses to
+Acausal inside the generated DAE; causal at the network-root boundary, where cosim crosses to
 physics, environment, controls, and telemetry. The actual part prims remain where the
 vehicle assembly needs them; the collection groups them without duplicating them below a
 network proxy hierarchy. Independent units share the root's stable path namespace, so
@@ -296,14 +297,24 @@ own feeder lane to the shared power rail. This is only Modelica `Placement` and
 remain the topology authority, and the generic canvas flow animation reads the
 declared `Pin.i` values from the live model state.
 
-The network's own authored `outputs:soc` is the runtime contract — `get(elec, "soc")`
-reads the value forwarded from the child unit.
+The battery owns `outputs:soc_out`. A network-root `outputs:soc` is an optional,
+explicit public boundary for scripts and external consumers; its authored USD
+connection records that the value comes from the battery. It is not a second
+battery state. A solver that needs SOC must connect directly to the battery:
+
+```usd
+float inputs:engine_enable.connect = </Rover/Battery.outputs:soc_out>
+```
+
+The direct member path is the required form for solver-to-solver wiring. It keeps
+the producer visible and lets the generated-network projection resolve the member
+output without a fake root output or a component-specific runtime special case.
 
 ### 2b. Prove a photovoltaic source reaches the battery
 
 For a fixed rover panel, the minimum end-to-end acceptance is:
 
-1. the `Electrical` scope compiles from the explicit battery/panel/load collection;
+1. the rover-root network compiles from the explicit battery/panel/load collection;
 2. the panel publishes a positive authored boundary output such as `solar_power` under
    a lit environment;
 3. the same root publishes `solar_incidence` and `soc`; and
@@ -311,7 +322,7 @@ For a fixed rover panel, the minimum end-to-end acceptance is:
    parked observation.
 
 The mesh and the presence of a `SolarPanel` entity are not enough. A useful live
-`ReadPorts` filter addresses only the Scope boundary:
+`ReadPorts` filter addresses only the network-root boundary:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4101/api/commands \
@@ -320,8 +331,8 @@ curl -sS -X POST http://127.0.0.1:4101/api/commands \
   | jq '.data.ports[] | select(.name == "solar_power" or .name == "solar_incidence" or .name == "soc" or (.name | test("SolarPanel\\.(power_out|generated_current_a)")))'
 ```
 
-The API id comes from `ListEntities` for the composed `…/Rover/Electrical`
-entity; it is not the Rhai entity id. A positive panel output together with a
+The API id comes from `ListEntities` for the composed `…/Rover` network root;
+it is not the Rhai entity id. A positive panel output together with a
 matching battery current proves the source is electrically connected rather
 than merely compiled. For a fixed +Y panel, test generation under a known sun
 vector; do not require a tracker yaw response from a component that has no joint.

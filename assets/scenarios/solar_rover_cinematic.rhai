@@ -15,7 +15,7 @@ fn on_event(me, evt) {
 }
 
 fn soc() {
-    let r = find("/SolarRoverTest/SolarRover/Electrical");
+    let r = find("/SolarRoverTest/SolarRover");
     if r < 0 { return (); }
     get(r, "soc")
 }

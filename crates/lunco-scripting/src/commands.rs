@@ -106,9 +106,10 @@ fn on_run_rhai(
     pending
         .queue
         .push((id, cmd.code.clone(), authority, correlation_id));
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "status": "queued" });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "status": "queued" }),
+    ))
 }
 
 /// Attach a persistent rhai scenario to an entity — the scenario-loading entry
@@ -171,9 +172,10 @@ fn on_run_scenario(
         &q_existing,
         &mut commands,
     );
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "document_id": doc_id_raw, "generation": generation });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "document_id": doc_id_raw, "generation": generation }),
+    ))
 }
 
 /// Register a rhai source as a `ScriptDocument` and attach a `ScriptedModel` to
@@ -505,12 +507,10 @@ fn on_register_tool_library(
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
     }
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({
+    Ok(Ack::with_data(OpId::new(), serde_json::json!({
         "name": cmd.name,
         "libraries": crate::tool_libs::library_names(),
-    });
-    Ok(ack)
+    })))
 }
 
 /// Run a declarative **mission timeline** on an entity — Layer 2 of the
@@ -747,13 +747,11 @@ fn on_run_timeline(
         &q_existing,
         &mut commands,
     );
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({
+    Ok(Ack::with_data(OpId::new(), serde_json::json!({
         "document_id": doc_id_raw,
         "generation": generation,
         "steps": step_count,
-    });
-    Ok(ack)
+    })))
 }
 
 /// Save a named mission **timeline** to the Twin — the storage counterpart of
@@ -807,9 +805,10 @@ fn on_register_timeline(
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_timeline(journal, &cmd.name, &cmd.timeline);
     }
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "name": cmd.name, "timelines": store.names() });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "name": cmd.name, "timelines": store.names() }),
+    ))
 }
 
 /// Run a stored mission timeline on an entity by name (resolved from the
@@ -866,14 +865,12 @@ fn on_run_stored_timeline(
         &q_existing,
         &mut commands,
     );
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({
+    Ok(Ack::with_data(OpId::new(), serde_json::json!({
         "name": cmd.name,
         "document_id": doc_id_raw,
         "generation": generation,
         "steps": step_count,
-    });
-    Ok(ack)
+    })))
 }
 
 #[cfg(feature = "python")]
@@ -889,9 +886,10 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
         .get(ScriptLanguage::Python)
         .ok_or_else(|| "python backend not registered".to_string())?;
     let stdout = backend.eval(&cmd.code)?;
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "stdout": stdout });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "stdout": stdout }),
+    ))
 }
 
 /// Pause or resume the scenario attached to `target` (sets `ScriptedModel.paused`).
@@ -916,9 +914,10 @@ fn on_set_scenario_paused(
         .get_mut(cmd.target)
         .map_err(|_| "SetScenarioPaused: target has no ScriptedModel".to_string())?;
     model.paused = cmd.paused;
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "paused": cmd.paused });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "paused": cmd.paused }),
+    ))
 }
 
 /// Stop & detach the scenario from `target` — removes its `ScriptedModel` so it

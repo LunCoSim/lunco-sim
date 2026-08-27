@@ -183,7 +183,7 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
-            .any(|e| e.contains("connector-requires-network-scope")),
+            .any(|e| e.contains("connector-requires-network-root")),
         "lint_selftest.usda must prove standalone connectors are rejected — \
          got {lint_errors:?}"
     );
@@ -259,7 +259,7 @@ fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
         ("collections", empty()),
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
-        ("network_scopes", empty()),
+        ("network_roots", empty()),
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         (
@@ -325,7 +325,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("collections", empty()),
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
-        ("network_scopes", H::Array(vec![scope])),
+        ("network_roots", H::Array(vec![scope])),
         // The WHOLE fact table, including the keys this case has nothing to say
         // about. `physics_facts` always emits every key, and a rule reading one
         // that is absent aborts `lint_usd` — taking every OTHER rule down with it,
@@ -377,7 +377,7 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("collections", empty()),
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
-        ("network_scopes", empty()),
+        ("network_roots", empty()),
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         ("telemetry_declarations", empty()),

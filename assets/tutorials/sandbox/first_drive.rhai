@@ -10,12 +10,12 @@
 fn on_start(me) {
     // The curriculum payload is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
-    hint("Welcome to LunCoSim! Let's drive a rover on the Moon.");
+    hint("Select the rover. Click Possess in Inspector or Command Deck.");
     notify_kind("Tutorial: First Drive", "info");
 }
 
 fn first_drive_possessed(me) {
-    hint("Now use " + input_hint("forward") + " / " + input_hint("left") + " / " + input_hint("backward") + " / " + input_hint("right") + " to drive to the glowing flag.");
+    hint("Drive with " + input_hint("forward") + " / " + input_hint("backward") + ". Steer with " + input_hint("left") + " / " + input_hint("right") + ".\n\nStop at the glowing flag.");
 }
 
 fn first_drive_finished(me) {
@@ -42,14 +42,14 @@ fn mission(me) {
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
-            text: "Click the rover, then click Possess in the Inspector or Command Deck.",
+            text: "Select the rover and click Possess in Inspector or Command Deck",
             done: Fn("first_drive_controlled"),
             on_complete: Fn("first_drive_possessed"),
         }),
         // Step 2 — drive to this lesson's named flag. A generic marker event is
         // not enough to prove the correct rover reached the correct target.
         objective("reach_flag", #{
-            text: "Drive to the glowing flag",
+            text: "Drive to the glowing flag and stop there",
             requires: ["possess"],
             done: Fn("first_drive_at_flag"),
             on_complete: Fn("first_drive_finished"),
@@ -60,7 +60,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
-        hint("Tutorial complete! Free-roam, or pick another lesson from the Tutorials panel.");
+        hint("You took control and reached the flag.\n\nClick Continue to start Moon Driving Basics, or choose another lesson from Tutorials.");
         notify_kind("First Drive complete", "success");
     }
 }

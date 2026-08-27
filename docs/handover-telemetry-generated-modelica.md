@@ -212,8 +212,8 @@ solver direction; runtime signed `flow` values still determine animation.
 The two banks use disjoint lane ranges around the hub, so a horizontal route
 cannot be mistaken for a direct source-to-load wire. Member coordinates are
 local to their owning unit diagram; root coordinates place the unit instances.
-The policy also uses readable generated unit instances (`power_system` or
-`power_unit_N`); full USD paths remain the identity mapping, not the display
+The policy also uses readable generated unit instances (`network_system` or
+`network_unit_N`); full USD paths remain the identity mapping, not the display
 label.
 
 Electrical activity is covered by the established generic flow animation path
@@ -388,11 +388,11 @@ projection held `ModelicaEngineHandle` while calling a helper that attempted
 to lock the same mutex. That path was removed. The UI/API readers now use
 short `try_lock` reads, and root loading plus icon inheritance resolution run
 on the compute task pool. A cold generated root loaded 77 native Modelica
-documents, and the `PowerSystem` drill-in completed projection in roughly
+documents, and the `NetworkSystem` drill-in completed projection in roughly
 24 ms after opening according to the production log.
 
 The production binary was exercised on API port `4108` with the composed
-solar-rover scene. The generated `PowerSystem` document reported live
+solar-rover scene. The generated `NetworkSystem` document reported live
 `Battery.p.i`, `Motor_*.p.i`, and `YawHead__SolarPanel.p.i` state values, while
 the inspected screenshot showed the authored battery, motor, and solar-panel
 icons and the routed bus topology:

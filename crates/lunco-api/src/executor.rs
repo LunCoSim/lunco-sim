@@ -40,10 +40,13 @@ pub struct ApiCommandEvent {
     pub command: String,
     #[reflect(ignore)]
     pub params: serde_json::Value,
-    /// Internal outcome key used by result-reporting in-process handlers.
-    /// Transport responses use the request correlation id directly; this id
-    /// is not exposed on the wire.
+    /// Internal outcome key used by result-reporting handlers.
     pub id: u64,
+    /// The transport request waiting for this command's result, if any.
+    /// `None` is used by in-process callers and by commands whose owner sends a
+    /// deferred response through its own completion path.
+    #[reflect(ignore)]
+    pub correlation_id: Option<u64>,
 }
 
 /// System counter for generating unique IDs.
@@ -106,8 +109,8 @@ pub fn api_request_observer(
         )
     };
 
-    // None means the response is deferred — a deferred command or query provider will
-    // answer on this correlation id later. See `DeferredCommands`.
+    // None means the response is produced by queued work — a command handler,
+    // deferred command, or query provider answers on this correlation id later.
     if let Some(response) = maybe_response {
         commands.trigger(ApiResponseEvent {
             response,
@@ -163,11 +166,147 @@ pub fn validate_command_params(
     Ok(())
 }
 
-fn record_rejected_command(world: &mut World, id: u64, message: String) {
+fn record_rejected_command(
+    world: &mut World,
+    id: u64,
+    message: String,
+    correlation_id: Option<u64>,
+) {
     world.resource_mut::<lunco_core::CommandResults>().insert(
         id,
         lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(message)),
     );
+    emit_command_response(world, correlation_id, id);
+}
+
+struct NormalizedCommandResult {
+    data: Option<serde_json::Value>,
+    error: Option<(ApiErrorCode, String)>,
+}
+
+fn normalize_command_result(
+    outcome: Option<&lunco_core::CommandOutcome>,
+) -> NormalizedCommandResult {
+    match outcome {
+        Some(lunco_core::CommandOutcome::Succeeded(ack)) => NormalizedCommandResult {
+            data: ack.data.clone(),
+            error: None,
+        },
+        Some(lunco_core::CommandOutcome::Rejected(reject)) => NormalizedCommandResult {
+            data: None,
+            error: Some((ApiErrorCode::CommandRejected, reject.to_string())),
+        },
+        Some(lunco_core::CommandOutcome::Failed(message)) => NormalizedCommandResult {
+            data: None,
+            error: Some((ApiErrorCode::InternalError, message.clone())),
+        },
+        Some(lunco_core::CommandOutcome::Pending) | None => NormalizedCommandResult {
+            data: None,
+            error: None,
+        },
+    }
+}
+
+/// Convert the command outcome into the transport-neutral JSON shape used by
+/// in-process scripts: `{ id, ok, data?, error? }`.
+pub fn command_result_json(
+    id: u64,
+    outcome: Option<&lunco_core::CommandOutcome>,
+) -> serde_json::Value {
+    let result = normalize_command_result(outcome);
+    let mut response = serde_json::json!({
+        "id": id,
+        "ok": result.error.is_none(),
+    });
+    if let Some(data) = result.data {
+        response["data"] = data;
+    }
+    if let Some((_, error)) = result.error {
+        response["error"] = serde_json::Value::String(error);
+    }
+    response
+}
+
+/// Convert the same normalized result into the transport response envelope.
+/// Keeping this beside [`command_result_json`] prevents HTTP, wasm, and Rhai
+/// from inventing separate Ack/data handling.
+fn command_response(outcome: Option<&lunco_core::CommandOutcome>) -> ApiResponse {
+    command_response_from_normalized(normalize_command_result(outcome))
+}
+
+fn command_response_from_normalized(result: NormalizedCommandResult) -> ApiResponse {
+    match result.error {
+        Some((code, message)) => ApiResponse::error(code, message),
+        None => result
+            .data
+            .map(ApiResponse::ok)
+            .unwrap_or_else(ApiResponse::accepted),
+    }
+}
+
+fn normalize_command_handler_result(
+    result: &Result<lunco_core::Ack, String>,
+    error_code: ApiErrorCode,
+) -> NormalizedCommandResult {
+    match result {
+        Ok(ack) => NormalizedCommandResult {
+            data: ack.data.clone(),
+            error: None,
+        },
+        Err(message) => NormalizedCommandResult {
+            data: None,
+            error: Some((error_code, message.clone())),
+        },
+    }
+}
+
+/// Variant for a deferred owner whose failed result is a valid command that
+/// the current simulation state rejected rather than an internal failure.
+fn command_response_from_result_with_error_code(
+    result: &Result<lunco_core::Ack, String>,
+    error_code: ApiErrorCode,
+) -> ApiResponse {
+    command_response_from_normalized(normalize_command_handler_result(result, error_code))
+}
+
+/// Record a deferred command's result and, when a transport is waiting, emit
+/// its response through the same mapper used by ordinary command dispatch.
+/// `error_code` is supplied by the owning domain because only that owner knows
+/// whether an error means invalid state or an internal failure.
+pub fn finish_command_result(
+    world: &mut World,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+    result: Result<lunco_core::Ack, String>,
+    error_code: ApiErrorCode,
+) {
+    let response = correlation_id.map(|correlation_id| ApiResponseEvent {
+        response: command_response_from_result_with_error_code(&result, error_code),
+        correlation_id,
+    });
+    if let Some(command_id) = command_id {
+        world
+            .resource_mut::<lunco_core::CommandResults>()
+            .record(command_id, result);
+    }
+    if let Some(event) = response {
+        world.commands().trigger(event);
+    }
+}
+
+fn emit_command_response(world: &mut World, correlation_id: Option<u64>, id: u64) {
+    let Some(correlation_id) = correlation_id else {
+        return;
+    };
+    let response = world
+        .get_resource::<lunco_core::CommandResults>()
+        .and_then(|results| results.get(id))
+        .map(|outcome| command_response(Some(outcome)))
+        .unwrap_or_else(ApiResponse::accepted);
+    world.commands().trigger(ApiResponseEvent {
+        response,
+        correlation_id,
+    });
 }
 
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
@@ -192,8 +331,9 @@ pub fn api_command_dispatcher(
             let message = error.message(&event.command);
             warn!("[lunco-api] {message}");
             let id = event.id;
+            let correlation_id = event.correlation_id;
             commands.queue(move |world: &mut World| {
-                record_rejected_command(world, id, message);
+                record_rejected_command(world, id, message, correlation_id);
             });
             return;
         }
@@ -226,6 +366,7 @@ pub fn api_command_dispatcher(
             // 4. Trigger the event dynamically via commands.queue to access World
             let cmd_name = event.command.clone();
             let cmd_id = event.id;
+            let correlation_id = event.correlation_id;
 
             commands.queue(move |world: &mut World| {
                 let registry = world.resource::<AppTypeRegistry>().clone();
@@ -236,14 +377,14 @@ pub fn api_command_dispatcher(
                     Err(error) => {
                         let message = error.message(&cmd_name);
                         warn!("[lunco-api] {message}");
-                        record_rejected_command(world, cmd_id, message);
+                        record_rejected_command(world, cmd_id, message, correlation_id);
                         return;
                     }
                 };
                 let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else {
                     let message = format!("Command '{cmd_name}' has no reflected event registration");
                     warn!("[lunco-api] {message}");
-                    record_rejected_command(world, cmd_id, message);
+                    record_rejected_command(world, cmd_id, message, correlation_id);
                     return;
                 };
 
@@ -254,7 +395,7 @@ pub fn api_command_dispatcher(
                     Err(e) => {
                         let msg = format!("command '{cmd_name}': invalid params: {e}");
                         warn!("[lunco-api] {msg}; dropped");
-                        record_rejected_command(world, cmd_id, msg);
+                        record_rejected_command(world, cmd_id, msg, correlation_id);
                         return;
                     }
                 };
@@ -276,7 +417,7 @@ pub fn api_command_dispatcher(
                         warn!("[lunco-api] {msg}; dropped");
                         // Record a terminal internal outcome for scripts and
                         // in-process result handlers.
-                        record_rejected_command(world, cmd_id, msg);
+                        record_rejected_command(world, cmd_id, msg, correlation_id);
                         return;
                     }
                     // Scope the active request id around the trigger so a
@@ -293,6 +434,7 @@ pub fn api_command_dispatcher(
                     if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
                         pending.correlation_id = 0;
                     }
+                    emit_command_response(world, correlation_id, cmd_id);
                 }
             });
         }
@@ -304,8 +446,9 @@ pub fn api_command_dispatcher(
             let msg = format!("command '{}': invalid params: {e}", event.command);
             warn!("[lunco-api] {msg}; dropped");
             let cmd_id = event.id;
+            let correlation_id = event.correlation_id;
             commands.queue(move |world: &mut World| {
-                record_rejected_command(world, cmd_id, msg);
+                record_rejected_command(world, cmd_id, msg, correlation_id);
             });
         }
     }
@@ -676,19 +819,24 @@ fn execute_request(
                     command: command.clone(),
                     params: params.clone(),
                     id: id_counter.next_id(),
+                    correlation_id: None,
                 });
                 return None; // the handler answers on `correlation_id`
             }
 
-            // Trigger as ApiCommandEvent — handled by api_command_dispatcher
+            // Trigger as ApiCommandEvent — handled by api_command_dispatcher.
+            // The dispatcher sends the command's Ack.data after the typed
+            // handler runs, so the transport and in-process callers use the
+            // same result-producing path.
             let command_id = id_counter.next_id();
             commands.trigger(ApiCommandEvent {
                 command: command.clone(),
                 params: params.clone(),
                 id: command_id,
+                correlation_id: Some(correlation_id),
             });
 
-            Some(ApiResponse::accepted())
+            None
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry
@@ -743,11 +891,11 @@ fn execute_request(
 
 /// **Commands that answer LATER, on the request's correlation id.**
 ///
-/// Most commands are fire-and-report: the executor validates them, dispatches an
-/// `ApiCommandEvent`, and answers with an explicit acknowledgement immediately. A few cannot — their
-/// result only exists after something asynchronous happens (a GPU frame is captured, a bake
-/// finishes, a file is written). Those want to put the *actual payload* in the HTTP response
-/// rather than make the caller poll a second endpoint.
+/// Commands are validated here, then their typed handler produces the response
+/// through the same `ApiResponseEvent` path as deferred work. A few cannot
+/// finish in the handler — a GPU frame is captured, a bake finishes, or a file
+/// is written. Those keep ownership of completion and send their actual payload
+/// later rather than making the caller poll a second endpoint.
 ///
 /// The mechanism already existed for query providers (`return None; // response deferred`,
 /// then answer with an [`ApiResponseEvent`] carrying the same `correlation_id`). This makes
@@ -763,12 +911,21 @@ fn execute_request(
 /// app.register_deferred_command::<CaptureScreenshot>();
 /// ```
 ///
-/// and its `#[on_command]` handler answers when ready:
+/// and its `#[on_command]` handler answers when ready. An Ack-based deferred
+/// command completes through [`finish_command_result`]:
 ///
 /// ```ignore
 /// let cid = pending.correlation_id;              // Res<PendingApiRequest>
-/// commands.trigger(ApiResponseEvent { correlation_id: cid, response });
+/// finish_command_result(
+///     world,
+///     command_id,
+///     Some(cid),
+///     result,
+///     ApiErrorCode::InternalError,
+/// );
 /// ```
+/// Specialized payloads such as raw screenshot bytes may emit
+/// [`ApiResponseEvent`] directly because they are not represented by an `Ack`.
 ///
 /// **Contract:** a deferred command MUST eventually send exactly one `ApiResponseEvent` on
 /// that id. If it never does, the caller hangs — which is precisely why a command that is
@@ -1085,8 +1242,85 @@ mod tests {
         if cmd.fail {
             Err("boom".into())
         } else {
-            Ok(Ack::new(OpId::new()))
+            Ok(Ack::with_data(
+                OpId::new(),
+                serde_json::json!({ "answer": 42 }),
+            ))
         }
+    }
+
+    #[test]
+    fn synchronous_command_data_uses_the_api_response_path() {
+        use std::sync::{Arc, Mutex};
+
+        let mut app = App::new();
+        app.add_plugins(ApiExecutorPlugin)
+            .init_resource::<ApiEntityRegistry>()
+            .init_resource::<ApiQueryRegistry>()
+            .init_resource::<ApiVisibility>();
+        __register_on_test_echo(&mut app);
+
+        let responses = Arc::new(Mutex::new(Vec::<ApiResponse>::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<ApiResponseEvent>| {
+            sink.lock().unwrap().push(trigger.event().response.clone());
+        });
+
+        app.world_mut().trigger(ApiRequestEvent {
+            request: ApiRequest::ExecuteCommand {
+                command: "TestEcho".into(),
+                params: serde_json::json!({ "fail": false }),
+            },
+            correlation_id: 42,
+        });
+        app.world_mut().flush();
+
+        let responses = responses.lock().unwrap();
+        assert!(matches!(
+            responses.as_slice(),
+            [ApiResponse::Ok {
+                data: Some(data)
+            }] if data["answer"] == 42
+        ));
+    }
+
+    #[test]
+    fn deferred_command_result_records_and_emits_once() {
+        use std::sync::{Arc, Mutex};
+
+        let mut app = App::new();
+        app.init_resource::<CommandResults>();
+
+        let responses = Arc::new(Mutex::new(Vec::<ApiResponse>::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<ApiResponseEvent>| {
+            sink.lock().unwrap().push(trigger.event().response.clone());
+        });
+
+        finish_command_result(
+            app.world_mut(),
+            Some(7),
+            Some(42),
+            Ok(Ack::with_data(
+                OpId::new(),
+                serde_json::json!({ "answer": 42 }),
+            )),
+            ApiErrorCode::InternalError,
+        );
+        app.world_mut().flush();
+
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(7),
+            Some(CommandOutcome::Succeeded(ack))
+                if ack.data.as_ref().is_some_and(|data| data["answer"] == 42)
+        ));
+        let responses = responses.lock().unwrap();
+        assert!(matches!(
+            responses.as_slice(),
+            [ApiResponse::Ok {
+                data: Some(data)
+            }] if data["answer"] == 42
+        ));
     }
 
     #[test]

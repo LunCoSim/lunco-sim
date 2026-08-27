@@ -5,12 +5,12 @@
 
 fn steps() {
     [
-        #{ anchor: "",                   title: "Script a Rover",      body: "Behaviour in LunCoSim is rhai — hot-reloadable scripts attached to entities. This tutorial you're reading is itself one. Next / Back below." },
-        #{ anchor: "",                   title: "Event-driven lifecycle", body: "A scenario uses on_start for setup, on_event for reactions, and declarative mission/task primitives for progression. Production scenarios do not install an on_tick control loop. Per-entity state lives on `this`." },
-        #{ anchor: "",                   title: "High-level verbs",    body: "You don't hand-code continuous control loops. Modelica owns continuous equations; Rhai supplies policy and sequencing through verbs such as nav_to, arrived, emit, and mission objectives." },
-        #{ anchor: "panel.side_browser", title: "Attach & run",        body: "Attach a script by adding a `Scope` child with `prepend apiSchemas = [\"LunCoProgramAPI\"]` and `uniform asset info:sourceAsset = @lunco://scenarios/patrol.rhai@`; delete the scope and the behaviour goes with it. Per-instance settings are authored as `lunco:param:*` attributes. Or run one live through RunScenario; re-running hot-reloads it without a rebuild." },
-        #{ anchor: "panel.side_browser", title: "Watch it work",       body: "Read the script's live output and telemetry in the workbench status and telemetry surfaces. Scripts sense and command the world through the SAME API the UI and AI agents use." },
-        #{ anchor: "",                   title: "Go deeper",           body: "See the Scripting Guide and the author-scenario skill for the full verb surface, sequencing, and mission objectives." },
+        #{ anchor: "",                   title: "Script a rover",       body: "Rhai scripts add scenario behaviour to entities. This tutorial is a Rhai scenario too. Press Next to continue." },
+        #{ anchor: "",                   title: "React to events",       body: "Use `on_start` for setup and `on_event` for reactions. Use mission and task primitives for progression. Keep per-entity state on `this`." },
+        #{ anchor: "",                   title: "Choose the right owner", body: "Use Modelica for continuous equations. Use Rhai for policy and sequencing with verbs such as `nav_to`, `arrived`, `emit`, and mission objectives." },
+        #{ anchor: "panel.side_browser", title: "Attach or run a script", body: "To attach a script, add a `Scope` with `LunCoProgramAPI` and set its `info:sourceAsset` to the `.rhai` file. To run one live, use RunScenario. Re-running reloads the script without a rebuild." },
+        #{ anchor: "panel.side_browser", title: "Read the result",        body: "Open status and Telemetry to read the script's output. Scripts, the UI, and AI agents use the same command surface." },
+        #{ anchor: "",                   title: "Try it yourself",       body: "Open the Scripting Guide for the full verb and mission reference. Click Continue to return to the tutorial list." },
     ]
 }
 

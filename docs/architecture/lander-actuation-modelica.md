@@ -10,7 +10,7 @@ projections of one composed USD design.
 
 | Concern | Owner | Contract |
 |---|---|---|
-| Mission composition and topology | USD | `inputs:*`, `outputs:*`, `connectors:*`, collection membership, transforms, actuator direction and limits |
+| Mission composition and topology | USD | `inputs:*`, `outputs:*`, `connectors:*`, collection membership, transforms, actuator direction and limits; structural actuator command targets use USD relationships |
 | Sensor frame conversion | USD sensor projection + Modelica sensor component | The control law receives body-local gyro and attitude error, never world-frame pose or wrench |
 | Guidance and control equations | Modelica | `Lander.mo` produces a normalized main-valve request and body-local torque demand; PID tuning is exposed through authored inputs |
 | Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure, conserved mass flow, and stream specific enthalpy; tanks, turbopumps, and chamber are reusable package members |
@@ -79,6 +79,13 @@ contract for its single generated root: the `WrenchAllocator` is a real placed
 Modelica component and the root uses standard `Icon`/`Diagram` annotations.
 The physical USD actuators remain Avian members, so the UI does not invent a
 fake Modelica unit or drill-down class for them.
+
+Each force actuator targets its allocator output with
+`rel lunco:forceActuator:commandSource = </...outputs:...>`. This is a
+structural relationship because the actuator's real physical signal is the
+typed `inputs:force_command` connection to its thrust model. The relationship
+selects the allocator column without duplicating a value port or matching a
+free-form output name.
 
 ## Parameter rule
 

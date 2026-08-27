@@ -5,12 +5,12 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Inspect the Simulation", body: "A running sim is fully observable — pose, telemetry ports, and Modelica variables, all live. Let's find them. Next / Back below." },
-        #{ anchor: "panel.center",          title: "Select to inspect",      body: "Select an object in the Entities panel or the USD prim tree. Everything about it becomes readable; Help shows the viewport-selection gesture when that view is active." },
-        #{ anchor: "panel.right_inspector", title: "The Inspector",          body: "Pose, components, and editable properties for the selection show here — a live view that updates every frame." },
-        #{ anchor: "panel.side_browser",    title: "Telemetry & plots",      body: "Named ports (throttle, altitude, battery…) are readable in the left dock's Telemetry panel and can feed the plots. This is the same telemetry a ground station would read." },
-        #{ anchor: "",                      title: "Read it from code",      body: "Over the API: call `ListEntities` first to obtain an entity's `api_id`, then use `ListPorts` to enumerate that entity's ports and `ReadPorts` to read values. Use `CosimStatus` for the Modelica→physics graph and `GetBrokenConnections` for wiring faults. Read typed state — never poll the log." },
-        #{ anchor: "",                      title: "You can see everything", body: "Selection + ports + a screenshot answer 'is it working?' without guessing. See the inspect-simulation skill for the full read surface." },
+        #{ anchor: "",                      title: "Inspect live state",   body: "This tour shows where to read pose, telemetry, and Modelica values. Press Next to move on; press Back to review." },
+        #{ anchor: "panel.center",          title: "Select an object",      body: "Select an object in Entities or the USD prim tree. Its details become available in the other panels." },
+        #{ anchor: "panel.right_inspector", title: "Read Inspector",        body: "Open Inspector to read the selected object's pose, components, and authored properties." },
+        #{ anchor: "panel.side_browser",    title: "Read telemetry",        body: "Open Telemetry in the left dock. Select a port such as throttle, altitude, or battery to read its live value." },
+        #{ anchor: "",                      title: "Read state from code",  body: "Call `ListEntities` to get an entity's `api_id`. Use `ListPorts` to find its ports, then `ReadPorts` to read values. Use `CosimStatus` and `GetBrokenConnections` to inspect the Modelica link." },
+        #{ anchor: "",                      title: "Inspect, then act",     body: "Use selection, Inspector, and Telemetry to answer whether the simulation is working. Click Continue to return to the tutorial list." },
     ]
 }
 

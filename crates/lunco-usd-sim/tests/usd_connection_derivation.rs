@@ -10,6 +10,7 @@
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use lunco_cosim::SimConnection;
+use lunco_usd_bevy::program::is_network_boundary_output;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdRead, UsdStageAsset};
 use lunco_usd_sim::cosim::{rewire_usd_connections, WiringDirty};
 use lunco_usd_sim::domain_projection::{
@@ -473,6 +474,39 @@ fn lander_actuator_projection_uses_all_authored_force_geometry() {
     };
     assert_eq!(plan.component_paths.len(), 12);
     assert_eq!(plan.outputs.len(), 12);
+    let authored_command_sources = view
+        .collection_members(&root, "components")
+        .expect("the actuator collection must expand")
+        .into_iter()
+        .filter(|path| !path.is_property_path())
+        .map(|path| {
+            let targets = view.rel_targets(&path, "lunco:forceActuator:commandSource");
+            assert_eq!(
+                targets.len(),
+                1,
+                "{path} must have one explicit command-source relationship"
+            );
+            let target = targets[0].to_string();
+            assert!(
+                target.starts_with("/DescentLander/AttitudeActuation.outputs:"),
+                "{path} command source must target the allocator output, got {target}"
+            );
+            (path.to_string(), target)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        authored_command_sources.len(),
+        12,
+        "every physical RCS actuator must publish its structural command binding"
+    );
+    assert_eq!(
+        authored_command_sources
+            .values()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        12,
+        "each physical RCS actuator must bind a distinct allocator output"
+    );
     assert!(plan.source_roots.contains("LunCo"));
     assert!(plan.source.contains("LunCo.Actuation.WrenchAllocator"));
     assert!(!plan.source.contains("RcsValveAllocator"));
@@ -530,6 +564,55 @@ fn battery_telemetry_target_is_a_modelica_network_member() {
         vec![SdfPath::new("/BatteryEmptyActuator/Rover/Battery").unwrap()],
         "the authored telemetry declaration must target the composed battery prim"
     );
+}
+
+#[test]
+fn network_root_distinguishes_commands_from_solver_outputs() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/electrical_network.usda");
+    let source = std::fs::read_to_string(&fixture).expect("read electrical fixture");
+    let (app, id) = build_from_source(&source);
+    let stages = app.world().non_send::<CanonicalStages>();
+    let view = stages.get(id).expect("fixture stage present").view();
+    let root = SdfPath::new("/Rig").unwrap();
+
+    assert!(
+        !is_network_boundary_output(&view, &root, "outputs:drive_left"),
+        "a command/actuator output must not become an unsourced generated solver output"
+    );
+    assert!(
+        is_network_boundary_output(&view, &root, "outputs:soc"),
+        "a public output sourced by a generated member is a solver boundary output"
+    );
+    assert!(
+        is_network_boundary_output(&view, &root, "outputs:solar_power"),
+        "a public output sourced by a generated member is classified generically"
+    );
+}
+
+#[test]
+fn thermal_consumes_motor_member_outputs_directly() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/thermal_with_battery.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose thermal_with_battery.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    let thermal = SdfPath::new("/ThermalWithBatteryTest/Rover/Thermal").unwrap();
+    for (input, motor) in [
+        ("motor_heat_FL", "Motor_FL"),
+        ("motor_heat_FR", "Motor_FR"),
+        ("motor_heat_RL", "Motor_RL"),
+        ("motor_heat_RR", "Motor_RR"),
+    ] {
+        assert_eq!(
+            view.connections(&thermal, &format!("inputs:{input}")),
+            [format!(
+                "/ThermalWithBatteryTest/Rover/{motor}.outputs:heat"
+            )],
+            "thermal must consume {motor}.outputs:heat directly"
+        );
+    }
 }
 
 #[test]

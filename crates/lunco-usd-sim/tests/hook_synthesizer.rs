@@ -130,12 +130,12 @@ fn a_rhai_policy_can_be_the_synthesizer() {
 
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
     let ctx = SynthContext { classes: &classes };
 
     let outcome = synthesizer
-        .synthesize(&view, &root, "Rig_Electrical_System", &ctx)
+        .synthesize(&view, &root, "Rig_System", &ctx)
         .expect("the policy is not an authoring error");
     let SynthOutcome::Ready(synthesized) = outcome else {
         panic!("the fixture is a network and its classes resolve, so it must be Ready");
@@ -164,12 +164,12 @@ fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
 
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
     let ctx = SynthContext { classes: &classes };
 
     let outcome = synthesizer
-        .synthesize(&view, &root, "Rig_Electrical_System", &ctx)
+        .synthesize(&view, &root, "Rig_System", &ctx)
         .expect("the policy result is valid");
     let SynthOutcome::Ready(synthesized) = outcome else {
         panic!("the fixture is a network and its classes resolve");
@@ -185,7 +185,7 @@ fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
         synthesized.layout.member_positions["/Rig/Battery"].0, -60,
         "the policy-owned placement is applied rather than recomputed"
     );
-    assert!(synthesized.source.contains("model Rig_Electrical_System"));
+    assert!(synthesized.source.contains("model Rig_System"));
 }
 
 #[test]
@@ -199,12 +199,12 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
 
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
     let ctx = SynthContext { classes: &classes };
 
     let errors = synthesizer
-        .synthesize(&view, &root, "Rig_Electrical_System", &ctx)
+        .synthesize(&view, &root, "Rig_System", &ctx)
         .expect_err("a policy that returns a number has emitted no model");
     assert!(
         errors[0]
@@ -230,8 +230,8 @@ fn a_policy_must_return_the_complete_synthesis_schema() {
     let errors = synthesizer
         .synthesize(
             &stage.view(),
-            &SdfPath::new("/Rig/Electrical").unwrap(),
-            "Rig_Electrical_System",
+            &SdfPath::new("/Rig").unwrap(),
+            "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
             },
@@ -254,12 +254,12 @@ fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
     register_hook_synthesizer(&mut registry, "invalid-source");
     let synthesizer = registry.get("invalid-source").expect("registered").clone();
     let stage = stage("electrical_network.usda");
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let errors = synthesizer
         .synthesize(
             &stage.view(),
             &root,
-            "Rig_Electrical_System",
+            "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
             },
@@ -285,12 +285,12 @@ fn a_policy_cannot_extend_the_authored_boundary_surface() {
     register_hook_synthesizer(&mut registry, "extra-port");
     let synthesizer = registry.get("extra-port").expect("registered").clone();
     let stage = stage("electrical_network.usda");
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let errors = synthesizer
         .synthesize(
             &stage.view(),
             &root,
-            "Rig_Electrical_System",
+            "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
             },
@@ -317,12 +317,12 @@ fn a_policy_cannot_promote_an_output_missing_from_the_loaded_class() {
         .expect("registered")
         .clone();
     let stage = stage("electrical_network.usda");
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let errors = synthesizer
         .synthesize(
             &stage.view(),
             &root,
-            "Rig_Electrical_System",
+            "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
             },
@@ -341,12 +341,12 @@ fn a_policy_cannot_overlap_generated_member_layout_positions() {
     register_hook_synthesizer(&mut registry, "overlap-layout");
     let synthesizer = registry.get("overlap-layout").expect("registered").clone();
     let stage = stage("electrical_network.usda");
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let errors = synthesizer
         .synthesize(
             &stage.view(),
             &root,
-            "Rig_Electrical_System",
+            "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
             },
@@ -359,12 +359,12 @@ fn a_policy_cannot_overlap_generated_member_layout_positions() {
 fn facts_describe_the_whole_graph() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let network = read_network(&view, &root, &fixture_classes())
         .expect("well-formed")
         .expect("a network");
 
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+    let facts = network_facts(&network, "Rig_System", Some(&fixture_classes()))
         .expect("network facts are valid");
     let components = facts.get("components").expect("components");
     let lunco_hooks::HookValue::Array(components) = components else {
@@ -405,13 +405,13 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         .clone();
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
     let outcome = synthesizer
         .synthesize(
             &view,
             &root,
-            "Rig_Electrical_System",
+            "Rig_System",
             &SynthContext { classes: &classes },
         )
         .expect("the shipped policy result is valid");
@@ -441,12 +441,12 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
     );
     assert_eq!(
         interface.model_name.as_deref(),
-        Some("Rig_Electrical_System")
+        Some("Rig_System")
     );
     let ast = rumoca_phase_parse::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(
-        lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Rig_Electrical_System")
+        lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Rig_System")
             .and_then(|class| {
                 assert!(
                     lunco_modelica::annotations::extract_icon(&class.annotation).is_some(),
@@ -533,12 +533,12 @@ fn shipped_acausal_policy_contract_runs_in_rhai() {
     let stage = stage("electrical_network.usda");
     let network = read_network(
         &stage.view(),
-        &SdfPath::new("/Rig/Electrical").unwrap(),
+        &SdfPath::new("/Rig").unwrap(),
         &fixture_classes(),
     )
     .expect("fixture is readable")
     .expect("fixture is a network");
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+    let facts = network_facts(&network, "Rig_System", Some(&fixture_classes()))
         .expect("network facts are valid");
     let result = lunco_hooks::invoke("test.synthesized-acausal-contract", &[facts])
         .expect("Rhai contract hook is registered")

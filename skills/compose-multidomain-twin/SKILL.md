@@ -137,20 +137,24 @@ domain as its own a `Scope` applying `LunCoProgramAPI` under the vehicle Xform, 
 wired through the port surface. This *is* FMI/SSP — no new machinery.
 
 ```usda
-def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian ports)
+def Xform "Lander" (PhysicsRigidBodyAPI …, CollectionAPI:components) # body + network root
 {
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body force
+
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    ) {}
+    uniform token collection:components:expansionRule = "explicitOnly"
+    prepend rel collection:components:includes = [</Lander/Battery>]
 
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect     = </Lander.outputs:position_y>
         float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
-        float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
+        # Consume the battery output at its authored USD path.
+        float inputs:engine_enable.connect = </Lander/Battery.outputs:soc_out>
         float inputs:g = 1.62                                           # only if the Modelica contract declares a runtime input
-    }
-    def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
     }
     def Scope "Therm" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
@@ -158,7 +162,8 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
 }
 ```
 
-Note what `Power` does *not* have: an `inputs:load` wire. `Battery.mo` exposes a
+The electrical network is the explicit `CollectionAPI:components` collection on
+the assembly root. It does not need a domain-named child or an `inputs:load` wire. `Battery.mo` exposes a
 `Pin`, and a pin carries a `flow` variable — the current is the circuit's answer,
 not a number anyone writes in. Wire a physical bus by `connect()`-ing pins inside
 one Modelica model; only *signals* (a throttle, a setpoint, a temperature reading)
@@ -215,13 +220,13 @@ def Scope "Scenario" ( kind = "component" )
 2. **Reference vehicles:** pull authored assets into the scene (e.g.
    `assets/vessels/rovers/{skid,ackermann}_rover.usda`, a lander) — wheel count,
    params, joints, drive type all come from USD; nothing hardcoded.
-3. **Add subsystems per vehicle:** a a `Scope` applying `LunCoProgramAPI` per domain naming its
-   `info:sourceAsset`; the body carries `PhysicsRigidBodyAPI` + the force
-   connections. Reuse existing `.mo` (`models/RocketEngine.mo`, an MSL `LimPID`
-   for GNC).
+3. **Add subsystems per vehicle:** apply `LunCoProgramAPI` to each standalone
+   program prim and apply `CollectionAPI:components` to each assembled network
+   root. The body carries `PhysicsRigidBodyAPI` plus the force connections. Reuse
+   existing `.mo` (`models/RocketEngine.mo`, an MSL `LimPID` for GNC).
 4. **Wire cross-domain ports** with connections on the consumer
    (`inputs:load.connect = </Lander/GNC.outputs:thrust>`,
-   `inputs:engine_enable.connect = </Lander/Power.outputs:soc>`, …).
+   `inputs:engine_enable.connect = </Lander/Battery.outputs:soc_out>`, …).
 5. **Add the Scenario prim:** a `LunCoProgramAPI` child naming the orchestration script
    (phases + objectives as port predicates), plus a `LunCoProgramAPI` child on each
    vehicle for its own behaviour.

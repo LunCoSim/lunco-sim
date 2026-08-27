@@ -12,15 +12,15 @@
 
 fn steps() {
     [
-        #{ anchor: "",                              focus: (),                       title: "Welcome to Lunica",     body: "Lunica is the LunCoSim Modelica workbench — model, compile, run, and plot dynamical systems. A 90-second tour. Use the Back and Next controls; Skip leaves the tour." },
-        #{ anchor: "panel.lunco.workbench.twin_browser",      focus: "lunco.workbench.twin_browser",     title: "Twin Browser",          body: "Your workspace. A Twin is a folder of .mo files + a manifest. Bundled demos and the Modelica Standard Library are read-only — duplicate one to edit." },
-        #{ anchor: "panel.modelica_welcome",        focus: "modelica_welcome",       title: "Learning Paths",        body: "The Welcome tab curates example arcs — Circuits, Control, Mechanics — each a ladder of MSL models with a goal. A great place to start exploring." },
-        #{ anchor: "model_view.view_toggles",       focus: (),                       title: "Four Views of a Model", body: "Click Text, Diagram, Icon, and Docs. They are four projections of one model: the source, connected components, reusable symbol, and explanation." },
-        #{ anchor: "model_view.compile_buttons",    focus: (),                       title: "Compile & Run",         body: "First click Compile to check the model. Then use Run for real-time stepping and live inputs, or Fast Run to integrate to t_end in the background and produce plots." },
-        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",                body: "Select a signal to trace, put fast and slow signals on appropriate axes, then snapshot the run so a later run can be overlaid. Drag Graphs beside the model if useful." },
-        #{ anchor: "panel.modelica_experiments",    focus: "modelica_experiments",   title: "Experiments",           body: "Open Experiments, override a parameter without editing source, run once, then define a list of overrides for a reproducible sweep." },
-        #{ anchor: "",                              focus: (),                       title: "Automate it",           body: "Open Help in the top menu for the command guidance. Every UI action is a typed Command. Drive Lunica from rhai scripts (like this tour!), the HTTP API, or an LLM agent over MCP." },
-        #{ anchor: "",                              focus: (),                       title: "You're set",            body: "Reopen any lesson from the Tutorials menu, or use the app's tutorial entry point for this overview. Pick a focused lesson next to go deeper." },
+        #{ anchor: "",                              focus: (),                       title: "Welcome to Lunica",     body: "Lunica is the Modelica workbench. Use it to model, compile, run, and plot dynamical systems. Press Next to begin." },
+        #{ anchor: "panel.lunco.workbench.twin_browser",      focus: "lunco.workbench.twin_browser",     title: "Find a model",           body: "Open Twin Browser and select a model. A Twin contains `.mo` files and a manifest. Duplicate read-only demos before editing them." },
+        #{ anchor: "panel.modelica_welcome",        focus: "modelica_welcome",       title: "Start with a path",       body: "Open Learning Paths. Choose Circuits, Control, or Mechanics, then select a class to see its goal and example." },
+        #{ anchor: "model_view.view_toggles",       focus: (),                       title: "View one model four ways", body: "Click Text, Diagram, Icon, and Docs. Text is the source; Diagram shows connections; Icon is the reusable symbol; Docs explains the model." },
+        #{ anchor: "model_view.compile_buttons",    focus: (),                       title: "Compile, then run",       body: "Click Compile to check the model. Then click Run for live stepping, or Fast Run to integrate to `t_end` and produce plots." },
+        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Read a graph",                body: "Select a signal in Graphs. Snapshot the run, change the setup, and overlay the next run to compare results." },
+        #{ anchor: "panel.modelica_experiments",    focus: "modelica_experiments",   title: "Test a parameter",           body: "Open Experiments. Override a parameter, run once, then define several values for a reproducible sweep." },
+        #{ anchor: "",                              focus: (),                       title: "Automate the work",           body: "Open Help for command guidance. Rhai scripts, the HTTP API, and MCP clients can send the same typed commands as the UI." },
+        #{ anchor: "",                              focus: (),                       title: "Choose your next lesson",            body: "Reopen this tour from Tutorials, or choose a focused lesson to practise one part of the workflow." },
     ]
 }
 
