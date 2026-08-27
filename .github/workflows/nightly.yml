@@ -55,23 +55,35 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      date: ${{ steps.date.outputs.date }}
-      timestamp: ${{ steps.timestamp.outputs.timestamp }}
-      tag: ${{ steps.tag.outputs.tag }}
+      date: ${{ steps.metadata.outputs.date }}
+      timestamp: ${{ steps.metadata.outputs.timestamp }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - id: date
-        run: echo "date=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
-      - id: timestamp
-        run: echo "timestamp=$(date -u +'%Y%m%dT%H%M%SZ')" >> "$GITHUB_OUTPUT"
-      - id: tag
+      - id: metadata
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
-          if [ -n "${{ inputs.release_tag }}" ]; then
-            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          date=$(date -u +'%Y-%m-%d %H:%M UTC')
+          timestamp=$(date -u +'%Y%m%dT%H%M%SZ')
+          if [ -n "$RELEASE_TAG_INPUT" ]; then
+            release_tag="$RELEASE_TAG_INPUT"
           else
-            echo "tag=nightly-${{ steps.timestamp.outputs.timestamp }}" >> "$GITHUB_OUTPUT"
+            release_tag="nightly-$timestamp"
           fi
+
+          if [[ ! "$release_tag" =~ ^nightly-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "Invalid nightly release tag: '$release_tag'" >&2
+            exit 1
+          fi
+
+          {
+            echo "date=$date"
+            echo "timestamp=$timestamp"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Preparing nightly release: $release_tag ($timestamp)"
       - id: version
         env:
           RUN_NUMBER: ${{ github.run_number }}
@@ -292,7 +304,7 @@ jobs:
       - name: Create nightly release
         env:
           RELEASE_DATE: ${{ needs.meta.outputs.date }}
-          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           MAIN_GH_TOKEN: ${{ github.token }}
           UPDATES_GH_TOKEN: ${{ secrets.LUNCOSIM_UPDATES_TOKEN }}
@@ -300,6 +312,14 @@ jobs:
         run: |
           if [ -z "$UPDATES_GH_TOKEN" ]; then
             echo "Repository secret LUNCOSIM_UPDATES_TOKEN is required to publish updater releases." >&2
+            exit 1
+          fi
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "The meta job did not provide a release tag; refusing to create an untagged release." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" == untagged-* ]]; then
+            echo "Invalid release tag '$RELEASE_TAG'; refusing to publish an untagged release." >&2
             exit 1
           fi
           # Tag validation is fail-closed: do not let a transient fetch error
@@ -317,10 +337,10 @@ jobs:
           # Check for an existing immutable traceability tag before asking the
           # Release API to create it. A rerun must use a new release tag rather
           # than replacing a published build that testers may already be using.
-          if git show-ref --tags --verify --quiet "refs/tags/${{ needs.meta.outputs.tag }}"; then
-            existing_sha=$(git rev-list -n 1 "${{ needs.meta.outputs.tag }}")
+          if git show-ref --tags --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            existing_sha=$(git rev-list -n 1 "$RELEASE_TAG")
             if [ "$existing_sha" != "${{ github.sha }}" ]; then
-              echo "Tag ${{ needs.meta.outputs.tag }} already points at $existing_sha, not ${{ github.sha }}." >&2
+              echo "Tag $RELEASE_TAG already points at $existing_sha, not ${{ github.sha }}." >&2
               exit 1
             fi
           fi

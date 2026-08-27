@@ -37,6 +37,12 @@ Create short, human-facing notes for the exact commit being built. Keep the comm
 
 5. Add or update the release workflow only in `.github/workflows/nightly.yml`. The release job must fetch timestamped tags, generate the GitHub body with `--format release-notes` from the exact `github.sha`, and publish those notes with the artifacts. Keep the detailed changelog output in its separate `docs/releases/` snapshot; never pass that output as the GitHub release body. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
 
+   The metadata job must produce one validated `release_tag` together with the
+   shared UTC timestamp, and the release job must propagate that output
+   explicitly. Fail before any `gh release create` call if the value is empty or
+   begins with `untagged-`; GitHub's generated untagged draft is not a valid
+   nightly release and cannot receive the Velopack upload contract.
+
 6. Validate without Rust edits:
 
    ```bash

@@ -15,7 +15,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("--draft=false", workflow)
-        self.assertNotIn('git push origin "${{ needs.meta.outputs.tag }}"', workflow)
+        self.assertNotIn('git push origin "${{ needs.meta.outputs.release_tag }}"', workflow)
         self.assertNotIn("--verify-tag", workflow)
         self.assertIn('--target "${{ github.sha }}"', workflow)
         main_release_edit = workflow.index(
@@ -48,6 +48,21 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("--output release_notes.md", release_notes_block)
         self.assertNotIn("nightly-updates", workflow)
         self.assertNotIn("--clobber", workflow)
+
+    def test_release_identity_is_explicit_and_fail_closed(self) -> None:
+        workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+        self.assertIn("release_tag: ${{ steps.metadata.outputs.release_tag }}", workflow)
+        self.assertIn("RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}", workflow)
+        self.assertNotIn("steps.tag.outputs.tag", workflow)
+        self.assertNotIn("needs.meta.outputs.tag", workflow)
+        self.assertIn("Invalid nightly release tag", workflow)
+        self.assertIn('if [ -z "$RELEASE_TAG" ]; then', workflow)
+        self.assertIn('[[ "$RELEASE_TAG" == untagged-* ]]', workflow)
+
+        guard = workflow.index('if [ -z "$RELEASE_TAG" ]; then')
+        first_release_create = workflow.index('gh release create "$RELEASE_TAG"')
+        self.assertLess(guard, first_release_create)
 
     def test_application_reads_the_machine_only_repository(self) -> None:
         updater = (
