@@ -7122,6 +7122,7 @@ dependencies = [
  "js-sys",
  "lunco-core",
  "lunco-geotiff",
+ "lunco-settings",
  "lunco-storage",
  "lunco-twin",
  "lunco-workspace",
@@ -7773,6 +7774,7 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
+ "lunco-settings",
  "lunco-signal",
  "lunco-storage",
  "lunco-terrain-surface",
@@ -7831,7 +7833,7 @@ name = "lunco-settings"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets",
+ "dirs",
  "lunco-storage",
  "serde",
  "serde_json",
@@ -7947,12 +7949,10 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "catppuccin-egui",
- "js-sys",
  "lunco-assets",
+ "lunco-settings",
  "serde",
- "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -8122,6 +8122,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-render",
+ "lunco-settings",
  "lunco-time",
  "lunco-usd-compose",
  "openusd",

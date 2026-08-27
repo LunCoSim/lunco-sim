@@ -31,10 +31,16 @@ changed without recompiling Rust: HUDs, status cards, progress overlays,
 telemetry summaries, and simple buttons.
 
 Use `lunco-workbench`/egui for the application shell, docking, code editors,
-large inspectors, rich text input, complex forms, and controls that need
-semantics not present in the runtime contract. Runtime UI uses the existing
+large inspectors, rich text input, complex forms, modal dialogs, and controls
+that need semantics not present in the runtime contract. Runtime UI uses the existing
 egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
+
+The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
+dismissal, outcomes, and the typed `CloseModal` command. HUI currently has no
+modal queue/outcome, checkbox/input state events, or dynamic repeated-list
+contract, so a dialog requiring those capabilities belongs in that host until
+the runtime surface contract grows and is tested.
 
 ## Authoring workflow
 

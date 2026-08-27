@@ -27,15 +27,15 @@ pub const DEJAVU_WEB_URL: &str = "/fonts/DejaVuSans.ttf";
 ///
 /// On failure the channel is simply left empty (a warning is logged), so
 /// callers degrade gracefully — no font, no panic.
-pub fn load_dejavu_sans_bytes() -> Receiver<Vec<u8>> {
+pub fn load_dejavu_sans_bytes(settings: &lunco_settings::DownloadSettings) -> Receiver<Vec<u8>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    load_into(tx);
+    load_into(tx, settings);
     rx
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)]
-fn load_into(tx: Sender<Vec<u8>>) {
+fn load_into(tx: Sender<Vec<u8>>, _settings: &lunco_settings::DownloadSettings) {
     // One-shot startup font read — a direct `std::fs::read` is correct here
     // (this crate is the I/O boundary; the wasm path below replaces it).
     let path = crate::dejavu_sans_path();
@@ -52,45 +52,16 @@ fn load_into(tx: Sender<Vec<u8>>) {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_into(tx: Sender<Vec<u8>>) {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
+fn load_into(tx: Sender<Vec<u8>>, settings: &lunco_settings::DownloadSettings) {
+    let settings = settings.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        let Some(win) = web_sys::window() else {
-            bevy::log::warn!("[lunco-assets] no `window` — cannot fetch font");
-            return;
-        };
-        let resp_jsv = match JsFuture::from(win.fetch_with_str(DEJAVU_WEB_URL)).await {
-            Ok(v) => v,
-            Err(e) => {
-                bevy::log::warn!("[lunco-assets] font fetch {DEJAVU_WEB_URL}: {e:?}");
-                return;
+        match crate::web_fetch::network_fetch_uncached(DEJAVU_WEB_URL, &settings).await {
+            Ok(bytes) => {
+                let _ = tx.send(bytes);
             }
-        };
-        let Ok(resp) = resp_jsv.dyn_into::<web_sys::Response>() else {
-            return;
-        };
-        if !resp.ok() {
-            bevy::log::warn!(
-                "[lunco-assets] font fetch {DEJAVU_WEB_URL}: HTTP {}",
-                resp.status()
-            );
-            return;
+            Err(error) => {
+                bevy::log::warn!("[lunco-assets] font fetch {DEJAVU_WEB_URL}: {error}");
+            }
         }
-        let buf = match resp.array_buffer() {
-            Ok(p) => match JsFuture::from(p).await {
-                Ok(v) => v,
-                Err(e) => {
-                    bevy::log::warn!("[lunco-assets] font array_buffer: {e:?}");
-                    return;
-                }
-            },
-            Err(e) => {
-                bevy::log::warn!("[lunco-assets] font array_buffer init: {e:?}");
-                return;
-            }
-        };
-        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-        let _ = tx.send(bytes);
     });
 }

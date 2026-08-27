@@ -28,7 +28,7 @@
 #     --version <semver>  SemVer2 version used by Velopack (or env override)
 #     --target <triple>  Cross-compile target (default: host triple)
 #     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
-#     --skip-download    Skip the cache asset download step (use existing .cache/)
+#     --skip-download    Skip the cache asset download step (use existing global cache)
 #     --no-assets        Skip bundling the assets/ tree
 #     --out <dir>        Output directory (default: dist/<binary>-<platform>-<arch>/)
 #     --extra <args>     Pass extra args to cargo build
@@ -158,23 +158,22 @@ velopack_runtime() {
 }
 
 # ── Resolve the cache directory ───────────────────────────────────────────
-# Mirrors lunco_assets::cache_dir(): LUNCOSIM_CACHE env → workspace .cache/ →
-# one level up (shared workspace cache) → OS cache dir. Returns "" if none
-# found.
+# Mirrors lunco_assets::cache_dir(): an explicit LUNCOSIM_CACHE override, then
+# the OS-global cache. A workspace-local `.cache/` is never selected.
 resolve_cache_dir() {
     if [ -n "${LUNCOSIM_CACHE:-}" ]; then
         mkdir -p "$LUNCOSIM_CACHE"
         echo "$LUNCOSIM_CACHE"
         return
     fi
-    for candidate in "$PROJECT_DIR/.cache" "$PROJECT_DIR/../.cache"; do
-        if [ -d "$candidate" ]; then
-            echo "$candidate"
-            return
-        fi
-    done
-    mkdir -p "$PROJECT_DIR/.cache"
-    echo "$PROJECT_DIR/.cache"
+    local base
+    case "$(uname -s)" in
+        Darwin*) base="${HOME:?}/Library/Caches" ;;
+        MINGW*|MSYS*|CYGWIN*) base="${LOCALAPPDATA:-${HOME:?}/AppData/Local}" ;;
+        *) base="${XDG_CACHE_HOME:-${HOME:?}/.cache}" ;;
+    esac
+    mkdir -p "$base/lunco"
+    echo "$base/lunco"
 }
 
 # ── Portable directory sync ───────────────────────────────────────────────
@@ -242,7 +241,7 @@ download_cache_for() {
     local cache_dir
     cache_dir="$(resolve_cache_dir)"
     if [ -z "$cache_dir" ]; then
-        warn "No cache dir resolved — cannot download assets. Set LUNCOSIM_CACHE or run from a worktree."
+        warn "Unable to resolve the OS-global cache — cannot download assets. Set LUNCOSIM_CACHE."
         return 0
     fi
     info "Downloading cache assets for $binary → $cache_dir"

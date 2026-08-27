@@ -98,6 +98,13 @@ downloaded only on request (Settings ▸ Downloadable data, or the
 `lunco-assets` CLI) — the engine never fetches on its own, so an asset that is
 merely declared resolves to nothing until someone asks for it.
 
+All requesters use the `download` section of the one settings file owned by
+`lunco-settings`. `DownloadSettings.max_attempts` includes the first request;
+retry waits are exponential and capped. Native and browser fetches retain
+received bytes and resume with HTTP `Range` when the origin supports it.
+Callers must pass the shared settings resource through the existing asset/API
+surface rather than adding a local retry loop or path.
+
 **A bare relative path is not "wrong" — it is resolved against the anchoring
 document's directory, keeping that document's scheme.** That is why it bites:
 

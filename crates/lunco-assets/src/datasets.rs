@@ -219,6 +219,7 @@ fn artifact_present(
     {
         let _ = spec;
         let _ = path;
+        let _ = source_path;
         false
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -794,7 +795,7 @@ impl DatasetRegistry {
     ///
     /// An attempt remains owned until its task returns. A retry can therefore
     /// never overlap staging or installation from an earlier attempt.
-    pub fn request(&mut self, id: &str) {
+    pub fn request(&mut self, id: &str, settings: &lunco_settings::DownloadSettings) {
         let Some(i) = self.entries.iter().position(|e| e.id == id) else {
             warn!("[datasets] request for unknown dataset '{id}'");
             return;
@@ -823,6 +824,7 @@ impl DatasetRegistry {
                 &self.entries[i],
                 &spec,
                 scope,
+                settings.clone(),
                 self.slots[i].status.clone(),
                 self.slots[i].cancel.clone(),
                 self.slots[i].commit_gate.clone(),
@@ -833,6 +835,7 @@ impl DatasetRegistry {
             &self.entries[i],
             &spec,
             scope,
+            settings.clone(),
             self.slots[i].status.clone(),
             self.slots[i].cancel.clone(),
             self.slots[i].commit_gate.clone(),
@@ -860,10 +863,10 @@ impl DatasetRegistry {
     }
 
     /// Start every missing dataset. Same authorisation rule as [`request`](Self::request).
-    pub fn request_all_missing(&mut self) {
+    pub fn request_all_missing(&mut self, settings: &lunco_settings::DownloadSettings) {
         let ids: Vec<String> = self.missing().map(|e| e.id.clone()).collect();
         for id in ids {
-            self.request(&id);
+            self.request(&id, settings);
         }
     }
 }
@@ -876,8 +879,12 @@ pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
 }
 
 #[on_command(RequestDataset)]
-fn on_request_dataset(trigger: On<RequestDataset>, mut registry: ResMut<DatasetRegistry>) {
-    registry.request(&trigger.event().id);
+fn on_request_dataset(
+    trigger: On<RequestDataset>,
+    mut registry: ResMut<DatasetRegistry>,
+    settings: Res<lunco_settings::DownloadSettings>,
+) {
+    registry.request(&trigger.event().id, &settings);
 }
 
 #[on_command(CancelDataset)]
@@ -907,6 +914,7 @@ fn spawn_download(
     entry: &DatasetEntry,
     spec: &AssetEntry,
     scope: DatasetScope,
+    settings: lunco_settings::DownloadSettings,
     slot: StatusSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
@@ -954,6 +962,7 @@ fn spawn_download(
             let fetched = download_asset_with_control(
                 &spec,
                 &key,
+                &settings,
                 download_control,
                 Some(dest_root.as_path()),
             );
@@ -1023,6 +1032,7 @@ fn spawn_download(
     entry: &DatasetEntry,
     _spec: &AssetEntry,
     _scope: DatasetScope,
+    _settings: lunco_settings::DownloadSettings,
     slot: StatusSlot,
     _cancel: Arc<std::sync::atomic::AtomicBool>,
     _commit_gate: Arc<Mutex<()>>,
@@ -1286,6 +1296,7 @@ pub struct DatasetsPlugin;
 
 impl Plugin for DatasetsPlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         app.init_resource::<DatasetRegistry>();
         register_commands!(on_request_dataset, on_cancel_dataset);
         register_all_commands(app);
@@ -1487,15 +1498,12 @@ output = "terrain/luna2"
     }
 
     /// Read roots are wider than the write root, and ordered: a copy packed
-    /// into a distribution outranks the source-tree and machine-wide pools.
+    /// into a distribution outranks the machine-wide pool.
     #[test]
     fn engine_scope_reads_the_packed_cache_before_the_shared_pool() {
         let roots = DatasetScope::Engine.read_roots();
         assert_eq!(roots[0], crate::assets_dir_abs());
         assert_eq!(roots[1], crate::packed_cache_dir());
-        if let Some(development) = crate::development_cache_dir() {
-            assert_eq!(roots[2], development);
-        }
         let shared = crate::cache_dir();
         assert_eq!(roots.last(), Some(&shared));
         // The write root stays the shared pool: a package may be read-only,

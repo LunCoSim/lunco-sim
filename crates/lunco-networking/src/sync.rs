@@ -3272,6 +3272,7 @@ lunco_core::register_commands!(
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         // CONVENTION: SyncPlugin initializes ONLY wire-only state (envelope
         // queues, dedup, transport/replication config). Always-on substrate
         // resources — anything read by systems that run even with networking

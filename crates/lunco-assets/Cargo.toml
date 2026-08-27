@@ -22,6 +22,7 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 # Twin and a downloaded scenario are served uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }
+lunco-settings = { path = "../lunco-settings" }
 # Twin open/close events are the lifecycle boundary for the shared `twin://`
 # source and its scoped dataset registry. The asset layer owns that binding so
 # a host does not need a domain-specific plugin just to mount a Twin.
@@ -41,9 +42,7 @@ image = { workspace = true }
 # target (wasm has no filesystem). Used by `scripting.rs` to bake
 # `assets/scripting/` in. All-targets: `include_dir!` is fs-free at runtime.
 include_dir = "0.7"
-# Cross-platform user-home / config-dir resolution for `user_config_dir()`.
-# Native-only — the wasm path uses OPFS / IndexedDB instead and skips
-# this helper entirely.
+# Cross-platform OS cache-dir resolution for `cache_dir()`.
 dirs = "5"
 # Not native-only: `download::source_pool_path` keys the source pool by URL hash,
 # and that resolver is target-neutral — `datasets.rs` and the Modelica UI call it

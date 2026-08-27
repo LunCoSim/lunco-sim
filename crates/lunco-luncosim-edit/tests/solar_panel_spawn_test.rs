@@ -78,7 +78,12 @@ fn test_solar_panel_catalog_entry() {
     manifest.set(Vec::new());
 
     let mut catalog = lunco_scene_commands::catalog::SpawnCatalog::default();
-    lunco_scene_commands::catalog::scan_usd_into_catalog_blocking(&manifest, &roots, &mut catalog);
+    lunco_scene_commands::catalog::scan_usd_into_catalog_blocking(
+        &manifest,
+        &roots,
+        &mut catalog,
+        &lunco_settings::DownloadSettings::default(),
+    );
 
     let entry = catalog
         .get("solar_panel")

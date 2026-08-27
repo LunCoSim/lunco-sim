@@ -68,15 +68,17 @@ cargo build --bin luncosim --features networking -j"${SYNC_JOBS:-8}" || exit 2
 
 # Cold cache: force a full download so the HTTP bytes plane is exercised (a warm
 # cache fetches nothing). Point BOTH the harness and the launched apps at the SAME
-# cache root — the binary, run directly rather than via `cargo`, does not inherit
-# the `[env]` in `.cargo/config.toml`. Wipe ONLY `scenarios/`: nuking the whole
+# cache root — both binaries use the OS-global default unless explicitly
+# overridden. Wipe ONLY `scenarios/`: nuking the whole
 # root strips fonts/models the app needs (the "cold-cache isolation gotcha").
 CACHE_ROOT="${LUNCOSIM_CACHE:-}"
 if [ -z "$CACHE_ROOT" ]; then
-  CACHE_ROOT="$(sed -n 's/.*LUNCOSIM_CACHE *= *{ *value *= *"\([^"]*\)".*/\1/p' \
-    .cargo/config.toml 2>/dev/null | head -1)"
+  case "$(uname -s)" in
+    Darwin*) CACHE_ROOT="${HOME:?}/Library/Caches/lunco" ;;
+    MINGW*|MSYS*|CYGWIN*) CACHE_ROOT="${LOCALAPPDATA:-${HOME:?}/AppData/Local}/lunco" ;;
+    *) CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:?}/.cache}/lunco" ;;
+  esac
 fi
-CACHE_ROOT="${CACHE_ROOT:-$PWD/.cache}"
 export LUNCOSIM_CACHE="$CACHE_ROOT"
 echo "==> cache root: $CACHE_ROOT (wiping scenarios/ for a cold sync)"
 rm -rf "$CACHE_ROOT/scenarios" 2>/dev/null || true

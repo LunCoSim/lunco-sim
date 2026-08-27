@@ -21,7 +21,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-assets`** | Unified asset management: cache resolution across worktrees, versioned downloads (`Assets.toml`, SHA-256), and texture processing. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
-| **`lunco-settings`** | Centralised user-settings: one JSON file (`~/.lunco/settings.json`), namespaced sections, auto-persist on change. |
+| **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
 | **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/`WorldTime`, the `TimeDomain` clock tree + animation transport, and the `scales` projection layer over `celestial-time`. |
 | **`lunco-worker-transport`** | Generic Web Worker pool transport (wasm-only): spawn / lazy-grow, boot wire-id handshake, byte + Transferable-`ArrayBuffer` post, crash respawn. Payload-agnostic (the caller supplies decode/route callbacks); shared by the Modelica Fast-Run workers and the DEM bake worker so neither reimplements the plumbing. |
@@ -169,7 +169,7 @@ Content-addressed precompute disk cache. Provides the `bake_or_load` mechanism t
 Centralized design tokens based on the Catppuccin palette. Provides semantic tokens for general UI (accent, success, error) and schematic-specific colors for diagram wires and badges, ensuring visual consistency across all panels.
 
 **`lunco-settings`**
-Centralised user-settings system. Persists one namespaced JSON file (`~/.lunco/settings.json`) with auto-save on change, giving subsystems a single place to read and write per-user preferences.
+Centralised user-settings system. Persists one namespaced JSON file at `<OS config dir>/lunco/settings.json` with auto-save on change, giving subsystems a single place to read and write per-user preferences. It also owns the application-wide `DownloadSettings` policy: total attempts, exponential retry delay, and delay cap.
 
 **`lunco-command-macro`**
 Procedural macros for the typed command system. Provides the `#[Command]`, `#[on_command]`, and `register_commands!` macros used to simplify the creation and registration of simulation actions.
@@ -286,7 +286,7 @@ Domain-agnostic visualization framework. Collects simulation data into a `Signal
 In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning, transform gizmos for manipulation, and inspector panels for real-time property editing during simulation assembly.
 
 **`lunco-render`**
-Appearance **intent** — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, and the sun/shadow look settings. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
+Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
 
 **`lunco-render-bevy`**
 The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).

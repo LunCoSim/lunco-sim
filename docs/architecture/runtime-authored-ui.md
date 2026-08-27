@@ -152,9 +152,11 @@ command/event path.
 
 There is no DOM query, JavaScript execution, direct resource mutation, or
 widget-specific Rust callback in an authored template. Inputs, forms, text
-editing, lists with virtualisation, and accessibility semantics are not part of
-the current surface contract; use egui/workbench panels or add an explicit
-engine capability before assuming those features exist.
+editing, lists with virtualisation, modal queue/outcome integration, and
+accessibility semantics are not part of the current surface contract; use
+egui/workbench panels or add an explicit engine capability before assuming
+those features exist. The shared `lunco-ui::modal` host remains the owner of
+scrim, focus, Esc dismissal, queued outcomes, and typed `CloseModal` dispatch.
 
 ### 3. Style the contents
 

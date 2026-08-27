@@ -72,7 +72,7 @@ pub fn author_for_session(session: lunco_core::SessionId) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn persisted_install_id() -> String {
-    let path = lunco_assets::user_config_subdir("identity").join("peer_id");
+    let path = lunco_settings::user_config_subdir("identity").join("peer_id");
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let id = existing.trim();
         if !id.is_empty() {

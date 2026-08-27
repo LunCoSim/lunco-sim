@@ -407,12 +407,12 @@ LunCoSim follows **VS Code's two-tier split** for what survives a
 restart:
 
 - **Global, app-wide prefs** (theme, perf HUD, **default window
-  geometry**) → one shared `~/.lunco/settings.json` via `lunco-settings`
+  geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
 - **Per-project volatile UI state** (active perspective, open-document
   list, and — in future — per-window layout) → **global storage keyed by
   a hash of the project path**, *not* written into the Twin folder:
-  `~/.lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
+  `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
   churn, and personal layout never leaks into a shared project.
 The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur.
@@ -431,7 +431,7 @@ open-document paths; it does not yet replay per-domain open commands.
 ### 9a. Recents
 
 Bounded recents lists (10 Twin folders, 20 loose files; most-recent-first,
-dedupe-on-push) persist to `~/.lunco/recents.json` via the same
+dedupe-on-push) persist to the shared config directory's `recents.json` via the same
 `user_config_dir()` helper. Loaded on startup by `WorkspacePlugin`,
 saved when the in-memory list changes (JSON-fingerprint gated to
 avoid disk writes on unrelated `WorkspaceResource` mutations). Atomic
@@ -442,7 +442,7 @@ boot.
 ### 9b. Settings (`lunco-settings`)
 
 User preferences (perf HUD on/off, editor word-wrap, palette filters,
-…) persist to a single `~/.lunco/settings.json` via the
+…) persist to a single `<OS config dir>/lunco/settings.json` via the
 `lunco-settings` crate. Layouts and recents stay separate by design
 — layouts are TOML and high-structure, recents are high-churn list
 state — but everything else funnels through `settings.json`.
@@ -526,12 +526,13 @@ crates):
 | `modelica.canvas.collab` | `lunco-modelica` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
 | `modelica.editor` | `lunco-modelica` | Source editor word-wrap, tab width, auto-format-on-save |
 | `perf_hud` | `lunco-workbench` | Spike threshold, plot rolling window, Twin overlay toggles |
+| `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
 
 #### 9b.3 Per-Twin overrides
 
-User-global `~/.lunco/settings.json` remains the baseline for user
+User-global `<OS config dir>/lunco/settings.json` remains the baseline for user
 preferences. Project-owned configuration lives in the Twin manifest, where
 the project can enforce behavior that should travel with the project. The
 missing-declared-assets prompt is the first implemented example:
@@ -550,7 +551,7 @@ The original layered-settings design would let projects enforce conventions
 luncosim Twin keeps `"Never"`). Resolution order:
 
 ```
-defaults  ←  ~/.lunco/settings.json  ←  <active_twin>/.lunco/settings.json
+defaults  ←  <OS config dir>/lunco/settings.json  ←  <active_twin>/settings.json
 ```
 
 The active-Twin layer would be writable from the UI's "Workspace
@@ -574,7 +575,7 @@ control kind), and a single panel walks all registered sections via
 - Theming via egui's visuals system. Built-in themes: Dark, Light, High
   Contrast. Per-user customization is a typed section in `settings.json`.
 - Avatar and vessel input bindings are owned by `lunco-controller` as the typed
-  `InputBindingsSettings` section in `~/.lunco/settings.json`. The bundled
+  `InputBindingsSettings` section in `<OS config dir>/lunco/settings.json`. The bundled
   defaults are the data in `assets/config/keybindings.json`; the same resolved
   resource feeds the live input map, help surfaces, input injection, and Rhai
   tutorial labels. There is no separate `keybinds.toml` registry.
@@ -617,6 +618,25 @@ no novel design.
 Both `lunco-workbench` and `lunco-ui` are LunCoSim-agnostic at their core —
 they don't know about balloons, solar panels, or Modelica. Domain knowledge
 lives in domain crates.
+
+### Modal and authored-policy boundary
+
+`lunco-ui::modal` owns the single egui modal host and its queued outcomes. A
+modal body may be custom-painted, but the host owns the scrim, focus, Esc
+dismissal, button outcomes, and the `CloseModal` command. That command is
+available through the same API/Rhai command funnel as every other typed
+command, so dismissing a consent window never stops the simulation, download
+tasks, or API transport.
+
+The dataset consent body remains egui because the retained HTML/Rhai UI layer
+does not yet provide the complete modal contract: a modal host with queue and
+outcome lifecycle, dynamic repeated rows, checkbox/input state events,
+viewport-aware scrolling, and typed command dispatch from the HTML surface.
+Rhai remains the policy owner (`assets/scripting/policy/dataset_provisioning.rhai`):
+it decides prompt versus skip from supplied facts;
+Rust owns only shared transport, persistence, and UI mechanics. An eventual
+HTML modal should add those host capabilities first, then move this body
+without duplicating the current command or policy paths.
 
 ## 12. Workbench apps and the headless launcher
 

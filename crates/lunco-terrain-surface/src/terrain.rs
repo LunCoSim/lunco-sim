@@ -1154,9 +1154,13 @@ fn layer_contributions(
 /// revalidation so a host-side DEM replacement is picked up on the following
 /// reload. Pure I/O (an `await`, not CPU) → safe to run on the main-thread
 /// event loop; the heavy decode/stamp is what moves to the worker.
-async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
+async fn read_bytes(
+    path: std::path::PathBuf,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = settings;
         use lunco_storage::{FileStorage, Storage, StorageHandle};
         FileStorage::new()
             .read(&StorageHandle::File(path))
@@ -1191,7 +1195,8 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
                 .map_err(|e| e.to_string());
         }
         let url = lunco_assets::asset_path::web_url(&path.to_string_lossy());
-        lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url).await
+        lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url, settings)
+            .await
     }
 }
 
@@ -1251,6 +1256,7 @@ fn start_dem_builds(
         (Without<DemBuildTask>, Without<DemWorkerJob>),
     >,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     // Parent-body radius for site-anchored scenes — folded LAST over the layer
     // stack so the tangent-plane DEM hugs the body sphere. Georeferenced
@@ -1285,6 +1291,7 @@ fn start_dem_builds(
         // can't cross the task boundary).
         let half_window = req.half_window;
         let target_res = req.target_res;
+        let settings = settings.clone();
         // The terrain's composed layer stack (from its USD child layer prims).
         // Height layers (craters, edits) contribute ANALYTIC modifiers to the
         // surface oracle: composed OFF-THREAD in the native build task below, and
@@ -1381,6 +1388,7 @@ fn start_dem_builds(
                             &url,
                             0,
                             progress_cb.as_ref().unchecked_ref(),
+                            &settings,
                         )
                         .await;
                         drop(progress_cb);
@@ -1464,7 +1472,7 @@ fn start_dem_builds(
             // ONE file. The `metadata.yaml` read that used to precede this is gone:
             // the raster states its own extent and position, so there is no second
             // document to fetch, parse, or disagree with.
-            let tif = read_bytes(tif_path).await?;
+            let tif = read_bytes(tif_path, &settings).await?;
             let grid = height_grid_from_geotiff(&tif).map_err(|e| e.to_string())?;
 
             // Crop the playable region at native resolution. The mesh and collider

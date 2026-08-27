@@ -36,21 +36,27 @@ successful asset postcondition. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
+Downloads use the shared `download` section in the user settings file
+(`lunco-settings::DownloadSettings`): attempts include the first request,
+delays are exponential and capped, and a failed body read resumes from the
+received prefix with HTTP `Range` when the source supports it. The CLI and the
+interactive window therefore have one policy and one cache/path resolver.
+
 ## Where files live (cache resolution)
 
-- **Shared cache** — `LUNCOSIM_CACHE` env → OS cache dir
-  (`~/.cache/lunco` on Linux) → CWD `.cache`. The worktrees pin
-  `LUNCOSIM_CACHE` to ONE absolute workspace-level `.cache/` in their
-  `.cargo/config.toml`, so every worktree and twin shares a single pool of
-  regenerable data (MSL, textures, ephemeris, downloaded sources).
+- **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,
+  `~/Library/Caches/lunco` on macOS, `%LOCALAPPDATA%\\lunco` on Windows).
+  `LUNCOSIM_CACHE` remains an explicit CI/custom-install override. Every
+  worktree and Twin therefore shares one pool of regenerable data (MSL,
+  textures, ephemeris, downloaded sources).
 - **Twin cache** — `<TWIN>/.cache`. A Twin's default-owned downloads land
   beside the Twin. `twin://` reads resolve `<twin>/<rel>` first, then
   `<twin>/.cache/<rel>`, then the global cache `<cache>/<rel>`.
 - **`shared = true`** on an entry sends its write to the global pool instead
   (`<cache>/sources/<sha256(url)[..16]>/<basename>`) — one download per URL,
-  reused by every twin and worktree. Use it for multi-GB upstream products
-  several twins reuse: the LROC DTM entries all set it, so `apollo15_dtm` and
-  `apollo15_normal` still share one file.
+  reused by every twin and worktree. Use it when several Twins intentionally
+  share a multi-GB upstream product; a Twin that must be self-contained should
+  set `shared = false`.
 - **Raw downloads**: entries without `dest` land in
   `<owner cache>/sources/<url-hash>/<basename>` — owner being the twin
   (`--twin`) or the shared cache (crate manifest). Author `dest` only when a

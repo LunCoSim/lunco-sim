@@ -329,14 +329,17 @@ fn process_asset_to(
     // ── Bake-key staleness check ──────────────────────────────────────────
     // The processed output is a pure function of (source bytes, this config,
     // pipeline version). Content-address it: a stamp beside the output holds
-    // the key of the bake that produced it, and a matching key skips the
-    // whole decode (the expensive part — a big mosaic decodes to GBs of f64).
+    // the key of the bake that produced it, and a matching key plus a complete
+    // consumer artifact skips the whole decode (the expensive part — a big
+    // mosaic decodes to GBs of f64).
     // Anything that could change the result — new source, edited ROI, a
     // pipeline fix (bump PIPELINE_VERSION) — changes the key and rebakes.
     // Never time-based: a cache that can't go stale beats one that expires.
     let stamp_path = bake_stamp_path(&output_path);
     let key = bake_key(source_path, process)?;
-    if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key) {
+    if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key)
+        && processed_output_present(&output_path, process, Some(source_path))
+    {
         println!(
             "  ✓ up-to-date (bake key match) → {}",
             output_path.display()
@@ -556,11 +559,12 @@ fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
 /// Whether a processed artifact is complete enough for a consumer to load.
 ///
 /// The output itself may be a file or a directory (`dem` delivers a terrain
-/// site folder). The pipeline-specific payload and all required sidecars are
-/// checked before the completion stamp is accepted. When the source is also
-/// present, its current content-addressed bake key must match; packaged builds
-/// may omit the raw source, in which case the non-empty completion stamp is the
-/// integrity boundary created by the packaging pipeline.
+/// site folder). The pipeline-specific payload is checked before the completion
+/// stamp is accepted. Some map inputs also emit an optional `.mean` sidecar for
+/// the albedo gain calculation; the PNG remains the map artifact. When the
+/// source is also present, its current content-addressed bake key must match;
+/// packaged builds may omit the raw source, in which case the non-empty
+/// completion stamp is the integrity boundary created by the packaging pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn processed_output_present(
     output_path: &Path,
@@ -574,7 +578,7 @@ pub fn processed_output_present(
                     .join("materials/textures/heightmap.tif")
                     .is_file()
         }
-        "map" => output_path.is_file() && output_path.with_extension("mean").is_file(),
+        "map" => output_path.is_file(),
         "gltf" | "normalmap" | "texture" => output_path.is_file(),
         _ => false,
     };

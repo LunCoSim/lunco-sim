@@ -1128,7 +1128,7 @@ mod tests {
         )));
         // `lunco-settings` refuses disk I/O in a test binary (see its `disk_backed`), so
         // this app's settings are in-memory defaults and CANNOT reach the developer's real
-        // `~/.lunco/settings.json`. Asserted belt-and-braces: the master-switch test below
+        // the user's settings file. Asserted belt-and-braces: the master-switch test below
         // writes `enabled: false`, and that once escaped into the real config.
         app.insert_resource(TelemetrySettings::default());
         app.add_systems(FixedUpdate, advance_test_ports);

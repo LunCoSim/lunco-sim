@@ -224,9 +224,7 @@ impl Plugin for SandboxUiPlugin {
             // second one panics ("plugin already added"). So all app-level panel
             // registration goes here.
             .add_plugins(|app: &mut App| {
-                use lunco_settings::AppSettingsExt;
                 use lunco_workbench::WorkbenchAppExt;
-                app.register_settings_section::<lunco_settings::DownloadSettings>();
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
@@ -873,9 +871,47 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 ui.label("Max parallel downloads:");
                 ui.add(egui::Slider::new(
                     &mut settings.max_parallel_downloads,
-                    1..=10,
+                    lunco_settings::DownloadSettings::MAX_PARALLEL_DOWNLOADS_RANGE,
                 ));
             });
+            ui.horizontal(|ui| {
+                ui.label("Max attempts per download:");
+                ui.add(egui::Slider::new(
+                    &mut settings.max_attempts,
+                    lunco_settings::DownloadSettings::MAX_ATTEMPTS_RANGE,
+                ));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Initial retry delay (seconds):");
+                ui.add(egui::Slider::new(
+                    &mut settings.retry_initial_delay_secs,
+                    lunco_settings::DownloadSettings::RETRY_INITIAL_DELAY_SECS_RANGE,
+                ));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Retry backoff multiplier:");
+                ui.add(egui::Slider::new(
+                    &mut settings.retry_backoff_multiplier,
+                    lunco_settings::DownloadSettings::RETRY_BACKOFF_MULTIPLIER_RANGE,
+                ));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Maximum retry delay (seconds):");
+                ui.add(egui::Slider::new(
+                    &mut settings.retry_max_delay_secs,
+                    lunco_settings::DownloadSettings::RETRY_MAX_DELAY_SECS_RANGE,
+                ));
+            });
+            settings.retry_max_delay_secs = settings
+                .retry_max_delay_secs
+                .max(settings.retry_initial_delay_secs);
+            ui.label(
+                egui::RichText::new(
+                    "The same bounded policy is used for assets, MSL, scenario HTTP, and app updates. Attempts include the first request; delays grow exponentially and stop at the configured maximum.",
+                )
+                .weak()
+                .small(),
+            );
             ui.add_space(8.0);
         }
         if let Some((root, suppressed)) = dataset_provisioning::active_project_prompt_setting(

@@ -104,31 +104,41 @@ fn open_modal(request: ProvisioningRequest, modals: &mut ModalQueue) -> ActivePr
                 }
             }
         });
+        // Keep the consent controls and action row reachable on small displays:
+        // only the potentially unbounded dataset list scrolls.
+        let list_height = (ui.ctx().content_rect().height() - 190.0).max(32.0);
+        egui::ScrollArea::vertical()
+            .max_height(list_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (index, dataset) in body_choices.iter().enumerate() {
+                    let Ok(mut selected) = selection.lock() else {
+                        return;
+                    };
+                    let enabled = needs_provisioning(&dataset.state);
+                    let mut checked = selected[index];
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(enabled, egui::Checkbox::new(&mut checked, &dataset.name));
+                        ui.label(status_text(dataset));
+                    });
+                    selected[index] = checked;
+                }
+            });
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "Already ready resources are shown for visibility and cannot be selected.",
+            )
+            .weak()
+            .small(),
+        );
         if project_root.is_some() {
-            ui.add_space(2.0);
+            ui.separator();
             let Ok(mut suppress) = suppress_prompt.lock() else {
                 return;
             };
-            ui.checkbox(
-                &mut *suppress,
-                "Don't show this prompt again for this project",
-            );
+            ui.checkbox(&mut *suppress, "Don't ask again for this project");
         }
-        ui.add_space(2.0);
-        for (index, dataset) in body_choices.iter().enumerate() {
-            let Ok(mut selected) = selection.lock() else {
-                return;
-            };
-            let enabled = needs_provisioning(&dataset.state);
-            let mut checked = selected[index];
-            ui.horizontal(|ui| {
-                ui.add_enabled(enabled, egui::Checkbox::new(&mut checked, &dataset.name));
-                ui.label(status_text(dataset));
-            });
-            selected[index] = checked;
-        }
-        ui.add_space(4.0);
-        ui.label("Already ready resources are shown for visibility and cannot be selected.");
     }));
     let title = if is_engine {
         "Download visual resources"

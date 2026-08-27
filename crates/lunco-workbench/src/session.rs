@@ -4,7 +4,7 @@
 //! the add/close events, and [`WorkspacePlugin`](lunco_workspace::WorkspacePlugin)
 //! — now lives in `lunco-workspace` (bevy ECS substrate, no UI), so a `--no-ui`
 //! server installs it without the workbench. What stays here is the part that
-//! needs on-disk config-dir resolution (via `lunco_assets`): loading the
+//! needs on-disk config-dir resolution (via `lunco_settings`): loading the
 //! recents list at startup and writing it back when it changes. The workbench
 //! owns config-dir I/O, so this is its job, not the headless workspace crate's.
 
@@ -33,14 +33,14 @@ impl Plugin for RecentsPlugin {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Recents persistence — `~/.lunco/recents.json`
+// Recents persistence — the shared LunCoSim config directory
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Path resolution for the recents file. Lifted into a helper so the
-/// `LUNCOSIM_CONFIG` env override (set by `lunco_assets::user_config_dir`)
+/// `LUNCOSIM_CONFIG` env override (set by `lunco_settings::user_config_dir`)
 /// flows through to both the load and save paths.
 fn recents_path() -> std::path::PathBuf {
-    lunco_assets::user_config_dir().join("recents.json")
+    lunco_settings::user_config_dir().join("recents.json")
 }
 
 /// Holds the JSON-serialised recents from the last successful save (or

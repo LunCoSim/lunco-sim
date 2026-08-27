@@ -18,6 +18,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use lunco_assets::{download, process};
+use lunco_settings::DownloadSettings;
 use std::path::PathBuf;
 
 fn main() {
@@ -125,7 +126,8 @@ fn main() {
         return;
     };
 
-    let parallel = parallel_limit.unwrap_or_else(download::load_download_parallel_limit);
+    let settings = lunco_settings::load_section_from_disk::<DownloadSettings>();
+    let parallel = parallel_limit.unwrap_or(settings.max_parallel_downloads);
 
     // `--twin` selects the Twin download/process/list path, which reads the
     // folder's own Assets.toml and resolves dests against the Twin root.
@@ -134,11 +136,12 @@ fn main() {
     if let Some(dir) = twin_dir {
         let twin_root = PathBuf::from(dir);
         let result = match (action, asset_key) {
-            ("download", Some(key)) => {
-                download::download_one_for_twin(&twin_root, key).map_err(|e| e.to_string())
-            }
-            ("download", None) => download::download_all_for_twin_with_limit(&twin_root, parallel)
+            ("download", Some(key)) => download::download_one_for_twin(&twin_root, key, &settings)
                 .map_err(|e| e.to_string()),
+            ("download", None) => {
+                download::download_all_for_twin_with_limit(&twin_root, parallel, &settings)
+                    .map_err(|e| e.to_string())
+            }
             ("process", key) => process_for_twin(&twin_root, key, quality),
             ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
             ("stage", _) => Err("stage cannot be used with --twin".to_string()),
@@ -157,17 +160,18 @@ fn main() {
                 if group.is_some() || asset_key.is_some() {
                     Err("--bundle cannot be combined with --group or --asset".to_string())
                 } else {
-                    download::download_all_for_bundle_with_limit(bundle, parallel)
+                    download::download_all_for_bundle_with_limit(bundle, parallel, &settings)
                         .map_err(|e| e.to_string())
                 }
             } else if let Some(key) = asset_key {
                 // `-a` targets a single asset in any group. Takes precedence
                 // over `-g` (one asset is more specific than one group).
-                download::download_one_engine(key).map_err(|e| e.to_string())
+                download::download_one_engine(key, &settings).map_err(|e| e.to_string())
             } else if let Some(g) = group {
-                download::download_all_for_group_with_limit(g, parallel).map_err(|e| e.to_string())
+                download::download_all_for_group_with_limit(g, parallel, &settings)
+                    .map_err(|e| e.to_string())
             } else {
-                download::download_all_engine().map_err(|e| e.to_string())
+                download::download_all_engine(&settings).map_err(|e| e.to_string())
             }
         }
         "process" => {

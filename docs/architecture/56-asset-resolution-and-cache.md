@@ -25,12 +25,12 @@ scheme: naming the mistake legibly would make it permanent.
 
 | Scheme | Resolves to | For |
 |---|---|---|
-| `lunco://` | `assets/`, then `assets/.cache`, then a source tree's sibling `.cache/`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `lunco://` | `assets/`, then `assets/.cache`, then the machine-global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
 | `twin://<name>/…` | the Twin's authored root, then `<twin>/.cache`, then the global cache | Twin-owned content, downloaded scenarios, and intentional global reuse |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 
 Both schemes resolve **authored first, then the cache that travels with the
-unit, then (for a source checkout) its staging cache, then the shared pool**. So a downloaded binary is reachable at its logical
+unit, then the shared machine-global pool**. So a downloaded binary is reachable at its logical
 address without any authored file naming a cache, and a file the author
 committed always wins over a materialised copy of it.
 
@@ -57,15 +57,13 @@ we distribute:
   would have written to, and reports those datasets *installed* instead of
   offering to re-fetch files already on disk.
 
-During native development, the packer's `<workspace>/.cache` is also a read
-root. It is the source of the package's `assets/.cache`, so `cargo run` and the
-extracted package resolve the same fonts and processed imagery. The machine-wide `<cache>` sits underneath both as a shared convenience, never
-as a prerequisite. Writes still go there ([`DatasetScope::dest_root`]): a
-package may sit on a read-only mount, and one machine should not hold a copy of
-the same product per installation. `lunco_assets::cache_roots()` is the single
-place that order is decided; the `AssetSource`, the synchronous resolver
-(`engine_asset_local_path`) and the dataset registry all ask it, so a file the
-loader finds is a file the validator finds.
+During native development, downloads and processed outputs go directly to the
+machine-global cache. The packer copies selected manifest artifacts from that
+cache into `assets/.cache`, so a package remains self-contained while source
+runs and packaged runs use the same logical identities. `lunco_assets::cache_roots()`
+is the single place that order is decided; the `AssetSource`, the synchronous
+resolver (`engine_asset_local_path`) and the dataset registry all ask it, so a
+file the loader finds is a file the validator finds.
 
 Both `twin://` readers implement that fallback — the `AssetReader` and the
 `SchemeRegistry` handler — because they must agree: a file the asset server can
@@ -248,6 +246,23 @@ Native HTTP reads have connect, response, and per-read body deadlines. The body
 deadline is an inactivity bound, not a total transfer-duration limit, so a
 large healthy DEM can continue while a silent peer releases its worker.
 
+### One download policy and resumable recovery
+
+`lunco-settings::DownloadSettings` is the single application-wide transport
+policy. It is persisted in `<OS config dir>/lunco/settings.json` and is used by
+the CLI, interactive asset registry, scenario HTTP, MSL, terrain, browser
+Cache Storage fetches, and the desktop updater. `max_attempts` counts the first
+request; subsequent waits use exponential backoff with a configured multiplier
+and maximum delay. No downloader owns a second retry constant or settings file.
+
+Native file downloads and update ranges retain the received prefix in their
+staging file/vector. When the origin honors `Range`, the next attempt requests
+only the missing suffix. If an origin ignores the range and returns a complete
+`200`, the response is restarted safely; a partial `200` or an invalid
+`Content-Range` is rejected. Browser fetches apply the same policy and retain
+received chunks across `fetch()` attempts. Final cache publication remains
+atomic/content-verified, so partial bytes are never exposed as an asset.
+
 ### Domain metadata rides with the declaration
 
 A dataset's transport (`url`, `dest`, `sha256`) and its *meaning* belong in one
@@ -390,6 +405,6 @@ above.
 
 This keeps the manifest authoritative without bundling runtime datasets that
 must remain user-consented. The packaged `lunco://` reader checks authored
-assets, packed cache, development cache, and the machine-global cache in that
-order; Twin reads additionally check the Twin's authored/cache roots and then
-the same machine-global cache.
+assets, packed cache, and the machine-global cache in that order; Twin reads
+additionally check the Twin's authored/cache roots and then the same
+machine-global cache.

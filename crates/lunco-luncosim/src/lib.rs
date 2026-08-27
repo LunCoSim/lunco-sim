@@ -172,6 +172,42 @@ fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String>
     Ok(profile)
 }
 
+/// Parse the explicit Graphics quality override used by GPU-backed runs.
+///
+/// The persisted Graphics section remains the default when this flag is absent.
+/// A command-line override is useful for render tests and recordings because it
+/// makes their visual budget part of the invocation instead of depending on the
+/// developer's settings file.
+fn parse_render_quality(args: &[String]) -> Result<Option<lunco_render::RenderingQuality>, String> {
+    let mut quality = None;
+    let mut index = 0;
+    while index < args.len() {
+        let value = if args[index] == "--render-quality" {
+            index += 1;
+            args.get(index)
+                .map(String::as_str)
+                .ok_or_else(|| "`--render-quality` needs low, balanced, or high".to_string())?
+        } else if let Some(value) = args[index].strip_prefix("--render-quality=") {
+            value
+        } else {
+            index += 1;
+            continue;
+        };
+        quality = Some(match value {
+            "low" => lunco_render::RenderingQuality::Low,
+            "balanced" => lunco_render::RenderingQuality::Balanced,
+            "high" => lunco_render::RenderingQuality::High,
+            _ => {
+                return Err(format!(
+                    "invalid render quality `{value}`; expected `low`, `balanced`, or `high`"
+                ));
+            }
+        });
+        index += 1;
+    }
+    Ok(quality)
+}
+
 #[cfg(feature = "ui")]
 fn parse_record_preset(
     args: &[String],
@@ -313,6 +349,55 @@ mod render_profile_tests {
         ])
         .is_err());
     }
+
+    #[test]
+    fn parses_render_quality_in_both_cli_forms() {
+        assert_eq!(
+            parse_render_quality(&[
+                "luncosim".to_string(),
+                "--render-quality".to_string(),
+                "high".to_string(),
+            ]),
+            Ok(Some(lunco_render::RenderingQuality::High))
+        );
+        assert_eq!(
+            parse_render_quality(&[
+                "luncosim".to_string(),
+                "--render-quality=balanced".to_string(),
+            ]),
+            Ok(Some(lunco_render::RenderingQuality::Balanced))
+        );
+    }
+
+    #[test]
+    fn absent_render_quality_keeps_the_persisted_setting() {
+        assert_eq!(parse_render_quality(&["luncosim".to_string()]), Ok(None));
+    }
+
+    #[test]
+    fn rejects_an_unknown_render_quality() {
+        assert!(parse_render_quality(&[
+            "luncosim".to_string(),
+            "--render-quality=ultra".to_string(),
+        ])
+        .is_err());
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn explicit_render_quality_replaces_the_existing_settings_resource() {
+        let mut app = App::new();
+        app.insert_resource(lunco_render::RenderingQualitySettings::default());
+
+        apply_render_quality_override(&mut app, Some(lunco_render::RenderingQuality::High));
+
+        assert_eq!(
+            app.world()
+                .resource::<lunco_render::RenderingQualitySettings>()
+                .profile(),
+            lunco_render::RenderingQuality::High.profile()
+        );
+    }
 }
 
 /// Usage text for `--help`. Every flag here is one the binary ACTUALLY parses,
@@ -385,6 +470,12 @@ PERFORMANCE:
                          `standard` (default) preserves authored PBR rendering;
                          `fast` uses unlit, texture-free materials and disables
                          HDR, bloom and MSAA. Startup-only; restart to change it.
+        --render-quality MODE
+                         Graphics quality override: `low`, `balanced`, or `high`.
+                         `high` is the highest shipped quality: it raises the
+                         shadow, sky cubemap, lunar terrain, LOD and tessellation
+                         budgets. It applies to GPU-backed runs only and does not
+                         replace the shaders authored by the USD scene.
         --no-vsync       Uncap the frame rate (present without vsync).
         --no-throttle    Keep running at full rate while unfocused.
         --headless-max-speed
@@ -489,6 +580,13 @@ fn run_with_mode(headless: bool) -> AppExit {
             return AppExit::error();
         }
     };
+    let render_quality = match parse_render_quality(&args) {
+        Ok(quality) => quality,
+        Err(error) => {
+            eprintln!("luncosim: {error}");
+            return AppExit::error();
+        }
+    };
     #[cfg(feature = "ui")]
     let record_preset = match parse_record_preset(&args) {
         Ok(preset) => preset,
@@ -552,9 +650,42 @@ fn run_with_mode(headless: bool) -> AppExit {
         app.add_plugins(SandboxHeadlessPlugin { execution_mode });
     }
 
+    apply_render_quality_override(&mut app, render_quality);
+
     // Return the AppExit so a non-zero exit (e.g. the startup-scene fail-loud
     // guard's `AppExit::error()`) propagates to the process exit code.
     app.run()
+}
+
+/// Apply a process-level quality choice after all render plugins have initialized
+/// their settings resource. Omitting the flag leaves the persisted Graphics choice
+/// (or the renderer's documented default) unchanged; supplying it is an explicit
+/// test/recording contract.
+#[cfg(feature = "ui")]
+fn apply_render_quality_override(app: &mut App, quality: Option<lunco_render::RenderingQuality>) {
+    let Some(quality) = quality else {
+        return;
+    };
+    let Some(mut settings) = app
+        .world_mut()
+        .get_resource_mut::<lunco_render::RenderingQualitySettings>()
+    else {
+        warn!(
+            "[render] --render-quality={} requested for a headless run; no GPU settings resource exists",
+            quality.label()
+        );
+        return;
+    };
+
+    settings.apply_preset(quality);
+    info!(
+        "[render] explicit quality override enabled: {}",
+        quality.label()
+    );
+}
+
+#[cfg(not(feature = "ui"))]
+fn apply_render_quality_override(_app: &mut App, _quality: Option<lunco_render::RenderingQuality>) {
 }
 
 /// Build the base [`DefaultPlugins`] group for the chosen mode.

@@ -7,14 +7,15 @@
 //!
 //! ## Cache Directory Strategy
 //!
-//! All worktrees share the same cache directory to avoid redundant downloads
-//! and duplicate processed output. Resolution order:
+//! All worktrees share the same machine-global cache directory to avoid
+//! redundant downloads and duplicate processed output. Resolution order:
 //!
-//! 1. `LUNCOSIM_CACHE` environment variable (set in `.cargo/config.toml`)
-//! 2. Fallback to `.cache/` relative to the workspace root
+//! 1. `LUNCOSIM_CACHE` environment variable (explicit override for CI/custom installs)
+//! 2. OS-conventional cache directory
+//! 3. CWD-relative `.cache/` only when no OS cache directory is available
 //!
 //! ```text
-//! ~/.cache/luncosim/          # Shared across ALL worktrees
+//! ~/.cache/lunco/             # Shared across ALL worktrees and Twins
 //! ├── textures/               # Large binaries (earth.jpg, moon.png)
 //! ├── ephemeris/              # JPL Horizons CSVs
 //! ├── remote/                 # HTTP-downloaded assets
@@ -26,7 +27,7 @@
 //! ```rust
 //! use lunco_assets::cache_dir;
 //!
-//! let dir = cache_dir();  // → ~/.cache/luncosim/ on Linux
+//! let dir = cache_dir();  // → ~/.cache/lunco/ on Linux
 //! ```
 
 // This crate owns the on-disk asset cache layout, so it legitimately
@@ -88,92 +89,6 @@ pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
     parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
 };
-
-// ============================================================================
-// User Config Directory Resolution
-// ============================================================================
-
-/// Resolves the user-level config directory for LunCoSim — for
-/// settings, recents, keybinds, palette history, layouts, and any
-/// other **per-user persistent state** that must survive `cargo clean`
-/// and is independent of any one Twin.
-///
-/// Resolution order:
-///
-/// 1. `LUNCOSIM_CONFIG` environment variable if set (testing, custom
-///    installs, sandboxed CI).
-/// 2. OS-conventional config dir via [`dirs::config_dir`]:
-///    - Linux:   `~/.config/lunco/`
-///    - macOS:   `~/Library/Application Support/lunco/`
-///    - Windows: `%APPDATA%\lunco\` (i.e. `C:\Users\<user>\AppData\Roaming\lunco\`)
-/// 3. `~/.lunco/` if no OS-conventional dir is available.
-/// 4. `.lunco/` in the CWD as a pathological last resort.
-///
-/// The directory is **not created** by this function — callers that
-/// write into a subdir use [`user_config_subdir`] which `create_dir_all`s.
-/// Read-only callers (existence probes for migrations, etc.) get a
-/// path back regardless of whether the dir exists.
-///
-/// Distinct from [`cache_dir`]: that returns the regenerable artifact
-/// cache (MSL, textures, ephemeris). Anything safe to delete and
-/// re-download belongs there. User config does not.
-pub fn user_config_dir() -> PathBuf {
-    if let Some(val) = std::env::var_os("LUNCOSIM_CONFIG") {
-        return PathBuf::from(val);
-    }
-    if let Some(cfg) = dirs::config_dir() {
-        return cfg.join("lunco");
-    }
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".lunco");
-    }
-    PathBuf::from(".lunco")
-}
-
-/// User-level data directory for projects, exported simulations, FMUs,
-/// logs — anything the user produced and would be upset to lose.
-///
-/// Resolution: `LUNCOSIM_DATA` env → OS-conventional data dir
-/// ([`dirs::data_dir`]) under `lunco/` → fall back to [`user_config_dir`]
-/// so callers always get *some* writable location.
-///
-/// - Linux:   `~/.local/share/lunco/`
-/// - macOS:   `~/Library/Application Support/lunco/`
-/// - Windows: `%APPDATA%\lunco\`
-pub fn user_data_dir() -> PathBuf {
-    if let Some(val) = std::env::var_os("LUNCOSIM_DATA") {
-        return PathBuf::from(val);
-    }
-    if let Some(d) = dirs::data_dir() {
-        return d.join("lunco");
-    }
-    user_config_dir()
-}
-
-/// Returns a named subdirectory of [`user_config_dir`], creating it
-/// (and any missing parents) on the way out.
-///
-/// Use this for *write* paths; for *probe* paths (existence checks,
-/// migrations) call `user_config_dir().join(name)` directly so a
-/// missing dir doesn't get materialised on a no-op read.
-///
-/// # Examples
-///
-/// ```no_run
-/// use lunco_assets::user_config_subdir;
-///
-/// let recents = user_config_subdir("").join("recents.json");
-/// // → ~/.lunco/recents.json (Linux/macOS), C:\Users\u\.lunco\recents.json (Windows)
-/// ```
-pub fn user_config_subdir(name: &str) -> PathBuf {
-    let dir = if name.is_empty() {
-        user_config_dir()
-    } else {
-        user_config_dir().join(name)
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
 
 // ============================================================================
 // Cache Directory Resolution
@@ -299,41 +214,8 @@ pub fn engine_manifest_text(group: &str) -> Option<String> {
     std::fs::read_to_string(manifests_dir().join(format!("{group}.toml"))).ok()
 }
 
-/// Development cache beside an `assets/` source tree (`<workspace>/.cache`).
-///
-/// The native packer materialises its payload here before copying it into
-/// [`packed_cache_dir`]. A source-tree run must read the same bytes through the
-/// same `lunco://` identity; otherwise `cargo run` and an extracted package
-/// resolve different asset sets. It is deliberately a *read* root only — engine
-/// downloads still write to [`cache_dir`], the user-selected/shared cache.
-///
-/// A checkout may itself be one directory below the workspace that owns the
-/// shared `.cache` (the normal layout for sibling git worktrees). The production
-/// executable is launched directly in that case, so Cargo's
-/// `.cargo/config.toml` environment injection is not present. Discover the
-/// adjacent workspace cache as well; otherwise `cargo run` and the exact same
-/// `target/debug/luncosim` resolve different asset sets.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn development_cache_dir() -> Option<PathBuf> {
-    let assets_dir = assets_dir_abs();
-    let worktree = assets_dir.parent()?;
-    let local = worktree.join(".cache");
-    if local.is_dir() {
-        return Some(local);
-    }
-
-    let adjacent = worktree.parent()?.join(".cache");
-    adjacent.is_dir().then_some(adjacent)
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn development_cache_dir() -> Option<PathBuf> {
-    None
-}
-
 /// Every cache root a library-relative reference is looked up in, in order:
-/// the packed cache beside `assets/`, an adjacent source-tree cache when one is
-/// present, then the shared machine-wide pool.
+/// the packed cache beside `assets/`, then the shared machine-wide pool.
 ///
 /// The ONE place that order is decided. The `lunco://` asset source, the
 /// synchronous resolver ([`engine_asset_local_path`]) and any tool probing for
@@ -341,11 +223,6 @@ pub fn development_cache_dir() -> Option<PathBuf> {
 /// validator.
 pub fn cache_roots() -> Vec<PathBuf> {
     let mut roots = vec![packed_cache_dir()];
-    if let Some(development) = development_cache_dir() {
-        if !roots.contains(&development) {
-            roots.push(development);
-        }
-    }
     let shared = cache_dir();
     if !roots.contains(&shared) {
         roots.push(shared);
@@ -508,11 +385,10 @@ pub fn msl_source_root_path() -> Option<PathBuf> {
     if !root.join("Modelica").exists() {
         return None;
     }
-    // Canonicalize so callers see the same absolute path regardless
-    // of CWD. `LUNCOSIM_CACHE = "../.cache"` in `.cargo/config.toml`
-    // is relative, and rumoca's bincode source-root cache keys on the
-    // exact path it receives — a CWD-dependent relative form would
-    // produce different keys per caller and force full reparses.
+    // Canonicalize so callers see the same absolute path regardless of CWD.
+    // Rumoca's bincode source-root cache keys on the exact path it receives,
+    // so a CWD-dependent relative form would produce different keys per caller
+    // and force full reparses.
     std::fs::canonicalize(&root).ok().or(Some(root))
 }
 
@@ -816,47 +692,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_config_dir_returns_path() {
-        // Function is infallible — returns *some* path regardless of
-        // platform / env. Don't assert the exact location since CI
-        // may set `LUNCOSIM_CONFIG` or run with HOME unset.
-        let dir = user_config_dir();
-        assert!(!dir.as_os_str().is_empty());
-    }
-
-    #[test]
-    fn user_config_dir_honours_env_override() {
-        let prev = std::env::var_os("LUNCOSIM_CONFIG");
-        // SAFETY: tests in this module run sequentially relative to
-        // each other (they don't, in fact, but the env var is unique
-        // to this single test and we restore it). Fine for a single-
-        // file unit test.
-        std::env::set_var("LUNCOSIM_CONFIG", "/tmp/lunco-test-config");
-        assert_eq!(user_config_dir(), PathBuf::from("/tmp/lunco-test-config"));
-        match prev {
-            Some(v) => std::env::set_var("LUNCOSIM_CONFIG", v),
-            None => std::env::remove_var("LUNCOSIM_CONFIG"),
-        }
-    }
-
-    #[test]
-    fn user_config_subdir_creates_dir() {
-        let prev = std::env::var_os("LUNCOSIM_CONFIG");
-        let tmp = std::env::temp_dir().join(format!("lunco-test-cfg-{}", std::process::id()));
-        std::env::set_var("LUNCOSIM_CONFIG", &tmp);
-        let sub = user_config_subdir("recents");
-        assert!(sub.exists());
-        assert!(sub.ends_with("recents"));
-        let _ = std::fs::remove_dir_all(&tmp);
-        match prev {
-            Some(v) => std::env::set_var("LUNCOSIM_CONFIG", v),
-            None => std::env::remove_var("LUNCOSIM_CONFIG"),
-        }
-    }
-
-    #[test]
-    fn cache_dir_defaults_to_dot_cache() {
-        // When LUNCOSIM_CACHE is not set, falls back to .cache
+    fn cache_dir_defaults_to_os_global_cache() {
+        // When LUNCOSIM_CACHE is not set, use the OS-global cache.
         // (In CI this test may run with the env var set, so we only test the function exists)
         let dir = cache_dir();
         assert!(!dir.as_os_str().is_empty());

@@ -17,9 +17,17 @@ pipeline into the slim web / Modelica binaries.
   split + shadow-map atlas + depth/normal biases). Shared by the sandbox,
   celestial, and USD render paths; callers construct it from the authoritative
   Graphics profile and may then apply authored scene overrides.
+- **`RenderingQualitySettings`** — the persisted Graphics section and its
+  `RenderingQuality::{Low, Balanced, High}` presets. `High` is the highest
+  shipped renderer budget: it covers shadow maps and casters, the horizon-shadow
+  cache, camera MSAA/bloom, sky cubemap resolution, lunar terrain caches/LOD,
+  rock density, and geometric tessellation. The settings are consumed by the
+  render-capable crates; they do not select or replace USD-authored shader
+  sources.
 
-## Roadmap
+## Remaining roadmap
 
-Intended home for the rest of the render-look surface: exposure / earthshine,
-anti-aliasing, sky / Earth, and the `RenderSettings` window backing. Only the
-sun-shadow spec lives here today.
+The remaining render-look surface includes deeper exposure/earthshine controls,
+additional authored sky/Earth looks, and further Graphics UI refinements. New
+quality controls belong in `RenderingQualitySettings` here and must have a real
+consumer in the render-capable crates.

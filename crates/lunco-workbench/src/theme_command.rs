@@ -1,6 +1,6 @@
 //! Theme mode persistence + the `SetTheme` API command.
 //!
-//! Persists `ThemeMode` to `~/.lunco/settings.json` under the
+//! Persists `ThemeMode` to the shared LunCoSim settings file under the
 //! `"theme"` key (via `lunco-settings`) so a Light-mode user doesn't
 //! get blasted with Dark on every relaunch. The command mirrors what
 //! the `Settings ▸ Theme` toggle does, but reachable from the

@@ -1,6 +1,6 @@
 //! Centralised user settings.
 //!
-//! One file on disk (`~/.lunco/settings.json`), one resource in the
+//! One file on disk in the OS config directory (`lunco/settings.json`), one resource in the
 //! ECS, and a typed-section API that domain crates use to register
 //! their own slice. The crate handles load-on-startup, persist-on-
 //! change, and atomic disk writes — call sites just read & mutate
@@ -72,10 +72,41 @@ pub trait SettingsSection:
     }
 }
 
-/// Resolved path to `settings.json`. Honours the `LUNCOSIM_CONFIG`
-/// env override via [`lunco_assets::user_config_dir`].
+/// Resolves the user-level configuration directory for LunCoSim.
+///
+/// This is the single owner of the configuration path used by settings,
+/// recents, identities, layouts, and other per-user state. It is separate
+/// from the regenerable asset cache owned by `lunco-assets`.
+pub fn user_config_dir() -> PathBuf {
+    if let Some(val) = std::env::var_os("LUNCOSIM_CONFIG") {
+        return PathBuf::from(val);
+    }
+    if let Some(cfg) = dirs::config_dir() {
+        return cfg.join("lunco");
+    }
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".lunco");
+    }
+    PathBuf::from(".lunco")
+}
+
+/// Returns a named user-configuration subdirectory, creating it for callers
+/// that are about to write. Read-only callers should use [`user_config_dir`]
+/// directly and append their probe path.
+pub fn user_config_subdir(name: &str) -> PathBuf {
+    let dir = if name.is_empty() {
+        user_config_dir()
+    } else {
+        user_config_dir().join(name)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Resolved path to `settings.json`.
 pub fn settings_path() -> PathBuf {
-    lunco_assets::user_config_dir().join("settings.json")
+    user_config_dir().join("settings.json")
 }
 
 /// Read a single section directly from disk, **before** the App is
@@ -345,7 +376,7 @@ pub fn use_ephemeral_settings() {
 /// change. That is correct for the app and *actively dangerous* in a test: a test app that
 /// merely installs a domain plugin inherits real, persistent, cross-process state. A
 /// `lunco-telemetry` test flipped `TelemetrySettings::enabled` to `false`; that `false`
-/// landed in the developer's real `~/.lunco/settings.json`, and every subsequent test in
+/// landed in the developer's real settings file, and every subsequent test in
 /// the process — and the developer's next real run of the app — read it back. It presented
 /// as a cluster of unrelated failures whose membership *changed with the test-thread
 /// count*, because the poison travelled through the filesystem rather than the code.
@@ -379,7 +410,7 @@ fn disk_backed() -> bool {
 /// Settings persist automatically: [`persist_section`] fires on *any* change to the typed
 /// resource, and `flush_settings` then writes `settings.json`. In a test that means a
 /// plugin under test which mutates its own settings resource **writes into the developer's
-/// real `~/.lunco/settings.json`** — and the next test app, and their next real run of the
+/// real settings file** — and the next test app, and their next real run of the
 /// application, load it back.
 ///
 /// This is not hypothetical. A `lunco-telemetry` test flipped `TelemetrySettings::enabled`
@@ -395,7 +426,7 @@ pub fn isolate_config_dir_for_tests(tag: &str) {
         let dir = std::env::temp_dir().join(format!("lunco-test-config-{tag}"));
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::remove_file(dir.join("settings.json"));
-        // `lunco_assets::user_config_dir()` reads this first — see its docs.
+        // `user_config_dir()` reads this first — see its docs.
         std::env::set_var("LUNCOSIM_CONFIG", &dir);
     });
 }
@@ -495,21 +526,153 @@ impl SettingsSection for TerrainSettings {
 
 /// Persistent settings for asset downloading.
 #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
 pub struct DownloadSettings {
     /// Maximum number of concurrent asset downloads (default: 3).
     pub max_parallel_downloads: usize,
+    /// Maximum total attempts for one network operation, including the first
+    /// request (default: 5).
+    pub max_attempts: usize,
+    /// Delay after the first failed attempt, in seconds (default: 1).
+    pub retry_initial_delay_secs: u64,
+    /// Exponential retry multiplier (default: 2).
+    pub retry_backoff_multiplier: u32,
+    /// Maximum delay between attempts, in seconds (default: 60).
+    pub retry_max_delay_secs: u64,
+}
+
+impl DownloadSettings {
+    pub const MAX_PARALLEL_DOWNLOADS_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+    pub const MAX_ATTEMPTS_RANGE: std::ops::RangeInclusive<usize> = 1..=20;
+    pub const RETRY_INITIAL_DELAY_SECS_RANGE: std::ops::RangeInclusive<u64> = 0..=3600;
+    pub const RETRY_BACKOFF_MULTIPLIER_RANGE: std::ops::RangeInclusive<u32> = 2..=10;
+    pub const RETRY_MAX_DELAY_SECS_RANGE: std::ops::RangeInclusive<u64> = 1..=86400;
+
+    /// Delay before the next attempt after `failed_attempt`, where the first
+    /// failed attempt is numbered one. The cap prevents a large retry budget
+    /// from creating an unbounded wait.
+    pub fn retry_delay(&self, failed_attempt: usize) -> std::time::Duration {
+        let exponent = failed_attempt.saturating_sub(1).min(63);
+        let multiplier = u128::from(self.retry_backoff_multiplier);
+        let base = u128::from(self.retry_initial_delay_secs);
+        let cap = u128::from(self.retry_max_delay_secs);
+        let seconds = base
+            .saturating_mul(multiplier.saturating_pow(exponent as u32))
+            .min(cap);
+        std::time::Duration::from_secs(seconds as u64)
+    }
 }
 
 impl Default for DownloadSettings {
     fn default() -> Self {
         Self {
             max_parallel_downloads: 3,
+            max_attempts: 5,
+            retry_initial_delay_secs: 1,
+            retry_backoff_multiplier: 2,
+            retry_max_delay_secs: 60,
         }
     }
 }
 
 impl SettingsSection for DownloadSettings {
     const KEY: &'static str = "download";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if !Self::MAX_PARALLEL_DOWNLOADS_RANGE.contains(&self.max_parallel_downloads) {
+            return Err("max_parallel_downloads must be between 1 and 64".into());
+        }
+        if !Self::MAX_ATTEMPTS_RANGE.contains(&self.max_attempts) {
+            return Err("max_attempts must be between 1 and 20".into());
+        }
+        if !Self::RETRY_INITIAL_DELAY_SECS_RANGE.contains(&self.retry_initial_delay_secs) {
+            return Err("retry_initial_delay_secs must be between 0 and 3600".into());
+        }
+        if !Self::RETRY_BACKOFF_MULTIPLIER_RANGE.contains(&self.retry_backoff_multiplier) {
+            return Err("retry_backoff_multiplier must be between 2 and 10".into());
+        }
+        if !Self::RETRY_MAX_DELAY_SECS_RANGE.contains(&self.retry_max_delay_secs) {
+            return Err("retry_max_delay_secs must be between 1 and 86400".into());
+        }
+        if self.retry_max_delay_secs < self.retry_initial_delay_secs {
+            return Err("retry_max_delay_secs must not be below retry_initial_delay_secs".into());
+        }
+        Ok(())
+    }
+}
+
+/// Registers the application-wide network download policy. Plugins that can
+/// initiate a download call [`ensure_download_settings`] during composition;
+/// the resource and persistence registration remain owned here.
+pub struct DownloadSettingsPlugin;
+
+impl Plugin for DownloadSettingsPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_settings_section::<DownloadSettings>();
+    }
+}
+
+/// Ensure the shared download policy is installed in a composed Bevy app.
+///
+/// Several independently useful plugins can initiate downloads. Bevy rejects
+/// adding the same plugin type twice, so each such plugin calls this one
+/// composition helper instead of owning a second registration path. The
+/// resource, section key, and persistence remain owned by this crate.
+pub fn ensure_download_settings(app: &mut App) {
+    if !app.is_plugin_added::<DownloadSettingsPlugin>() {
+        app.add_plugins(DownloadSettingsPlugin);
+    }
+}
+
+#[cfg(test)]
+mod download_settings_tests {
+    use super::*;
+
+    #[test]
+    fn default_download_policy_is_exponential_and_capped() {
+        let settings = DownloadSettings::default();
+        assert_eq!(settings.max_attempts, 5);
+        assert_eq!(settings.retry_delay(1), std::time::Duration::from_secs(1));
+        assert_eq!(settings.retry_delay(2), std::time::Duration::from_secs(2));
+        assert_eq!(settings.retry_delay(3), std::time::Duration::from_secs(4));
+        assert_eq!(settings.retry_delay(4), std::time::Duration::from_secs(8));
+        assert_eq!(settings.retry_delay(10), std::time::Duration::from_secs(60));
+        assert!(settings.validate_section().is_ok());
+    }
+
+    #[test]
+    fn download_section_without_policy_fields_uses_defaults() {
+        let settings: DownloadSettings = serde_json::from_str(r#"{"max_parallel_downloads": 7}"#)
+            .expect("omitted policy fields use documented defaults");
+        assert_eq!(settings.max_parallel_downloads, 7);
+        assert_eq!(
+            settings.max_attempts,
+            DownloadSettings::default().max_attempts
+        );
+        assert_eq!(settings.retry_backoff_multiplier, 2);
+    }
+
+    #[test]
+    fn invalid_download_policy_is_rejected() {
+        let mut settings = DownloadSettings::default();
+        settings.max_attempts = 0;
+        assert!(settings.validate_section().is_err());
+        settings = DownloadSettings::default();
+        settings.retry_backoff_multiplier = 1;
+        assert!(settings.validate_section().is_err());
+    }
+
+    #[test]
+    fn composed_downloaders_share_one_settings_plugin() {
+        let mut app = App::new();
+        ensure_download_settings(&mut app);
+        ensure_download_settings(&mut app);
+        assert!(app.is_plugin_added::<DownloadSettingsPlugin>());
+        assert_eq!(
+            app.world().resource::<DownloadSettings>(),
+            &DownloadSettings::default()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -646,7 +809,7 @@ mod disk_guard_tests {
             is_test_binary(),
             "the settings disk-guard no longer recognises a cargo-test binary — every \
              SettingsSection in the workspace is now free to overwrite the developer's \
-             real ~/.lunco/settings.json"
+             real settings file"
         );
     }
 

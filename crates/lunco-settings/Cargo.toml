@@ -3,13 +3,15 @@ name = "lunco-settings"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Centralised user-settings system for LunCoSim. One JSON file (~/.lunco/settings.json), namespaced sections, auto-persist on change."
+description = "Centralised user-settings system for LunCoSim. One JSON file in the OS config directory, namespaced sections, auto-persist on change."
 
 [dependencies]
 bevy = { workspace = true, default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
-lunco-assets = { path = "../lunco-assets" }
+# The settings crate owns the user configuration path. Asset storage depends
+# on settings for this shared path, so the ownership direction is explicit.
+dirs = "5"
 # All settings I/O — native files AND the wasm `localStorage` mirror —
 # routes through the storage abstraction (`read_file_sync`/`write_file_sync`),
 # never raw `std::fs` (clippy-banned, wasm-incompatible) or `web_sys`. The

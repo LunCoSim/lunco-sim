@@ -502,6 +502,7 @@ fn kick_web_msl_fetcher(
     slot: Res<MslLoadSlot>,
     mut request: ResMut<WebMslInstallRequest>,
     mut state: ResMut<MslLoadState>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if !request.0 {
         return;
@@ -512,7 +513,7 @@ fn kick_web_msl_fetcher(
         bytes_done: 0,
         bytes_total: 0,
     };
-    wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone()));
+    wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone(), settings.clone()));
 }
 
 /// Plugin that owns MSL asset loading. Add once during app build.
@@ -533,6 +534,7 @@ struct WebMslInstallRequest(bool);
 
 impl Plugin for MslRemotePlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         app.init_resource::<MslLoadState>();
         // Persisted user settings (the local-root override). Lives in
         // settings.json so the Settings menu and source resolver share one
@@ -1036,8 +1038,8 @@ mod web {
     use lunco_assets::web_fetch;
     use wasm_bindgen::prelude::*;
 
-    pub(super) async fn run_fetcher(slot: SharedSlot) {
-        match try_fetch(&slot).await {
+    pub(super) async fn run_fetcher(slot: SharedSlot, settings: lunco_settings::DownloadSettings) {
+        match try_fetch(&slot, &settings).await {
             Ok(()) => {}
             Err(e) => {
                 if let Ok(mut s) = slot.lock() {
@@ -1053,7 +1055,10 @@ mod web {
         }
     }
 
-    async fn try_fetch(slot: &SharedSlot) -> Result<(), String> {
+    async fn try_fetch(
+        slot: &SharedSlot,
+        settings: &lunco_settings::DownloadSettings,
+    ) -> Result<(), String> {
         set_state(
             slot,
             MslLoadState::Loading {
@@ -1064,7 +1069,7 @@ mod web {
         );
 
         let manifest_bytes =
-            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json").await?;
+            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json", settings).await?;
         let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
@@ -1101,6 +1106,7 @@ mod web {
             &bundle_path,
             sources_total,
             progress_cb1.as_ref().unchecked_ref(),
+            settings,
         )
         .await
         .map_err(|e| format!("sources bundle fetch: {e}"))?;
@@ -1150,6 +1156,7 @@ mod web {
                 &parsed_path,
                 parsed_total,
                 progress_cb2.as_ref().unchecked_ref(),
+                settings,
             )
             .await
             .map_err(|e| format!("parsed bundle fetch: {e}"))?;

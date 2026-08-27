@@ -113,58 +113,21 @@ pub fn install_fallback_fonts_with_bytes(ctx: &egui::Context, dejavu: Vec<u8>) {
 /// reported as a startup resource error; it is not treated as a successful
 /// font load.
 #[cfg(target_arch = "wasm32")]
-pub fn spawn_wasm_font_fetch(ctx: egui::Context, url: String) {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
+pub fn spawn_wasm_font_fetch(
+    ctx: egui::Context,
+    url: String,
+    settings: lunco_settings::DownloadSettings,
+) {
     wasm_bindgen_futures::spawn_local(async move {
-        let win = match web_sys::window() {
-            Some(w) => w,
-            None => {
-                bevy::log::warn!("[lunco-theme] no `window` — skipping font fetch");
-                return;
+        match lunco_assets::web_fetch::network_fetch_uncached(&url, &settings).await {
+            Ok(bytes) => {
+                bevy::log::info!(
+                    "[lunco-theme] font fetched {url}: {} bytes — installing",
+                    bytes.len()
+                );
+                install_fallback_fonts_with_bytes(&ctx, bytes);
             }
-        };
-        let resp_jsv = match JsFuture::from(win.fetch_with_str(&url)).await {
-            Ok(v) => v,
-            Err(e) => {
-                bevy::log::warn!("[lunco-theme] font fetch {url}: {e:?}");
-                return;
-            }
-        };
-        let resp: web_sys::Response = match resp_jsv.dyn_into() {
-            Ok(r) => r,
-            Err(e) => {
-                bevy::log::warn!("[lunco-theme] font fetch {url}: not a Response: {e:?}");
-                return;
-            }
-        };
-        if !resp.ok() {
-            bevy::log::warn!(
-                "[lunco-theme] font fetch {url}: HTTP {} {}",
-                resp.status(),
-                resp.status_text()
-            );
-            return;
+            Err(error) => bevy::log::warn!("[lunco-theme] font fetch {url}: {error}"),
         }
-        let buf_jsv = match resp.array_buffer() {
-            Ok(p) => match JsFuture::from(p).await {
-                Ok(v) => v,
-                Err(e) => {
-                    bevy::log::warn!("[lunco-theme] font fetch {url}: array_buffer: {e:?}");
-                    return;
-                }
-            },
-            Err(e) => {
-                bevy::log::warn!("[lunco-theme] font fetch {url}: array_buffer init: {e:?}");
-                return;
-            }
-        };
-        let array = js_sys::Uint8Array::new(&buf_jsv);
-        let bytes = array.to_vec();
-        bevy::log::info!(
-            "[lunco-theme] font fetched {url}: {} bytes — installing",
-            bytes.len()
-        );
-        install_fallback_fonts_with_bytes(&ctx, bytes);
     });
 }
