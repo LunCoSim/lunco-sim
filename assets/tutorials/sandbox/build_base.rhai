@@ -37,7 +37,7 @@ fn power_present(me) {
 
 fn power_placed(me) {
     clear_spotlight();
-    hint("Power identified. Solar supplies daylight generation; an FSPS is the long-night option. In a real layout, keep a reactor at an appropriate crew standoff. Now identify the habitat.");
+    hint("Power added. Solar Tower supplies daylight power; FSPS covers the lunar night.\n\nNow add the crew Habitat.");
 }
 
 fn habitat_present(me) {
@@ -57,15 +57,15 @@ fn pad_present(me) {
 }
 
 fn habitat_placed(me) {
-    hint("Habitat identified. In a real layout, place the crew module where the other systems can service it and keep its radiators clear. Next, comms — your link home.");
+    hint("Habitat added. Place it where the other systems can service the crew.\n\nNow add a Comms Mast.");
 }
 
 fn comms_placed(me) {
-    hint("Comms identified. On a terrain-enabled base, elevation and line-of-sight would matter. This flat training plot does not calculate that constraint. Now the ISRU plant.");
+    hint("Comms added. On real terrain, check elevation and line of sight.\n\nNow add the ISRU plant.");
 }
 
 fn isru_placed(me) {
-    hint("ISRU identified. On a resource-enabled base, place it near the resource while keeping logistics practical. This lesson does not provide a resource field. Last piece: the landing pad.");
+    hint("ISRU added. On a resource-enabled base, place it near the resource.\n\nLast, add the Landing Pad.");
 }
 
 fn pad_placed(me) {
@@ -76,8 +76,8 @@ fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
-    hint("Open Spawn in the right dock and find the new Structures group. Pick a part and drop it onto the ground, then click-drag its gizmo to place it. Fly the camera with " + input_hint("look_button") + " and the active movement bindings.");
-    spotlight("panel.right_inspector", "The Spawn panel's Structures group holds the habitat, power, comms, ISRU and the landing pad.");
+    hint("Open Spawn in the right dock. Open Structures and add the requested part.\n\nDrag its gizmo to place it; use " + input_hint("look_button") + " to look around.");
+    spotlight("panel.right_inspector", "Open Spawn, then choose a part from Structures.");
 }
 
 fn mission(me) {
@@ -86,33 +86,33 @@ fn mission(me) {
         // the solar tower for daylight watts, or the fission plant (FSPS) for
         // the 350-hour lunar night.
         objective("power", #{
-            text: "Place a power source — a Solar Tower or a Fission plant (FSPS)",
+            text: "Open Structures and place a Solar Tower or FSPS",
             done: Fn("power_present"),
             on_complete: Fn("power_placed"),
         }),
         // 2 — CREW HABITAT. Identify the crew module in the catalog.
         objective("habitat", #{
-            text: "Add the crew Habitat",
+            text: "Open Structures and add the crew Habitat",
             done: Fn("habitat_present"),
             on_complete: Fn("habitat_placed"),
         }),
         // 3 — COMMS. Discuss elevation and line-of-sight as a design concern;
         // this flat payload does not validate either one.
         objective("comms", #{
-            text: "Add a Comms Mast for the link back to Earth",
+            text: "Open Structures and add a Comms Mast",
             done: Fn("comms_present"),
             on_complete: Fn("comms_placed"),
         }),
         // 4 — ISRU. Discuss resource and logistics placement; this payload has no
         // resource field or distance predicate.
         objective("isru", #{
-            text: "Add an ISRU plant for water and propellant processing",
+            text: "Open Structures and add the ISRU plant",
             done: Fn("isru_present"),
             on_complete: Fn("isru_placed"),
         }),
         // 5 — LANDING PAD. Discuss plume clearance; this payload does not model it.
         objective("pad", #{
-            text: "Add a Landing Pad",
+            text: "Open Structures and add the Landing Pad",
             done: Fn("pad_present"),
             on_complete: Fn("pad_placed"),
         }),
@@ -123,7 +123,7 @@ fn on_event(me, evt) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
-        hint("Your required components are present: power, habitat, comms, ISRU and a pad. This lesson checks composition, not siting geometry. Review the Inspector and adjust the layout for your mission before adding a rover or a second power source.");
+        hint("Your base has power, habitat, comms, ISRU, and a landing pad.\n\nReview each part in Inspector and adjust the layout for your mission.");
         notify_kind("Build a Lunar Base complete", "success");
     }
 }

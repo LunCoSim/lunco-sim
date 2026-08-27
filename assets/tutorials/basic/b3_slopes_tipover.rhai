@@ -13,24 +13,24 @@ fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     focus_panel("sandbox_inspector");
-    spotlight("panel.right_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
+    spotlight("panel.right_inspector", "Select the Hauler and read its mass and centre of mass.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
-    hint("This is the Hauler — heavy and top-heavy on purpose. Click it, then click Possess in the Inspector or Command Deck.");
+    hint("Select the Hauler. Read its mass and centre of mass in Inspector, then click Possess.");
 }
 
 fn b3_possessed(me) {
-    hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, use the Recover tool to put it back on its wheels. Witness where the edge is.");
+    hint("Drive onto the grade and steer across it until the Hauler leans.\n\nIf it tips, click Recover to put it back on its wheels.");
 }
 
 fn b3_edge_felt(me) {
     clear_spotlight();
     let msg = if is_tipped(find("/SlopeTest/Rover"), 15.0) {
-        "Over it went — recover it explicitly. THAT is a high centre of mass."
+        "The Hauler tipped. Click Recover, then continue."
     } else {
-        "Feel that lean? A few more degrees across the fall-line and the Hauler goes over."
+        "The Hauler is near its limit. Keep going until it leans past 15°."
     };
     notify_kind(msg, "warn");
-    hint("Now do it properly: point straight up the fall-line and climb to the marker with small, gentle inputs.");
+    hint("Now point straight up the fall-line. Use small inputs and climb to the marker.");
 }
 
 fn b3_tilted(me) {
@@ -77,7 +77,7 @@ fn b3_brake(me) {
 fn mission(me) {
     [
         objective("possess", #{
-            text: "Click the Hauler, then click Possess in the Inspector or Command Deck",
+            text: "Select the Hauler and click Possess in Inspector or Command Deck",
             done: Fn("b3_controlled"),
             on_complete: Fn("b3_possessed"),
         }),
@@ -85,14 +85,14 @@ fn mission(me) {
         // across the grade, while requiring a full tip-over would punish a careful
         // driver and make the objective impossible to complete safely.
         objective("feel_the_edge", #{
-            text: "Steer ACROSS the grade until you feel it lean past 15°",
+            text: "Steer across the grade until the Hauler leans past 15°",
             requires: ["possess"],
             done: Fn("b3_tilted"),
             dwell: 0.3,
             on_complete: Fn("b3_edge_felt"),
         }),
         objective("reach_top", #{
-            text: "Now climb straight up the fall-line to the marker at the top",
+            text: "Climb straight up the fall-line to the top marker",
             requires: ["feel_the_edge"],
             // The marker's USD-authored Trigger Sensor is the arrival authority.
             // Its overlap accounts for the rover's physical footprint; polling
@@ -107,7 +107,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
-        hint("You've felt why a high centre of mass tips, and how to climb anyway: pick the fall-line, keep steering inputs small on a grade. Click Continue in the Tutorial complete dialog to compare the rover variants.");
+        hint("You found the Hauler's tipping point and climbed safely.\n\nClick Continue to compare rover variants.");
         notify_kind("Lesson complete — choose Continue for Rover Variants", "success");
     }
 }

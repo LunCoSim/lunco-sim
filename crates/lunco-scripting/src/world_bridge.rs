@@ -40,7 +40,7 @@ use bevy::prelude::*;
 
 use std::sync::Arc;
 
-use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
+use lunco_core::{Ack, OpId, TelemetryEvent, TelemetryValue};
 use lunco_hash::Fnv1a;
 
 /// True the FIRST time this (entity, path) `set` failure is seen; false after.
@@ -651,7 +651,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
     // resolution, and result recording. The command runs SYNCHRONOUSLY (the
-    // bridge flushes), so `data` carries any values the handler assigned — a
+    // bridge flushes), so `data` carries any command result data the handler returned — a
     // spawned entity's gid, an allocated name — enabling create-then-manipulate
     // in one tick. `ok=false` + `error` on a handler error/rejection.
     engine.register_fn("cmd", |name: ImmutableString, params: Map| -> Dynamic {
@@ -2432,38 +2432,21 @@ pub fn drain_world_scripts(world: &mut World) {
     for (id, code, authority, correlation_id) in pending {
         let outcome = match eval_with_world_as(world, &code, authority) {
             Ok(stdout) => {
-                let mut ack = Ack::new(OpId::new());
-                ack.assigned = serde_json::json!({ "stdout": stdout });
-                Ok(ack)
+                Ok(Ack::with_data(
+                    OpId::new(),
+                    serde_json::json!({ "stdout": stdout }),
+                ))
             }
             Err(e) => Err(e),
         };
-        if let Some(correlation_id) = correlation_id {
-            let response = match &outcome {
-                Ok(ack) => {
-                    let data = if ack.assigned.is_null() {
-                        serde_json::json!({ "accepted": true })
-                    } else {
-                        ack.assigned.clone()
-                    };
-                    lunco_api::schema::ApiResponse::ok(data)
-                }
-                Err(error) => lunco_api::schema::ApiResponse::error(
-                    lunco_api::schema::ApiErrorCode::InternalError,
-                    error.clone(),
-                ),
-            };
-            world
-                .commands()
-                .trigger(lunco_api::executor::ApiResponseEvent {
-                    correlation_id,
-                    response,
-                });
-        }
         // `id == 0` means an in-process trigger with no internal result key.
-        if id != 0 {
-            world.resource_mut::<CommandResults>().record(id, outcome);
-        }
+        lunco_api::executor::finish_command_result(
+            world,
+            (id != 0).then_some(id),
+            correlation_id,
+            outcome,
+            lunco_api::schema::ApiErrorCode::InternalError,
+        );
     }
 }
 

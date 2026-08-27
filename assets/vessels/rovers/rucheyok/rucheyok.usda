@@ -19,7 +19,7 @@ def Xform "Rucheyok" (
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
+        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
@@ -93,7 +93,7 @@ def Xform "Rucheyok" (
         # further down this file, and the `over` won: the composed panel kept
         # `connectors:p` and lost the reference, the children, `LunCoProgramAPI`
         # and `info:sourceAsset`. The runtime then blamed the collection —
-        # `SolarPanel is outside collection Electrical` — and the whole
+        # `SolarPanel is outside the rover-root collection` — and the whole
         # electrical island was rejected. See
         # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
@@ -121,11 +121,7 @@ def Xform "Rucheyok" (
         float physics:mass = 50.0
     }
 
-    # --- Electrical domain: actual part collection projected into one Modelica DAE ---
-    def Scope "Electrical" (
-        prepend apiSchemas = ["CollectionAPI:components"]
-    )
-    {
+    # --- Network: explicit component collection projected into one Modelica DAE ---
         float inputs:drive_left.connect = </Rucheyok.outputs:drive_left>
         float inputs:drive_right.connect = </Rucheyok.outputs:drive_right>
         float inputs:shaft_speed_FL.connect = </Rucheyok/Wheel_FL.outputs:shaft_speed>
@@ -157,10 +153,8 @@ def Xform "Rucheyok" (
             </Rucheyok/Shaft_RL>,
             </Rucheyok/Shaft_RR>,
         ]
-    }
-
     def LunCoEvent "BatteryDrained" {
-        float inputs:trigger.connect = </Rucheyok/Electrical.outputs:battery_drained>
+        float inputs:trigger.connect = </Rucheyok.outputs:battery_drained>
         uniform token lunco:event:name = "battery_drained"
         uniform token lunco:event:severity = "warning"
         uniform bool lunco:event:latched = true
@@ -281,7 +275,7 @@ def Xform "Rucheyok" (
     }
 
     # --- Hub motors + reductions ---------------------------------------------
-    # The four hub motors the `Electrical` circuit above already budgets for
+    # The four hub motors the rover-root circuit above already budgets for
     # (`inputs:rated_power = 500` W each) are real Modelica parts. Their solved
     # electrical state, solved torque, reduction, shaft speed, and heat all
     # belong to the same authored network as the battery and solar source. The
@@ -420,18 +414,18 @@ def Xform "Rucheyok" (
 
     def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FL>
+        float inputs:speed.connect = </Rucheyok.inputs:shaft_speed_FL>
     }
     def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FR>
+        float inputs:speed.connect = </Rucheyok.inputs:shaft_speed_FR>
     }
     def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RL>
+        float inputs:speed.connect = </Rucheyok.inputs:shaft_speed_RL>
     }
     def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RR>
+        float inputs:speed.connect = </Rucheyok.inputs:shaft_speed_RR>
     }
 }

@@ -127,7 +127,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
 ```
 
-Successful fire-and-forget response: `{"data":{"accepted":true}}`. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. Deferred commands return their completed payload or error on the same request; there is no command-id polling endpoint.
+Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-returning typed command puts its command-specific payload in the same `data` envelope. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. Deferred commands return their completed payload or error on the same request; there is no command-id polling endpoint.
 
 ### Loading a scene or model
 
@@ -263,8 +263,8 @@ connection rewiring before the test verdict is trusted.
 For a placed rover, also query the composed USD transform after reload. Check
 that every authored rotation op appears in `xformOpOrder` and that the effective
 heading comes from one placement layer. For a fixed solar panel, list the
-composed `SolarPanel`, `Battery` and `Electrical` entities, then read the
-electrical scope ports. Presence of a panel mesh is not a power verdict: require
+composed `SolarPanel`, `Battery` and rover-root network entities, then read the
+rover-root boundary ports. Presence of a panel mesh is not a power verdict: require
 positive `solar_power`/panel `power_out`, a valid incidence, and battery current
 or changing `soc`.
 

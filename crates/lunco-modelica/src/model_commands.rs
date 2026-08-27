@@ -7,13 +7,14 @@
 
 use bevy::prelude::*;
 #[cfg(feature = "lunco-api")]
-use lunco_api::{
-    executor::{ApiResponseEvent, PendingApiRequest},
-    schema::{ApiErrorCode, ApiResponse},
-};
+use lunco_api::executor::{finish_command_result, PendingApiRequest};
+#[cfg(feature = "lunco-api")]
+use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
-    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
+    on_command, register_commands, Ack, ActiveCommandId, Command, OpId,
 };
+#[cfg(not(feature = "lunco-api"))]
+use lunco_core::CommandResults;
 use lunco_doc::DocumentId;
 
 use crate::state::ModelicaDocumentRegistry;
@@ -51,36 +52,18 @@ fn on_set_model_input(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let result =
-            apply_set_model_input(world, doc, &name, value).map_err(|error| error.message());
-        if let Some(command_id) = command_id {
-            let outcome = result.clone().map(|applied_doc| {
-                let mut ack = Ack::new(OpId::new());
-                ack.assigned = serde_json::json!({
-                    "doc": applied_doc.raw(),
-                    "name": name,
-                    "value": value,
-                });
-                ack
-            });
-            world
-                .resource_mut::<CommandResults>()
-                .record(command_id, outcome);
-        }
-        if let Some(correlation_id) = correlation_id {
-            let response = match result {
-                Ok(applied_doc) => ApiResponse::ok(serde_json::json!({
-                    "doc": applied_doc.raw(),
-                    "name": name,
-                    "value": value,
-                })),
-                Err(error) => ApiResponse::error(ApiErrorCode::CommandRejected, error),
-            };
-            world.commands().trigger(ApiResponseEvent {
-                response,
-                correlation_id,
-            });
-        }
+        let ack_result = set_model_input_result(
+            apply_set_model_input(world, doc, &name, value),
+            &name,
+            value,
+        );
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            ack_result,
+            ApiErrorCode::CommandRejected,
+        );
     });
 }
 
@@ -97,18 +80,12 @@ fn on_set_model_input(
     let value = cmd.value;
     let command_id = active_id.get();
     commands.queue(move |world: &mut World| {
-        let result =
-            apply_set_model_input(world, doc, &name, value).map_err(|error| error.message());
+        let outcome = set_model_input_result(
+            apply_set_model_input(world, doc, &name, value),
+            &name,
+            value,
+        );
         if let Some(command_id) = command_id {
-            let outcome = result.map(|applied_doc| {
-                let mut ack = Ack::new(OpId::new());
-                ack.assigned = serde_json::json!({
-                    "doc": applied_doc.raw(),
-                    "name": name,
-                    "value": value,
-                });
-                ack
-            });
             world
                 .resource_mut::<CommandResults>()
                 .record(command_id, outcome);
@@ -171,6 +148,25 @@ impl SetModelInputError {
             ),
         }
     }
+}
+
+fn set_model_input_result(
+    result: Result<DocumentId, SetModelInputError>,
+    name: &str,
+    value: f64,
+) -> Result<Ack, String> {
+    result
+        .map(|applied_doc| {
+            Ack::with_data(
+                OpId::new(),
+                serde_json::json!({
+                    "doc": applied_doc.raw(),
+                    "name": name,
+                    "value": value,
+                }),
+            )
+        })
+        .map_err(|error| error.message())
 }
 
 /// Push a runtime input value into a compiled model's stepper. `doc_raw`

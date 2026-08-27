@@ -84,7 +84,7 @@ fn set_subsystem(name, on)     { cmd("SetSubsystemEnabled", #{ name: name, on: o
 fn emitter(evt)                { evt.source }
 fn from_entity(evt, id)        { evt.source == id }
 
-/// Fire a command and return JUST its assigned data (the `.data` bag), or () if
+/// Fire a command and return JUST its result data (the `.data` bag), or () if
 /// it failed or reported none. The create-then-manipulate shortcut:
 ///   let id = cmd_data("SpawnThing", #{...}); if id != () { set_property(id, ...) }
 fn cmd_data(name, params) {

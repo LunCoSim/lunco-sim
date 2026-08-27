@@ -243,23 +243,23 @@ fn on_tick(me) {
         "expected exactly 1 (/LintSelftest/GhostGroup filters against a body)"));
 
     // ── THE PHANTOM WIRE, AND THE DECLARATION THAT IS NOT ONE ───────────────
-    // `connector-requires-network-scope` takes a `connectors:*.connect` that no
+    // `connector-requires-network-root` takes a `connectors:*.connect` that no
     // compiler network owns. Both halves are asserted, because the rule was
     // MEASURED reading the other way: keyed on the DECLARATION it reported 314
     // errors across the shipped tree — every motor of every rover — since
     // `components/mobility/motor.usda` declares its pin unconditionally and only
     // the `power = "battery"` variant wires it. None of those was fixable.
-    let stranded = by_rule(findings, "connector-requires-network-scope");
+    let stranded = by_rule(findings, "connector-requires-network-root");
     f.push(t_true(mentions(stranded, "/LintSelftest/StrandedMotor"),
-        "connector-requires-network-scope never named /LintSelftest/StrandedMotor, " +
-        "which connects its pin while sitting in no network scope — the wire reads " +
+        "connector-requires-network-root never named /LintSelftest/StrandedMotor, " +
+        "which connects its pin while sitting in no network root — the wire reads " +
         "as authored in USD and no solver ever receives it"));
     f.push(t_true(!mentions(stranded, "/LintSelftest/StrandedBattery"),
-        "connector-requires-network-scope named /LintSelftest/StrandedBattery, which " +
+        "connector-requires-network-root named /LintSelftest/StrandedBattery, which " +
         "only DECLARES a pin. A bare connector is an interface — the USD spelling of " +
         "Modelica's `Pin p` — and flagging it flags every catalogue part we ship"));
     f.push(t_true(!mentions(stranded, "/LintSelftest/OutsideBattery"),
-        "connector-requires-network-scope named /LintSelftest/OutsideBattery, another " +
+        "connector-requires-network-root named /LintSelftest/OutsideBattery, another " +
         "bare declaration. It IS wrong — something inside a scope wires to it — but " +
         "that is dangling-network-connector's finding, said once, from the scope side"));
 
@@ -274,9 +274,9 @@ fn on_tick(me) {
 
     // THE FALSE-POSITIVE GUARD, and the one that matters most: one battery plus one
     // motor, connected, both collected — the shape of every shipped rover's
-    // `Electrical` scope. A rule that cannot stay silent here fires on the fleet.
-    f.push(t_true(!mentions(findings, "/LintSelftest/HealthyElectrical"),
-        "a finding names /LintSelftest/HealthyElectrical — one voltage source and one " +
+    // network root. A rule that cannot stay silent here fires on the fleet.
+    f.push(t_true(!mentions(findings, "/LintSelftest/HealthyNetwork"),
+        "a finding names /LintSelftest/HealthyNetwork — one voltage source and one " +
         "current-stating load is a CORRECT island, and a rule that flags it flags " +
         "every rover we ship"));
     f.push(t_true(!mentions(findings, "/LintSelftest/HealthyBattery"),

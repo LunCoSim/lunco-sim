@@ -322,15 +322,13 @@ the very authoring the test exists to check.
   you think it moves.
 - **Measure what you claim.** "The node has zero peers" was reported from two
   missing edges without ever calling `neighbours()`. It had one.
-- **Ports live on the PROGRAM prim, not on the vessel.** `get(me, "soc_out")` on
-  a rover whose battery model hangs off `…/SolarRover/PowerSubsystem` returns
-  `()`, and the usual `if soc == () { soc = 1.0 }` fallback then reports a full
-  battery forever. In the solar rover demo that meant the pack never drained, the
-  cinematic's `wait_until(soc < 0.05)` never fired, and the demo hung after the
-  last waypoint looking like a physics bug. Resolve the program prim
-  (`find("/…/PowerSubsystem")`) and read/write there. A *fallback for an absent
-  reading is a lie you will believe* — prefer failing loudly, or at least log
-  which entity you resolved.
+- **Keep the producer in the connection path.** A battery's `soc_out` belongs to
+  the Battery prim. When another solver consumes it, author
+  `float inputs:engine_enable.connect = </Rover/Battery.outputs:soc_out>` on the
+  consumer. The generated network projection resolves that member output to its
+  solver wrapper; do not invent a vessel-level SOC port or use a fallback value.
+  A script may read an intentionally published network boundary, but that
+  boundary must be an authored connection to the battery, never a second state.
 - **A cut is not a camera loan.** `set_camera("RoverCam")` rebinds the viewport
   until something rebinds it back. Backspace now returns the view to the avatar
   (see [`51-cinematic-camera.md`](../../docs/architecture/51-cinematic-camera.md)),

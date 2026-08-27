@@ -774,9 +774,8 @@ impl<D: Document> DocumentHost<D> {
     /// to assert a parent generation.
     ///
     /// On success returns an [`Ack`] reporting the post-apply
-    /// generation; the `assigned` field is left null at this layer —
-    /// domain-specific apply paths (e.g. modelica's name allocator)
-    /// fill it in by wrapping this method.
+    /// generation. Domain-specific command data is added by the owning
+    /// command handler, not by this generic document layer.
     ///
     /// On any failure the document is unchanged, the undo/redo
     /// stacks are untouched, and the op-id is **not** added to the

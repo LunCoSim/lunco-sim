@@ -4,11 +4,11 @@
 
 fn steps() {
     [
-        #{ anchor: "",                         focus: (),                     title: "Your Workspace",   body: "This lesson shows where your models live and how to find examples to learn from. Use the Back and Next controls; Stop leaves the lesson." },
-        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Twin Browser",     body: "A Twin is a folder of .mo files plus a manifest. Expand it, select a model, and open it in the model view; this browser is the source of your workspace documents." },
-        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Read-only libraries", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate when you need an editable copy in your Twin." },
-        #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Learning Paths",   body: "Open a path such as Circuits, Control, or Mechanics, choose a class, and run it. Each step names a concrete signal or behavior to inspect." },
-        #{ anchor: "",                         focus: (),                     title: "That's the map",   body: "Next: open a model and meet its four views. Continue when you're ready - or reopen any lesson from the Tutorials menu." },
+        #{ anchor: "",                         focus: (),                     title: "Find your workspace",   body: "This lesson shows where models live and where to find examples. Press Next to continue." },
+        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Open a Twin",     body: "In Twin Browser, expand a Twin and select a model. A Twin contains `.mo` files and a manifest." },
+        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Duplicate before editing", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate to make an editable copy." },
+        #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Follow a Learning Path",   body: "Open Learning Paths and choose Circuits, Control, or Mechanics. Select a class and follow its signal or behaviour goal." },
+        #{ anchor: "",                         focus: (),                     title: "Open a model next",   body: "Click Continue to learn the four model views." },
     ]
 }
 

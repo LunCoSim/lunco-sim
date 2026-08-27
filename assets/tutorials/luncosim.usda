@@ -10,6 +10,7 @@
     metersPerUnit = 1
     subLayers = [
         @lunco://tutorials/luncosim/curriculum.usda@,
+        @lunco://tutorials/perspectives/curriculum.usda@,
         @lunco://tutorials/sandbox/curriculum.usda@,
         @lunco://tutorials/object_builder/curriculum.usda@,
         @lunco://tutorials/basic/curriculum.usda@

@@ -37,7 +37,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "cmd",
         "cmd(name, #{params})",
         "#{ id, ok, data, error }",
-        "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. Runs synchronously; `data` carries handler-assigned values (a spawned gid, etc.).",
+        "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. Runs synchronously; `data` carries command-specific result data (a spawned gid, stdout, etc.).",
     ),
     (
         "to_json",

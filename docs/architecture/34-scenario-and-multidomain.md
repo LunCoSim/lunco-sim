@@ -57,17 +57,19 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian port
 {
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body
 
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    ) {}
+
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect      = </Lander.outputs:position_y
         float inputs:descent_rate.connect  = </Lander.outputs:velocity_y>
         float inputs:g.connect             = </Environment.outputs:gravity_accel>
-        float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
+        # Consume the battery output at its authored USD path.
+        float inputs:engine_enable.connect = </Lander/Battery.outputs:soc_out>
     }
-    def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
-    }                                       # no inputs:load — the pin's current is the circuit's answer
     def Scope "Therm" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
     }
@@ -87,10 +89,10 @@ stick writes.)
 
 ### Domain coupling: causal across, acausal within
 
-**One `Scope` per physics domain; cross-domain coupling is causal; acausal
+**One network root per solver graph; cross-domain coupling is causal; acausal
 (`connectors:`) stays inside a domain.**
 
-A `Scope` with `CollectionAPI:components` compiles to ONE generated composite
+A network root with `CollectionAPI:components` compiles to ONE generated composite
 Modelica root. The synthesizer emits one child unit per connected graph component
 inside that root. Acausal `connectors:<name>.connect` edges become
 `connect(a.<name>, b.<name>)` inside one child unit — they cannot span two generated
@@ -101,18 +103,19 @@ either fail to compose (different names) or compile to an invalid
 `inputs:`/`outputs:` wire, routed at runtime as a `SimConnection` — exactly the
 FMI/SSP scalar-exchange contract.
 
-This is why the rover's thermal and electrical domains are separate scopes:
-- `Scope "Electrical"` — Battery + motors, acausal `connectors:p` (Kirchhoff
-  current) solved together; forwards each motor's `outputs:heat` to its boundary.
+This is why the rover's electrical network is owned by the rover root while the thermal domain is a separate scope:
+- The rover root — Battery + motors, acausal `connectors:p` (Kirchhoff current)
+  solved together. Its members retain ownership of their solved outputs.
 - `Scope "Thermal"` — heat loads + masses + radiators, acausal `connectors:port`
   (heat balance) solved together; consumes `inputs:motor_heat_*`. If the authored
   thermal graph has independent banks, the thermal synthesizer emits one composite
   root with one generated unit per bank; the asset does not duplicate Scope shells.
-- **The rover root is the bus** between them: it declares `outputs:motor_heat_*`
-  ports, forwards the Electrical boundary output onto them, and the Thermal scope
-  reads from the root. Neither scope names the other — the root (common ancestor)
-  is the only composer. This required a small Rust change (a pass-through
-  `SimComponent` for non-program prims that forward `outputs:*.connect`).
+- **The cross-domain wire names the real producer:** Thermal connects each
+  `inputs:motor_heat_*` directly to the corresponding motor's `outputs:heat`.
+  The generated-network member-output resolver maps that USD address to the
+  electrical solver's declared output. A root forward is only appropriate when
+  the assembly intentionally publishes a public boundary for scripts or
+  external consumers; it must never hide the producer from another solver.
 
 Connector domains are not inferred from USD property names. The resolved
 Modelica connector declarations own their types, flow variables and stream

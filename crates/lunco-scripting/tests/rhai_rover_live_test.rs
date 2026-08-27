@@ -82,13 +82,13 @@ fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut
 }
 
 // A result-reporting command that "spawns" something and reports the new gid
-// back via `Ack.assigned` — stands in for any create command (AddComponent,
+// back via `Ack.data` — stands in for any create command (AddComponent,
 // spawn, name allocation) whose result a script needs.
 //
 // Like the spy above, these fixtures are REAL commands (`#[Command]` +
 // `#[on_command]` + `register_commands!`, exactly as production verbs are wired),
 // not mocks. The whole point of the test is the round trip through the real
-// dispatch + `Ack.assigned` plumbing; a mock would only prove the mock works. Using
+// dispatch + `Ack.data` plumbing; a mock would only prove the mock works. Using
 // generic stand-in names instead of real verbs keeps the test honest about what it
 // covers — the *mechanism*, not one particular command.
 const SPAWNED_GID: i64 = 4242;
@@ -98,9 +98,10 @@ struct SpawnThing {}
 
 #[on_command(SpawnThing)]
 fn on_spawn(trigger: On<SpawnThing>) -> Result<Ack, String> {
-    let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "gid": SPAWNED_GID });
-    Ok(ack)
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "gid": SPAWNED_GID }),
+    ))
 }
 
 // Records values fed back from a script — proves the script captured cmd() data
@@ -242,6 +243,7 @@ fn run_scenario(app: &mut App, target_gid: u64, source: &str, id: u64) {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": target_gid, "source": source }),
         id,
+        correlation_id: None,
     });
     app.world_mut().flush();
 }
@@ -339,6 +341,7 @@ fn run_scenario_command_attaches_and_runs() {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "source": src }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush(); // apply the deferred ScriptedModel insert
 
@@ -379,6 +382,7 @@ fn run_scenario_command_attaches_and_runs() {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "source": "fn on_tick(me){}" }),
         id: 2,
+        correlation_id: None,
     });
     app.world_mut().flush();
     let id = app
@@ -747,7 +751,7 @@ fn rhai_event_delivered_to_on_event_next_tick() {
 
 #[test]
 fn cmd_returns_data_enabling_create_then_manipulate() {
-    // #5: cmd() must return the handler's assigned data, not just an id, so a
+    // #5: cmd() must return the handler's result data, not just an id, so a
     // script can capture a spawned entity's gid and act on it in the SAME tick.
     // on_start spawns (reports gid 4242), then feeds that gid into Report — the
     // captured value proves the round-trip worked end-to-end through rhai.
@@ -793,6 +797,7 @@ fn registered_tool_library_callable_from_a_hook() {
             "source": "fn drive_at(me, f) { cmd(\"SetPorts\", #{ target: me, writes: [[\"throttle\", f], [\"steer\", 0.0]], seq: 0, tick: 0 }); }",
         }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
 
@@ -1014,6 +1019,7 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
         command: "RunTimeline".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "timeline": timeline }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
 
@@ -1051,6 +1057,7 @@ fn run_timeline_arrives_advances_and_brakes() {
         command: "RunTimeline".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "timeline": timeline }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
 
@@ -1091,6 +1098,7 @@ fn timeline_storage_register_discover_and_run() {
         command: "RegisterTimeline".to_string(),
         params: serde_json::json!({ "name": "approach", "timeline": timeline }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
 
@@ -1133,6 +1141,7 @@ fn timeline_storage_register_discover_and_run() {
         command: "RunStoredTimeline".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "name": "approach" }),
         id: 2,
+        correlation_id: None,
     });
     app.world_mut().flush();
     assert!(
@@ -1158,6 +1167,7 @@ fn run_stored_timeline_unknown_name_errors() {
         command: "RunStoredTimeline".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "name": "nope" }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
     assert!(
@@ -1304,6 +1314,7 @@ fn set_scenario_paused_halts_and_resumes_on_tick() {
             command: "SetScenarioPaused".to_string(),
             params: serde_json::json!({ "target": ROVER_GID, "paused": paused }),
             id: 0,
+            correlation_id: None,
         });
         app.world_mut().flush();
     };
@@ -1353,6 +1364,7 @@ fn scenario_params_readable_in_hooks() {
             "params": r#"{"tag":"hello"}"#,
         }),
         id: 1,
+        correlation_id: None,
     });
     app.world_mut().flush();
     tick(&mut app);

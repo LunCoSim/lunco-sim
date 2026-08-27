@@ -300,7 +300,7 @@ mod compose_tests {
     // a time. They exist because every solar rover in the repo is silently dead:
     // `project_domain_islands` rejects the electrical network with
     //
-    //     output source component `…/SolarPanel` is outside collection `…/Electrical`
+    //     output source component `…/SolarPanel` is outside the rover-root collection
     //
     // on `scenes/tests/solar_domain_nested_ref.usda` AND on the shipped
     // `scenes/luncosim/solar_rover_demo.usda`, which has one reference arc and
@@ -361,7 +361,7 @@ mod compose_tests {
     /// rover asset's `power` variant declares the bus members, and the SCENE adds
     /// the panel it mounted with
     ///
-    ///     over "Electrical" {
+    ///     over "Rover" {
     ///         prepend rel collection:components:includes = [</…/SolarPanel>]
     ///     }
     ///
@@ -431,7 +431,7 @@ mod compose_tests {
     /// Two variantSets on one prim, each contributing to the same collection.
     ///
     /// `vessels/rovers/rocker_bogie.usda` verbatim: `power = "battery"` DEFINES
-    /// `Electrical` with the bus members, and `generation = "solar"` OVERS it to
+    /// the rover root with the bus members, and `generation = "solar"` OVERS it to
     /// add the panel. Two sibling variant arcs on the same prim, both authoring
     /// the same relationship — and the selection is made a further arc away, in a
     /// profile asset or a scene, so this is the composition that has to hold for

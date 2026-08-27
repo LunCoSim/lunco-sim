@@ -516,10 +516,10 @@ fn policy_units(net) {
     let result = [];
     let index = 0;
     for unit in net.units {
-        let instance = "power_unit_" + (index + 1).to_string();
-        if net.units.len == 1 { instance = "power_system"; }
-        let class_name = "PowerUnit_" + (index + 1).to_string();
-        if net.units.len == 1 { class_name = "PowerSystem"; }
+        let instance = "network_unit_" + (index + 1).to_string();
+        if net.units.len == 1 { instance = "network_system"; }
+        let class_name = "NetworkUnit_" + (index + 1).to_string();
+        if net.units.len == 1 { class_name = "NetworkSystem"; }
         let rewritten = #{
             name: class_name,
             source_name: unit.name,

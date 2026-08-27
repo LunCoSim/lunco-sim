@@ -6,12 +6,12 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Build a Scene",       body: "LunCoSim scenes are OpenUSD — the same format Omniverse and Blender use. Let's see how you compose one. Next / Back below, Skip anytime." },
-        #{ anchor: "panel.right_inspector", title: "The spawn palette",   body: "The right dock's Spawn panel lists catalogued objects — rovers, props, primitives. Click one to drop it into the scene." },
-        #{ anchor: "panel.center",          title: "Place with the gizmo",body: "Select an object in the Entities panel or the USD prim tree; the transform gizmo appears in a build view. Drag to move, rotate, or scale it in the world. Help shows the viewport-selection gesture." },
-        #{ anchor: "panel.right_inspector", title: "Tune properties",     body: "The Inspector shows the selected object's authored properties — colour, mass, material. Editing it creates a USD-backed authoring operation; the runtime ECS is only the projection." },
-        #{ anchor: "panel.side_browser",    title: "It's all USD",        body: "The shipped assets under assets/scenes are a read-only library. Save authored changes through the active Twin/document Save workflow; the same authoring surface is available through SpawnEntity, MoveEntity and SetObjectProperty." },
-        #{ anchor: "",                      title: "That's scene authoring", body: "You compose the world from parts, then attach behaviour and simulation. Next stop: scripting." },
+        #{ anchor: "",                      title: "Build a scene",        body: "Use this tour to place and edit objects. Press Next to move on; press Back to review a step." },
+        #{ anchor: "panel.right_inspector", title: "Place an object",       body: "Open Spawn in the right dock. Click an object in the palette to add it to the scene." },
+        #{ anchor: "panel.center",          title: "Move the object",       body: "Select the object in Entities or the USD prim tree. Drag the gizmo to move, rotate, or scale it." },
+        #{ anchor: "panel.right_inspector", title: "Edit its properties",   body: "With the object selected, open Inspector. Change an authored property such as colour, mass, or material." },
+        #{ anchor: "panel.side_browser",    title: "Save the scene",       body: "The shipped assets are read-only. Save your authored changes through the active Twin or document Save workflow." },
+        #{ anchor: "",                      title: "Scene ready",           body: "You placed an object, transformed it, and edited its properties. Click Continue to learn how to script a rover." },
     ]
 }
 

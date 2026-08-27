@@ -348,8 +348,9 @@ def Xform "DescentLander" (
         float inputs:desired_torque_y.connect = </DescentLander.outputs:torque_y>
         float inputs:desired_torque_z.connect = </DescentLander.outputs:torque_z>
 
-        # The generated allocator owns these boundary outputs. Their names must
-        # match the commandOutput authored on each force actuator exactly.
+        # The generated allocator owns these boundary outputs. Each physical
+        # actuator targets its corresponding output property explicitly through
+        # lunco:forceActuator:commandSource below.
         float outputs:pitch_pos_a_valve
         float outputs:pitch_pos_b_valve
         float outputs:pitch_neg_a_valve
@@ -1919,7 +1920,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "pitch_pos_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_pos_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
         def SphereLight "RcsLight" (
@@ -1971,7 +1972,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "pitch_neg_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_neg_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
         def SphereLight "RcsLight" (
@@ -2025,7 +2026,7 @@ def Xform "DescentLander" (
         # 180-degree mount turns local -Y into that body direction.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "roll_pos_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:roll_pos_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
         def SphereLight "RcsLight" (
@@ -2079,7 +2080,7 @@ def Xform "DescentLander" (
         # 180-degree mount turns local -Y into that body direction.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "roll_neg_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:roll_neg_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
         def SphereLight "RcsLight" (
@@ -2132,7 +2133,7 @@ def Xform "DescentLander" (
         # Local -Y becomes body -Z under the authored +90° visual rotation.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "yaw_pos_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:yaw_pos_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
         def SphereLight "RcsLight" (
@@ -2186,7 +2187,7 @@ def Xform "DescentLander" (
         # rotation; at -X that is the negative yaw moment.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "yaw_neg_a_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:yaw_neg_a_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_activity>
         def SphereLight "RcsLight" (
@@ -2243,7 +2244,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "pitch_pos_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_pos_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
         def SphereLight "RcsLight" (
@@ -2295,7 +2296,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, 1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "pitch_neg_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_neg_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
         def SphereLight "RcsLight" (
@@ -2347,7 +2348,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "roll_pos_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:roll_pos_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
         def SphereLight "RcsLight" (
@@ -2399,7 +2400,7 @@ def Xform "DescentLander" (
         bool primvars:doNotCastShadows = true
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "roll_neg_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:roll_neg_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
         def SphereLight "RcsLight" (
@@ -2452,7 +2453,7 @@ def Xform "DescentLander" (
         # Local -Y becomes body +Z under the authored -90° visual rotation.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "yaw_pos_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:yaw_pos_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
         def SphereLight "RcsLight" (
@@ -2506,7 +2507,7 @@ def Xform "DescentLander" (
         # rotation; at +X that is the negative yaw moment.
         custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
-        custom string lunco:forceActuator:commandOutput = "yaw_neg_b_valve"
+        rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:yaw_neg_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_thrust_n>
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_activity>
         def SphereLight "RcsLight" (

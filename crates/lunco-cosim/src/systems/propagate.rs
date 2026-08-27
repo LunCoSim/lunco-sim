@@ -1041,7 +1041,7 @@ mod wire_order_tests {
             .spawn((
                 GlobalEntityId::from_raw(20),
                 crate::SimComponent {
-                    model_name: "GeneratedElectricalIsland".into(),
+                    model_name: "GeneratedNetworkIsland".into(),
                     // The generated model publishes part of its interface while
                     // compiling.  That makes the missing `drive_left` name a
                     // terminal contract fault once the model reaches Running,

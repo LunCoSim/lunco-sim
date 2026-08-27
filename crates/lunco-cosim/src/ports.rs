@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use lunco_core::architecture::{InputPorts, Port};
+use lunco_core::architecture::{InputPorts, OutputPorts, Port};
 use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
 
 use crate::{DeclaredOutputPorts, SimComponent};
@@ -296,6 +296,43 @@ const PORT_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
+/// Generic runtime output surface backed by child [`Port`] entities.
+///
+/// Imperative producers use this when their authored `outputs:*` values are
+/// not owned by a `SimComponent` (for example a drive kernel). The producer's
+/// output names remain visible to the common port registry, but they are
+/// read-only here: commands enter through [`InputPorts`], and a producer owns
+/// the writes to its outputs.
+const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list: |world, entity, out| {
+        let Some(outputs) = world.get::<OutputPorts>(entity) else {
+            return;
+        };
+        for (name, port_entity) in &outputs.ports {
+            if let Some(port) = world.get::<Port>(*port_entity) {
+                out.push(PortRef {
+                    name: name.clone(),
+                    direction: PortDirection::Out,
+                    value: port.value,
+                });
+            }
+        }
+    },
+    read_output: |world, entity, name| {
+        world
+            .get::<OutputPorts>(entity)
+            .and_then(|outputs| outputs.get(name))
+            .and_then(|port_entity| world.get::<Port>(port_entity))
+            .map(|port| port.value)
+    },
+    read_input: |_world, _entity, _name| None,
+    write_input: |_world, _entity, _name, _value| false,
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
+
 /// Control-authority sensor: a read-only `piloted` port, 1.0 while the vessel is
 /// possessed by ANY external session — a human user OR an autopilot (both are
 /// external session-controllers) — else 0.0. It reports only POSSESSION STATUS from
@@ -313,7 +350,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative
         // command and possession boundary (see `lunco_core::InputPorts`).
-        // `ControlBinding` is merely an input-device adapter and `ActuatorPorts`
+        // `ControlBinding` is merely an input-device adapter and `OutputPorts`
         // are mechanical output plumbing, so neither defines this port's owner.
         // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary
         // Modelica children merely because they happen to have a stable id.
@@ -358,6 +395,7 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(SIMCOMPONENT_BACKEND);
     registry.register(AVIAN_BACKEND);
     registry.register(PORT_BACKEND);
+    registry.register(OUTPUT_PORTS_BACKEND);
     registry.register(PILOTED_BACKEND);
 }
 
@@ -386,5 +424,34 @@ mod tests {
             .entity_ports(&world, vessel)
             .iter()
             .any(|port| port.name == "piloted"));
+    }
+
+    #[test]
+    fn runtime_outputs_are_read_only_and_visible_on_their_producer() {
+        let mut world = World::new();
+        let port = world.spawn(Port { value: 0.75 }).id();
+        let producer = world
+            .spawn(OutputPorts::new(std::collections::HashMap::from([(
+                "drive_left".into(),
+                port,
+            )])))
+            .id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+
+        assert_eq!(
+            registry.read_output_port(&world, producer, "drive_left"),
+            Some(0.75)
+        );
+        assert_eq!(
+            registry
+                .entity_ports(&world, producer)
+                .into_iter()
+                .find(|port| port.name == "drive_left")
+                .map(|port| (port.direction, port.value)),
+            Some((PortDirection::Out, 0.75))
+        );
+        assert!(!registry.write_port(&mut world, producer, "drive_left", 0.1));
+        assert_eq!(world.get::<Port>(port).unwrap().value, 0.75);
     }
 }

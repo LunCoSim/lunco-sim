@@ -26,7 +26,7 @@ def Xform "AckermannRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI"
+        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis: a complete
@@ -355,19 +355,19 @@ def Xform "AckermannRover" (
 
     def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </AckermannRover/Electrical.inputs:shaft_speed_FL>
+        float inputs:speed.connect = </AckermannRover.inputs:shaft_speed_FL>
     }
     def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </AckermannRover/Electrical.inputs:shaft_speed_FR>
+        float inputs:speed.connect = </AckermannRover.inputs:shaft_speed_FR>
     }
     def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </AckermannRover/Electrical.inputs:shaft_speed_RL>
+        float inputs:speed.connect = </AckermannRover.inputs:shaft_speed_RL>
     }
     def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </AckermannRover/Electrical.inputs:shaft_speed_RR>
+        float inputs:speed.connect = </AckermannRover.inputs:shaft_speed_RR>
     }
 
     # --- Comms ---------------------------------------------------------
@@ -451,10 +451,8 @@ def Xform "AckermannRover" (
             )
             {
             }
-            def Scope "Electrical" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-            )
-            {
+            # The rover root owns the explicit component collection and its
+            # causal boundary. There is no extra domain-name prim in USD.
                 float inputs:drive_left.connect = </AckermannRover.outputs:drive_left>
                 float inputs:drive_right.connect = </AckermannRover.outputs:drive_right>
                 float inputs:shaft_speed_FL.connect = </AckermannRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
@@ -484,21 +482,20 @@ def Xform "AckermannRover" (
                     </AckermannRover/Shaft_RL>,
                     </AckermannRover/Shaft_RR>,
                 ]
-            }
             over "Motor_FL" {
-                float inputs:demand.connect = </AckermannRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </AckermannRover.inputs:drive_left>
                 custom token connectors:p.connect = </AckermannRover/PowerSource.connectors:p>
             }
             over "Motor_FR" {
-                float inputs:demand.connect = </AckermannRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </AckermannRover.inputs:drive_right>
                 custom token connectors:p.connect = </AckermannRover/PowerSource.connectors:p>
             }
             over "Motor_RL" {
-                float inputs:demand.connect = </AckermannRover/Electrical.inputs:drive_left>
+                float inputs:demand.connect = </AckermannRover.inputs:drive_left>
                 custom token connectors:p.connect = </AckermannRover/PowerSource.connectors:p>
             }
             over "Motor_RR" {
-                float inputs:demand.connect = </AckermannRover/Electrical.inputs:drive_right>
+                float inputs:demand.connect = </AckermannRover.inputs:drive_right>
                 custom token connectors:p.connect = </AckermannRover/PowerSource.connectors:p>
             }
         }

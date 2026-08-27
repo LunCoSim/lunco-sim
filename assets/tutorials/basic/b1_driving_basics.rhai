@@ -13,16 +13,16 @@ fn on_start(me) {
     // layer alone. Ordinals duplicated into scripts are how this track ended up
     // titled "2 ·" while toasting "S3".
     focus_panel("command_deck");
-    spotlight("panel.right_inspector", "Use the Command Deck to verify who is driving before you move.");
+    spotlight("panel.right_inspector", "Check Command Deck before you drive.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
-    hint("Welcome, driver. Click the rover, then click Possess in the Inspector or Command Deck.");
+    hint("Select the rover. Click Possess in Inspector or Command Deck.");
 }
 
 fn b1_driving_started(me) {
     clear_spotlight();
     focus_panel("telemetry_browser");
     spotlight("panel.side_browser", "Read speed and wheel signals in the left dock while you drive.");
-    hint("You're driving. " + input_hint("forward") + " / " + input_hint("backward") + " throttle forward and back, " + input_hint("left") + " / " + input_hint("right") + " steer, " + input_hint("brake") + " brakes. Read the telemetry while you roll onto the ramp.");
+    hint("Drive with " + input_hint("forward") + " / " + input_hint("backward") + ". Steer with " + input_hint("left") + " / " + input_hint("right") + ". Brake with " + input_hint("brake") + ".\n\nOpen Telemetry and watch the rover as you approach the ramp.");
 }
 
 fn b1_finished(me) {
@@ -46,13 +46,13 @@ fn mission(me) {
     [
         // 1 — take control.
         objective("possess", #{
-            text: "Click the rover, then click Possess in the Inspector or Command Deck",
+            text: "Select the rover and click Possess in Inspector or Command Deck",
             done: Fn("b1_controlled"),
             on_complete: Fn("b1_driving_started"),
         }),
         // 2 — climb the ramp to this lesson's finish flag.
         objective("reach_flag", #{
-            text: "Drive out, then climb the ramp and stop at the finish flag",
+            text: "Drive to the finish flag and stop there",
             requires: ["possess"],
             done: Fn("b1_at_flag"),
             on_complete: Fn("b1_finished"),
@@ -62,7 +62,7 @@ fn mission(me) {
 
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
-        hint("You can drive, climb, stop, and read the result. Click Continue in the Tutorial complete dialog to begin Slopes & Tip-Over.");
+        hint("You took control, climbed the ramp, and checked telemetry.\n\nClick Continue to try Slopes & Tip-Over.");
         notify_kind("Lesson complete — choose Continue for Slopes & Tip-Over", "success");
     }
 }

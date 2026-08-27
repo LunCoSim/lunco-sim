@@ -136,8 +136,10 @@ now USD-authorable:
   fallback.
 - **Extensible port set** — each port is a real numeric attribute on the rover
   root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers the complete
-  authored set and spawns a named `Port` for each one; no canonical Rust port
-  vocabulary is required.
+  authored set and exposes imperative producer values through the generic
+  `OutputPorts` surface. Generated Modelica boundary outputs are kept on
+  `SimComponent.outputs`; they are never copied into that runtime surface.
+  No canonical Rust port vocabulary is required.
 - **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.

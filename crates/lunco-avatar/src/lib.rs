@@ -1215,7 +1215,7 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
         ("yaw_right".to_string(), "up".to_string(), 1.0),
         ("yaw_left".to_string(), "up".to_string(), -1.0),
     ]);
-    // No `ActuatorPorts` (no hardware actuators — `apply_fly` reads the command
+    // No `OutputPorts` (no hardware actuators — `apply_fly` reads the command
     // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is
     // not a drive-allocation target and must stay out of the chassis queries).
     //

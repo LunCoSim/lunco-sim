@@ -327,7 +327,7 @@ mod tests {
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
-    use lunco_core::ActuatorPorts;
+    use lunco_core::OutputPorts;
     use std::time::Duration;
 
     /// Put a test app on the SAME clock the product runs on: fixed steps of
@@ -399,7 +399,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                ActuatorPorts::default(),
+                OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -499,7 +499,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(DVec3::ZERO),
-                ActuatorPorts::default(),
+                OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

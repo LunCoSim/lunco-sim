@@ -128,12 +128,12 @@ does. That is the whole reason the electrical domain is acausal (see
 
 To cosim it onto a rover:
 
-1. **Attach** — add a `def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"])`
-   child prim on the rover with
+1. **Attach** — place the battery, PDU, and loads in the rover's explicit
+   `CollectionAPI:components` collection. The rover root owns this network when
+   the parts are part of the same assembly; no domain-named child prim is needed.
+   Each Modelica component still names its source with
    `uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@`.
-   It is a subsystem bolted on, not the rover's own control law, so it is a child
-   prim — and a shipped asset is addressed `@lunco://…@`, never by a bare relative
-   path.
+   A shipped asset is addressed `@lunco://…@`, never by a bare relative path.
 2. **Wire the circuit, not a number** — the battery, the PDU and each load are
    `connect()`-ed pin to pin inside one Modelica model. A rover motor pulling
    current is a load on that bus; adding a second load changes the first one's

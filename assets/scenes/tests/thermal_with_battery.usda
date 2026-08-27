@@ -9,11 +9,11 @@
 # flows from the solved electrical DAE into the solved thermal DAE.
 #
 # With `power = "battery"` AND `thermal = "basic"` selected, the rover carries
-# BOTH a `Scope "Electrical"` (Battery + motors) and a `Scope "Thermal"` (heat
+# BOTH a rover-root network (Battery + motors) and a `Scope "Thermal"` (heat
 # loads + masses + radiators). They compile to TWO separate generated models.
-# The motors' solved `outputs:heat` (from the electrical DAE) crosses into the
-# thermal DAE as a causal SimConnection. This scene proves both islands compile
-# independently and the cross-domain wire still lands.
+# Each motor's solved `outputs:heat` (from the electrical DAE) is connected
+# directly to the thermal DAE as a causal SimConnection. This scene proves both
+# islands compile independently and the cross-domain member wire still lands.
 #
 #   target/debug/luncosim test --scene scenes/tests/thermal_with_battery.usda
 

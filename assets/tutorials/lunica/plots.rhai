@@ -2,11 +2,11 @@
 
 fn steps() {
     [
-        #{ anchor: "",                              focus: (),                       title: "Plots & Results",  body: "A simulation is only as good as what you can read off it. Let's tour the output surfaces. Use the Back and Next controls." },
-        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",           body: "Select two signals, put fast and slow signals on separate axes, and snapshot the run. Then overlay a later run to make the comparison visible." },
-        #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Diagnostics",      body: "Compile the model, open a diagnostic with a severity, and click it. The source view should jump to the reported line when a source location is available." },
-        #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Console",          body: "Read compile progress, solver messages, and script output here. Use the message context to decide whether a problem is in source, setup, or runtime." },
-        #{ anchor: "",                              focus: (),                       title: "Last stop",        body: "You can model, run, sweep, and read results. Finish with “Automate” — drive all of this from scripts. Continue when you're ready." },
+        #{ anchor: "",                              focus: (),                       title: "Read plots and results",  body: "This lesson shows where to read simulation output. Press Next to continue." },
+        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Compare signals",           body: "Select two signals in Graphs. Put fast and slow signals on separate axes, then snapshot the run and overlay another one." },
+        #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Open a diagnostic",      body: "Compile the model and select a diagnostic. When a source location exists, the source view jumps to that line." },
+        #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Read the console",          body: "Read compile progress, solver messages, and script output. Use the message context to tell whether the issue is in source, setup, or runtime." },
+        #{ anchor: "",                              focus: (),                       title: "Automate the workflow",        body: "You can model, run, sweep, and read results. Click Continue to learn how to automate those actions." },
     ]
 }
 

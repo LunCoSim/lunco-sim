@@ -22,8 +22,8 @@
 //!
 //! Conventions:
 //! - [`Mutation`] is the wire-shape carrier; payload is generic.
-//! - [`Ack`] reports the post-apply state plus any server-assigned
-//!   values (e.g. an auto-allocated Modelica instance name).
+//! - [`Ack`] reports the post-apply state plus optional command data (e.g. an
+//!   auto-allocated Modelica instance name).
 //! - [`Reject`] gives the client enough to decide whether to revert,
 //!   retry, or surface to the user.
 
@@ -252,21 +252,21 @@ impl<P> Mutation<P> {
     }
 }
 
-/// Successful apply. Reports the new domain generation and any
-/// server-assigned values the client needs to learn about (the
-/// canonical example: an `AddComponent` whose name was allocated by
-/// the document layer).
+/// Successful apply. Reports the new domain generation and optional
+/// command-specific data the client needs to continue (the canonical
+/// example: an `AddComponent` whose name was allocated by the document layer).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Ack {
     pub op_id: OpId,
     /// New domain generation after the apply, when the receiving
     /// document has one. `None` for stateless / ephemeral commands.
     pub new_gen: Option<u64>,
-    /// Loose key/value bag for server-assigned outputs. Domains agree
-    /// on the keys: e.g. modelica's name allocator writes
-    /// `{"assigned_name": "R3"}`.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub assigned: serde_json::Value,
+    /// Optional command-specific result data. The command owns the shape of
+    /// this value; common examples are an allocated entity id, queued status,
+    /// generated source, or captured stdout. Continuous simulation values do
+    /// not belong here — they remain authored `outputs:*` ports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 impl Ack {
@@ -274,7 +274,16 @@ impl Ack {
         Self {
             op_id,
             new_gen: None,
-            assigned: serde_json::Value::Null,
+            data: None,
+        }
+    }
+
+    /// Build a successful acknowledgement carrying command-specific result data.
+    pub fn with_data(op_id: OpId, data: serde_json::Value) -> Self {
+        Self {
+            op_id,
+            new_gen: None,
+            data: Some(data),
         }
     }
 }
@@ -339,7 +348,7 @@ impl std::error::Error for Reject {}
 pub enum CommandOutcome {
     /// Accepted; the observer hasn't reported a terminal state yet.
     Pending,
-    /// Ran successfully; carries the [`Ack`] (new generation, assigned values).
+    /// Ran successfully; carries the [`Ack`] (new generation, optional data).
     Succeeded(Ack),
     /// Never ran — rejected before/at validation. Client should revert.
     Rejected(Reject),

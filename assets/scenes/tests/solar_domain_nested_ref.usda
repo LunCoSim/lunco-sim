@@ -14,10 +14,8 @@
 # WHY THAT IS NOT PEDANTRY. The generation variant authors its membership with an
 # ABSOLUTE path, inside a variant, in the asset that owns the collection:
 #
-#     over "Electrical" {
-#         float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
-#         prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
-#     }
+#     float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+#     prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
 #
 # Every reference arc has to remap that path and merge that `prepend` list op. At
 # one arc it demonstrably works (`scenes/luncosim/solar_rover_demo.usda`). At two
@@ -25,14 +23,14 @@
 # collection while `outputs:solar_power.connect` still pointed at it, so
 # `project_domain_islands` rejected the whole network with
 #
-#     output source component `…/SolarPanel` is outside collection `…/Electrical`
+#     output source component `…/SolarPanel` is outside the rover-root collection
 #
 # and the rover silently lost its electrical domain: no `soc`, no `solar_power`,
 # no error anywhere a driver would look. Every purchasable rover configuration is
 # a wrapper asset, so this is the arc count that ships.
 #
 # HOW IT IS MEASURED. Ports, not logs. A rejected island produces no
-# `SimComponent`, so `get(<rover>/Electrical, "solar_power")` returns `()`. Both
+# `SimComponent`, so `get(<rover>, "solar_power")` returns `()`. Both
 # rovers are read the same way and the verdict names which one lost its domain.
 #
 # THE CONTROL IS THE POINT. `Direct` selects the SAME two variants at the scene,

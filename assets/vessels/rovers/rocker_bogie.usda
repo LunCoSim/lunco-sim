@@ -26,7 +26,8 @@ def Xform "RockerBogie" (
         "PhysicsMassAPI",
         "PhysicsArticulationRootAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI"
+        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI",
+        "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
@@ -489,7 +490,7 @@ def Xform "RockerBogie" (
 
         def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FL>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_FL>
         }
     }
 
@@ -636,7 +637,7 @@ def Xform "RockerBogie" (
 
         def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FR>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_FR>
         }
     }
 
@@ -858,11 +859,11 @@ def Xform "RockerBogie" (
 
         def Xform "Shaft_ML" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_ML>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_ML>
         }
         def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RL>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_RL>
         }
     }
 
@@ -1075,11 +1076,11 @@ def Xform "RockerBogie" (
 
         def Xform "Shaft_MR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_MR>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_MR>
         }
         def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
         {
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RR>
+            float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_RR>
         }
     }
 
@@ -1211,187 +1212,167 @@ def Xform "RockerBogie" (
             )
             {
             }
-            def Scope "Electrical" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-            )
-            {
-                float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
-                float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
-                float outputs:bus_voltage.connect = </RockerBogie/PowerSource.outputs:terminal_voltage_v>
-                float outputs:bus_current.connect = </RockerBogie/PowerSource.outputs:terminal_current_a>
-                float outputs:bus_power.connect = </RockerBogie/PowerSource.outputs:terminal_power_w>
-                uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </RockerBogie/PowerSource>,
-                    </RockerBogie/RockerL/Motor_FL>,
-                        </RockerBogie/RockerL/TorqueSource_FL>,
-                    </RockerBogie/BogieL/Motor_ML>,
-                        </RockerBogie/BogieL/TorqueSource_ML>,
-                    </RockerBogie/BogieL/Motor_RL>,
-                        </RockerBogie/BogieL/TorqueSource_RL>,
-                    </RockerBogie/RockerR/Motor_FR>,
-                        </RockerBogie/RockerR/TorqueSource_FR>,
-                    </RockerBogie/BogieR/Motor_MR>,
-                        </RockerBogie/BogieR/TorqueSource_MR>,
-                    </RockerBogie/BogieR/Motor_RR>,
-                        </RockerBogie/BogieR/TorqueSource_RR>,
-                    </RockerBogie/RockerL/Gearbox_FL>,
-                    </RockerBogie/RockerR/Gearbox_FR>,
-                    </RockerBogie/BogieL/Gearbox_ML>,
-                    </RockerBogie/BogieL/Gearbox_RL>,
-                    </RockerBogie/BogieR/Gearbox_MR>,
-                    </RockerBogie/BogieR/Gearbox_RR>,
-                    </RockerBogie/RockerL/Shaft_FL>,
-                    </RockerBogie/RockerR/Shaft_FR>,
-                    </RockerBogie/BogieL/Shaft_ML>,
-                    </RockerBogie/BogieL/Shaft_RL>,
-                    </RockerBogie/BogieR/Shaft_MR>,
-                    </RockerBogie/BogieR/Shaft_RR>,
-                ]
-            }
+            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
+            float outputs:bus_voltage.connect = </RockerBogie/PowerSource.outputs:terminal_voltage_v>
+            float outputs:bus_current.connect = </RockerBogie/PowerSource.outputs:terminal_current_a>
+            float outputs:bus_power.connect = </RockerBogie/PowerSource.outputs:terminal_power_w>
+            uniform token collection:components:expansionRule = "explicitOnly"
+            prepend rel collection:components:includes = [
+                </RockerBogie/PowerSource>,
+                </RockerBogie/RockerL/Motor_FL>,
+                </RockerBogie/RockerL/TorqueSource_FL>,
+                </RockerBogie/BogieL/Motor_ML>,
+                </RockerBogie/BogieL/TorqueSource_ML>,
+                </RockerBogie/BogieL/Motor_RL>,
+                </RockerBogie/BogieL/TorqueSource_RL>,
+                </RockerBogie/RockerR/Motor_FR>,
+                </RockerBogie/RockerR/TorqueSource_FR>,
+                </RockerBogie/BogieR/Motor_MR>,
+                </RockerBogie/BogieR/TorqueSource_MR>,
+                </RockerBogie/BogieR/Motor_RR>,
+                </RockerBogie/BogieR/TorqueSource_RR>,
+                </RockerBogie/RockerL/Gearbox_FL>,
+                </RockerBogie/RockerR/Gearbox_FR>,
+                </RockerBogie/BogieL/Gearbox_ML>,
+                </RockerBogie/BogieL/Gearbox_RL>,
+                </RockerBogie/BogieR/Gearbox_MR>,
+                </RockerBogie/BogieR/Gearbox_RR>,
+                </RockerBogie/RockerL/Shaft_FL>,
+                </RockerBogie/RockerR/Shaft_FR>,
+                </RockerBogie/BogieL/Shaft_ML>,
+                </RockerBogie/BogieL/Shaft_RL>,
+                </RockerBogie/BogieR/Shaft_MR>,
+                </RockerBogie/BogieR/Shaft_RR>,
+            ]
             over "RockerL" {
                 over "Motor_FL" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
             }
             over "BogieL" {
                 over "Motor_ML" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
                 over "Motor_RL" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
             }
             over "RockerR" {
                 over "Motor_FR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
             }
             over "BogieR" {
                 over "Motor_MR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
                 over "Motor_RR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
                 }
             }
         }
 
         "battery" {
-            def Scope "Electrical" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-            )
-            {
-                float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
-                float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
-                float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
-                float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
-                float outputs:bus_voltage.connect = </RockerBogie/Battery.outputs:terminal_voltage_v>
-                float outputs:bus_current.connect = </RockerBogie/Battery.outputs:terminal_current_a>
-                float outputs:bus_power.connect = </RockerBogie/Battery.outputs:net_power_w>
-                float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
-                float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
-                float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
-                # These are authored network-boundary observables for the
-                # front-left actuator. Consumers read the typed Electrical
-                # surface; they never depend on generated Modelica member
-                # identifiers, which are implementation details of the
-                # synthesized wrapper.
-                float outputs:motor_electrical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:electrical_power>
-                float outputs:motor_mechanical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:mechanical_power_w>
-                float outputs:motor_terminal_current.connect = </RockerBogie/RockerL/Motor_FL.outputs:terminal_current_a>
-                # Forward each motor's solved `heat` to the electrical boundary so
-                # the thermal island can source it as a cross-domain SimConnection.
-                # A member's `output` is only readable on its island scope under a
-                # mangled name; forwarding it here makes it a named boundary port.
-                float outputs:motor_heat_FL.connect = </RockerBogie/RockerL/Motor_FL.outputs:heat>
-                float outputs:motor_heat_ML.connect = </RockerBogie/BogieL/Motor_ML.outputs:heat>
-                float outputs:motor_heat_RL.connect = </RockerBogie/BogieL/Motor_RL.outputs:heat>
-                float outputs:motor_heat_FR.connect = </RockerBogie/RockerR/Motor_FR.outputs:heat>
-                float outputs:motor_heat_MR.connect = </RockerBogie/BogieR/Motor_MR.outputs:heat>
-                float outputs:motor_heat_RR.connect = </RockerBogie/BogieR/Motor_RR.outputs:heat>
-                uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </RockerBogie/Battery>,
-                    </RockerBogie/RockerL/Motor_FL>,
-                        </RockerBogie/RockerL/TorqueSource_FL>,
-                    </RockerBogie/BogieL/Motor_ML>,
-                        </RockerBogie/BogieL/TorqueSource_ML>,
-                    </RockerBogie/BogieL/Motor_RL>,
-                        </RockerBogie/BogieL/TorqueSource_RL>,
-                    </RockerBogie/RockerR/Motor_FR>,
-                        </RockerBogie/RockerR/TorqueSource_FR>,
-                    </RockerBogie/BogieR/Motor_MR>,
-                        </RockerBogie/BogieR/TorqueSource_MR>,
-                    </RockerBogie/BogieR/Motor_RR>,
-                        </RockerBogie/BogieR/TorqueSource_RR>,
-                    </RockerBogie/RockerL/Gearbox_FL>,
-                    </RockerBogie/RockerR/Gearbox_FR>,
-                    </RockerBogie/BogieL/Gearbox_ML>,
-                    </RockerBogie/BogieL/Gearbox_RL>,
-                    </RockerBogie/BogieR/Gearbox_MR>,
-                    </RockerBogie/BogieR/Gearbox_RR>,
-                    </RockerBogie/RockerL/Shaft_FL>,
-                    </RockerBogie/RockerR/Shaft_FR>,
-                    </RockerBogie/BogieL/Shaft_ML>,
-                    </RockerBogie/BogieL/Shaft_RL>,
-                    </RockerBogie/BogieR/Shaft_MR>,
-                    </RockerBogie/BogieR/Shaft_RR>,
-                ]
-            }
+            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
+            float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+            float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
+            float outputs:bus_voltage.connect = </RockerBogie/Battery.outputs:terminal_voltage_v>
+            float outputs:bus_current.connect = </RockerBogie/Battery.outputs:terminal_current_a>
+            float outputs:bus_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+            float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+            float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
+            float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
+            # These are authored network-boundary observables for the
+            # front-left actuator. Consumers read the typed Electrical
+            # surface; they never depend on generated Modelica member
+            # identifiers, which are implementation details of the
+            # synthesized wrapper.
+            float outputs:motor_electrical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:electrical_power>
+            float outputs:motor_mechanical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:mechanical_power_w>
+            float outputs:motor_terminal_current.connect = </RockerBogie/RockerL/Motor_FL.outputs:terminal_current_a>
+            uniform token collection:components:expansionRule = "explicitOnly"
+            prepend rel collection:components:includes = [
+                </RockerBogie/Battery>,
+                </RockerBogie/RockerL/Motor_FL>,
+                </RockerBogie/RockerL/TorqueSource_FL>,
+                </RockerBogie/BogieL/Motor_ML>,
+                </RockerBogie/BogieL/TorqueSource_ML>,
+                </RockerBogie/BogieL/Motor_RL>,
+                </RockerBogie/BogieL/TorqueSource_RL>,
+                </RockerBogie/RockerR/Motor_FR>,
+                </RockerBogie/RockerR/TorqueSource_FR>,
+                </RockerBogie/BogieR/Motor_MR>,
+                </RockerBogie/BogieR/TorqueSource_MR>,
+                </RockerBogie/BogieR/Motor_RR>,
+                </RockerBogie/BogieR/TorqueSource_RR>,
+                </RockerBogie/RockerL/Gearbox_FL>,
+                </RockerBogie/RockerR/Gearbox_FR>,
+                </RockerBogie/BogieL/Gearbox_ML>,
+                </RockerBogie/BogieL/Gearbox_RL>,
+                </RockerBogie/BogieR/Gearbox_MR>,
+                </RockerBogie/BogieR/Gearbox_RR>,
+                </RockerBogie/RockerL/Shaft_FL>,
+                </RockerBogie/RockerR/Shaft_FR>,
+                </RockerBogie/BogieL/Shaft_ML>,
+                </RockerBogie/BogieL/Shaft_RL>,
+                </RockerBogie/BogieR/Shaft_MR>,
+                </RockerBogie/BogieR/Shaft_RR>,
+            ]
             over "RockerL" {
                 over "Motor_FL" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
             }
             over "BogieL" {
                 over "Motor_ML" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
                 over "Motor_RL" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
             }
             over "RockerR" {
                 over "Motor_FR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
             }
             over "BogieR" {
                 over "Motor_MR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
                 over "Motor_RR" {
-                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
             }
 
             def LunCoEvent "BatteryDrained" {
-                float inputs:trigger.connect = </RockerBogie/Electrical.outputs:battery_drained>
+                float inputs:trigger.connect = </RockerBogie.outputs:battery_drained>
                 uniform token lunco:event:name = "battery_drained"
                 uniform token lunco:event:severity = "warning"
                 uniform bool lunco:event:latched = true
@@ -1412,7 +1393,7 @@ def Xform "RockerBogie" (
             # brought — the reference, the children, `LunCoProgramAPI`,
             # `info:sourceAsset`. `read_network` then skips a member with no
             # program API, and the runtime blames the collection instead:
-            # `SolarPanel is outside collection Electrical`. See
+            # `SolarPanel is outside the rover-root collection`. See
             # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
@@ -1428,9 +1409,9 @@ def Xform "RockerBogie" (
                 # authoring the same opinion twice and relying on the merge; state it
                 # once, where the prim is declared.
                 custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                float inputs:sun_mount_x.connect = </RockerBogie/Electrical.inputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </RockerBogie/Electrical.inputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </RockerBogie/Electrical.inputs:sun_mount_z>
+                float inputs:sun_mount_x.connect = </RockerBogie.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </RockerBogie.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </RockerBogie.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -1438,8 +1419,6 @@ def Xform "RockerBogie" (
                 {
                 }
             }
-            over "Electrical"
-            {
                 # Environment probes are runtime providers, not generated
                 # Modelica members. Cross the island boundary through typed
                 # inputs, then let the panel consume those boundary values.
@@ -1450,7 +1429,6 @@ def Xform "RockerBogie" (
                 float outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
                 float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
                 prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
-            }
         }
     }
 
@@ -1480,17 +1458,15 @@ def Xform "RockerBogie" (
                 # With `power="infinite"` these resolve to the motors' authored
                 # `outputs:heat` directly (still 0 for an uncommanded motor); the
                 # thermal island compiles and runs regardless.
-                # Source heat from the Electrical island's forwarded boundary outputs,
-                # not from the motor entities directly: a member's `output` is only
-                # readable on its island scope, so the Electrical scope forwards each
-                # motor's `heat` as a named boundary port (see the power="battery"
-                # variant). This is the cross-domain causal wire.
-                float inputs:motor_heat_FL.connect = </RockerBogie/Electrical.outputs:motor_heat_FL>
-                float inputs:motor_heat_ML.connect = </RockerBogie/Electrical.outputs:motor_heat_ML>
-                float inputs:motor_heat_RL.connect = </RockerBogie/Electrical.outputs:motor_heat_RL>
-                float inputs:motor_heat_FR.connect = </RockerBogie/Electrical.outputs:motor_heat_FR>
-                float inputs:motor_heat_MR.connect = </RockerBogie/Electrical.outputs:motor_heat_MR>
-                float inputs:motor_heat_RR.connect = </RockerBogie/Electrical.outputs:motor_heat_RR>
+                # Thermal consumes the solved motor outputs directly. The
+                # generated electrical wrapper resolves these member addresses;
+                # no rover-root heat aliases are needed.
+                float inputs:motor_heat_FL.connect = </RockerBogie/RockerL/Motor_FL.outputs:heat>
+                float inputs:motor_heat_ML.connect = </RockerBogie/BogieL/Motor_ML.outputs:heat>
+                float inputs:motor_heat_RL.connect = </RockerBogie/BogieL/Motor_RL.outputs:heat>
+                float inputs:motor_heat_FR.connect = </RockerBogie/RockerR/Motor_FR.outputs:heat>
+                float inputs:motor_heat_MR.connect = </RockerBogie/BogieR/Motor_MR.outputs:heat>
+                float inputs:motor_heat_RR.connect = </RockerBogie/BogieR/Motor_RR.outputs:heat>
 
                 # ── Causal boundary OUT: bank temperatures published HERE ──
                 float outputs:motor_temp_left.connect  = </RockerBogie/Thermal/MotorThermalLeft.outputs:temp_k>

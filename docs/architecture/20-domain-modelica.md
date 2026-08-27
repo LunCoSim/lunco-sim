@@ -107,7 +107,7 @@ telemetry); Rhai owns the hierarchy, annotation graphics, and policy-side
 layout so visual changes do not require a Rust rebuild.
 
 The shipped electrical presentation uses readable policy-owned unit class and
-instance names (`PowerSystem`/`PowerUnit_N` and `power_system`/`power_unit_N`),
+instance names (`NetworkSystem`/`NetworkUnit_N` and `network_system`/`network_unit_N`),
 a dedicated power-bus rail, and standard `Line` waypoints on every generated acausal
 connection. Each route includes the icon-to-rail stubs and rail crossing, so a
 panel is not visually mistaken for a direct motor connection. The rail is drawn

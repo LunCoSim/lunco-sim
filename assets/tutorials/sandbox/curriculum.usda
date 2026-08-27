@@ -48,7 +48,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
         string lunco:tutorial:title = "Sandbox Intro"
-        string lunco:tutorial:blurb = "An optional guided coach-mark tour of the workspace — camera, viewport, browser, inspector and control authority."
+        string lunco:tutorial:blurb = "Learn the camera, selection, spawning, and control handoff."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
     }
@@ -60,7 +60,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
         string lunco:tutorial:title = "First Drive"
-        string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving."
+        string lunco:tutorial:blurb = "Take control of a rover and drive it to a lunar flag."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/MoonDrivingBasics>
@@ -73,7 +73,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/lander_mission.rhai@
         string lunco:tutorial:title = "Lander & Rover Mission"
-        string lunco:tutorial:blurb = "Watch a powered descent land a rover, then drive the deployed rover through a course."
+        string lunco:tutorial:blurb = "Watch a powered landing, take the rover, and drive through the gates."
         uniform token lunco:tutorial:difficulty = "intermediate"
         uniform token lunco:tutorial:format = "exercise"
     }
@@ -85,7 +85,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_scene.rhai@
         string lunco:tutorial:title = "Build a Scene"
-        string lunco:tutorial:blurb = "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath."
+        string lunco:tutorial:blurb = "Place an object, edit it, and save the USD-backed scene."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </ObjectBuilder/MountComponents>
@@ -98,7 +98,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_base.rhai@
         string lunco:tutorial:title = "Build a Lunar Base"
-        string lunco:tutorial:blurb = "Compose a surface base from the moonbase Structures kit — solar/fission power, a crew habitat, a comms mast, an ISRU plant and a landing pad."
+        string lunco:tutorial:blurb = "Place power, habitat, comms, ISRU, and a landing pad."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Sandbox/ScriptARover>
@@ -111,7 +111,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/script_a_rover.rhai@
         string lunco:tutorial:title = "Script a Rover"
-        string lunco:tutorial:blurb = "What a rhai scenario is and how to attach one — lifecycle hooks, prelude verbs, hot-reload."
+        string lunco:tutorial:blurb = "Attach a Rhai scenario, run it, and reload it without rebuilding."
         uniform token lunco:tutorial:difficulty = "intermediate"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/RhaiRepl>
@@ -124,7 +124,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rhai_repl.rhai@
         string lunco:tutorial:title = "Rhai Editor & REPL"
-        string lunco:tutorial:blurb = "Learn how to write scripts in the in-app editor, run typed commands in the live REPL, and use the command reference."
+        string lunco:tutorial:blurb = "Edit a scenario and run typed commands in the live REPL."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/InspectSim>
@@ -137,7 +137,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/inspect_sim.rhai@
         string lunco:tutorial:title = "Inspect the Simulation"
-        string lunco:tutorial:blurb = "Read live state — selection, telemetry ports and plots, and reading it all back over the API."
+        string lunco:tutorial:blurb = "Select an entity and read its state, ports, and Modelica links."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/Cosim>
@@ -150,7 +150,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/cosim.rhai@
         string lunco:tutorial:title = "Cosim — Model meets Physics"
-        string lunco:tutorial:blurb = "How a Modelica model flies a physics body: the model, the SimConnection wire, Modelica events, and verifying the result."
+        string lunco:tutorial:blurb = "Trace the Modelica-to-physics loop and verify its live connections."
         uniform token lunco:tutorial:difficulty = "intermediate"
         uniform token lunco:tutorial:format = "tour"
     }

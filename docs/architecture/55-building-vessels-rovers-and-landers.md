@@ -11,13 +11,14 @@ This document is the step-by-step architectural guide for assembling mission-gra
 When building any vehicle assembly in LunCoSim:
 
 1. **Decoupled Component References**:
-   - Component files in `assets/components/` (`battery.usda`, `motor.usda`, `cryo_tank.usda`) contain **zero vehicle-specific paths** (`/SkidRover` or `/Power`).
+   - Component files in `assets/components/` (`battery.usda`, `motor.usda`, `cryo_tank.usda`) contain **zero vehicle-specific paths** (`/SkidRover` or `/Rover`).
    - Component files define reusable part interfaces and nameplate defaults. The vehicle
      file references those parts and owns its actual topology.
 
-2. **Ordinary USD Scopes and Standard Collections for Networks**:
-   - Every independently solved physical network has a named `Scope` applying
-     `CollectionAPI:components`.
+2. **Assembly Roots and Standard Collections for Networks**:
+   - Every independently solved physical network has one network-root prim applying
+     `CollectionAPI:components`. When the network belongs to a vehicle assembly, the
+     assembly root owns it; a domain-named child is unnecessary.
    - The collection includes the actual assembled part prims; it does not create proxy
      copies below the Scope.
    - Every included Modelica facet explicitly uses
@@ -42,7 +43,8 @@ When building any vehicle assembly in LunCoSim:
          custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
      }
 
-     def Scope "Electrical" (
+     # The rover root owns the network collection and boundary.
+     over "SkidRover" (
          prepend apiSchemas = ["CollectionAPI:components"]
      )
      {
@@ -119,11 +121,11 @@ normal is +Y unless the vehicle explicitly overrides it. The component owns the
 visual frame/cell surface, mass/collision facet, environment probe and
 `SolarPanel.mo` source. A horizontal collecting face uses the component's +Y
 normal. Include the panel, battery and driven loads in the same explicit
-`CollectionAPI:components` electrical scope and connect the panel pin to the
+`CollectionAPI:components` collection on the rover root and connect the panel pin to the
 battery pin.
 
-The acceptance is a chain, not a mesh check: the electrical scope must compile,
-the authored Scope boundary must publish `solar_power`/`solar_incidence`, and it
+The acceptance is a chain, not a mesh check: the rover-root network must compile,
+the authored root boundary must publish `solar_power`/`solar_incidence`, and it
 must publish `soc` while receiving current. Read the stable boundary names through
 `ReadPorts`; generated child-unit and member-instance names are diagnostic only.
 
@@ -138,7 +140,7 @@ four-motor network as a base for a six-motor one; topology is an assembly fact, 
 component type.
 
 ### Step 2: Group Network Members with CollectionAPI
-Apply `CollectionAPI:components` to the network Scope and explicitly include the actual
+Apply `CollectionAPI:components` to the network-root prim and explicitly include the actual
 part paths. OpenUSD computes membership after references, variants, and other composition
 arcs have been resolved.
 

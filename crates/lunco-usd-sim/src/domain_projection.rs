@@ -62,7 +62,7 @@ fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc:
     });
 }
 
-/// Fingerprint of the generated wrapper currently installed on a network scope.
+/// Fingerprint of the generated wrapper currently installed on a network root.
 #[derive(Component)]
 pub struct DomainProjectionState {
     fingerprint: u64,
@@ -79,7 +79,7 @@ pub struct DomainProjectionState {
 /// nobody can obtain.
 #[derive(Component, Clone, Debug)]
 pub struct GeneratedModelicaSource {
-    /// Composed USD scope that owns this compilation unit.
+    /// Composed USD network root that owns this compilation unit.
     pub network_root: String,
     /// Stable transient document URI used by the Modelica compiler for this unit.
     pub doc_uri: String,
@@ -141,14 +141,14 @@ pub struct DomainComponent {
     pub topology_role: String,
 }
 
-/// One network scope and its public causal boundary.
+/// One network root and its public causal boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DomainNetwork {
-    /// Composed path of the ordinary USD `Scope`.
+    /// Composed path of the USD prim carrying `CollectionAPI:components`.
     pub root: String,
-    /// Modelica component facets below the scope.
+    /// Modelica component facets in the root's explicit collection.
     pub components: Vec<DomainComponent>,
-    /// Public wrapper inputs authored on the scope.
+    /// Public wrapper inputs authored on the network root.
     pub inputs: BTreeSet<String>,
     /// Public wrapper input name to its composed external source.
     pub input_sources: BTreeMap<String, String>,
@@ -164,11 +164,11 @@ pub struct DomainNetwork {
     pub pending_sources: bool,
 }
 
-/// One deterministic Modelica composite unit inside a network Scope.
+/// One deterministic Modelica composite unit inside a network root.
 ///
 /// A unit is a connected component of the composed program graph. It is not a
 /// second ECS participant: the selected synthesizer emits the units below one
-/// generated root model, so the Scope keeps one public boundary and one
+/// generated root model, so the network root keeps one public boundary and one
 /// runtime lifecycle while independent acausal subgraphs remain explicit in
 /// the generated Modelica. This is the same composite-model shape used by
 /// SSP/FMI toolchains.
@@ -214,8 +214,8 @@ pub struct DomainProjectionError {
     pub message: String,
 }
 
-// A `Scope` is ONE runtime compilation unit: one generated root model on one
-// entity carrying one `ModelicaModel`. The synthesizer may partition the
+// A network root is ONE runtime compilation unit: one generated root model on
+// one entity carrying one `ModelicaModel`. The synthesizer may partition the
 // composed graph into several Modelica composite units, but it owns that
 // topology operation and emits the units under the root. The runtime therefore
 // never invents entities or a second definition of graph connectivity.
@@ -249,11 +249,11 @@ pub struct SynthesisPlan {
     pub communication_period_secs: f64,
 }
 
-/// One way of turning a composed USD scope into ONE Modelica compilation unit.
+/// One way of turning a composed USD network root into ONE Modelica compilation unit.
 ///
 /// The seam doc 37 §8 asks for. What ships is the acausal-network synthesizer
 /// below; a `thermal`, `harness` or `comms-link` synthesizer is a registration,
-/// not an edit to [`project_domain_islands`]. A generic scope may select one
+/// not an edit to [`project_domain_islands`]. A generic network root may select one
 /// through `LunCoDomainSynthesisAPI`; otherwise the projector derives the
 /// built-in owner from the typed member role schemas.
 ///
@@ -263,9 +263,9 @@ pub struct SynthesisPlan {
 /// `project_domain_islands`, so changing dynamic building behaviour does not
 /// require a Rust branch.
 pub trait DomainSynthesizer: Send + Sync + 'static {
-    /// Registry key, and the token a scope names.
+    /// Registry key, and the token a network root names.
     fn name(&self) -> &str;
-    /// Turn one composed scope into a compilation unit.
+    /// Turn one composed network root into a compilation unit.
     fn synthesize(
         &self,
         view: &lunco_usd_bevy::StageView<'_>,
@@ -275,7 +275,7 @@ pub trait DomainSynthesizer: Send + Sync + 'static {
     ) -> Result<SynthOutcome, Vec<DomainProjectionError>>;
 }
 
-/// What a synthesizer concluded about a scope.
+/// What a synthesizer concluded about a network root.
 #[derive(Debug)]
 pub enum SynthOutcome {
     /// Not a scope this synthesizer compiles (or nothing solvable is in it).
@@ -298,7 +298,7 @@ pub const DEFAULT_SYNTHESIZER: &str = DEFAULT_DOMAIN_SYNTHESIZER;
 /// The generic force-actuator allocator used by the shipped lander.
 pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER;
 
-/// Select the domain owner for a composed network scope.
+/// Select the domain owner for a composed network root.
 ///
 /// An authored `LunCoDomainSynthesisAPI` is an explicit contract. Without that
 /// API, ownership is derived from the composed member role schemas. Keeping
@@ -1595,7 +1595,7 @@ pub fn network_facts(
 ///
 /// Acausal connector edges and internal causal output-to-input edges both keep
 /// components in one composite unit. Boundary connections do not: they are
-/// the public FMI/SSP-style interface of the unit's containing Scope. The
+/// the public FMI/SSP-style interface of the containing network root. The
 /// returned order and generated names are stable across runs and independent
 /// of USD collection ordering.
 pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
@@ -1690,10 +1690,11 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
 ///
 /// This is deliberately a separate synthesizer from `acausal-network`: force
 /// actuator prims are physical USD members, not Modelica component facets. The
-/// authored geometry supplies each actuator's moment contribution and command
-/// name; Modelica owns the runtime clamp and matrix operation. A rank-deficient
-/// actuator arrangement is an authoring error, not a reason to silently select
-/// a different allocation policy.
+/// authored geometry supplies each actuator's moment contribution and an
+/// explicit relationship to the generated network's command output. Modelica
+/// owns the runtime clamp and matrix operation. A rank-deficient actuator
+/// arrangement is an authoring error, not a reason to silently select a
+/// different allocation policy.
 pub struct ActuatorWrenchSynthesizer;
 
 impl DomainSynthesizer for ActuatorWrenchSynthesizer {
@@ -1708,9 +1709,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         model_name: &str,
         _ctx: &SynthContext<'_>,
     ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
-        if view.type_name(root).as_deref() != Some("Scope")
-            || !view.has_api_schema(root, "CollectionAPI:components")
-        {
+        if !is_domain_network_root(view, root) {
             return Ok(SynthOutcome::NotMine);
         }
 
@@ -1729,20 +1728,42 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             if path.is_property_path() || path.is_prim_variant_selection_path() {
                 continue;
             }
-            let Some(command) = view.text(&path, "lunco:forceActuator:commandOutput") else {
+            let command_targets = view.rel_targets(&path, "lunco:forceActuator:commandSource");
+            if command_targets.len() != 1 {
                 return Err(vec![DomainProjectionError {
                     path: path.to_string(),
-                    message: "actuator-wrench collection members must author a non-empty \
-                              lunco:forceActuator:commandOutput"
+                    message: "actuator-wrench collection members must target exactly one \
+                              scalar output with lunco:forceActuator:commandSource"
                         .into(),
                 }]);
-            };
-            if command.is_empty() || !is_modelica_identifier(&command) {
+            }
+            let command_target = &command_targets[0];
+            let Some((command_root, command_property)) = command_target.split_property() else {
                 return Err(vec![DomainProjectionError {
-                    path: format!("{path}.lunco:forceActuator:commandOutput"),
-                    message: format!("`{command}` is not a valid Modelica actuator output name"),
+                    path: format!("{path}.lunco:forceActuator:commandSource"),
+                    message: format!(
+                        "command source `{command_target}` must target a scalar output property"
+                    ),
+                }]);
+            };
+            let Some(command) = command_property.strip_prefix("outputs:") else {
+                return Err(vec![DomainProjectionError {
+                    path: format!("{path}.lunco:forceActuator:commandSource"),
+                    message: format!(
+                        "command source `{command_target}` must target an `outputs:` property"
+                    ),
+                }]);
+            };
+            if command_root != *root || command.is_empty() || !is_modelica_identifier(command) {
+                return Err(vec![DomainProjectionError {
+                    path: format!("{path}.lunco:forceActuator:commandSource"),
+                    message: format!(
+                        "command source `{command_target}` must target a valid Modelica output \
+                         on network root `{root}`"
+                    ),
                 }]);
             }
+            let command = command.to_string();
             let Some(actuator) = crate::force_actuator_from_usd(view, &path) else {
                 return Err(vec![DomainProjectionError {
                     path: path.to_string(),
@@ -1756,7 +1777,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 .is_some()
             {
                 return Err(vec![DomainProjectionError {
-                    path: format!("{root}.lunco:forceActuator:commandOutput"),
+                    path: format!("{root}.lunco:forceActuator:commandSource"),
                     message: format!("actuator output `{command}` is authored more than once"),
                 }]);
             }
@@ -2177,8 +2198,8 @@ fn generated_member_outputs(
     Ok(member_outputs)
 }
 
-/// Reactively compile every ordinary `Scope` containing a standard component
-/// collection of Modelica program facets. The generated source is runtime projection only.
+/// Reactively compile every prim containing a standard component collection of
+/// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
     mut commands: Commands,
     added: Query<(), Added<UsdPrimPath>>,
@@ -2249,9 +2270,6 @@ pub fn project_domain_islands(
         let Ok(root_path) = SdfPath::new(&prim.path) else {
             continue;
         };
-        if view.type_name(&root_path).as_deref() != Some("Scope") {
-            continue;
-        }
         // Domain ownership is derived from the typed member role schemas. A
         // domain API may still explicitly select a registered non-default
         // policy for a generic Modelica collection; physical actuator
@@ -2663,7 +2681,7 @@ pub fn generated_sources_need_publish(
 /// network was compiled from.
 ///
 /// `curl … {"type":"ExecuteCommand","command":"GeneratedModelicaSource","params":{}}` lists every
-/// projected network; `{"network_root":"/Rover/Electrical"}` returns one. This
+/// projected network; `{"network_root":"/Rover"}` returns one. This
 /// is the read path for the `generated://…` documents the compiler reports
 /// errors against, and the only way to see what USD actually emitted.
 pub struct GeneratedSourceProvider;
@@ -2839,7 +2857,7 @@ fn network_communication_period(
     }))
 }
 
-/// Read one composed `Scope` as a network, or say why it cannot be one.
+/// Read one composed network root as a network, or say why it cannot be one.
 ///
 /// `Ok(None)` = not a network root (or nothing solvable is left in it);
 /// `Err` = authored opinions that would produce a model the compiler could only
@@ -3059,6 +3077,13 @@ pub fn read_network(
         let Some(name) = attr.strip_prefix("outputs:") else {
             continue;
         };
+        // A network root can also expose ordinary vehicle outputs such as
+        // `drive_left`. Only an output sourced from a member in this root's
+        // component collection is part of the generated Modelica interface.
+        // The other outputs remain available to physics and control wiring.
+        if !lunco_usd_bevy::program::is_network_boundary_output(view, root, attr) {
+            continue;
+        }
         let targets = view.connections(root, attr);
         if targets.len() != 1 {
             extraction_errors.push(DomainProjectionError {
@@ -3356,7 +3381,7 @@ fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) ->
 /// Prefer the member leaf (Motor_FL) and add its immediate parent only for
 /// nested members (YawHead__SolarPanel). The network root's parent is used
 /// as the common assembly scope because composed members may sit beside the
-/// Electrical collection rather than below it. validate_network still
+/// component collection rather than below it. validate_network still
 /// rejects a same-name collision; it must be fixed in USD rather than hidden
 /// by a numeric fallback.
 fn instance_identifier(root: &str, path: &str) -> Result<String, String> {
@@ -3422,7 +3447,7 @@ fn has_authored_telemetry_for_output(view: &impl UsdRead, member: &str, output: 
 ///
 /// A generated network intentionally has one `ModelicaModel` entity.  Its
 /// solver variables therefore cannot be grouped by ECS parentage: that parent
-/// is the network scope, not the battery, motor, or panel that owns a value.
+/// is the network root, not the battery, motor, or panel that owns a value.
 /// The composed network already contains the authoritative mapping in two
 /// forms: boundary output connections and generated unit/member instance
 /// names.  Materialize those facts once at projection time so every telemetry
@@ -3913,14 +3938,14 @@ mod tests {
         };
         let units = vec![
             SynthesisUnit {
-                name: "PowerUnit_1".into(),
-                instance: "power_unit_1".into(),
+                name: "NetworkUnit_1".into(),
+                instance: "network_unit_1".into(),
                 component_paths: vec!["/Rig/Source_A".into(), "/Rig/Load_A".into()],
                 ..Default::default()
             },
             SynthesisUnit {
-                name: "PowerUnit_2".into(),
-                instance: "power_unit_2".into(),
+                name: "NetworkUnit_2".into(),
+                instance: "network_unit_2".into(),
                 component_paths: vec!["/Rig/Source_B".into(), "/Rig/Load_B".into()],
                 ..Default::default()
             },
@@ -3930,12 +3955,12 @@ mod tests {
                 "units",
                 lunco_hooks::HookValue::Array(vec![
                     lunco_hooks::HookValue::map([
-                        ("name", lunco_hooks::HookValue::str("PowerUnit_1")),
+                        ("name", lunco_hooks::HookValue::str("NetworkUnit_1")),
                         ("x", lunco_hooks::HookValue::Int(-200)),
                         ("y", lunco_hooks::HookValue::Int(0)),
                     ]),
                     lunco_hooks::HookValue::map([
-                        ("name", lunco_hooks::HookValue::str("PowerUnit_2")),
+                        ("name", lunco_hooks::HookValue::str("NetworkUnit_2")),
                         ("x", lunco_hooks::HookValue::Int(200)),
                         ("y", lunco_hooks::HookValue::Int(0)),
                     ]),
@@ -3978,25 +4003,25 @@ mod tests {
     fn generated_member_instance_names_are_readable_without_a_collision_fallback() {
         assert_eq!(
             instance_identifier(
-                "/SolarRoverTest/SolarRover/Electrical",
+                "/SolarRoverTest/SolarRover",
                 "/SolarRoverTest/SolarRover/Motor_FL"
             )
             .unwrap(),
             "Motor_FL"
         );
         assert_eq!(
-            instance_identifier("/Rig/Electrical", "/Rig/Electrical/Battery").unwrap(),
+            instance_identifier("/Rig", "/Rig/Battery").unwrap(),
             "Battery"
         );
         assert_ne!(
-            instance_identifier("/Rig/Electrical", "/Rig/Motor-A").unwrap(),
-            instance_identifier("/Rig/Electrical", "/Rig/Motor_A").unwrap()
+            instance_identifier("/Rig", "/Rig/Motor-A").unwrap(),
+            instance_identifier("/Rig", "/Rig/Motor_A").unwrap()
         );
     }
 
     #[test]
     fn member_path_without_a_name_is_reported_instead_of_panicking() {
-        let error = instance_identifier("/Rig/Electrical", "/Rig/Electrical")
+        let error = instance_identifier("/Rig", "/Rig")
             .expect_err("the network root is not a member instance");
         assert!(error.contains("has no name"), "{error}");
     }
@@ -4011,7 +4036,7 @@ mod tests {
             path.to_string_lossy().to_string(),
         );
         let view = stage.view();
-        let root_path = SdfPath::new("/Rig/Electrical").unwrap();
+        let root_path = SdfPath::new("/Rig").unwrap();
         let mut classes = MemberClasses::default();
         classes.declare(
             "lunco://models/LunCo/Electrical/Battery.mo",
@@ -4041,7 +4066,7 @@ mod tests {
             .synthesize(
                 &view,
                 &root_path,
-                "Rig_Electrical_System",
+                "Rig_System",
                 &SynthContext { classes: &classes },
             )
             .expect("fixture synthesis")
@@ -4052,7 +4077,7 @@ mod tests {
         let layout = generated_signal_layout(
             &view,
             &root_path,
-            "/Rig/Electrical",
+            "/Rig",
             &plan.outputs,
             &plan.members,
             &aliases,
@@ -4082,7 +4107,7 @@ mod tests {
         let solver_name = format!(
             "{}.{}.soc_out",
             battery_unit.instance,
-            instance_identifier("/Rig/Electrical", "/Rig/Battery").unwrap(),
+            instance_identifier("/Rig", "/Rig/Battery").unwrap(),
         );
         let internal = layout
             .provenance(&solver_name)
@@ -4148,13 +4173,13 @@ def Scope "Rig"
 
     #[test]
     fn rejects_external_connector_targets_and_keeps_unit_partition_deterministic() {
-        let mut external = component("/Electrical/Load/Model", None);
+        let mut external = component("/Rig/Load/Model", None);
         external
             .connectors
             .insert("p".into(), vec!["/Other/Battery/Model.connectors:p".into()]);
         let network = DomainNetwork {
-            root: "/Electrical".into(),
-            components: vec![component("/Electrical/Battery/Model", None), external],
+            root: "/Rig".into(),
+            components: vec![component("/Rig/Battery/Model", None), external],
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
@@ -4170,12 +4195,12 @@ def Scope "Rig"
 
     #[test]
     fn unconnected_acausal_component_is_omitted_from_generated_network() {
-        let panel = component("/Electrical/SolarPanel", None);
-        let mut battery = component("/Electrical/Battery", None);
+        let panel = component("/Rig/SolarPanel", None);
+        let mut battery = component("/Rig/Battery", None);
         battery
             .connectors
-            .insert("p".into(), vec!["/Electrical/Motor.connectors:p".into()]);
-        let motor = component("/Electrical/Motor", None);
+            .insert("p".into(), vec!["/Rig/Motor.connectors:p".into()]);
+        let motor = component("/Rig/Motor", None);
         let mut components = vec![panel, battery, motor];
         let omitted = retain_connected_acausal_components(&mut components);
         assert_eq!(
@@ -4183,11 +4208,11 @@ def Scope "Rig"
                 .iter()
                 .map(|component| component.path.as_str())
                 .collect::<Vec<_>>(),
-            ["/Electrical/Battery", "/Electrical/Motor"],
+            ["/Rig/Battery", "/Rig/Motor"],
             "only explicitly wired program facets enter a generated acausal island"
         );
         assert!(
-            omitted.contains("/Electrical/SolarPanel"),
+            omitted.contains("/Rig/SolarPanel"),
             "what the island omits has to be nameable — a boundary output published \
              through an omitted part drops with it instead of rejecting the network"
         );
@@ -4196,16 +4221,16 @@ def Scope "Rig"
     #[test]
     fn generated_model_identity_is_qualified_by_network_path() {
         assert_ne!(
-            network_model_name("/Rover/Electrical", Some(10)),
-            network_model_name("/Payload/Electrical", Some(20))
+            network_model_name("/Rover", Some(10)),
+            network_model_name("/Payload", Some(20))
         );
         assert_eq!(
-            network_model_name("/Rover/Electrical", Some(42)),
-            "Rover_x2f_Electrical_G42_System"
+            network_model_name("/Rover", Some(42)),
+            "Rover_G42_System"
         );
         assert_ne!(
-            network_model_name("/Rover/Electrical", Some(10)),
-            network_model_name("/Rover/Electrical", Some(20))
+            network_model_name("/Rover", Some(10)),
+            network_model_name("/Rover", Some(20))
         );
     }
 
@@ -4228,15 +4253,15 @@ def Scope "Rig"
         let six_ticks = 6.0 * lunco_core::SECS_PER_TICK;
         assert_eq!(
             aggregate_communication_periods([
-                Ok(("/Electrical/A".into(), six_ticks)),
-                Ok(("/Electrical/B".into(), 0.1)),
+                Ok(("/Rig/A".into(), six_ticks)),
+                Ok(("/Rig/B".into(), 0.1)),
             ])
             .unwrap(),
             six_ticks
         );
         let errors = aggregate_communication_periods([
-            Ok(("/Electrical/A".into(), six_ticks)),
-            Ok(("/Electrical/B".into(), 12.0 * lunco_core::SECS_PER_TICK)),
+            Ok(("/Rig/A".into(), six_ticks)),
+            Ok(("/Rig/B".into(), 12.0 * lunco_core::SECS_PER_TICK)),
         ])
         .unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -4246,8 +4271,8 @@ def Scope "Rig"
     #[test]
     fn rejects_ambiguous_forwarded_boundary_sources() {
         let network = DomainNetwork {
-            root: "/Electrical".into(),
-            components: vec![component("/Electrical/Battery", None)],
+            root: "/Rig".into(),
+            components: vec![component("/Rig/Battery", None)],
             inputs: BTreeSet::from(["left".into(), "right".into()]),
             input_sources: BTreeMap::from([
                 ("left".into(), "/Controls.outputs:throttle".into()),
@@ -4264,11 +4289,11 @@ def Scope "Rig"
 
     #[test]
     fn rejects_modelica_keywords_as_public_members() {
-        let mut bad = component("/Electrical/Load", None);
+        let mut bad = component("/Rig/Load", None);
         bad.inputs
-            .insert("equation".into(), "/Electrical.inputs:demand".into());
+            .insert("equation".into(), "/Rig.inputs:demand".into());
         let network = DomainNetwork {
-            root: "/Electrical".into(),
+            root: "/Rig".into(),
             components: vec![bad],
             inputs: BTreeSet::from(["demand".into()]),
             input_sources: BTreeMap::new(),
@@ -4295,9 +4320,9 @@ def Scope "Rig"
             .world_mut()
             .spawn((
                 GeneratedModelicaSource {
-                    network_root: "/Electrical".into(),
-                    doc_uri: "generated://Electrical.mo".into(),
-                    source: "model Electrical end Electrical;".into(),
+                    network_root: "/Rig".into(),
+                    doc_uri: "generated://Rig.mo".into(),
+                    source: "model Rig end Rig;".into(),
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
                     source_roots: Vec::new(),
@@ -4347,7 +4372,7 @@ def Scope "Rig"
                     ..default()
                 },
                 GeneratedModelicaSource {
-                    network_root: "/Rig/Electrical".into(),
+                    network_root: "/Rig".into(),
                     doc_uri: "generated://Generated.mo".into(),
                     source: "model Generated end Generated;".into(),
                     component_paths: Vec::new(),
@@ -4370,7 +4395,7 @@ def Scope "Rig"
             .push(lunco_modelica::state::GeneratedModelicaSourceEntry {
                 document,
                 uri: "generated://Generated.mo".into(),
-                network_root: "/Rig/Electrical".into(),
+                network_root: "/Rig".into(),
                 model_name: "Generated".into(),
                 source: "model Generated end Generated;".into(),
                 component_paths: Vec::new(),

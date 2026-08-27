@@ -1792,11 +1792,11 @@ class "LunCoDomainSynthesisAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = "Selects the domain synthesizer that owns a composed network scope."
+    doc = "Selects the domain synthesizer that owns a composed network root."
 )
 {
     uniform token lunco:synthesizer = "" (
-        doc = "Registered synthesizer id for this domain scope."
+        doc = "Registered synthesizer id for this network root."
     )
 }
 
@@ -1805,7 +1805,7 @@ class "LunCoForceActuatorAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = "A force actuator geometry and its generated command-output binding."
+    doc = "A force actuator geometry and its structural command-output binding."
 )
 {
     float3 lunco:forceActuator:direction = (0, 0, 1) (
@@ -1814,8 +1814,8 @@ class "LunCoForceActuatorAPI" (
     double lunco:forceActuator:maxForce = 0 (
         doc = "Maximum force in newtons."
     )
-    string lunco:forceActuator:commandOutput = "" (
-        doc = "Name of the selected synthesizer output that commands this actuator."
+    rel lunco:forceActuator:commandSource (
+        doc = "The scalar output property that supplies this actuator's normalized command slot. This is a structural target for the geometry-derived allocator; the actuator's physical value still arrives through inputs:force_command."
     )
 }
 

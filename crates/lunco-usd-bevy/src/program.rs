@@ -91,6 +91,33 @@ pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
     view.any_attr_with_prefix(prim, "collection:components:")
 }
 
+/// Whether an authored root output is a Modelica network boundary.
+///
+/// A vehicle root may carry ordinary output ports such as `drive_left` and
+/// `steering` while also owning a `CollectionAPI:components` network. Those
+/// ports are not generated-model outputs unless their authored connection
+/// names a member of the collection. Keeping this distinction in the shared
+/// USD contract prevents the linter and projector from treating an actuator
+/// command surface as an unsourced Modelica boundary.
+pub fn is_network_boundary_output(view: &StageView<'_>, root: &SdfPath, attr: &str) -> bool {
+    let Some(_) = attr.strip_prefix("outputs:") else {
+        return false;
+    };
+    let Ok(members) = view.collection_members(root, "components") else {
+        return false;
+    };
+    let member_paths: HashSet<String> = members
+        .into_iter()
+        .filter(|path| !path.is_property_path())
+        .map(|path| path.to_string())
+        .collect();
+    view.connections(root, attr).iter().any(|target| {
+        target
+            .rsplit_once(".outputs:")
+            .is_some_and(|(source, _)| member_paths.contains(source))
+    })
+}
+
 /// The default synthesizer for a collection of Modelica program facets.
 pub const DEFAULT_DOMAIN_SYNTHESIZER: &str = "acausal-network";
 

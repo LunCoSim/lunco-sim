@@ -31,7 +31,7 @@ def Scope "Basic" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b1_driving_basics.rhai@
         string lunco:tutorial:title = "Moon Driving Basics"
-        string lunco:tutorial:blurb = "Take control of a rover — throttle, steer, brake, camera — and climb a gentle ramp to feel wheel slip on a gravel grade."
+        string lunco:tutorial:blurb = "Take control of a rover and climb a gentle lunar ramp."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/SlopesTipOver>
@@ -44,7 +44,7 @@ def Scope "Basic" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
         string lunco:tutorial:title = "Slopes & Tip-Over"
-        string lunco:tutorial:blurb = "Climb a borderline grade, feel why a top-heavy rover rolls, and practise the recovery control when it does."
+        string lunco:tutorial:blurb = "Tip a top-heavy rover across a slope, recover it, then climb the fall-line."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/RoverVariants>
@@ -57,7 +57,7 @@ def Scope "Basic" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b4_rover_variants.rhai@
         string lunco:tutorial:title = "Rover Variants"
-        string lunco:tutorial:blurb = "Drive the three rovers back to back — Explorer LT, Standard, Hauler — and feel how centre of mass and power change the handling."
+        string lunco:tutorial:blurb = "Compare Explorer LT, Standard, and Hauler on the same practice yard."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Basic/JoinTeam>
@@ -69,7 +69,7 @@ def Scope "Basic" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b5_join_team.rhai@
         string lunco:tutorial:title = "Join a Team Session"
-        string lunco:tutorial:blurb = "Connect to a server, find and possess your rover, and read your telemetry — everything you need to drive with a team."
+        string lunco:tutorial:blurb = "Connect to a server, find your rover, and read its live telemetry."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
     }

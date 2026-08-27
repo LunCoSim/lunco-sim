@@ -26,7 +26,7 @@ const SOC_RECOVER_MIN = 0.005;
 const MOTION_MIN_M = 0.25;
 const IDLE_DRIVE_TOL = 0.001;
 
-// Every observed value is an authored Electrical boundary port. Generated
+// Every observed value is an authored rover-root boundary port. Generated
 // member identifiers are implementation details, not a scenario contract.
 const BATTERY_SOC = "soc";
 const SOLAR_POWER = "solar_power";
@@ -58,7 +58,7 @@ fn on_start(me) {
     this.done = false;
 
     this.rover = find("/SolarRoverTest/SolarRover");
-    this.elec = find("/SolarRoverTest/SolarRover/Electrical");
+    this.elec = find("/SolarRoverTest/SolarRover");
     this.tracker = find("/SolarRoverTest/SolarRover/SunTrackerController");
     this.hinge = find("/SolarRoverTest/SolarRover/Hinge");
 

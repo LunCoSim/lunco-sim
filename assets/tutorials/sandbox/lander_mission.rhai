@@ -33,7 +33,7 @@
 fn on_start(me) {
     // The curriculum payload is mounted before this script starts. The scene's
     // embedded scenarios do the flying; mission() coaches over their events.
-    hint("A powered descent is landing a rover. Watch it touch down — then you'll take control and drive.");
+    hint("Watch the lander touch down. Then take the rover and drive through the gates.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");
 }
 
@@ -50,11 +50,11 @@ fn lander_touchdown_message(me) {
 }
 
 fn lander_deployed_message(me) {
-    hint("The rover is driving itself. Click the rover to take control.");
+    hint("The rover is free. Select it and click Possess to take control.");
 }
 
 fn lander_human_takeover(me) {
-    hint("You have the rover. Drive it through the glowing waypoint gates with " + input_hint("forward") + " / " + input_hint("left") + " / " + input_hint("backward") + " / " + input_hint("right") + ".");
+    hint("Drive through the glowing waypoint gates.\n\nUse " + input_hint("forward") + " / " + input_hint("backward") + " to move and " + input_hint("left") + " / " + input_hint("right") + " to steer.");
 }
 
 fn lander_human_has_control(me) {
@@ -107,7 +107,7 @@ fn mission(me) {
         // settles on its legs. This is the teaching observation; the scene's
         // deployment task separately joins all landing-transition events.
         objective("touchdown", #{
-            text: "Watch the powered descent land the rover",
+            text: "Watch the powered descent touch down",
             requires_event: "lander_touchdown",
             requires_event_source: "/LanderTest/Lander",
             on_complete: Fn("lander_touchdown_message"),
@@ -126,7 +126,7 @@ fn mission(me) {
         // 3 — take over. Completes when a PERSON holds the rover, however they got
         // it. NOT an event latch: possessing the lander must not satisfy this.
         objective("takeover", #{
-            text: "Take control of the deployed rover by clicking it",
+            text: "Select the deployed rover and click Possess",
             requires: ["deploy"],
             done: Fn("lander_human_has_control"),
             on_complete: Fn("lander_human_takeover"),
@@ -134,7 +134,7 @@ fn mission(me) {
         // 4 — drive the course home. Gated on the takeover, then completes on
         // the scene's authoritative final-marker event.
         objective("finish", #{
-            text: "Drive the rover to the final waypoint",
+            text: "Drive the rover through all three waypoint gates",
             requires: ["takeover"],
             requires_event: "waypoint_3_reached",
             on_complete: Fn("lander_course_finished"),
@@ -151,7 +151,7 @@ fn on_event(me, evt) {
         hint("Two down. Continue to the final marker.");
     } else if evt.name == "MISSION_COMPLETE" {
         // The engine emits MISSION_COMPLETE once every objective is done.
-        hint("Mission complete! You've flown a descent and driven a rover. Free-roam, or replay any lesson from the Tutorials menu.");
+        hint("You watched the landing, took the rover, and drove through the gates.\n\nClick Continue to return to the tutorial list.");
         notify_kind("Lander & Rover Mission complete", "success");
     }
 }

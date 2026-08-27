@@ -138,7 +138,7 @@ pub struct PendingStructuralOps {
 
 fn deferred_ack() -> lunco_doc::Ack {
     lunco_doc::Ack {
-        assigned: serde_json::json!({ "deferred": true }),
+        data: Some(serde_json::json!({ "deferred": true })),
         ..Default::default()
     }
 }

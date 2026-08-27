@@ -35,12 +35,12 @@ def Xform "SolarPanel" (
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
 
-    # Nameplate values belong to the physical part; enclosing electrical scopes
-    # collect this prim and emit them as Modelica instance parameters.
+    # Nameplate values belong to the physical part; the enclosing network root
+    # collects this prim and emits it as a Modelica instance parameter.
     float inputs:area = 18.0
     float inputs:efficiency = 0.30
     float inputs:irradiance = 1361.0
-    # The environment supplies the Sun vector in the enclosing electrical
+    # The environment supplies the Sun vector in the enclosing network
     # assembly's mount frame. The mounting assembly owns the illuminated-face
     # normal in that same frame; fixed horizontal panels use +Y.
     float inputs:sun_mount_x = 0.0

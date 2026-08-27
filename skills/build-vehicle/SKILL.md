@@ -36,10 +36,10 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, brake, contact, and solved shaft boundary — THE default set every wheel composes |
 | Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
-| Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
+| Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover-root collection composes it with loads and synthesizes one acausal network DAE |
 | Ideal rail | `power/ideal_voltage_source.usda` | authored unlimited-power source for the `infinite` power variant; it is still compiled into the same electrical network |
 | Motor / reduction / shaft | `mobility/motor.usda`, `mobility/gearbox.usda`, `mobility/avian_shaft.usda` | Modelica electrical and rotational equations plus the generic Avian mechanical boundary |
-| Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |
+| Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from the rover-root network — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
 | Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Modelica motor-lag drivetrain, one per steering family (see below) |
@@ -81,7 +81,7 @@ def Xform "MyRover" (
 }
 ```
 
-- `PhysxVehicleContextAPI` on the root ⇒ ActuatorPorts + ports
+- `PhysxVehicleContextAPI` on the root ⇒ OutputPorts + authored ports
   (`throttle`/`steer`/`brake` intake; `drive_left`/`drive_right`/`steering`).
 - `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
   `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels
@@ -203,7 +203,7 @@ For a fixed photovoltaic deck, there is no tracker controller to tune. Reference
 `components/power/solar_panel.usda` once, author its `inputs:area` and placement
 on the rover, use the component's +Y normal unless a different face is explicit,
 connect its `connectors:p` to the battery, and include both
-in the one `Electrical` collection with the driven loads. Keep the panel's
+in the rover-root `CollectionAPI:components` collection with the driven loads. Keep the panel's
 visual frame and cell surface under that same mounted component; do not add a
 second rigid body or a disconnected visual proxy. A horizontal deck uses the
 component's +Y collecting face. Verify `power_out`, `cos_incidence`, battery
@@ -273,7 +273,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   is an EMPTY variant (absence of a battery = today's drive-forever default);
   `battery` references reusable battery and motor parts, authors their connector
   topology in the rover file, and lists the actual part paths in a standard
-  `CollectionAPI:components` on the `Electrical` Scope. Runtime projects that
+  `CollectionAPI:components` on the rover root. Runtime projects that
   collection as one acausal electrical DAE, with drive commands entering as
   scalar domain-boundary inputs. Brownout
   and current limiting are equations and therefore belong in the projected
@@ -281,7 +281,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
 - `thermal` = **none | basic** — do the motors have temperatures. `none` is
   EMPTY; `basic` authors a `Scope "Thermal"` with its own
   `CollectionAPI:components`, compiled to a SEPARATE generated DAE from
-  `Electrical`. Each driven motor gets one `MotorHeatLoad` (from
+  rover-root network. Each driven motor gets one `MotorHeatLoad` (from
   `thermal/motor_thermal.usda`); the motor's solved `outputs:heat` crosses into
   the thermal island as a causal `inputs:motor_heat_*` boundary wire (a runtime
   `SimConnection`). The acausal `connectors:port` edges stay inside the thermal

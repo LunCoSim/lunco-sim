@@ -81,7 +81,7 @@ pub struct ModelicaSignalLayout {
     /// promoted outputs.
     pub metadata: BTreeMap<String, ModelicaVariableMetadata>,
     /// Owner of a generated value for which the topology has no more specific
-    /// member mapping.  This is the composed network scope, not a fabricated
+    /// member mapping.  This is the composed network root, not a fabricated
     /// telemetry entity.
     pub root_path: String,
 }

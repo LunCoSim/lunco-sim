@@ -39,7 +39,7 @@ fn fixture_classes() -> MemberClasses {
 fn reads_a_composed_collection_into_network_facts() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
 
     let network = read_network(&view, &root, &fixture_classes())
         .expect("a well-formed network is not an error")
@@ -61,11 +61,11 @@ fn reads_a_composed_collection_into_network_facts() {
         "an unconnected input is the model's parameter"
     );
 
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+    let facts = network_facts(&network, "Rig_System", Some(&fixture_classes()))
         .expect("network facts are valid");
     assert_eq!(
         facts.get("model_name").and_then(|value| value.as_str()),
-        Some("Rig_Electrical_System")
+        Some("Rig_System")
     );
     assert!(matches!(
         facts.get("connections"),
@@ -89,7 +89,7 @@ fn reads_a_composed_collection_into_network_facts() {
 fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
 
     let network = read_network(&view, &root, &fixture_classes())
         .expect(
@@ -110,7 +110,7 @@ fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
 fn an_explicitly_resolved_source_class_is_exposed_to_policy_facts() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
 
     // What `resolve_member_classes` reads out of the `.mo` — here the battery's
     // file declares a class its directory layout does NOT imply, which is what a
@@ -124,7 +124,7 @@ fn an_explicitly_resolved_source_class_is_exposed_to_policy_facts() {
     let network = read_network(&view, &root, &classes)
         .expect("declaring a class is not an authoring error")
         .expect("still a network");
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&classes))
+    let facts = network_facts(&network, "Rig_System", Some(&classes))
         .expect("network facts are valid");
     let Some(lunco_hooks::HookValue::Array(components)) = facts.get("components") else {
         panic!("component facts");
@@ -145,7 +145,7 @@ fn an_explicitly_resolved_source_class_is_exposed_to_policy_facts() {
 fn a_member_whose_class_is_unknown_defers_until_source_resolution() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
 
     // The production default: nothing resolved yet, because no `.mo` has loaded.
     let network = read_network(&view, &root, &MemberClasses::default())
@@ -167,7 +167,7 @@ fn a_member_whose_class_is_unknown_defers_until_source_resolution() {
 fn a_terminal_source_failure_is_reported_without_class_substitution() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
     let mut classes = fixture_classes();
     classes.reject(
         "lunco://models/LunCo/Electrical/Battery.mo",
@@ -185,7 +185,7 @@ fn a_terminal_source_failure_is_reported_without_class_substitution() {
 fn rejects_members_whose_opinions_cannot_be_generated() {
     let stage = stage("unusable_network.usda");
     let view = stage.view();
-    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let root = SdfPath::new("/Rig").unwrap();
 
     let errors =
         read_network(&view, &root, &fixture_classes()).expect_err("unusable authoring is an error");

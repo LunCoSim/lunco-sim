@@ -440,8 +440,9 @@ end RoverBattery;
 1. **Authoring** — declare the program + its connections in USD, reusing what
    `lunco-usd-sim` already reads: a `LunCoProgramAPI` prim naming
    `info:sourceAsset`, and native USD connections on its `inputs:`. The
-   battery program connects `inputs:load_w` ← rover motor power and exposes
-   `outputs:soc` / `outputs:voltage`. It drives no force, so it makes no realtime
+   battery component exposes its own solved `outputs:soc_out` and voltage
+   outputs. A consumer connects to the battery's authored prim path instead of
+   inventing a vessel-level signal. It drives no force, so it makes no realtime
    promise. **Zero new Rust to author.**
 2. **ECS stepper** — confirm the model steps via the existing `FixedUpdate` cosim
    pipeline (`sync_modelica_outputs` → `propagate_connections` → `sync_inputs_to_modelica`

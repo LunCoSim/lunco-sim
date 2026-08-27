@@ -29,7 +29,7 @@ def Scope "Lunica" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/overview.rhai@
         string lunco:tutorial:title = "Lunica Overview"
-        string lunco:tutorial:blurb = "A 90-second guided tour of the whole workbench — start here."
+        string lunco:tutorial:blurb = "Learn the Lunica workbench in a short guided tour."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         uniform bool lunco:tutorial:firstStart = true
@@ -41,8 +41,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/workspace.rhai@
-        string lunco:tutorial:title = "1 · Your Workspace"
-        string lunco:tutorial:blurb = "Twins, the browser, read-only libraries, and learning paths."
+        string lunco:tutorial:title = "Your Workspace"
+        string lunco:tutorial:blurb = "Find Twins, models, read-only libraries, and learning paths."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Model>
@@ -53,8 +53,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/model.rhai@
-        string lunco:tutorial:title = "2 · Open & View a Model"
-        string lunco:tutorial:blurb = "The four views (Text/Diagram/Icon/Docs) + graphical composition."
+        string lunco:tutorial:title = "Open & View a Model"
+        string lunco:tutorial:blurb = "Open a model, switch views, and add a connected component."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Run>
@@ -65,8 +65,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/run.rhai@
-        string lunco:tutorial:title = "3 · Compile & Run"
-        string lunco:tutorial:blurb = "Interactive vs Fast Run, and driving inputs live."
+        string lunco:tutorial:title = "Compile & Run"
+        string lunco:tutorial:blurb = "Compile a model, choose a run mode, and change a live input."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Experiments>
@@ -77,8 +77,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/experiments.rhai@
-        string lunco:tutorial:title = "4 · Experiments & Sweeps"
-        string lunco:tutorial:blurb = "Override parameters and sweep them without editing source."
+        string lunco:tutorial:title = "Experiments & Sweeps"
+        string lunco:tutorial:blurb = "Override parameters and compare several runs without editing source."
         uniform token lunco:tutorial:difficulty = "intermediate"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Plots>
@@ -89,8 +89,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/plots.rhai@
-        string lunco:tutorial:title = "5 · Plots & Results"
-        string lunco:tutorial:blurb = "Reading a run: graphs, diagnostics, and the console."
+        string lunco:tutorial:title = "Plots & Results"
+        string lunco:tutorial:blurb = "Read graphs, diagnostics, and solver messages."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Lunica/Scripting>
@@ -101,8 +101,8 @@ def Scope "Lunica" (
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/scripting.rhai@
-        string lunco:tutorial:title = "6 · Automate (API + MCP)"
-        string lunco:tutorial:blurb = "Drive the workbench from scripts, the HTTP API, and MCP."
+        string lunco:tutorial:title = "Automate with API + MCP"
+        string lunco:tutorial:blurb = "Drive the workbench from scripts, the HTTP API, or MCP."
         uniform token lunco:tutorial:difficulty = "intermediate"
         uniform token lunco:tutorial:format = "tour"
     }

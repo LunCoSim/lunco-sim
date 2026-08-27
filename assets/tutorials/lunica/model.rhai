@@ -4,11 +4,11 @@
 
 fn steps() {
     [
-        #{ anchor: "",                                  focus: (),                            title: "Open & View a Model", body: "We opened the CascadedRCFilter demo for you. Let's look at the ways to view and edit a Modelica model. Use the Back and Next controls." },
-        #{ anchor: "model_view.view_toggles",           focus: (),                            title: "Four Views",          body: "Click Text, Diagram, Icon, and Docs in turn. Text shows declarations, Diagram shows connected components, Icon shows the reusable symbol, and Docs shows the model explanation." },
-        #{ anchor: "panel.modelica_component_palette",  focus: "modelica_component_palette",  title: "Component Palette",   body: "In Diagram view, drag one component from the palette onto the canvas, then drag between compatible ports to create a connection. This is graphical composition." },
-        #{ anchor: "panel.modelica_diagram_inspector",  focus: "modelica_diagram_inspector",  title: "Diagram Inspector",   body: "Select the component or connection you just placed. Edit one parameter or modifier here, then switch to Text to see the same authored model." },
-        #{ anchor: "",                                  focus: (),                            title: "Now run it",          body: "You can read and build models. Next: compile and run one. Continue when you're ready." },
+        #{ anchor: "",                                  focus: (),                            title: "Open a model",          body: "The CascadedRCFilter demo is open. Use the Back and Next controls to explore it." },
+        #{ anchor: "model_view.view_toggles",           focus: (),                            title: "Switch views",           body: "Click Text, Diagram, Icon, and Docs. Each view shows the same model from a different angle." },
+        #{ anchor: "panel.modelica_component_palette",  focus: "modelica_component_palette",  title: "Add a component",         body: "In Diagram view, drag a component from the palette onto the canvas. Connect compatible ports by dragging between them." },
+        #{ anchor: "panel.modelica_diagram_inspector",  focus: "modelica_diagram_inspector",  title: "Edit the component",      body: "Select the component or connection. Change one parameter in Diagram Inspector, then switch to Text to see the authored change." },
+        #{ anchor: "",                                  focus: (),                            title: "Compile it next",          body: "You can now open and edit a model. Click Continue to learn how to compile and run it." },
     ]
 }
 

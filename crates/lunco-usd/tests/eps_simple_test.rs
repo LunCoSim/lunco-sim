@@ -1,5 +1,5 @@
-//! Electrical assembly contract: USD carries component instances and topology;
-//! runtime projection turns the enclosing Scope into one Modelica DAE.
+//! Modelica assembly contract: USD carries component instances and topology;
+//! runtime projection turns the rover root into one generated Modelica DAE.
 
 use lunco_usd_bevy::UsdRead;
 use openusd::sdf::Path as SdfPath;
@@ -15,19 +15,49 @@ fn compose_battery_skid() -> lunco_usd_bevy::CanonicalStage {
 }
 
 #[test]
-fn electrical_scope_contains_program_api_components() {
+fn rover_network_root_contains_program_api_components() {
     let stage = compose_battery_skid();
     let view = stage.view();
     let rover = "/SandboxScene/Skid_Battery_Thermal_1";
-    let root = SdfPath::new(&format!("{rover}/Electrical")).unwrap();
-    assert_eq!(view.type_name(&root).as_deref(), Some("Scope"));
+    let root = SdfPath::new(rover).unwrap();
+    assert_eq!(view.type_name(&root).as_deref(), Some("Xform"));
 
     assert!(view.has_api_schema(&root, "CollectionAPI:components"));
+    assert!(
+        !view.has_prim(&SdfPath::new(&format!("{rover}/Electrical")).unwrap()),
+        "the network must not reintroduce a domain-named child prim"
+    );
     let query = Collection::new(root, "components")
         .compute_membership_query(view.stage())
         .unwrap();
     let members = compute_included_paths(view.stage(), &query, PrimPredicate::DEFAULT).unwrap();
-    assert_eq!(members.len(), 5, "electrical working set: {members:?}");
+    let member_paths: std::collections::HashSet<String> = members
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let expected_paths: std::collections::HashSet<String> = [
+        "Battery",
+        "Motor_FL",
+        "Motor_FR",
+        "Motor_RL",
+        "Motor_RR",
+        "TorqueSource_FL",
+        "TorqueSource_FR",
+        "TorqueSource_RL",
+        "TorqueSource_RR",
+        "Gearbox_FL",
+        "Gearbox_FR",
+        "Gearbox_RL",
+        "Gearbox_RR",
+        "Shaft_FL",
+        "Shaft_FR",
+        "Shaft_RL",
+        "Shaft_RR",
+    ]
+    .into_iter()
+    .map(|name| format!("{rover}/{name}"))
+    .collect();
+    assert_eq!(member_paths, expected_paths, "network working set");
     for name in ["Battery", "Motor_FL", "Motor_FR", "Motor_RL", "Motor_RR"] {
         let path = SdfPath::new(&format!("{rover}/{name}")).unwrap();
         assert!(
@@ -63,10 +93,10 @@ fn electrical_topology_uses_modelica_connector_connections() {
 }
 
 #[test]
-fn electrical_scope_exposes_only_causal_cosim_boundary() {
+fn rover_network_root_exposes_only_causal_cosim_boundary() {
     let stage = compose_battery_skid();
     let view = stage.view();
-    let root = SdfPath::new("/SandboxScene/Skid_Battery_Thermal_1/Electrical").unwrap();
+    let root = SdfPath::new("/SandboxScene/Skid_Battery_Thermal_1").unwrap();
     let attrs = view.attr_names(&root);
     for port in ["inputs:drive_left", "inputs:drive_right", "outputs:soc"] {
         assert!(attrs.iter().any(|attr| attr == port), "missing {port}");

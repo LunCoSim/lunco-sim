@@ -73,6 +73,8 @@ assets/tutorials/
     lander_mission.rhai
   basic/                     # a track offered BY sandbox, not named after it
     curriculum.usda  b1_driving_basics.rhai  …
+  perspectives/               # luncosim UI tour; no world payload
+    curriculum.usda  overview.rhai
   lunica/                    # lunica (Modelica workbench) lessons
     curriculum.usda  overview.rhai  run.rhai  …
 ```
@@ -82,6 +84,26 @@ tracks it offers — that layer is the whole answer to "which tracks does this a
 show, in what order", and it is why `basic` appears under sandbox without any
 track declaring `hosts = ["sandbox"]`. A **twin** contributes by composing its
 own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
+
+The `perspectives` track is offered by `luncosim` and contains a UI-only tour of
+`◉ View`, `⚒ Build`, and `∿ Lunica`. It intentionally omits both a world
+payload and `lunco:track:perspective`, because the learner must be free to
+switch among all three layouts during the lesson.
+
+## Tutorial copy and flow
+
+Use one card for one idea. Start with the action in imperative language, then
+explain what the learner should notice and why it matters. Keep the body to one
+or two short paragraphs; use `\n\n` between paragraphs instead of one dense
+block. Name the exact menu, panel, tab, or button, and say what success looks
+like. Use the resolved `input_hint(...)` label for controls.
+
+Introduce only the concepts needed for the next action. Let a learner skip or
+go back, keep the current objective visible, and move from explanation to a
+real action as soon as possible. Tours may use Next for reference content;
+exercises must advance from an observable user action or authoritative state.
+Keep the first-run path short, and leave deeper reference tours available from
+the Tutorials menu.
 
 ## Add a tutorial (two steps)
 

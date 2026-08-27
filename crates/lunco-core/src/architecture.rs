@@ -463,8 +463,8 @@ pub struct PhysicsStateReady;
 /// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a
 /// Modelica bridge, …).
 ///
-/// NOTE: the command port named `"brake"` here is NOT the actuator port named
-/// `"brake"` in [`ActuatorPorts`]. They carry different values — an analog command
+/// NOTE: the command port named `"brake"` here is NOT the output port named
+/// `"brake"` in [`OutputPorts`]. They carry different values — an analog command
 /// in `[-1,1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
 /// kept in two components so the two `"brake"`s can never be conflated.
 #[derive(Component, Debug, Clone, Default)]
@@ -545,30 +545,32 @@ pub fn owning_input_ports<'w>(
     }
 }
 
-/// A vessel's index from **actuator** name to the [`Port`] entity carrying that
-/// actuator's setpoint.
+/// A runtime index from **output** name to the [`Port`] entity carrying that
+/// output's current value.
 ///
-/// This is the hardware/output half of a vessel's control surface, and is a
-/// different thing from [`InputPorts`]: those are the logical input values a human
-/// or script issues, these are the per-actuator registers a drive kernel allocates
-/// them onto (`drive_left`, `drive_right`, `steering`, `brake`, plus whatever the
-/// vessel declares as `outputs:` attributes).
+/// This is the produced-value half of a control surface, and is a different
+/// thing from [`InputPorts`]: those are the logical input values a human or
+/// script issues, while these are runtime registers written by an imperative
+/// producer such as a drive kernel. The names and topology still come from
+/// authored USD `outputs:*` attributes; this component only stores the runtime
+/// endpoint for each one.
 ///
-/// The port entities are spawned as children of the vessel so the recursive
-/// scene-clear reclaims them with it.
+/// The port entities are owned by their producer so the recursive scene-clear
+/// reclaims them with it. Generated Modelica outputs stay on `SimComponent` and
+/// are never duplicated here.
 #[derive(Component, Debug, Clone, Default)]
-pub struct ActuatorPorts {
-    /// Maps actuator mnemonics (e.g. `"drive_left"`) to their `Port` entity.
+pub struct OutputPorts {
+    /// Maps authored output names (e.g. `"drive_left"`) to their `Port` entity.
     pub ports: std::collections::HashMap<String, Entity>,
 }
 
-impl ActuatorPorts {
-    /// Build from a prebuilt actuator-name → `Port` entity index.
+impl OutputPorts {
+    /// Build from a prebuilt output-name → `Port` entity index.
     pub fn new(ports: std::collections::HashMap<String, Entity>) -> Self {
         Self { ports }
     }
 
-    /// The `Port` entity for actuator `name`, if this vessel has one.
+    /// The `Port` entity for output `name`, if this producer has one.
     #[inline]
     pub fn get(&self, name: &str) -> Option<Entity> {
         self.ports.get(name).copied()
@@ -603,35 +605,35 @@ impl PortSurface {
 /// Apply the control lifecycle's safe-stop boundary immediately.
 ///
 /// `InputPorts` are the command request, while the wired Modelica/hardware path
-/// reads the derived actuator [`Port`]s. Waiting for a later drive-mixer tick to
-/// copy one into the other leaves an actor's final drive demand live after its
+/// reads the derived output [`Port`]s. Waiting for a later producer tick to copy
+/// one into the other leaves an actor's final drive demand live after its
 /// lease has ended. This operation clears every actuator output now and closes the
 /// discrete brake gate when present, so the next co-simulation propagation sees a
 /// neutral vehicle regardless of schedule phase.
 pub fn safe_stop_control_surface(
     inputs: Option<&mut InputPorts>,
-    actuators: Option<&ActuatorPorts>,
+    outputs: Option<&OutputPorts>,
     ports: &mut Query<&mut Port>,
 ) {
     if let Some(inputs) = inputs {
         inputs.safe_stop();
     }
-    let Some(actuators) = actuators else {
+    let Some(outputs) = outputs else {
         return;
     };
-    safe_stop_actuators(actuators, |entity, value| {
+    safe_stop_outputs(outputs, |entity, value| {
         if let Ok(mut port) = ports.get_mut(entity) {
             port.value = value;
         }
     });
 }
 
-/// Neutralize all declared actuators while engaging the discrete brake gate.
+/// Neutralize all declared control outputs while engaging the discrete brake gate.
 ///
 /// Kept apart from its caller so every lifecycle boundary uses the identical
 /// actuator mapping.
-fn safe_stop_actuators(actuators: &ActuatorPorts, mut write: impl FnMut(Entity, f64)) {
-    for (name, entity) in &actuators.ports {
+fn safe_stop_outputs(outputs: &OutputPorts, mut write: impl FnMut(Entity, f64)) {
+    for (name, entity) in &outputs.ports {
         write(*entity, if name == "brake" { 1.0 } else { 0.0 });
     }
 }
@@ -711,7 +713,7 @@ mod tests {
         struct StopTarget;
 
         fn stop_target(
-            mut target: Query<(&mut InputPorts, &ActuatorPorts), With<StopTarget>>,
+            mut target: Query<(&mut InputPorts, &OutputPorts), With<StopTarget>>,
             mut ports: Query<&mut Port>,
         ) {
             for (mut inputs, actuators) in &mut target {
@@ -726,13 +728,13 @@ mod tests {
         let mut inputs = InputPorts::new(&["throttle", "steer", "brake"]);
         inputs.values.insert("throttle".into(), 0.9);
         inputs.values.insert("steer".into(), -0.5);
-        let actuators = ActuatorPorts::new(std::collections::HashMap::from([
+        let outputs = OutputPorts::new(std::collections::HashMap::from([
             ("drive_left".into(), left),
             ("drive_right".into(), right),
             ("brake".into(), brake),
         ]));
 
-        let target = world.spawn((inputs, actuators, StopTarget)).id();
+        let target = world.spawn((inputs, outputs, StopTarget)).id();
         world.run_system_once(stop_target).unwrap();
         let inputs = world.get::<InputPorts>(target).unwrap();
 

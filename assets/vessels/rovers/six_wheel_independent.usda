@@ -30,7 +30,7 @@ def Xform "SixWheelIndependent" (
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
-        "PhysxVehicleContextAPI", "LunCoCatalogAPI"
+        "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
@@ -76,10 +76,8 @@ def Xform "SixWheelIndependent" (
     )
     {
     }
-    def Scope "Electrical" (
-        prepend apiSchemas = ["CollectionAPI:components"]
-    )
-    {
+    # The rover root owns the explicit component collection and its causal
+    # boundary. There is no extra domain-name prim in the USD hierarchy.
         float inputs:drive_w0.connect = </SixWheelIndependent.outputs:drive_w0>
         float inputs:drive_w1.connect = </SixWheelIndependent.outputs:drive_w1>
         float inputs:drive_w2.connect = </SixWheelIndependent.outputs:drive_w2>
@@ -123,29 +121,28 @@ def Xform "SixWheelIndependent" (
             </SixWheelIndependent/Shaft_R1>,
             </SixWheelIndependent/Shaft_R2>,
         ]
-    }
     over "Motor_L0" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w0>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w0>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
     over "Motor_L1" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w1>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w1>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
     over "Motor_L2" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w2>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w2>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
     over "Motor_R0" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w3>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w3>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
     over "Motor_R1" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w4>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w4>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
     over "Motor_R2" {
-        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w5>
+        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w5>
         custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
     }
 
@@ -497,27 +494,27 @@ def Xform "SixWheelIndependent" (
 
     def Xform "Shaft_L0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L0>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_L0>
     }
     def Xform "Shaft_L1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L1>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_L1>
     }
     def Xform "Shaft_L2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L2>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_L2>
     }
     def Xform "Shaft_R0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R0>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_R0>
     }
     def Xform "Shaft_R1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R1>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_R1>
     }
     def Xform "Shaft_R2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
     {
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R2>
+        float inputs:speed.connect = </SixWheelIndependent.inputs:shaft_speed_R2>
     }
 
     # --- Drive law -----------------------------------------------------------
