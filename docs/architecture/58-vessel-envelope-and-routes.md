@@ -163,9 +163,12 @@ on the crop) rather than requiring the author to supply heights they cannot know
 
 `lunco-autopilot` mirrors `AutopilotBehaviorSpec` onto the vessel so the editor can
 derive the route from the same mission data that drives the vehicle. The editor's
-`RouteVisualProjection` is the single derived view consumed by labels, marker
-progress, and `sync_route_visual_meshes`; it is real 3D geometry in the active
-physics frame, not the camera-path preview's screen-space presentation.
+`RouteVisualProjection` is the single derived view consumed by marker progress and
+`sync_route_visual_meshes`; it is real 3D geometry in the active physics frame,
+not the camera-path preview's screen-space presentation. Waypoint labels are
+different: the waypoint prim authors `lunco:billboard*`, and the generic billboard
+renderer projects that prim's propagated render pose. Route code must not redraw
+labels or convert active-frame coordinates for the camera.
 
 `rebuild_waypoint_route_projection` is change-gated. The autopilot-owned
 `AuthoredRouteMetadata` read derives target identity, loop policy, and smoothness

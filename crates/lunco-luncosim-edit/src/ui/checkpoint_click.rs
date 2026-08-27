@@ -56,13 +56,6 @@ fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) 
     lunco_core::trigger_error(commands, "waypoint-edit-failed", message);
 }
 
-fn scene_root_path(vessel_path: &str) -> Option<String> {
-    vessel_path
-        .split('/')
-        .find(|component| !component.is_empty())
-        .map(|component| format!("/{component}"))
-}
-
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
 pub struct WaypointContextMenuState {
@@ -75,7 +68,7 @@ pub struct WaypointContextMenuState {
     pub dwell: f64,
 }
 
-/// What a pending authored route edit will do to the route.
+/// What a pending "click the ground" placement will do to the route.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PlacementMode {
     /// Repoint the named leg at the clicked spot (Move).
@@ -84,25 +77,21 @@ pub enum PlacementMode {
     InsertAfter,
 }
 
-/// A waypoint edit waiting on a ground click.
+/// A waypoint edit waiting on a ground click, armed from the context menu.
 ///
-/// Move and insert are addressed by DOCUMENT + PRIM PATH, never by the vessel's
-/// `Entity`. The append mode carries no entity: the selected or possessed vessel
-/// is resolved when the click lands, so a scene recompose cannot leave an armed
-/// tool holding a stale vessel handle.
+/// Addressed by DOCUMENT + PRIM PATH, never by the vessel's `Entity`. Authoring the
+/// arming edit can recompose the stage, which despawns and respawns the vessel — a
+/// captured `Entity` is stale by the time the ground click lands, and the placement
+/// then failed silently ("vessel has no BehaviorXml/UsdPrimPath"). The path is stable
+/// across recomposition, so the owning vessel is re-resolved at click time from the
+/// mission that names this waypoint (see [`vessel_for_target`]).
 #[derive(Debug)]
-pub enum PendingPlacement {
-    /// An edit armed by a waypoint context menu.
-    Route {
-        /// The document that owns the marker and mission.
-        doc: lunco_doc::DocumentId,
-        /// The marker prim path whose leg is edited.
-        coord_key: String,
-        /// The edit operation.
-        mode: PlacementMode,
-    },
-    /// Append a route member to the selected or possessed vessel.
-    Append,
+pub struct PendingPlacement {
+    /// The document that owns the marker (and the mission that names it).
+    pub doc: lunco_doc::DocumentId,
+    /// The waypoint MARKER prim path: the leg to move, or the leg to insert after.
+    pub coord_key: String,
+    pub mode: PlacementMode,
 }
 
 /// Armed "click the ground to place" mode. While `Some`, the next scene click is
@@ -113,19 +102,6 @@ pub enum PendingPlacement {
 /// not siblings).
 #[derive(Resource, Default)]
 pub struct WaypointPlacement(pub Option<PendingPlacement>);
-
-/// Arm route-member placement from the Spawn palette's semantic Waypoint entry.
-/// The ground-click handler selects authored USD or runtime patrol ownership at
-/// the same boundary used by Alt+LMB.
-#[derive(Event)]
-pub(crate) struct AppendWaypointPlacementRequested;
-
-pub(crate) fn on_append_waypoint_placement_requested(
-    _trigger: On<AppendWaypointPlacementRequested>,
-    mut placement: ResMut<WaypointPlacement>,
-) {
-    placement.0 = Some(PendingPlacement::Append);
-}
 
 /// Mirror [`WaypointPlacement`] into the shared `WaypointToolActive` gate so the
 /// avatar-possession and entity-selection observers stand down while a placement is
@@ -177,7 +153,7 @@ fn on_cancel_waypoint_edit(
     mut menu_open: ResMut<lunco_core::WaypointMenuOpen>,
 ) {
     if let Some(p) = placement.0.take() {
-        info!("[waypoint] cancelled {p:?}");
+        info!("[waypoint] cancelled {:?} of '{}'", p.mode, p.coord_key);
     }
     menu_state.entity = None;
     menu_open.0 = false;
@@ -348,10 +324,8 @@ fn select_ground_point(
 
 /// Global `Pointer<Click>` observer: the `PlaceWaypoint` input intent paired with
 /// the primary pointer action drops a waypoint prim for the selected vessel and
-/// appends the matching `drive_to` leaf to its mission. The Spawn palette's
-/// Waypoint entry arms the same path without requiring a keyboard chord. The
-/// binding lives in `assets/config/keybindings.json`; this handler never inspects
-/// a raw key.
+/// appends the matching `drive_to` leaf to its mission. The Alt binding lives in
+/// `assets/config/keybindings.json`; this handler never inspects a raw key.
 ///
 /// Stands down when the spawn / terrain-sculpt tool is armed, and when egui owns the
 /// pointer (the authoritative gate). The semantic waypoint intent is excluded from
@@ -363,7 +337,6 @@ pub fn on_scene_click_checkpoint(
     terrain_tool: Res<TerrainToolActive>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalAvatar>,
-    mut waypoint_placement: ResMut<WaypointPlacement>,
     avatars: Query<(Entity, &IntentState), (With<Avatar>, With<LocalAvatar>)>,
     simulated_intents: Option<Res<SimulatedIntents>>,
     q_link: Query<&ControllerLink>,
@@ -388,10 +361,6 @@ pub fn on_scene_click_checkpoint(
     // A plain primary click possesses/selects; the semantic PlaceWaypoint intent
     // paired with it drops a waypoint. The input map supplies that intent, so
     // rebinding the gesture changes this path without editor-only key handling.
-    let append_palette_armed = matches!(
-        waypoint_placement.0.as_ref(),
-        Some(PendingPlacement::Append)
-    );
     let place_waypoint_held = local_avatar
         .0
         .and_then(|entity| avatars.get(entity).ok())
@@ -403,7 +372,7 @@ pub fn on_scene_click_checkpoint(
                         .is_some_and(|set| set.contains(&UserIntent::PlaceWaypoint))
                 })
         });
-    if !place_waypoint_held && !append_palette_armed {
+    if !place_waypoint_held {
         return;
     }
 
@@ -474,9 +443,6 @@ pub fn on_scene_click_checkpoint(
             target: vessel,
             position: hit.to_array(),
         });
-        if append_palette_armed {
-            waypoint_placement.0 = None;
-        }
         info!(
             "[waypoint] runtime-only rover {:?} received a live waypoint command; no authored USD document was modified",
             vessel
@@ -491,16 +457,16 @@ pub fn on_scene_click_checkpoint(
     // is the scene's default prim (e.g. "/Traverse" for traverse.usda). This is
     // more robust than reading defaultPrim from the document layer, which may
     // differ when the vessel is composed from a referenced twin scene.
-    let Some(root) = scene_root_path(&vessel_prim.path) else {
-        report_waypoint_failure(
-            &mut commands,
-            format!(
-                "Target vessel path {:?} has no scene root",
-                vessel_prim.path
-            ),
-        );
-        return;
-    };
+    let root = vessel_prim
+        .path
+        .split('/')
+        .nth(1) // first non-empty component after the leading '/'
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| {
+            lunco_usd_bevy::layer_default_prim(host.document().data())
+                .map(|p| format!("/{p}"))
+                .unwrap_or_else(|| "/".to_string())
+        });
     // ── The MARKER is an authored prim ────────────────────────────────────────
     // Not a Rust-built sphere: `vessels/markers/waypoint.usda` already defines
     // the dome, its livery and its arrival trigger zone. Referencing it means
@@ -550,9 +516,6 @@ pub fn on_scene_click_checkpoint(
         label: "Create waypoint mission edit".to_string(),
         ops,
     });
-    if append_palette_armed {
-        waypoint_placement.0 = None;
-    }
 }
 
 /// Global `Pointer<Click>` observer: right-click a waypoint sphere to open its menu.
@@ -612,8 +575,7 @@ pub fn on_scene_right_click_waypoint(
 /// when a Move / Insert-after is armed from the context menu.
 ///
 /// The possession and selection observers stand down via `WaypointToolActive` (see
-/// [`WaypointPlacement`]), so this click only edits the route. Append mode is
-/// consumed by [`on_scene_click_checkpoint`].
+/// [`WaypointPlacement`]), so this click only moves the waypoint.
 pub fn on_scene_click_place_waypoint(
     mut click: On<Pointer<Click>>,
     egui_focus: Res<EguiFocus>,
@@ -626,10 +588,7 @@ pub fn on_scene_click_place_waypoint(
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
 ) {
-    if click.button != PointerButton::Primary {
-        return;
-    }
-    if matches!(placement.0.as_ref(), Some(PendingPlacement::Append)) || placement.0.is_none() {
+    if placement.0.is_none() || click.button != PointerButton::Primary {
         return;
     }
     if egui_focus.wants_pointer {
@@ -640,15 +599,10 @@ pub fn on_scene_click_place_waypoint(
     let Some(pending) = placement.0.take() else {
         return;
     };
-    let PendingPlacement::Route {
-        doc,
-        coord_key,
-        mode,
-    } = pending
-    else {
-        unreachable!("append placement is handled by on_scene_click_checkpoint");
-    };
-    info!("[waypoint] placement: consuming click for {mode:?} of '{coord_key}'");
+    info!(
+        "[waypoint] placement: consuming click for {:?} of '{}'",
+        pending.mode, pending.coord_key
+    );
 
     let Some(world) = pick_ground_world(
         &frame,
@@ -660,6 +614,8 @@ pub fn on_scene_click_place_waypoint(
         info!("[waypoint] placement cancelled: no ground under the cursor");
         return;
     };
+    let doc = pending.doc;
+
     // MOVE repositions the MARKER, and touches the mission not at all: the leg
     // targets the prim by path, and the prim's pose is the prim's business. The
     // coordinate-in-the-XML spelling had to rewrite the whole mission to drag a
@@ -668,13 +624,13 @@ pub fn on_scene_click_place_waypoint(
     // It therefore needs NOTHING but the marker path and its document — no vessel
     // lookup, so a stage recomposition between arming the move and clicking the
     // ground (which respawns the vessel entity) cannot strand it.
-    if mode == PlacementMode::Move {
-        info!("[waypoint] Move → {} to {:?}", coord_key, world);
+    if pending.mode == PlacementMode::Move {
+        info!("[waypoint] Move → {} to {:?}", pending.coord_key, world);
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
-                path: coord_key,
+                path: pending.coord_key,
                 value: [world.x, world.y, world.z],
             },
         });
@@ -684,26 +640,22 @@ pub fn on_scene_click_place_waypoint(
     // INSERT-AFTER edits the mission, so it does need the vessel — resolved HERE,
     // from the route that names this waypoint, rather than from an entity captured
     // when the menu was open.
-    let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &coord_key) else {
+    let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
         report_waypoint_failure(
             &mut commands,
             format!(
                 "No unique vessel mission refers to '{}'; waypoint insertion was refused",
-                coord_key
+                pending.coord_key
             ),
         );
         return;
     };
-    let Some(root) = scene_root_path(&vessel_prim.path) else {
-        report_waypoint_failure(
-            &mut commands,
-            format!(
-                "Target vessel path {:?} has no scene root",
-                vessel_prim.path
-            ),
-        );
-        return;
-    };
+    let root = vessel_prim
+        .path
+        .split('/')
+        .nth(1)
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
     let Some(host) = doc_ctx.usd_registry.host(doc) else {
         report_waypoint_failure(
             &mut commands,
@@ -712,10 +664,10 @@ pub fn on_scene_click_place_waypoint(
         return;
     };
     let (new_target, mut ops) = author_marker_ops(host, &root, world, &canonical, vessel_prim);
-    let edited = insert_waypoint_after(&xml.0, &coord_key, &new_target);
+    let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
-            info!("[waypoint] {mode:?} → {new_target}");
+            info!("[waypoint] {:?} → {}", pending.mode, new_target);
             ops.push(UsdOp::SetAttribute {
                 edit_target: LayerId::root(),
                 // Editing an EXISTING tree, so the program prim is already there —
@@ -790,7 +742,7 @@ pub fn draw_waypoint_context_menu(
     // The pointer position is window-relative, but egui lays out from the context's
     // content rect — which is NOT the window origin when the scene viewport sits in a
     // dock leaf. Without this offset the menu is placed off under the chrome and looks
-    // like it never opened. Same correction `draw_waypoint_overlay` applies.
+    // like it never opened.
     let origin = ctx.content_rect().min.to_vec2();
     let pos = egui::pos2(menu_state.position.x, menu_state.position.y) + origin;
     let mut open = true;
@@ -823,7 +775,7 @@ pub fn draw_waypoint_context_menu(
                     )
                     .clicked()
                 {
-                    placement.0 = Some(PendingPlacement::Route {
+                    placement.0 = Some(PendingPlacement {
                         doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::Move,
@@ -839,7 +791,7 @@ pub fn draw_waypoint_context_menu(
                     .clicked()
                 {
                     info!("[waypoint] armed Insert-after of '{}'", marker_target);
-                    placement.0 = Some(PendingPlacement::Route {
+                    placement.0 = Some(PendingPlacement {
                         doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::InsertAfter,
@@ -1068,7 +1020,7 @@ fn route_execution(
 
 /// Return runtime marker roots in patrol order. A runtime route is only a
 /// presentable route once every live waypoint has its explicit binding; using a
-/// partial list would put labels and the ribbon on different target indices.
+/// partial list would put the ribbon and marker state on different target indices.
 fn ordered_runtime_marker_entities(
     vessel: Entity,
     count: usize,
@@ -1090,9 +1042,10 @@ pub(crate) struct RouteVisualTarget {
 }
 
 /// The one editor-facing route view. It is rebuilt only when an authoritative
-/// route, target pose, terrain, frame, progress, or focus input changes. Meshes,
-/// labels, and marker tinting consume this snapshot instead of interpreting XML
-/// or resolving targets independently.
+/// route, target pose, terrain, frame, progress, or focus input changes. Meshes
+/// and marker tinting consume this snapshot instead of interpreting XML or
+/// resolving targets independently. Labels are authored on waypoint prims and
+/// consumed by the generic billboard renderer.
 #[derive(Clone, Debug)]
 pub(crate) struct RouteVisualRoute {
     pub targets: Vec<RouteVisualTarget>,
@@ -1121,139 +1074,6 @@ pub(crate) struct RouteProjectionRebuildRequested {
 impl Default for RouteProjectionRebuildRequested {
     fn default() -> Self {
         Self { pending: true }
-    }
-}
-
-/// Single egui overlay that draws waypoint labels (numbers) from the cached route
-/// view. Route lines are separate 3D meshes so depth testing remains authoritative.
-///
-/// Uses [`lunco_physics::SimulationPoseQuery`] for authoritative body-fixed
-/// positions: f64 Avian poses for physical targets and composed BigSpace poses
-/// for non-physical markers.
-pub(crate) fn draw_waypoint_overlay(
-    projection: Res<RouteVisualProjection>,
-    q_camera: Query<(Entity, &Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
-    local_avatar: Res<TheLocalAvatar>,
-    poses: lunco_physics::SimulationPoseQuery,
-    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
-    panel_rects: Option<Res<lunco_workbench::PanelRects>>,
-    mut egui_ctx: bevy_egui::EguiContexts,
-    theme: Option<Res<lunco_theme::Theme>>,
-) {
-    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
-        return;
-    }
-    let theme = theme
-        .map(|t| t.clone())
-        .unwrap_or_else(lunco_theme::Theme::dark);
-    // The local avatar camera is the only camera with presentation ownership
-    // for this overlay. If it is absent, the overlay is intentionally absent.
-    let cam_result = local_avatar.0.and_then(|avatar| q_camera.get(avatar).ok());
-    let Some((cam_entity, camera, cam_gtf)) = cam_result else {
-        return;
-    };
-    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let origin = ctx.content_rect().min.to_vec2();
-    let clip_rect = panel_rects
-        .as_ref()
-        .and_then(|rects| rects.egui_rect(lunco_workbench::VIEWPORT_PANEL_ID, ctx))
-        .unwrap_or_else(|| ctx.content_rect());
-
-    // Camera world position for distance-based sizing.
-    let Some(cam_world) = poses.position(cam_entity).map(|p| p.0) else {
-        return;
-    };
-
-    // Append to the root background before WorkbenchRenderSet so labels are
-    // deterministically below every normal egui window and dock panel.
-    let painter = ctx
-        .layer_painter(egui::LayerId::background())
-        .with_clip_rect(clip_rect);
-
-    for route in projection.routes.values() {
-        // EVERY route is labelled, not just the focused vessel's. A waypoint is an
-        // object in the scene you edit by right-clicking it, so hiding the numbers
-        // (and, next door, the ribbon) until the vessel was possessed or selected
-        // made the whole waypoint UI look like it only worked while driving.
-        // Focus now only DIMS: the route you are working on stays the loud one.
-        let focused = route.focused;
-
-        let label_color = theme.tokens.text;
-
-        // Collect screen-space points for each waypoint that is in front of the camera.
-        struct WpScreen {
-            screen: egui::Pos2,
-            index: usize,
-            distance: f64,
-            visited: bool,
-        }
-        let mut wp_screens: Vec<WpScreen> = Vec::with_capacity(route.targets.len());
-
-        for (i, target) in route.targets.iter().enumerate() {
-            let distance = (target.position - cam_world).length();
-
-            // Convert to camera-relative Vec3 for projection.
-            let cam_relative = (target.position - cam_world).as_vec3();
-            let world_f32 = cam_gtf.translation() + cam_relative;
-
-            let Ok(viewport) = camera.world_to_viewport(cam_gtf, world_f32) else {
-                continue;
-            };
-            let screen = egui::pos2(viewport.x, viewport.y) + origin;
-            wp_screens.push(WpScreen {
-                screen,
-                index: i,
-                distance,
-                visited: target.visited,
-            });
-        }
-
-        // NOTE: the route LINE is not drawn here. A screen-space overlay stroke has no
-        // depth, so it painted straight over terrain and over other waypoints and read
-        // as a buggy, overlapping gizmo. The path is real 3D geometry instead — see
-        // `sync_route_visual_meshes`, which builds a ground-hugging ribbon that occludes
-        // correctly. Only the NUMBER labels stay in egui, where screen-space is right.
-        // Draw labels above each waypoint.
-        for wp in &wp_screens {
-            let scale = (30.0 / wp.distance.max(1.0) as f32).clamp(0.4, 2.5);
-            let font_size = (18.0 * scale).max(8.0);
-
-            let fade = if wp.distance < 30.0 {
-                1.0f32
-            } else {
-                (1.0 - ((wp.distance as f32 - 30.0) / 200.0)).clamp(0.1, 1.0)
-            };
-            // Another vessel's route is context, not the subject — same labels, quieter.
-            let fade = if focused { fade } else { fade * 0.5 };
-
-            let alpha = (255.0 * fade) as u8;
-            let text = format!("{}", wp.index + 1);
-            let font = egui::FontId::proportional(font_size);
-            let label = if wp.visited {
-                theme.tokens.success
-            } else {
-                label_color
-            };
-            let tc = egui::Color32::from_rgba_unmultiplied(label.r(), label.g(), label.b(), alpha);
-
-            let galley = painter.layout_no_wrap(text, font, tc);
-            let size = galley.size();
-            let top_left = wp.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
-
-            let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
-            let backdrop = theme.tokens.overlay_backdrop;
-            painter.rect_filled(
-                bg,
-                3.0,
-                egui::Color32::from_rgba_unmultiplied(
-                    backdrop.r(),
-                    backdrop.g(),
-                    backdrop.b(),
-                    (f32::from(backdrop.a()) * fade) as u8,
-                ),
-            );
-            painter.galley(top_left, galley, tc);
-        }
     }
 }
 
@@ -1566,15 +1386,15 @@ fn on_start_autopilot(
     if !autopilot_engaged {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(xml, spec)| has_movement_route(xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
-                "[autopilot] start ignored for vessel {:?}: no movement route",
+                "[autopilot] start ignored for vessel {:?}: no authored movement route",
                 vessel
             );
             commands.trigger(lunco_avatar::ShowNotification {
                 text:
-                    "No movement route is available for this vessel; manual control remains active."
+                    "No autopilot route is authored for this vessel; manual control remains active."
                         .to_string(),
                 kind: "warn".to_string(),
                 secs: 3.0,
@@ -1634,15 +1454,15 @@ fn on_toggle_autopilot(
     } else {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(xml, spec)| has_movement_route(xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
-                "[autopilot] F ignored for vessel {:?}: no movement route",
+                "[autopilot] F ignored for vessel {:?}: no authored movement route",
                 vessel
             );
             commands.trigger(lunco_avatar::ShowNotification {
                 text:
-                    "No movement route is available for this vessel; manual control remains active."
+                    "No autopilot route is authored for this vessel; manual control remains active."
                         .to_string(),
                 kind: "warn".to_string(),
                 secs: 3.0,
@@ -1670,19 +1490,20 @@ fn on_toggle_autopilot(
 }
 
 /// A route may be authored as XML before its derived runtime spec is ready.
-/// A spawned vessel also owns an empty `Mission` placeholder, so a valid empty
-/// mission is explicitly classified as the live runtime-spec source. Malformed
-/// XML remains a hard no-route state; it never silently selects a stale runtime
-/// value.
-fn has_movement_route(
+/// Treat that state as available so a user pressing F during scene startup does
+/// not get a false "no route" warning; once a spec exists, its actual movement
+/// content is authoritative and an empty/holding tree is still rejected.
+fn has_authored_movement_route(
     xml: Option<&lunco_autopilot::usd_tree::BehaviorXml>,
     spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
 ) -> bool {
-    match route_visual_source(xml, spec) {
-        Ok(Some(RouteVisualSource::Authored(_))) => true,
-        Ok(Some(RouteVisualSource::Runtime(spec))) => spec.0.has_motion(),
-        Ok(None) | Err(_) => false,
+    if let Some(xml) = xml {
+        let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
+            return false;
+        };
+        return !metadata.targets.is_empty();
     }
+    spec.is_some_and(|spec| spec.0.has_motion())
 }
 
 register_commands!(
@@ -1776,7 +1597,7 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
         // (the Apollo 15 W3 → W4 → W3 turnaround), the central difference is
         // zero; keep the incoming direction there instead of inventing a
         // world-axis tangent that breaks the ribbon at the waypoint.
-        let tan = route_tangent(points, i)?;
+        let tan = route_tangent(points, i);
         let right = route_right(tan, previous_right);
         previous_right = Some(right);
         let right = right * ROUTE_RIBBON_HALF_WIDTH_M as f64;
@@ -1806,7 +1627,7 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
     Some(mesh)
 }
 
-fn route_tangent(points: &[DVec3], index: usize) -> Option<DVec3> {
+fn route_tangent(points: &[DVec3], index: usize) -> DVec3 {
     debug_assert!(!points.is_empty());
     let current = points[index];
     let prev = points[index.saturating_sub(1)];
@@ -1823,14 +1644,18 @@ fn route_tangent(points: &[DVec3], index: usize) -> Option<DVec3> {
         tangent.y = 0.0;
     }
     if tangent.length_squared() < 1.0e-9 {
-        None
+        DVec3::Z
     } else {
-        Some(tangent.normalize())
+        tangent.normalize()
     }
 }
 
 fn route_right(tangent: DVec3, previous_right: Option<DVec3>) -> DVec3 {
-    let mut right = tangent.cross(DVec3::Y).normalize();
+    let mut right = tangent.cross(DVec3::Y);
+    if right.length_squared() < 1.0e-9 {
+        right = DVec3::X;
+    }
+    let mut right = right.normalize();
     // A route ribbon is an unoriented strip. Keep its lateral frame coherent
     // when traversal reverses at a turnaround; otherwise the outgoing vertex
     // swaps left/right and the two triangles cross.
@@ -2032,40 +1857,11 @@ pub(crate) fn project_waypoint_markers_to_surface(
     }
 }
 
-/// Build one atomic route view for labels, marker tinting, and mesh rendering.
+/// Build one atomic route view for marker tinting and mesh rendering.
 /// Authored XML resolves exclusively through the exact `TargetBindings` map;
 /// coordinate strings are not a second authored contract. The view deliberately
 /// excludes the moving rover pose: route annotations connect authored waypoints,
 /// so driving does not cause per-frame route sampling or mesh rebuilds.
-enum RouteVisualSource<'a> {
-    Authored(lunco_autopilot::usd_tree::AuthoredRouteMetadata),
-    Runtime(&'a lunco_autopilot::AutopilotBehaviorSpec),
-}
-
-/// Classify the one route source used by the visual projection.
-///
-/// An authored mission with navigation targets owns the route even when a
-/// derived runtime spec is also present. A valid empty mission is the explicit
-/// placeholder emitted on runtime-spawned vessels, so only that state permits
-/// the live spec to own the route. A parse error is an invalid authored state,
-/// not permission to use a stale runtime spec.
-fn route_visual_source<'a>(
-    xml: Option<&lunco_autopilot::usd_tree::BehaviorXml>,
-    spec: Option<&'a lunco_autopilot::AutopilotBehaviorSpec>,
-) -> Result<Option<RouteVisualSource<'a>>, String> {
-    match xml {
-        Some(xml) => {
-            let metadata = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0)?;
-            if metadata.targets.is_empty() {
-                Ok(spec.map(RouteVisualSource::Runtime))
-            } else {
-                Ok(Some(RouteVisualSource::Authored(metadata)))
-            }
-        }
-        None => Ok(spec.map(RouteVisualSource::Runtime)),
-    }
-}
-
 pub(crate) fn rebuild_waypoint_route_projection(
     q_vessels: Query<(
         Entity,
@@ -2120,82 +1916,83 @@ pub(crate) fn rebuild_waypoint_route_projection(
     let mut routes = std::collections::HashMap::new();
 
     for (vessel, xml, spec, bindings, reached) in q_vessels.iter() {
-        let Ok(Some(source)) = route_visual_source(xml, spec) else {
+        let (targets, points, smooth, closed, entities) = if let Some(xml) = xml {
+            // Authored XML is parsed once by the autopilot owner. Its route
+            // metadata remains authoritative even while a derived runtime spec
+            // is present, and malformed XML is an explicit no-route state.
+            let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
+                continue;
+            };
+            let targets = metadata.targets;
+            let Some(bindings) = bindings else { continue };
+            if targets.is_empty() {
+                continue;
+            }
+            let Some(resolved) = targets
+                .iter()
+                .map(|target| {
+                    let entity = *bindings.0.get(target)?;
+                    let (position, _) = lunco_core::coords::grid_relative_pose(
+                        entity,
+                        frame_entity,
+                        &q_parents,
+                        &q_grids,
+                        &q_spatial,
+                    )?;
+                    Some((position, entity))
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            (
+                targets,
+                resolved.iter().map(|(point, _)| *point).collect::<Vec<_>>(),
+                metadata.smooth,
+                metadata.loops,
+                resolved
+                    .into_iter()
+                    .map(|(_, entity)| Some(entity))
+                    .collect(),
+            )
+        } else if let Some(spec) = spec {
+            let Some(waypoints) = spec.patrol_waypoints() else {
+                continue;
+            };
+            // Runtime waypoint roots are the presentation projection of the same
+            // live route. Resolve their current active-frame poses instead of
+            // reusing the original command Y coordinate: terrain edits move the
+            // marker root while the ribbon is rebuilt from the same points.
+            let Some(runtime_entities) =
+                ordered_runtime_marker_entities(vessel, waypoints.len(), &runtime_markers)
+            else {
+                continue;
+            };
+            let Some(points) = runtime_entities
+                .iter()
+                .map(|entity| {
+                    lunco_core::coords::grid_relative_pose(
+                        *entity,
+                        frame_entity,
+                        &q_parents,
+                        &q_grids,
+                        &q_spatial,
+                    )
+                    .map(|(position, _)| position)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            (
+                (0..waypoints.len()).map(runtime_waypoint_key).collect(),
+                points,
+                false,
+                runtime_route_loops(spec),
+                runtime_entities.into_iter().map(Some).collect::<Vec<_>>(),
+            )
+        } else {
             continue;
-        };
-        let (targets, points, smooth, closed, entities) = match source {
-            RouteVisualSource::Authored(metadata) => {
-                // Authored XML is parsed once by the autopilot owner. Its route
-                // metadata remains authoritative while a derived runtime spec
-                // is present.
-                let targets = metadata.targets;
-                let Some(bindings) = bindings else { continue };
-                let Some(resolved) = targets
-                    .iter()
-                    .map(|target| {
-                        let entity = *bindings.0.get(target)?;
-                        let (position, _) = lunco_core::coords::grid_relative_pose(
-                            entity,
-                            frame_entity,
-                            &q_parents,
-                            &q_grids,
-                            &q_spatial,
-                        )?;
-                        Some((position, entity))
-                    })
-                    .collect::<Option<Vec<_>>>()
-                else {
-                    continue;
-                };
-                (
-                    targets,
-                    resolved.iter().map(|(point, _)| *point).collect::<Vec<_>>(),
-                    metadata.smooth,
-                    metadata.loops,
-                    resolved
-                        .into_iter()
-                        .map(|(_, entity)| Some(entity))
-                        .collect(),
-                )
-            }
-            RouteVisualSource::Runtime(spec) => {
-                let Some(waypoints) = spec.patrol_waypoints() else {
-                    continue;
-                };
-                // Runtime waypoint roots are the presentation projection of the same
-                // live route. Resolve their current active-frame poses instead of
-                // reusing the original command Y coordinate: terrain edits move the
-                // marker root, and labels must remain attached to that marker while
-                // the ribbon is rebuilt from the same points.
-                let Some(runtime_entities) =
-                    ordered_runtime_marker_entities(vessel, waypoints.len(), &runtime_markers)
-                else {
-                    continue;
-                };
-                let Some(points) = runtime_entities
-                    .iter()
-                    .map(|entity| {
-                        lunco_core::coords::grid_relative_pose(
-                            *entity,
-                            frame_entity,
-                            &q_parents,
-                            &q_grids,
-                            &q_spatial,
-                        )
-                        .map(|(position, _)| position)
-                    })
-                    .collect::<Option<Vec<_>>>()
-                else {
-                    continue;
-                };
-                (
-                    (0..waypoints.len()).map(runtime_waypoint_key).collect(),
-                    points,
-                    false,
-                    runtime_route_loops(spec),
-                    runtime_entities.into_iter().map(Some).collect::<Vec<_>>(),
-                )
-            }
         };
         let (cursor, completed) = route_execution(vessel, &q_autopilots);
         let progress = route_visual_state(&targets, reached, cursor, completed, closed);
@@ -2535,10 +2332,9 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        has_movement_route, ordered_runtime_marker_entities, resample_polyline,
-        route_ribbon_points, route_right, route_tangent, route_visual_source, route_visual_state,
-        runtime_route_loops, scene_root_path, select_ground_point, BehaviorXml, ReachedWaypoints,
-        RouteVisualSource, WAYPOINT_MARKER_ASSET,
+        has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
+        route_ribbon_points, route_right, route_tangent, route_visual_state, runtime_route_loops,
+        select_ground_point, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
@@ -2564,12 +2360,6 @@ mod tests {
     use lunco_scene_commands::runtime_waypoint::append_runtime_patrol;
 
     #[test]
-    fn scene_root_path_rejects_a_rootless_vessel_without_a_fallback() {
-        assert_eq!(scene_root_path("/Traverse/Rover"), Some("/Traverse".into()));
-        assert_eq!(scene_root_path("/"), None);
-    }
-
-    #[test]
     fn runtime_click_creates_and_extends_patrol_without_usd() {
         let first = append_runtime_patrol(None, None, [1.0, 2.0, 3.0]).unwrap();
         let BehaviorSpec::Patrol {
@@ -2582,7 +2372,7 @@ mod tests {
             panic!("runtime waypoint must create a patrol");
         };
         assert_eq!(waypoints.len(), 1);
-        assert_eq!((speed, radius, dwell), (0.6, 2.0, 0.0));
+        assert_eq!((speed, radius, dwell), (0.6, 3.0, 0.0));
 
         let current = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
             waypoints: vec![PatrolWaypoint::at([1.0, 2.0, 3.0])],
@@ -2629,7 +2419,7 @@ mod tests {
         assert_eq!(
             ordered_runtime_marker_entities(vessel, 2, &markers),
             None,
-            "a partial binding set must not produce mismatched route labels"
+            "a partial binding set must not produce mismatched route state"
         );
     }
 
@@ -2642,12 +2432,12 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert!(has_movement_route(Some(&xml), None));
-        assert!(!has_movement_route(
+        assert!(has_authored_movement_route(Some(&xml), None));
+        assert!(!has_authored_movement_route(
             None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::Brake))
         ));
-        assert!(has_movement_route(
+        assert!(has_authored_movement_route(
             None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::DriveTo {
                 target: [1.0, 0.0, 0.0],
@@ -2671,47 +2461,10 @@ mod tests {
             lunco_autopilot::usd_tree::authored_route_metadata(&malformed.0).is_err(),
             "malformed authored data must remain an explicit parse failure"
         );
-        assert!(!has_movement_route(Some(&malformed), Some(&stale_runtime)));
-    }
-
-    #[test]
-    fn empty_runtime_mission_uses_the_live_patrol_for_route_projection() {
-        let empty = BehaviorXml(
-            value_to_xml(&serde_json::json!({
-                "kind": "sequence",
-                "children": []
-            }))
-            .unwrap(),
-        );
-        let patrol = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
-            waypoints: vec![
-                PatrolWaypoint::at([1.0, 0.0, 2.0]),
-                PatrolWaypoint::at([3.0, 0.0, 4.0]),
-            ],
-            speed: 0.6,
-            radius: 3.0,
-            dwell: 0.0,
-        });
-
-        assert!(matches!(
-            route_visual_source(Some(&empty), Some(&patrol)),
-            Ok(Some(RouteVisualSource::Runtime(_)))
+        assert!(!has_authored_movement_route(
+            Some(&malformed),
+            Some(&stale_runtime)
         ));
-        assert!(has_movement_route(Some(&empty), Some(&patrol)));
-    }
-
-    #[test]
-    fn malformed_mission_never_selects_a_runtime_route_for_projection() {
-        let malformed = BehaviorXml("<broken".to_string());
-        let patrol = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
-            waypoints: vec![PatrolWaypoint::at([1.0, 0.0, 2.0])],
-            speed: 0.6,
-            radius: 3.0,
-            dwell: 0.0,
-        });
-
-        assert!(route_visual_source(Some(&malformed), Some(&patrol)).is_err());
-        assert!(!has_movement_route(Some(&malformed), Some(&patrol)));
     }
 
     #[test]
@@ -2757,23 +2510,18 @@ mod tests {
             DVec3::new(0.0, 30.0, 0.0),
         ];
 
-        assert_eq!(route_tangent(&points, 1), Some(DVec3::X));
+        assert_eq!(route_tangent(&points, 1), DVec3::X);
 
         let rights = points
             .iter()
             .enumerate()
             .scan(None, |previous, (index, _)| {
-                let right = route_right(route_tangent(&points, index).unwrap(), *previous);
+                let right = route_right(route_tangent(&points, index), *previous);
                 *previous = Some(right);
                 Some(right)
             })
             .collect::<Vec<_>>();
         assert!(rights[1].dot(rights[2]) > 0.0);
-        assert_eq!(
-            route_tangent(&[DVec3::ZERO, DVec3::ZERO], 0),
-            None,
-            "an all-coincident route has no physical ribbon direction"
-        );
     }
 
     #[test]

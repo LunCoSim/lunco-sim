@@ -4,9 +4,8 @@
 //! Screen space is the right space for this. A world-space text mesh would have
 //! to be re-oriented every frame, would scale itself into illegibility, and
 //! would z-fight the terrain it labels; an egui overlay is always camera-facing
-//! and always crisp. The same reasoning already produced the checkpoint-number
-//! overlay this is modelled on — the difference is that what to write here comes
-//! from the scene rather than from Rust.
+//! and always crisp. The label's content and owner still come from the USD prim;
+//! this pass only projects the existing render pose into the viewport.
 //!
 //! ## Three things this must get right
 //!

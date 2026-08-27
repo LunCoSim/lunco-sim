@@ -621,11 +621,10 @@ impl Plugin for SandboxEditUiPlugin {
                     // Background layer has no deterministic order against that
                     // root list; this schedule edge is the actual 3D → tags → UI
                     // composition boundary.
-                    (
-                        checkpoint_click::draw_waypoint_overlay,
-                        // USD-authored labels (`lunco:billboard`).
-                        billboard_overlay::draw_billboard_overlay,
-                    )
+                    // USD-authored labels (`lunco:billboard`) use each prim's
+                    // propagated render pose; route projection remains the sole
+                    // producer for terrain-grid ribbon geometry and marker state.
+                    billboard_overlay::draw_billboard_overlay
                         .before(lunco_workbench::WorkbenchRenderSet),
                     checkpoint_click::draw_waypoint_context_menu
                         .in_set(lunco_workbench::ApplicationOverlayRenderSet),
