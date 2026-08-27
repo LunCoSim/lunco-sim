@@ -36,6 +36,14 @@ semantics not present in the runtime contract. Runtime UI uses the existing
 egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
 
+Project-owned visibility policy belongs in the active Twin manifest's generic
+`[settings]` table. A surface declares `setting` plus `setting_default` in
+`runtime_surfaces.json`; Rhai reads/writes the same scope with
+`get_twin_setting`/`set_twin_setting`. Keep user-global diagnostics, theme,
+input visualisation, and window preferences in `lunco-settings`. Missing Twin
+keys use the surface's authored default, so Rust does not grow a field for
+each new preference.
+
 ## Authoring workflow
 
 ### 1. Define a generic capability namespace
@@ -61,6 +69,14 @@ Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
 `EngineExposures.revision` changes only when a value or visibility flag changes;
 it is not a frame counter. Do not use JSON to detect internal changes.
+
+For camera status, Rust publishes only the current camera fact through the
+generic exposure namespace. Rhai owns selection policy (`set_camera(name)`) and
+can read the fact with `get_exposure(...)`; HUI/CSS owns rendering. Camera
+status emits `CameraSelectionStatusChanged` after its camera/viewport lifecycle
+projection changes, and the exposure observer consumes that event. The UI is
+revision-gated. Do not add a Rhai `on_tick` loop, a timer poll, or a per-frame
+camera scan for this HUD.
 
 ### 2. Add the template and stylesheet
 

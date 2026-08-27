@@ -1220,6 +1220,24 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         bridge_core::get_resource_field(&RhaiBuilder, path.as_str()).unwrap_or(Dynamic::UNIT)
     });
 
+    // get_twin_setting("ui.camera_status") -> Dynamic — read a scalar from
+    // the active Twin manifest. Missing keys intentionally read as (), so an
+    // authored surface can keep its documented default without a Rust field.
+    engine.register_fn("get_twin_setting", |key: ImmutableString| -> Dynamic {
+        bridge_core::get_twin_setting(&RhaiBuilder, key.as_str()).unwrap_or(Dynamic::UNIT)
+    });
+
+    // get_exposure("camera-status", "active_name") -> Dynamic — read one
+    // raw engine fact from the generic presentation snapshot. Rhai owns how
+    // that fact is selected, formatted, or turned into a HUD policy.
+    engine.register_fn(
+        "get_exposure",
+        |namespace: ImmutableString, property: ImmutableString| -> Dynamic {
+            bridge_core::get_exposure(&RhaiBuilder, namespace.as_str(), property.as_str())
+                .unwrap_or(Dynamic::UNIT)
+        },
+    );
+
     // input_binding("forward") -> "W" (or () when the intent is unbound).
     // Tutorials read the controller's resolved settings resource directly, so
     // authored copy and action policy follow user rebinding without a second
@@ -1248,6 +1266,24 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
                     false
                 }
             }
+        },
+    );
+
+    // set_twin_setting("ui.camera_status", value) -> bool — use the generic
+    // command bus so persistence, authority, and all other command callers
+    // converge on one owner. The value is scalar by the command contract.
+    engine.register_fn(
+        "set_twin_setting",
+        |key: ImmutableString, value: Dynamic| -> bool {
+            let mut params = Map::new();
+            params.insert("key".into(), key.into());
+            params.insert("value".into(), value);
+            let result = bridge_core::cmd(&RhaiBuilder, "SetTwinSetting", map_to_json(params));
+            result
+                .clone()
+                .try_cast::<Map>()
+                .and_then(|map| map.get("ok").and_then(|value| value.as_bool().ok()))
+                .unwrap_or(false)
         },
     );
 

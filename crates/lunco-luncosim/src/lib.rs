@@ -2623,6 +2623,12 @@ impl Plugin for SandboxCorePlugin {
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
+            // Camera status is a retained current-camera fact. Seed it once,
+            // then let the camera domain's status-change event update the
+            // exposure registry; it does not belong in the continuous HUD
+            // invalidation/presentation loop below.
+            .add_systems(Startup, engine_exposure::publish_initial_camera_exposure)
+            .add_observer(engine_exposure::on_camera_selection_status_changed)
             .add_systems(
                 Update,
                 (

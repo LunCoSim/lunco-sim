@@ -32,13 +32,13 @@ use lunco_core::{
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
 ///
-/// This is NOT a possess gate — there is none. An avatar may possess anything; WHO
-/// may hold a given target is arbitrated by the authority layer
-/// (`SessionRegistry::may_possess` / `PossessionPolicy`, checked in
-/// `on_possess_command`), and what a possessed thing can DO is decided by whether it
-/// accepts commands at all. This alias answers only that second question, and is used
-/// for one presentation decision: whether a heading-follow camera should track the
-/// target's yaw (a thing that steers has a meaningful heading; a prop tumbles).
+/// This is not the possession predicate. Possession validates a writable
+/// [`lunco_core::InputPorts`] endpoint that is not an [`Avatar`], then the
+/// authority layer (`SessionRegistry::may_possess` / `PossessionPolicy`) decides
+/// who may hold it. This alias answers only whether a target accepts commands,
+/// and is used for one presentation decision: whether a heading-follow camera
+/// should track the target's yaw (a thing that steers has a meaningful heading;
+/// a prop tumbles).
 type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
@@ -583,7 +583,7 @@ fn record_possession_authority(
     local: Res<lunco_core::LocalSession>,
     rbac: Res<lunco_core::session::SessionRbac>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_input_ports: Query<&lunco_core::InputPorts>,
+    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
     // Record ownership on the authoritative peer: Host, and also single-player
@@ -593,10 +593,7 @@ fn record_possession_authority(
         return;
     }
     let cmd = trigger.event();
-    if !q_input_ports
-        .get(cmd.target)
-        .is_ok_and(|surface| !surface.values.is_empty())
-    {
+    if !is_vessel_control_endpoint(cmd.target, &q_input_ports) {
         warn!(target = ?cmd.target, "[auth] possession refused: target exposes no writable input ports");
         return;
     }
@@ -2981,21 +2978,23 @@ fn avatar_global_hotkeys(
 /// wheel may carry it. [`lunco_core::InputPorts`] is the public interface:
 /// its nonempty vocabulary is the input surface a session may own. A
 /// [`lunco_core::ControlBinding`] is merely one optional avatar-input adapter.
-/// Walking to this owner makes a click on any vehicle part possess its vehicle.
+/// An [`Avatar`] endpoint is excluded even when it carries its own movement
+/// ports; walking past one to this owner makes a click on a vehicle part
+/// possess the vehicle rather than the avatar.
 fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_input_ports: &Query<&lunco_core::InputPorts>,
+    q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
         if q_ground.get(entity).is_ok() {
             return None;
         }
-        if q_input_ports
-            .get(entity)
-            .is_ok_and(|surface| !surface.values.is_empty())
-        {
+        // The avatar is also an InputPorts endpoint, but its endpoint is the
+        // free-flight driver, not a vessel that a scene click may possess. The
+        // domain marker is the authority here; render camera metadata is not.
+        if is_vessel_control_endpoint(entity, q_input_ports) {
             return Some(entity);
         }
         if let Ok(parent) = q_parents.get(entity) {
@@ -3007,10 +3006,24 @@ fn find_control_owner_from_hit(
     None
 }
 
+/// The possession boundary is a writable command surface owned by a domain
+/// entity, not a presentation marker. The local avatar has an `InputPorts`
+/// surface too, but that surface drives its free-flight embodiment and must
+/// never become the vessel selected by a click or a direct possession command.
+fn is_vessel_control_endpoint(
+    entity: Entity,
+    q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+) -> bool {
+    q_input_ports
+        .get(entity)
+        .is_ok_and(|surface| !surface.values.is_empty())
+}
+
 /// Raycasts possession against actual collider geometry.
 ///
 /// Uses Avian3D SpatialQuery to hit real mesh colliders, not invisible spheres.
-/// Walks up parent chain to find the root Vessel entity for possession.
+/// Walks up the parent chain to find the owning vessel control endpoint for
+/// possession. An avatar endpoint is never a vessel target.
 /// Celestial bodies still use sphere intersection (they have no colliders).
 /// Plain-click dispatcher: routes a left-click on a world entity to one of
 /// two typed commands.
@@ -3084,7 +3097,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_input_ports: Query<&lunco_core::InputPorts>,
+    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -3650,9 +3663,9 @@ fn on_possess_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     // Used ONLY for the heading-follow camera decision below. Possession is
-    // gated by the target's public input ports, then authority.
+    // gated by a non-avatar public input endpoint, then authority.
     q_vessel: Query<(Option<&lunco_core::CameraFollow>, Option<&GravityBody>), Controllable>,
-    q_input_ports: Query<&lunco_core::InputPorts>,
+    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
@@ -3663,10 +3676,7 @@ fn on_possess_command(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    if !q_input_ports
-        .get(cmd.target)
-        .is_ok_and(|surface| !surface.values.is_empty())
-    {
+    if !is_vessel_control_endpoint(cmd.target, &q_input_ports) {
         warn!(target = ?cmd.target, "[possess] refused: target exposes no writable input ports");
         return;
     }
@@ -5018,7 +5028,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
         let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
@@ -5026,6 +5036,53 @@ mod tests {
         assert_eq!(
             find_control_owner_from_hit(wheel_mesh, &q_parents, &q_input_ports, &q_ground),
             Some(rover)
+        );
+    }
+
+    #[test]
+    fn avatar_endpoint_hit_resolves_to_vehicle_parent_not_avatar() {
+        let mut world = World::new();
+        let rover = world
+            .spawn((lunco_core::InputPorts::new(&["drive"]), Name::new("Rover")))
+            .id();
+        let avatar = world
+            .spawn((
+                Avatar,
+                lunco_core::InputPorts::new(&["forward"]),
+                ChildOf(rover),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
+
+        assert_eq!(
+            find_control_owner_from_hit(avatar, &q_parents, &q_input_ports, &q_ground),
+            Some(rover)
+        );
+    }
+
+    #[test]
+    fn top_level_avatar_endpoint_is_not_a_possession_target() {
+        let mut world = World::new();
+        let avatar = world
+            .spawn((Avatar, lunco_core::InputPorts::new(&["forward"])))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
+
+        assert_eq!(
+            find_control_owner_from_hit(avatar, &q_parents, &q_input_ports, &q_ground),
+            None
         );
     }
 

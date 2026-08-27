@@ -543,25 +543,34 @@ scene. Omitted/false preserves the default of showing consent for recommended
 entries. The popup checkbox and Settings ▸ Data & libraries edit this same
 manifest-owned value.
 
-Additional per-Twin overrides may later use a layered project settings file.
-The original layered-settings design would let projects enforce conventions
-(e.g. a library Twin might pin
-`modelica.naming.rename_class_renames_file = "Always"` while a
-luncosim Twin keeps `"Never"`). Resolution order:
+The generic `[settings]` table in `twin.toml` is the per-Twin override
+mechanism. It is a namespaced scalar map, so a new project-owned preference
+does not require a new Rust field, settings section, or command. The active
+Twin is the only reader/writer scope; closing it removes that scope before the
+next Twin can become active. Omitted keys preserve the authored surface's
+declared default.
 
-```
-defaults  ←  ~/.lunco/settings.json  ←  <active_twin>/.lunco/settings.json
+For example, the shipped camera-status surface is on by default:
+
+```toml
+[settings]
+"ui.camera_status" = true
 ```
 
-The active-Twin layer would be writable from the UI's "Workspace
-settings" toggle (VS Code's pattern). Until more per-Twin overrides are
-implemented, only the manifest-owned download prompt and user-global
-settings are active.
+An explicit `false` hides it. Rhai reads the same map with
+`get_twin_setting("ui.camera_status")` and writes it through the generic
+`set_twin_setting(...)` command; the runtime surface declares its key and
+default in `runtime_surfaces.json`. This is project policy, not a user-global
+diagnostic preference. User-global settings remain in
+`~/.lunco/settings.json` for concerns such as perf HUDs, input visualisation,
+theme, and window geometry.
 
 #### 9b.4 Settings UI gap
 
 Today the only way to mutate `settings.json` is hand-editing the
-file or wiring a typed `#[Command]` per knob. Schema-driven panels
+file or wiring a typed `#[Command]` per knob. Twin `[settings]` values are
+mutated through the generic `SetTwinSetting` command; no per-knob command is
+needed. Schema-driven panels
 (VS Code's "Settings" UI, Blender's Preferences window) are out of
 scope for Phase α but slot in cleanly: each `SettingsSection`
 implementation gains an optional `schema() -> SettingsSchema` method

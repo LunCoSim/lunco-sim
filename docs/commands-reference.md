@@ -1733,7 +1733,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `avatar` | `Option < Entity >` |  The avatar entity taking possession — this process's *local* embodiment  in the world, used only to bind the chase camera. `None` for headless or  direct API control with no camera binding. |
-| `target` | `Entity` |  The entity to possess (becomes the controlled vessel). |
+| `target` | `Entity` |  The non-`Avatar` entity exposing the writable `InputPorts` surface to possess (becomes the controlled vessel). |
 | `bind_camera` | `bool` |  Whether possession also rebinds the avatar's camera to the chase rig —  the default, interactive behaviour. `false` claims control authority  only: what a recording scenario wants, where the script drives the  vessel through ports while an authored camera path owns the view.  A camera bind with no explicit avatar resolves only the authoritative  `TheLocalAvatar` slot. It fails visibly when that slot is empty; it never  selects an arbitrary `Avatar` entity. |
 
 #### `ReleaseVessel`

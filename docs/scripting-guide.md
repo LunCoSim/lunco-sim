@@ -254,6 +254,9 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
 | `set_setting("Res.field", value)` | bool | host-side **tuning write** to a supported reflected resource field; not replicated or undoable; `false` on bad path/type |
+| `get_twin_setting("namespace.key")` | value \| `()` | read a scalar from the active Twin manifest's generic `[settings]` table |
+| `set_twin_setting("namespace.key", value)` | bool | persist a scalar in the active Twin manifest through the generic `SetTwinSetting` command |
+| `get_exposure("namespace", "property")` | value \| `()` | read one raw engine capability value; Rhai owns selection and presentation policy |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
 | `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
 | `find(name)` | id (`-1` if none) | entity id by `Name` |

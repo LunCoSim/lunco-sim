@@ -98,6 +98,13 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     pub visible_in_perspective: Option<String>,
     #[serde(default)]
     pub gate: Option<String>,
+    /// Optional boolean Twin setting that controls whether this surface mounts.
+    #[serde(default)]
+    pub setting: Option<String>,
+    /// Default for the optional Twin setting when the key is absent. The
+    /// authored surface declares this policy; Rust has no per-setting field.
+    #[serde(default)]
+    pub setting_default: bool,
     #[serde(default)]
     pub interactive: bool,
     pub placement: RuntimeUiPlacementDefinition,
@@ -182,6 +189,9 @@ impl RuntimeUiManifest {
             }
             if let Some(gate) = &surface.gate {
                 require_non_empty("surface gate", gate)?;
+            }
+            if let Some(setting) = &surface.setting {
+                lunco_twin::TwinManifest::validate_setting_key(setting)?;
             }
             validate_placement(&surface.placement)?;
 
@@ -397,6 +407,8 @@ pub(crate) struct RuntimeUiSurface {
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
     visible_in_perspective: Option<String>,
     gate: Option<String>,
+    setting: Option<String>,
+    setting_default: bool,
     interactive: bool,
     mounted: bool,
     /// For a surface required by offline recording, set after the retained tree
@@ -426,6 +438,8 @@ impl RuntimeUiSurface {
             bindings: definition.bindings.clone(),
             visible_in_perspective: definition.visible_in_perspective.clone(),
             gate: definition.gate.clone(),
+            setting: definition.setting.clone(),
+            setting_default: definition.setting_default,
             interactive: definition.interactive,
             mounted: false,
             presentation_ready: false,
@@ -742,6 +756,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
     exposures: Res<EngineExposures>,
     layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
     gates: Option<Res<RuntimeUiGates>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut roots: Query<(
@@ -782,7 +797,12 @@ pub(crate) fn mount_runtime_ui_surfaces(
             continue;
         };
         if !exposure.visible
-            || !runtime_ui_is_allowed(&surface, layout.as_deref(), gates.as_deref())
+            || !runtime_ui_is_allowed(
+                &surface,
+                layout.as_deref(),
+                gates.as_deref(),
+                workspace.as_deref(),
+            )
             || resolve_placement(&surface.placement, rects.as_deref(), target, window).is_none()
         {
             continue;
@@ -801,6 +821,7 @@ fn runtime_ui_is_allowed(
     surface: &RuntimeUiSurface,
     layout: Option<&lunco_workbench::WorkbenchLayout>,
     gates: Option<&RuntimeUiGates>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
     let perspective_visible = surface
         .visible_in_perspective
@@ -816,7 +837,33 @@ fn runtime_ui_is_allowed(
         .gate
         .as_deref()
         .is_none_or(|gate| gates.is_some_and(|gates| gates.allows(gate)));
-    perspective_visible && gate_visible
+    let setting_visible = surface
+        .setting
+        .as_deref()
+        .is_none_or(|key| active_twin_setting_is_true(workspace, key, surface.setting_default));
+    perspective_visible && gate_visible && setting_visible
+}
+
+fn active_twin_setting_is_true(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    key: &str,
+    default: bool,
+) -> bool {
+    let Some(workspace) = workspace else {
+        return default;
+    };
+    let Some(twin_id) = workspace.active_twin else {
+        return default;
+    };
+    match workspace
+        .twin(twin_id)
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|manifest| manifest.setting(key))
+    {
+        Some(lunco_twin::TwinSettingValue::Bool(value)) => *value,
+        Some(_) => false,
+        None => default,
+    }
 }
 
 /// Keep retained HTML surfaces on the presentation camera.
@@ -917,6 +964,7 @@ pub(crate) fn apply_runtime_ui_exposures(
     mut manifest_state: ResMut<RuntimeUiManifestState>,
     layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
     gates: Option<Res<RuntimeUiGates>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     theme: Option<Res<lunco_theme::Theme>>,
@@ -941,6 +989,9 @@ pub(crate) fn apply_runtime_ui_exposures(
 
     let layout_changed = layout.as_ref().is_some_and(|layout| layout.is_changed());
     let gates_changed = gates.as_ref().is_some_and(|gates| gates.is_changed());
+    let workspace_changed = workspace
+        .as_ref()
+        .is_some_and(|workspace| workspace.is_changed());
     let theme_changed = theme.as_ref().is_some_and(|theme| theme.is_changed());
     let window = windows.iter().next();
 
@@ -964,9 +1015,13 @@ pub(crate) fn apply_runtime_ui_exposures(
             .gate
             .as_deref()
             .is_none_or(|gate| gates.as_ref().is_some_and(|gates| gates.allows(gate)));
+        let setting_visible = surface.setting.as_deref().is_none_or(|key| {
+            active_twin_setting_is_true(workspace.as_deref(), key, surface.setting_default)
+        });
         let should_be_visible = exposure.is_some_and(|exposure| exposure.visible)
             && perspective_visible
             && gate_visible
+            && setting_visible
             && placement.is_some();
         // Only recording surfaces need to wait for the cross-world render
         // acknowledgement. Ordinary runtime UI remains a live presentation
@@ -1011,6 +1066,7 @@ pub(crate) fn apply_runtime_ui_exposures(
         if surface.applied_revision == exposures.revision
             && !layout_changed
             && !gates_changed
+            && !workspace_changed
             && !theme_changed
             && !placement_changed
             && !visibility_changed
@@ -1417,6 +1473,7 @@ mod tests {
                         "template": "ui/c.html",
                         "stylesheet": "ui/c.css",
                         "namespace": "c",
+                        "setting": "ui.camera_status",
                         "interactive": true,
                         "placement": {
                             "mode": "window",
@@ -1438,6 +1495,10 @@ mod tests {
             RuntimeUiPlacementDefinition::Viewport
         ));
         assert!(manifest.surfaces[2].interactive);
+        assert_eq!(
+            manifest.surfaces[2].setting.as_deref(),
+            Some("ui.camera_status")
+        );
     }
 
     #[test]
@@ -1484,6 +1545,8 @@ mod tests {
                     bindings: HashMap::new(),
                     visible_in_perspective: None,
                     gate: None,
+                    setting: None,
+                    setting_default: false,
                     interactive: true,
                     mounted: true,
                     presentation_ready: false,
@@ -1558,6 +1621,8 @@ mod tests {
                     bindings: HashMap::new(),
                     visible_in_perspective: None,
                     gate: None,
+                    setting: None,
+                    setting_default: false,
                     interactive: false,
                     mounted: true,
                     // This surface is not part of the offline recording
@@ -1622,6 +1687,8 @@ mod tests {
                     bindings: HashMap::new(),
                     visible_in_perspective: None,
                     gate: None,
+                    setting: None,
+                    setting_default: false,
                     interactive: false,
                     mounted: true,
                     presentation_ready: false,
@@ -1678,6 +1745,8 @@ mod tests {
                     bindings: HashMap::new(),
                     visible_in_perspective: None,
                     gate: None,
+                    setting: None,
+                    setting_default: false,
                     interactive: false,
                     mounted: false,
                     presentation_ready: false,

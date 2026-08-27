@@ -74,6 +74,22 @@ fn objectives_hud(list) {
 /// Clear the objectives checklist.
 fn clear_objectives()          { cmd("SetObjectives", #{ text: "" }) }
 
+/// Per-Twin runtime camera HUD policy. The surface is visible by default when
+/// the key is absent; projects and tutorials can opt out without a Rust field.
+fn camera_status_visible()     {
+    let value = get_twin_setting("ui.camera_status");
+    if value == () { true } else { value == true }
+}
+fn show_camera_status(on)      { set_twin_setting("ui.camera_status", on) }
+
+/// Read the current engine camera fact for authored Rhai policy. Selection is
+/// still done with `set_camera(name)` from control.rhai; this helper never
+/// guesses a camera from an entity name.
+fn current_camera_name() {
+    let name = get_exposure("camera-status", "active_name");
+    if name == () || name == "" { "NO ACTIVE CAMERA" } else { name }
+}
+
 /// Enable/disable a simulation subsystem at runtime (progressive fidelity ramp).
 /// `name` ∈ "thermal" | "comms-degradation" | "obstacle-field" (see lunco-core).
 fn set_subsystem(name, on)     { cmd("SetSubsystemEnabled", #{ name: name, on: on }) }

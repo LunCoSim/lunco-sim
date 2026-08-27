@@ -16,7 +16,8 @@ pub struct PossessVessel {
     #[serde(default)]
     #[reflect(default)]
     pub avatar: Option<Entity>,
-    /// The entity to possess (becomes the controlled vessel).
+    /// The non-`Avatar` entity exposing the writable `InputPorts` surface to
+    /// possess (becomes the controlled vessel).
     pub target: Entity,
     /// Whether possession also rebinds the avatar's camera to the chase rig —
     /// the default, interactive behaviour. `false` claims control authority

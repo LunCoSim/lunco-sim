@@ -113,6 +113,14 @@ contains `suppress_missing_prompt`; it defaults to `false`, so a project with
 missing declared datasets shows the consent window when opened. The Workbench
 Settings menu and the popup checkbox both update this same manifest field.
 
+The generic `[settings]` table is the extensible project-policy surface. It
+stores namespaced scalar TOML values (`bool`, integer, number, or string), so
+new Twin settings do not require new Rust fields or per-setting commands.
+`lunco-workspace` owns persistence through `SetTwinSetting`; Rhai reads and
+writes the same active-Twin scope with `get_twin_setting` and
+`set_twin_setting`. Missing keys remain absent, allowing each authored consumer
+to declare its own semantic default.
+
 ## What this crate does NOT do (yet)
 
 - **Simulation control.** Clock, pause, compile scope, PauseTwin /

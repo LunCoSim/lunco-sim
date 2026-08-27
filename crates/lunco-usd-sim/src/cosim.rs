@@ -1376,14 +1376,13 @@ fn process_usd_cosim_prim_read(
     // still gets its `LinkNode`. The two concerns no longer race on one flag.
     commands.entity(entity).try_insert(UsdSimProcessed);
 
-    // NOTE: there is no possessable/vessel tag to stamp — possession is not gated by
-    // a marker at all (an avatar may possess anything; WHO may hold it is the
-    // authority layer's call). A prim's command CAPABILITY comes from its `Controls`
-    // scope → `ControlBinding` + `InputPorts`, stamped in the general USD
-    // translator (`lunco-usd-bevy`), which runs for every prim — not here, which only
-    // sees model-bound cosim prims. A lander's actuation backend is its
-    // `SimComponent` manual-override ports (written by `SetPorts`), read
-    // by topology at possess/route time.
+    // NOTE: there is no possessable/vessel tag to stamp. A prim's command CAPABILITY
+    // comes from its `Controls` scope → `ControlBinding` + `InputPorts`, stamped in
+    // the general USD translator (`lunco-usd-bevy`), which runs for every prim — not
+    // here, which only sees model-bound cosim prims. The avatar domain owns the
+    // semantic possession boundary and excludes the `Avatar` endpoint; authority
+    // arbitration remains independent. A lander's actuation backend is its
+    // `SimComponent` manual-override ports (written by `SetPorts`).
 
     // Opaque-body guard, applied HERE (cosim intent is known the instant we
     // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later

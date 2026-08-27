@@ -49,6 +49,7 @@ pub mod open;
 pub mod recents;
 pub mod session;
 
+pub use open::{SetTwinSetting, TwinSettingInput};
 pub use recents::Recents;
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
@@ -57,7 +58,7 @@ pub use session::{
 
 pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;
-pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode};
+pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode, TwinSettingValue};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinId

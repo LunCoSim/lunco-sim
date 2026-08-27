@@ -655,6 +655,50 @@ mod exposure_tests {
             "power.battery_soc 100.0 % | power.battery_discharge 327.5 W"
         );
     }
+
+    #[test]
+    fn camera_exposure_projects_only_authoritative_camera_facts() {
+        let status = lunco_usd_bevy::camera_switch::CameraSelectionStatus {
+            cameras: vec!["/World/Wide".into(), "/World/Close".into()],
+            active_name: Some("/World/Close".into()),
+            owner: lunco_usd_bevy::camera_switch::CameraSelectionOwner::User,
+            avatar_available: true,
+            director_available: true,
+            last_error: None,
+        };
+        let mut exposures = EngineExposures::default();
+        publish_camera_exposure(&mut exposures, &status);
+        let surface = exposures
+            .surfaces
+            .get("camera-status")
+            .expect("camera status exposure");
+        assert!(surface.visible);
+        assert_eq!(surface.properties["active_name"].render(), "/World/Close");
+        assert!(!surface.properties.contains_key("mode"));
+        assert!(!surface.properties.contains_key("camera_count"));
+        assert!(!surface.properties.contains_key("owner"));
+        assert!(!surface.properties.contains_key("error"));
+    }
+
+    #[test]
+    fn camera_status_event_updates_the_retained_exposure() {
+        let mut app = App::new();
+        app.init_resource::<EngineExposures>()
+            .insert_resource(lunco_usd_bevy::camera_switch::CameraSelectionStatus {
+                active_name: Some("/World/Close".into()),
+                ..default()
+            })
+            .add_observer(on_camera_selection_status_changed);
+
+        app.world_mut()
+            .trigger(lunco_usd_bevy::camera_switch::CameraSelectionStatusChanged);
+
+        let exposures = app.world().resource::<EngineExposures>();
+        assert_eq!(
+            exposures.surfaces["camera-status"].properties["active_name"].render(),
+            "/World/Close"
+        );
+    }
 }
 
 /// Cheap reactive invalidation in front of the expensive vessel resolver.
@@ -1779,6 +1823,37 @@ fn publish_runtime_overlay_exposures(
             );
         }
     }
+}
+
+/// Publish the current camera fact at the lifecycle boundary that changed it.
+/// This observer is deliberately separate from the continuous vessel exposure
+/// cadence: a camera switch must not be rediscovered by a per-tick poll.
+pub(crate) fn on_camera_selection_status_changed(
+    _trigger: On<lunco_usd_bevy::camera_switch::CameraSelectionStatusChanged>,
+    status: Res<lunco_usd_bevy::camera_switch::CameraSelectionStatus>,
+    mut exposures: ResMut<EngineExposures>,
+) {
+    publish_camera_exposure(&mut exposures, &status);
+}
+
+/// Seed the retained camera surface once when the host starts. Subsequent
+/// updates arrive only through `CameraSelectionStatusChanged`.
+pub(crate) fn publish_initial_camera_exposure(
+    status: Res<lunco_usd_bevy::camera_switch::CameraSelectionStatus>,
+    mut exposures: ResMut<EngineExposures>,
+) {
+    publish_camera_exposure(&mut exposures, &status);
+}
+
+fn publish_camera_exposure(
+    exposures: &mut EngineExposures,
+    status: &lunco_usd_bevy::camera_switch::CameraSelectionStatus,
+) {
+    let mut ui = exposures.writer("camera-status");
+    ui.visible(true);
+    // This boundary publishes only the authoritative current-camera fact.
+    // Selection policy and presentation wording stay in Rhai/HUI.
+    ui.property("active_name", status.active_name.as_deref().unwrap_or(""));
 }
 
 fn percent(value: f32) -> String {

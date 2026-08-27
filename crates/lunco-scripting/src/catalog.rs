@@ -64,6 +64,18 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "READ. Reflection read of a global Resource field — settings/config live in resources, not components. () if absent.",
     ),
     (
+        "get_twin_setting",
+        "get_twin_setting(\"namespace.key\")",
+        "value | ()",
+        "READ. Read a scalar project-owned setting from the active Twin manifest. () when the Twin or key is absent.",
+    ),
+    (
+        "get_exposure",
+        "get_exposure(\"namespace\", \"property\")",
+        "value | ()",
+        "READ. Read one raw scalar from the generic engine exposure registry. Presentation policy belongs in Rhai; () means the producer or property is unavailable.",
+    ),
+    (
         "input_binding",
         "input_binding(\"forward\")",
         "string | ()",
@@ -74,6 +86,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "set_setting(\"Resource.field\", value)",
         "bool",
         "LOCAL WRITE. The resource twin of set(): tune a supported reflect-registered Resource field from a host-authoritative scenario. Use cmd() for authoritative, replicated, or undoable changes. false on bad path/type.",
+    ),
+    (
+        "set_twin_setting",
+        "set_twin_setting(\"namespace.key\", value)",
+        "bool",
+        "WRITE. Persist a scalar project-owned setting on the active Twin through SetTwinSetting. false when no Twin is active or the key/value is invalid.",
     ),
     (
         "query",

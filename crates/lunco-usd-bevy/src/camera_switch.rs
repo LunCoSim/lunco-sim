@@ -86,6 +86,14 @@ pub struct CameraSelectionStatus {
     pub last_error: Option<String>,
 }
 
+/// Event-like invalidation for consumers of the current camera fact.
+///
+/// The camera exposure producer subscribes to this boundary. Camera status is
+/// therefore published when a camera-selection lifecycle event changes the
+/// status, rather than being rediscovered by a render/update tick.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct CameraSelectionStatusChanged;
+
 /// Mandatory authored presentation contract for a windowed scene.
 ///
 /// The render host opts into `required`. The USD projection owns the verdict:
@@ -224,8 +232,21 @@ pub(crate) fn resolve_named_camera(
     resolve_camera_names(want, &cameras)
 }
 
-fn record_camera_error(status: &mut CameraSelectionStatus, message: String) {
-    status.last_error = Some(message);
+fn record_camera_error(
+    status: &mut CameraSelectionStatus,
+    message: String,
+    commands: &mut Commands,
+) {
+    if status.last_error.as_deref() != Some(message.as_str()) {
+        status.last_error = Some(message);
+        commands.trigger(CameraSelectionStatusChanged);
+    }
+}
+
+fn clear_camera_error(status: &mut CameraSelectionStatus, commands: &mut Commands) {
+    if status.last_error.take().is_some() {
+        commands.trigger(CameraSelectionStatusChanged);
+    }
 }
 
 fn is_window_render_target(target: &RenderTarget) -> bool {
@@ -252,7 +273,7 @@ pub fn on_set_active_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::director(target)),
         Err(message) => {
-            record_camera_error(&mut status, message.clone());
+            record_camera_error(&mut status, message.clone(), &mut commands);
             warn!("[camera] {message}");
         }
     }
@@ -269,7 +290,7 @@ pub fn on_set_user_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::user(target)),
         Err(message) => {
-            record_camera_error(&mut status, message.clone());
+            record_camera_error(&mut status, message.clone(), &mut commands);
             warn!("[camera] {message}");
         }
     }
@@ -293,7 +314,7 @@ pub fn on_request_local_avatar_view(
     let target = local_avatar.0.filter(|entity| q_cameras.contains(*entity));
     let Some(target) = target else {
         let message = "the scene has no local avatar camera to observe".to_string();
-        record_camera_error(&mut status, message.clone());
+        record_camera_error(&mut status, message.clone(), &mut commands);
         warn!("[camera] {message}");
         return;
     };
@@ -306,16 +327,17 @@ pub fn on_resume_camera_director(
     q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
     mut selection: ResMut<ViewportCameraSelection>,
     mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
 ) {
     selection.owner = CameraSelectionOwner::Director;
     selection.requested = None;
     selection.director_revision = selection.director_revision.wrapping_add(1);
     if q_tracks.is_empty() {
         let message = "the scene has no authored CameraTrack to resume".to_string();
-        record_camera_error(&mut status, message.clone());
+        record_camera_error(&mut status, message.clone(), &mut commands);
         warn!("[camera] {message}");
     } else {
-        status.last_error = None;
+        clear_camera_error(&mut status, &mut commands);
     }
     info!("[camera] presentation ownership → authored director");
 }
@@ -382,6 +404,7 @@ pub fn on_activate_camera(
     q_identity: Query<(Option<&Name>, Option<&UsdPrimPath>, Has<SceneCamera>)>,
     mut selection: ResMut<ViewportCameraSelection>,
     mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
 ) {
     let event = trigger.event();
     let target = event.target;
@@ -402,7 +425,7 @@ pub fn on_activate_camera(
                 CameraActivationSource::Director => CameraSelectionOwner::Director,
                 CameraActivationSource::User => CameraSelectionOwner::User,
             };
-            status.last_error = None;
+            clear_camera_error(&mut status, &mut commands);
             info!(
                 "[camera] viewport → {target:?} (owner={:?})",
                 selection.owner
@@ -410,7 +433,7 @@ pub fn on_activate_camera(
         }
         Ok((Some(_), _)) => {
             let message = format!("camera {target:?} is not a window camera");
-            record_camera_error(&mut status, message.clone());
+            record_camera_error(&mut status, message.clone(), &mut commands);
             warn!("[camera] {message}");
         }
         Err(_) => {
@@ -424,7 +447,7 @@ pub fn on_activate_camera(
                 })
                 .unwrap_or_else(|| "entity no longer exists".to_string());
             let message = format!("camera {target:?} ({identity}) is not a SceneCamera");
-            record_camera_error(&mut status, message.clone());
+            record_camera_error(&mut status, message.clone(), &mut commands);
             warn!("[camera] {message}");
         }
     }
@@ -656,6 +679,7 @@ pub fn update_camera_selection_status(
     q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalAvatar>), With<SceneCamera>>,
     q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
     mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
 ) {
     let mut cameras: Vec<(Entity, String, bool)> = q_cams
         .iter()
@@ -679,7 +703,42 @@ pub fn update_camera_selection_status(
     };
     if *status != next {
         *status = next;
+        commands.trigger(CameraSelectionStatusChanged);
     }
+}
+
+/// Run the camera status projection only after one of its inputs changed.
+///
+/// This is deliberately a change detector, not a render-frame camera scan.
+/// Camera projection emits entity lifecycle changes, viewport selection and
+/// ownership are resources, and the scene camera's name/target/local-avatar
+/// markers are component changes. The status resource is then the event-like
+/// boundary consumed by engine exposures and UI.
+pub fn camera_selection_status_changed(
+    selection: Res<ViewportCameraSelection>,
+    viewport: Res<SceneViewport>,
+    cameras: Query<
+        (),
+        (
+            With<SceneCamera>,
+            Or<(
+                Added<SceneCamera>,
+                Changed<Name>,
+                Changed<RenderTarget>,
+                Changed<LocalAvatar>,
+            )>,
+        ),
+    >,
+    tracks: Query<(), Added<crate::camera_track::CameraTrackPlan>>,
+    removed_cameras: RemovedComponents<SceneCamera>,
+    removed_tracks: RemovedComponents<crate::camera_track::CameraTrackPlan>,
+) -> bool {
+    selection.is_changed()
+        || viewport.is_changed()
+        || !cameras.is_empty()
+        || !tracks.is_empty()
+        || !removed_cameras.is_empty()
+        || !removed_tracks.is_empty()
 }
 
 /// Validate the authored window presentation contract after USD camera-track
@@ -718,7 +777,7 @@ pub fn validate_authored_camera_contract(
             .as_deref()
             .is_some_and(|error| error.starts_with("[camera-contract]"))
         {
-            status.last_error = None;
+            clear_camera_error(&mut status, &mut commands);
         }
         return;
     }
@@ -735,7 +794,7 @@ pub fn validate_authored_camera_contract(
             .as_deref()
             .is_some_and(|error| error.starts_with("[camera-contract]"))
         {
-            status.last_error = None;
+            clear_camera_error(&mut status, &mut commands);
         }
         return;
     }
@@ -764,7 +823,7 @@ pub fn validate_authored_camera_contract(
             .as_deref()
             .is_some_and(|error| error.starts_with("[camera-contract]"))
         {
-            status.last_error = None;
+            clear_camera_error(&mut status, &mut commands);
         }
         return;
     }
@@ -848,14 +907,14 @@ pub fn validate_authored_camera_contract(
     contract.errors = errors;
     if changed {
         if let Some(error) = contract.errors.first() {
-            status.last_error = Some(error.clone());
+            record_camera_error(&mut status, error.clone(), &mut commands);
             error!("[camera] {error}");
         } else if status
             .last_error
             .as_deref()
             .is_some_and(|error| error.starts_with("[camera-contract]"))
         {
-            status.last_error = None;
+            clear_camera_error(&mut status, &mut commands);
         }
     }
 }
@@ -909,10 +968,14 @@ pub fn reset_camera_selection(
     mut selection: ResMut<ViewportCameraSelection>,
     mut viewport: ResMut<SceneViewport>,
     mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
 ) {
     *selection = ViewportCameraSelection::default();
     viewport.active_camera = None;
-    *status = CameraSelectionStatus::default();
+    if *status != CameraSelectionStatus::default() {
+        *status = CameraSelectionStatus::default();
+        commands.trigger(CameraSelectionStatusChanged);
+    }
 }
 
 #[cfg(test)]

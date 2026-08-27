@@ -284,7 +284,8 @@ impl Plugin for UsdBevyPlugin {
                         .in_set(lunco_core::SceneViewportSet::Reconcile)
                         .before(camera_switch::update_camera_origin),
                     camera_switch::update_camera_selection_status
-                        .after(camera_switch::reconcile_scene_viewport),
+                        .after(camera_switch::reconcile_scene_viewport)
+                        .run_if(camera_switch::camera_selection_status_changed),
                 ),
             )
             .add_systems(
@@ -1373,14 +1374,12 @@ fn instantiate_usd_prim_from_stage(
         // ours; extension picks the engine, exactly as USD picks a file format.
         attach_programs(reader, &sdf_path, entity, commands);
 
-        // There is deliberately NO "possessable" tag read here. Possession is not gated
-        // by a marker: an avatar may possess anything, and WHO may hold it is arbitrated by
-        // the authority layer (`SessionRegistry::may_possess` / `PossessionPolicy`,
-        // checked in `on_possess_command`). What a possessed thing can then DO is
-        // decided by its CAPABILITY — the `Controls` scope below — and the command
-        // backend is strict, so possessing something with no `Controls` simply accepts
-        // nothing. A relay satellite is exactly that: possessable, commands rejected.
-        // By composition, not a check.
+        // There is deliberately NO "possessable" tag read here. The generic command
+        // surface is authored by `Controls` and projected as `InputPorts`; the avatar
+        // domain owns the semantic vessel boundary and rejects its own `Avatar`
+        // endpoint before authority arbitration. What a non-avatar endpoint can do is
+        // still decided by its authored capability — no vehicle-class branch belongs
+        // in this translator.
 
         // `ui:displayName` — the STANDARD UsdUI attribute for a prim's human
         // name (SceneGraphPrimAPI), the field every DCC shows in its outliner.
