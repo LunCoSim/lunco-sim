@@ -192,3 +192,14 @@ system's own output, it is not a gate. (`lunco-usd-sim/src/cosim.rs`)
 trajectory alignment, sun light and solar-frame anchoring cost ~10 ms/frame
 solved every frame, for increments too small to see.
 (`lunco-celestial/src/cadence.rs`)
+
+Trajectory overlays have an additional presentation boundary. Their ephemeris
+sampling and mesh rebuild run only for an active `TrajectoryView` (`is_visible &&
+user_visible`); a hidden authored orbit must not consume orbital or GPU budget.
+The per-vertex time-fade buffer is stamped by epoch, path, sampling range, and
+vertex count, so an unchanged or paused clock does not reallocate and re-upload
+the full color attribute. Active overlays may still update when a warped epoch
+actually changes; an existing active curve is held whenever the Celestial domain
+is in high-rate transport (including an independently scaled Celestial clock),
+so high-rate clock transport cannot turn its mesh rebuild into a periodic frame
+stall. The body and frame poses continue to use the current epoch.

@@ -65,6 +65,15 @@ camera or orbit trajectory uses the body's inertial sibling. A view request
 names the semantic target/frame; camera and placement systems resolve the grid
 and use the common f64 conversion/migration path.
 
+Orbit lines are presentation views, not an implicit consequence of loading a
+celestial body. USD controls whether a trajectory is user-visible, and the
+trajectory owner samples ephemeris only while the view is active. Its mesh and
+per-vertex fade projections are change-gated. When the Celestial domain enters
+high-rate transport, including through an independent Celestial clock scale, an
+already-sampled active curve is held while its body/frame alignment continues to
+follow the current epoch; a high-rate clock therefore does not trigger periodic
+trajectory mesh rebuilds.
+
 ## Coordinate and physics boundary
 
 Ephemeris, anchors, orbits, velocities, and rotations remain f64 until the

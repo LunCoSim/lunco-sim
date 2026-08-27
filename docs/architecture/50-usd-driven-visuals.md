@@ -21,9 +21,8 @@ Three rules, in order of how often they are broken:
 
 A gizmo line has no depth, a fixed screen-space width, and bypasses tonemapping. It draws
 over terrain instead of being occluded by it, and it cannot be authored — its colour is a
-Rust constant. `draw_waypoint_overlay` records the same conclusion for the route ribbon:
-the egui screen-space stroke was removed because it had no depth and painted over the
-terrain it was supposed to lie on.
+Rust constant. The route ribbon follows the same rule: its egui screen-space stroke was
+removed because it had no depth and painted over the terrain it was supposed to lie on.
 
 A mesh occludes properly and has a real world thickness. For authored scene geometry its
 look comes from a USD material; for a derived annotation its look is render intent owned

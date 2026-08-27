@@ -1,10 +1,8 @@
 //! USD-authored **billboards** — a screen-facing text label a prim declares for
 //! itself, with the content written in the scene rather than compiled in.
 //!
-//! Before this, the only world-space labels in the tree were the autopilot
-//! checkpoint numbers, drawn by a system that knew what a checkpoint was and
-//! could label nothing else. A waypoint that wanted to show its own number and
-//! coordinates had no way to say so. Now the prim says it:
+//! A waypoint or any other scene prim can carry its own label without a
+//! waypoint-specific renderer. The prim says what it wants to show:
 //!
 //! ```usda
 //! def Xform "W3" (

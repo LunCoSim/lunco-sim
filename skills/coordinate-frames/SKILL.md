@@ -44,12 +44,24 @@ persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 physical entity, keep it under `ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
 or connection line, convert both endpoints into one semantic frame before
-generating cell-local geometry.
+generating cell-local geometry. Treat trajectory visibility as a work boundary:
+sample ephemeris and rebuild cell-local mesh only for an active trajectory view,
+and stamp per-vertex presentation data so an unchanged epoch does not trigger a
+full buffer upload. When the Celestial domain is in high-rate transport, including
+an independent Celestial clock scale, hold an existing curve sample while
+continuing current-epoch frame alignment; do not rebuild thousands of points on a
+wall-clock cadence.
 
 For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
 Read the complete composed local transform through the shared USD transform
 decoder, including scale; do not inspect individual `xformOp:*` attributes in a
 second path.
+
+For waypoint labels, author `lunco:billboard*` on the waypoint and let the
+generic billboard renderer consume its propagated `GlobalTransform`. Do not
+project a route snapshot's active-frame coordinates yourself, subtract them from
+a camera pose, or add a second distance calculation. The terrain-grid/BigSpace
+hierarchy and the existing billboard path already own that conversion.
 
 ## Do not patch symptoms
 

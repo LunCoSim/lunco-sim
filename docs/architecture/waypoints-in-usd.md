@@ -93,6 +93,18 @@ This keeps USD as the source of truth for identity, geometry, placement, and sen
 size. Rhai consumes the event and sequences mission policy; it does not scale marker
 meshes or poll a duplicate distance tolerance.
 
+### Labels follow the waypoint
+
+A waypoint that needs a screen label authors `lunco:billboard = true` and its
+`lunco:billboard:*` presentation fields on the waypoint prim. The generic USD
+billboard renderer is the only label reader: it consumes the waypoint's propagated
+`GlobalTransform`, which BigSpace derives from the terrain grid and its ancestors,
+and projects that render pose with the active camera. Route projection does not
+draw a second label, subtract active-frame positions from camera positions, or
+reimplement distance/coordinate conversion. This keeps a label attached to its
+waypoint when celestial parents rotate and leaves the route snapshot responsible
+only for terrain-grid ribbon geometry and visited-marker state.
+
 `BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
 metadata" as an intended channel.
 

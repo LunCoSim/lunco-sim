@@ -82,22 +82,25 @@ pub struct TrajectoryPath {
     /// real (1 500–2 400 ephemeris samples, then a mesh rebuild + GPU upload). The
     /// rebuild trigger is `|epoch − update_epoch| > sampling_step`, which is a *sim*
     /// condition — so once the celestial clock runs fast enough (100 000× advances the
-    /// epoch ~1.2 days per WALL second, past both views' sampling steps every frame),
-    /// every frame re-samples and re-uploads both orbits, and the app grinds to a halt.
+    /// epoch ~1.2 days per WALL second), the trigger is open on every render frame.
+    /// Active views are still bounded by the wall-clock interval below; hidden views
+    /// do not sample at all.
     ///
-    /// The view does not need to track a 100 000× clock at 60 Hz to look right. This
-    /// caps rebuilds in WALL time, so the cost per second is bounded at any sky rate.
+    /// The view does not need to track a 100 000× clock at 60 Hz to look right. At
+    /// realtime rates this caps rebuilds in WALL time; during high-rate Celestial
+    /// transport (including an independent domain scale) the existing curve is
+    /// held until realtime transport resumes.
     pub last_rebuild_real_secs: f64,
 }
 
 /// Minimum wall-clock seconds between trajectory rebuilds.
 ///
 /// A body's orbit is a quasi-static ellipse — over one WALL second it is
-/// imperceptibly different at any sky rate, because what actually moves is the body
-/// *along* the curve, not the curve itself. So 1 Hz is plenty, and it bounds the cost
-/// (each rebuild re-samples 800–1500 ephemeris points and re-splines the mesh on the
-/// main thread) no matter how fast the celestial clock runs. At 100 000× the sampling
-/// trigger alone wanted a rebuild every frame; this is what stops that.
+/// imperceptibly different at realtime rates, because what actually moves is the body
+/// *along* the curve, not the curve itself. So 1 Hz is plenty while realtime runs,
+/// and high-rate Celestial transport holds the existing sample entirely. Each
+/// rebuild re-samples 800–1500 ephemeris points and re-splines the mesh on the
+/// main thread.
 const MIN_REBUILD_INTERVAL_SECS: f64 = 1.0;
 
 #[derive(Component)]
@@ -111,6 +114,81 @@ pub struct TrajectoryData {
 
 #[derive(Component)]
 pub struct TrajectoryMeshMarker;
+
+/// Change stamp for the per-vertex time-fade attribute.
+///
+/// The trajectory mesh owns the geometry stamp (`Changed<TrajectoryPath>`). The
+/// alpha attribute has a different producer: the current world epoch. Keep its
+/// stamp on the trajectory entity so a paused or unchanged clock does not cause
+/// a full color-buffer allocation and GPU upload every frame.
+#[derive(Component, Default)]
+struct TrajectoryAlphaState {
+    epoch_jd: Option<f64>,
+    path_epoch: Option<f64>,
+    sampling_days: f64,
+    start_epoch: Option<f64>,
+    end_epoch: Option<f64>,
+    num_points: usize,
+}
+
+#[inline]
+fn trajectory_is_active(view: &TrajectoryView) -> bool {
+    view.is_visible && view.user_visible
+}
+
+#[inline]
+fn alpha_update_is_needed(
+    state: Option<&TrajectoryAlphaState>,
+    epoch_jd: f64,
+    path: &TrajectoryPath,
+    view: &TrajectoryView,
+    num_points: usize,
+) -> bool {
+    let Some(state) = state else {
+        return true;
+    };
+    state.epoch_jd != Some(epoch_jd)
+        || state.path_epoch != Some(path.update_epoch)
+        || state.sampling_days != view.sampling_days
+        || state.start_epoch != view.start_epoch
+        || state.end_epoch != view.end_epoch
+        || state.num_points != num_points
+}
+
+#[inline]
+fn trajectory_needs_update(
+    view: &TrajectoryView,
+    path: &TrajectoryPath,
+    current_epoch: f64,
+    hold_curve: bool,
+) -> bool {
+    if path.points.is_empty() {
+        return true;
+    }
+    if view.start_epoch.is_some() && view.end_epoch.is_some() {
+        return false;
+    }
+    // During high celestial warp the body/frame pose consumers continue to solve
+    // from the current epoch, but the rendered orbit curve is deliberately a
+    // held presentation sample. Rebuilding thousands of points once per wall
+    // second adds no useful visual fidelity at 100000x and causes a main-thread
+    // mesh/GPU upload spike. Re-entering realtime physics reopens this trigger.
+    if hold_curve {
+        return false;
+    }
+    (path.update_epoch - current_epoch).abs() > view.sampling_step
+}
+
+#[inline]
+fn celestial_clock_is_high_rate(
+    regime: lunco_time::TimeRegime,
+    domain_scale: Option<f64>,
+    effective_rate: Option<f64>,
+) -> bool {
+    matches!(regime, lunco_time::TimeRegime::KinematicWarp)
+        || domain_scale.is_some_and(|scale| scale.abs() > lunco_time::MAX_REALTIME_RATE)
+        || effective_rate.is_some_and(|rate| rate.abs() > lunco_time::MAX_REALTIME_RATE)
+}
 
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
@@ -154,12 +232,12 @@ impl Plugin for TrajectoryPlugin {
         app.add_systems(
             Update,
             (
+                mission_visibility_system,
                 spawn_trajectory_update_task,
                 handle_trajectory_tasks,
                 trajectory_mesh_update_system,
                 trajectory_alpha_update_system,
                 trajectory_visibility_system,
-                mission_visibility_system,
             )
                 .chain(),
         );
@@ -410,11 +488,14 @@ pub fn trajectory_probe_system(
 pub fn spawn_trajectory_update_task(
     world: Res<WorldTime>,
     real: Res<Time<bevy::time::Real>>,
+    clocks: Option<Res<lunco_time::Clocks>>,
+    resolved: Option<Res<lunco_time::ResolvedDomains>>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
     mut q_views: Query<(Entity, &TrajectoryView, &mut TrajectoryPath), Without<TrajectoryTask>>,
     frame_index: Res<crate::ReferenceFrameIndex>,
+    q_domains: Query<&lunco_time::TimeDomain>,
 ) {
     let Some(ephemeris) = ephemeris else {
         return;
@@ -422,8 +503,28 @@ pub fn spawn_trajectory_update_task(
     let current_epoch = world.epoch_jd;
     let now_real = real.elapsed_secs_f64();
     let pool = bevy::tasks::ComputeTaskPool::get();
+    let celestial_domain = clocks
+        .as_deref()
+        .and_then(|clocks| q_domains.get(clocks.celestial).ok());
+    let domain_scale = celestial_domain.map(|domain| domain.scale);
+    let effective_rate =
+        clocks
+            .as_deref()
+            .zip(resolved.as_deref())
+            .and_then(|(clocks, resolved)| {
+                let real_dt = real.delta_secs_f64();
+                (real_dt > 0.0).then(|| resolved.delta(clocks.celestial) / real_dt)
+            });
+    let hold_curve = celestial_clock_is_high_rate(world.regime, domain_scale, effective_rate);
 
     for (entity, view, mut path) in q_views.iter_mut() {
+        // Visibility is a consumer contract, not just a renderer hint. A hidden
+        // orbit must not spend ephemeris/task/mesh budget until the user or a
+        // mission range makes it active.
+        if !trajectory_is_active(view) {
+            continue;
+        }
+
         // Body orbit views (the tracked id has its own reference frame in
         // the scene — Earth around the Sun, Moon around the Earth) are
         // ANCHORED: points are stored relative to the tracked body's
@@ -442,16 +543,12 @@ pub fn spawn_trajectory_update_task(
                     center: view.tracked_id,
                 })
                 .is_some();
-        let is_fixed = view.start_epoch.is_some() && view.end_epoch.is_some();
-        let needs_update = if is_fixed {
-            path.points.is_empty()
-        } else {
-            (path.update_epoch - current_epoch).abs() > view.sampling_step || path.points.is_empty()
-        };
+        let needs_update = trajectory_needs_update(view, &path, current_epoch, hold_curve);
 
-        // Wall-clock rate limit. The trigger above is a SIM condition, so a fast sky
-        // makes it true every frame; this bounds the rebuild cost in real time instead.
-        // The first build (`points.is_empty()`) is never delayed.
+        // Wall-clock rate limit for realtime transport. The trigger above is a SIM
+        // condition, so a fast realtime rate can open it repeatedly; high-rate
+        // Celestial transport holds existing geometry instead. The first build
+        // (`points.is_empty()`) is never delayed.
         if needs_update
             && !path.points.is_empty()
             && now_real - path.last_rebuild_real_secs < MIN_REBUILD_INTERVAL_SECS
@@ -465,12 +562,13 @@ pub fn spawn_trajectory_update_task(
             let registry_arc = Arc::new((*registry).clone());
             let view_copy = *view;
 
-            let aligned_epoch = if let (true, Some(start)) = (is_fixed, view_copy.start_epoch) {
-                // If fixed range, update_epoch is not moving.
-                start
-            } else {
-                (current_epoch / view_copy.sampling_step).round() * view_copy.sampling_step
-            };
+            let aligned_epoch =
+                if let (Some(start), Some(_end)) = (view_copy.start_epoch, view_copy.end_epoch) {
+                    // If fixed range, update_epoch is not moving.
+                    start
+                } else {
+                    (current_epoch / view_copy.sampling_step).round() * view_copy.sampling_step
+                };
 
             let task = pool.spawn(async move {
                 let mut points = Vec::new();
@@ -616,7 +714,7 @@ pub fn trajectory_mesh_update_system(
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
     for (entity, path, view, children) in q_paths.iter() {
-        if path.points.is_empty() {
+        if !trajectory_is_active(view) || path.points.is_empty() {
             continue;
         }
 
@@ -722,26 +820,40 @@ pub fn trajectory_mesh_update_system(
     }
 }
 
-pub fn trajectory_alpha_update_system(
+fn trajectory_alpha_update_system(
     world: Res<WorldTime>,
+    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children)>,
+    q_paths: Query<(
+        Entity,
+        &TrajectoryPath,
+        &TrajectoryView,
+        &Children,
+        Option<&TrajectoryAlphaState>,
+    )>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-    // TODO(CQ-214): this rebuilds the full per-point ATTRIBUTE_COLOR Vec and
-    // re-uploads it to the GPU for every trajectory, every frame, with no
-    // change detection — even when the clock is paused or unchanged. Gate on
-    // `world.is_changed()` (+ a per-view epoch/color stamp), and skip the
-    // re-upload when the alpha curve hasn't moved. See
-    // docs/architecture/42-ui-frame-discipline.md; deferred, tracked in
-    // docs/architecture/engineering-backlog-and-standards.md.
-    for (path, view, children) in q_paths.iter() {
-        if path.points.len() < 2 {
+    // The alpha curve is a presentation projection of the world epoch. It is
+    // updated only when that epoch, the path, the sampling range, or the mesh
+    // vertex count changes. In particular, a paused/unchanged clock does not
+    // rebuild the full color buffer.
+    for (entity, path, view, children, state) in q_paths.iter() {
+        if !trajectory_is_active(view) || path.points.len() < 2 {
             continue;
         }
+
+        let mut updated = false;
+        let mut updated_num_points = None;
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
+                    let num_points = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
+                    if !alpha_update_is_needed(state, world.epoch_jd, path, view, num_points)
+                        && mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some()
+                    {
+                        continue;
+                    }
+
                     let start_epoch = if let Some(s) = view.start_epoch {
                         s
                     } else {
@@ -753,8 +865,6 @@ pub fn trajectory_alpha_update_system(
                         } else {
                             view.sampling_days
                         };
-
-                    let num_points = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
 
                     let colors: Vec<[f32; 4]> = (0..num_points)
                         .map(|i| {
@@ -782,10 +892,112 @@ pub fn trajectory_alpha_update_system(
                         })
                         .collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                    updated = true;
+                    updated_num_points = Some(num_points);
                     trace!("Trajectory alpha updated for {} points", num_points);
                 }
             }
         }
+
+        if updated {
+            commands.entity(entity).insert(TrajectoryAlphaState {
+                epoch_jd: Some(world.epoch_jd),
+                path_epoch: Some(path.update_epoch),
+                sampling_days: view.sampling_days,
+                start_epoch: view.start_epoch,
+                end_epoch: view.end_epoch,
+                num_points: updated_num_points.expect("updated trajectory has mesh points"),
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_trajectory_is_not_active() {
+        let mut view = TrajectoryView::default();
+        view.user_visible = false;
+        assert!(!trajectory_is_active(&view));
+
+        view.user_visible = true;
+        view.is_visible = false;
+        assert!(!trajectory_is_active(&view));
+
+        view.is_visible = true;
+        assert!(trajectory_is_active(&view));
+    }
+
+    #[test]
+    fn alpha_stamp_skips_unchanged_clock_and_path() {
+        let view = TrajectoryView::default();
+        let path = TrajectoryPath {
+            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
+            update_epoch: 2451545.0,
+            ..Default::default()
+        };
+        let state = TrajectoryAlphaState {
+            epoch_jd: Some(2451545.5),
+            path_epoch: Some(path.update_epoch),
+            sampling_days: view.sampling_days,
+            start_epoch: view.start_epoch,
+            end_epoch: view.end_epoch,
+            num_points: 2,
+        };
+
+        assert!(!alpha_update_is_needed(
+            Some(&state),
+            2451545.5,
+            &path,
+            &view,
+            2
+        ));
+        assert!(alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &path,
+            &view,
+            2
+        ));
+    }
+
+    #[test]
+    fn kinematic_warp_holds_an_existing_trajectory_sample() {
+        let view = TrajectoryView::default();
+        let path = TrajectoryPath {
+            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
+            update_epoch: 2451545.0,
+            ..Default::default()
+        };
+
+        assert!(!trajectory_needs_update(&view, &path, 2451600.0, true));
+        assert!(trajectory_needs_update(
+            &view,
+            &TrajectoryPath::default(),
+            2451600.0,
+            true
+        ));
+    }
+
+    #[test]
+    fn independently_scaled_celestial_clock_is_high_rate() {
+        assert!(celestial_clock_is_high_rate(
+            lunco_time::TimeRegime::RealtimePhysics,
+            Some(100_000.0),
+            None
+        ));
+        assert!(celestial_clock_is_high_rate(
+            lunco_time::TimeRegime::RealtimePhysics,
+            Some(1.0),
+            Some(100_000.0)
+        ));
+        assert!(!celestial_clock_is_high_rate(
+            lunco_time::TimeRegime::RealtimePhysics,
+            Some(1.0),
+            Some(1.0)
+        ));
     }
 }
 

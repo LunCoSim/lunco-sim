@@ -742,7 +742,7 @@ pub fn draw_waypoint_context_menu(
     // The pointer position is window-relative, but egui lays out from the context's
     // content rect — which is NOT the window origin when the scene viewport sits in a
     // dock leaf. Without this offset the menu is placed off under the chrome and looks
-    // like it never opened. Same correction `draw_waypoint_overlay` applies.
+    // like it never opened.
     let origin = ctx.content_rect().min.to_vec2();
     let pos = egui::pos2(menu_state.position.x, menu_state.position.y) + origin;
     let mut open = true;
@@ -1020,7 +1020,7 @@ fn route_execution(
 
 /// Return runtime marker roots in patrol order. A runtime route is only a
 /// presentable route once every live waypoint has its explicit binding; using a
-/// partial list would put labels and the ribbon on different target indices.
+/// partial list would put the ribbon and marker state on different target indices.
 fn ordered_runtime_marker_entities(
     vessel: Entity,
     count: usize,
@@ -1042,9 +1042,10 @@ pub(crate) struct RouteVisualTarget {
 }
 
 /// The one editor-facing route view. It is rebuilt only when an authoritative
-/// route, target pose, terrain, frame, progress, or focus input changes. Meshes,
-/// labels, and marker tinting consume this snapshot instead of interpreting XML
-/// or resolving targets independently.
+/// route, target pose, terrain, frame, progress, or focus input changes. Meshes
+/// and marker tinting consume this snapshot instead of interpreting XML or
+/// resolving targets independently. Labels are authored on waypoint prims and
+/// consumed by the generic billboard renderer.
 #[derive(Clone, Debug)]
 pub(crate) struct RouteVisualRoute {
     pub targets: Vec<RouteVisualTarget>,
@@ -1073,139 +1074,6 @@ pub(crate) struct RouteProjectionRebuildRequested {
 impl Default for RouteProjectionRebuildRequested {
     fn default() -> Self {
         Self { pending: true }
-    }
-}
-
-/// Single egui overlay that draws waypoint labels (numbers) from the cached route
-/// view. Route lines are separate 3D meshes so depth testing remains authoritative.
-///
-/// Uses [`lunco_physics::SimulationPoseQuery`] for authoritative body-fixed
-/// positions: f64 Avian poses for physical targets and composed BigSpace poses
-/// for non-physical markers.
-pub(crate) fn draw_waypoint_overlay(
-    projection: Res<RouteVisualProjection>,
-    q_camera: Query<(Entity, &Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
-    local_avatar: Res<TheLocalAvatar>,
-    poses: lunco_physics::SimulationPoseQuery,
-    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
-    panel_rects: Option<Res<lunco_workbench::PanelRects>>,
-    mut egui_ctx: bevy_egui::EguiContexts,
-    theme: Option<Res<lunco_theme::Theme>>,
-) {
-    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
-        return;
-    }
-    let theme = theme
-        .map(|t| t.clone())
-        .unwrap_or_else(lunco_theme::Theme::dark);
-    // The local avatar camera is the only camera with presentation ownership
-    // for this overlay. If it is absent, the overlay is intentionally absent.
-    let cam_result = local_avatar.0.and_then(|avatar| q_camera.get(avatar).ok());
-    let Some((cam_entity, camera, cam_gtf)) = cam_result else {
-        return;
-    };
-    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let origin = ctx.content_rect().min.to_vec2();
-    let clip_rect = panel_rects
-        .as_ref()
-        .and_then(|rects| rects.egui_rect(lunco_workbench::VIEWPORT_PANEL_ID, ctx))
-        .unwrap_or_else(|| ctx.content_rect());
-
-    // Camera world position for distance-based sizing.
-    let Some(cam_world) = poses.position(cam_entity).map(|p| p.0) else {
-        return;
-    };
-
-    // Append to the root background before WorkbenchRenderSet so labels are
-    // deterministically below every normal egui window and dock panel.
-    let painter = ctx
-        .layer_painter(egui::LayerId::background())
-        .with_clip_rect(clip_rect);
-
-    for route in projection.routes.values() {
-        // EVERY route is labelled, not just the focused vessel's. A waypoint is an
-        // object in the scene you edit by right-clicking it, so hiding the numbers
-        // (and, next door, the ribbon) until the vessel was possessed or selected
-        // made the whole waypoint UI look like it only worked while driving.
-        // Focus now only DIMS: the route you are working on stays the loud one.
-        let focused = route.focused;
-
-        let label_color = theme.tokens.text;
-
-        // Collect screen-space points for each waypoint that is in front of the camera.
-        struct WpScreen {
-            screen: egui::Pos2,
-            index: usize,
-            distance: f64,
-            visited: bool,
-        }
-        let mut wp_screens: Vec<WpScreen> = Vec::with_capacity(route.targets.len());
-
-        for (i, target) in route.targets.iter().enumerate() {
-            let distance = (target.position - cam_world).length();
-
-            // Convert to camera-relative Vec3 for projection.
-            let cam_relative = (target.position - cam_world).as_vec3();
-            let world_f32 = cam_gtf.translation() + cam_relative;
-
-            let Ok(viewport) = camera.world_to_viewport(cam_gtf, world_f32) else {
-                continue;
-            };
-            let screen = egui::pos2(viewport.x, viewport.y) + origin;
-            wp_screens.push(WpScreen {
-                screen,
-                index: i,
-                distance,
-                visited: target.visited,
-            });
-        }
-
-        // NOTE: the route LINE is not drawn here. A screen-space overlay stroke has no
-        // depth, so it painted straight over terrain and over other waypoints and read
-        // as a buggy, overlapping gizmo. The path is real 3D geometry instead — see
-        // `sync_route_visual_meshes`, which builds a ground-hugging ribbon that occludes
-        // correctly. Only the NUMBER labels stay in egui, where screen-space is right.
-        // Draw labels above each waypoint.
-        for wp in &wp_screens {
-            let scale = (30.0 / wp.distance.max(1.0) as f32).clamp(0.4, 2.5);
-            let font_size = (18.0 * scale).max(8.0);
-
-            let fade = if wp.distance < 30.0 {
-                1.0f32
-            } else {
-                (1.0 - ((wp.distance as f32 - 30.0) / 200.0)).clamp(0.1, 1.0)
-            };
-            // Another vessel's route is context, not the subject — same labels, quieter.
-            let fade = if focused { fade } else { fade * 0.5 };
-
-            let alpha = (255.0 * fade) as u8;
-            let text = format!("{}", wp.index + 1);
-            let font = egui::FontId::proportional(font_size);
-            let label = if wp.visited {
-                theme.tokens.success
-            } else {
-                label_color
-            };
-            let tc = egui::Color32::from_rgba_unmultiplied(label.r(), label.g(), label.b(), alpha);
-
-            let galley = painter.layout_no_wrap(text, font, tc);
-            let size = galley.size();
-            let top_left = wp.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
-
-            let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
-            let backdrop = theme.tokens.overlay_backdrop;
-            painter.rect_filled(
-                bg,
-                3.0,
-                egui::Color32::from_rgba_unmultiplied(
-                    backdrop.r(),
-                    backdrop.g(),
-                    backdrop.b(),
-                    (f32::from(backdrop.a()) * fade) as u8,
-                ),
-            );
-            painter.galley(top_left, galley, tc);
-        }
     }
 }
 
@@ -1989,7 +1857,7 @@ pub(crate) fn project_waypoint_markers_to_surface(
     }
 }
 
-/// Build one atomic route view for labels, marker tinting, and mesh rendering.
+/// Build one atomic route view for marker tinting and mesh rendering.
 /// Authored XML resolves exclusively through the exact `TargetBindings` map;
 /// coordinate strings are not a second authored contract. The view deliberately
 /// excludes the moving rover pose: route annotations connect authored waypoints,
@@ -2094,8 +1962,7 @@ pub(crate) fn rebuild_waypoint_route_projection(
             // Runtime waypoint roots are the presentation projection of the same
             // live route. Resolve their current active-frame poses instead of
             // reusing the original command Y coordinate: terrain edits move the
-            // marker root, and labels must remain attached to that marker while
-            // the ribbon is rebuilt from the same points.
+            // marker root while the ribbon is rebuilt from the same points.
             let Some(runtime_entities) =
                 ordered_runtime_marker_entities(vessel, waypoints.len(), &runtime_markers)
             else {
@@ -2552,7 +2419,7 @@ mod tests {
         assert_eq!(
             ordered_runtime_marker_entities(vessel, 2, &markers),
             None,
-            "a partial binding set must not produce mismatched route labels"
+            "a partial binding set must not produce mismatched route state"
         );
     }
 
