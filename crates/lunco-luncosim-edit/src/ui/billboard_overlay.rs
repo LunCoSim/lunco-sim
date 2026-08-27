@@ -34,8 +34,10 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use big_space::prelude::{CellCoord, Grid};
+use lunco_core::coords::world_vector;
 use lunco_render::SceneCamera;
-use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, UsdBillboard};
+use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, BillboardIndex, UsdBillboard};
 use lunco_workbench::{PanelRects, VIEWPORT_PANEL_ID};
 
 /// Resolve the screen-space anchor from the same render pose as the subject's
@@ -57,11 +59,15 @@ pub fn draw_billboard_overlay(
         Entity,
         &UsdBillboard,
         &Name,
+        Option<&BillboardIndex>,
         Option<&ViewVisibility>,
         Option<&lunco_core::markers::Callsign>,
         &GlobalTransform,
     )>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     surface_pose: lunco_celestial::SurfacePoseQuery,
     scene_viewport: Res<lunco_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
@@ -113,7 +119,7 @@ pub fn draw_billboard_overlay(
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
-    for (entity, bb, name, vis, callsign, gtf) in &q_billboards {
+    for (entity, bb, name, billboard_index, vis, callsign, gtf) in &q_billboards {
         // An entity culled or explicitly hidden must not keep a floating label.
         if vis.is_some_and(|v| !v.get()) {
             continue;
@@ -125,7 +131,11 @@ pub fn draw_billboard_overlay(
         // camera's already-propagated GlobalTransform mixes two pose phases
         // and makes a label jitter against the body it annotates.
         let anchor_render = render_anchor(gtf, bb.offset_y);
-        let distance = (anchor_render - cam_gtf.translation()).length() as f64;
+        let Some(distance) = world_vector(camera_entity, entity, &q_parents, &q_grids, &q_spatial)
+            .map(|vector| vector.length())
+        else {
+            continue;
+        };
         if distance > bb.fade_end as f64 {
             continue;
         }
@@ -146,6 +156,7 @@ pub fn draw_billboard_overlay(
             &BillboardFacts {
                 name: leaf,
                 label: callsign.map(|c| c.0.as_str()),
+                index: billboard_index.map(|index| index.0),
                 geo,
             },
         );

@@ -356,6 +356,39 @@ mod active_frame_pose_tests {
     }
 
     #[test]
+    fn active_frame_position_splits_only_for_a_grid_parent() {
+        let mut world = World::new();
+        let active = world
+            .spawn((
+                WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let entity = world.spawn((Transform::default(), ChildOf(active))).id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let (cell, local) = position_in_grid_to_parent_local(
+            entity,
+            DVec3::new(2_500.0, 0.0, 0.0),
+            active,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .expect("entity and active frame are connected");
+
+        assert_eq!(cell, Some(CellCoord::new(1, 0, 0)));
+        assert_eq!(local, Vec3::new(500.0, 0.0, 0.0));
+    }
+
+    #[test]
     fn active_frame_rotation_converts_to_the_entity_parent_once() {
         let mut world = World::new();
         let active = world

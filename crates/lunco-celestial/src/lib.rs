@@ -194,9 +194,6 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds mission data on wasm32, no-op on desktop.
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // (`TrajectoryShaderPlugin` was removed with the dead trajectory
-        // `MaterialExtension` — see the note in `trajectories.rs`.)
-
         // Terrain is now in lunco-terrain crate — register it here (guarded:
         // the sandbox adds it directly as well).
         if !app.is_plugin_added::<lunco_terrain_globe::TerrainPlugin>() {

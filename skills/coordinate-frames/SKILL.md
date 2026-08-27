@@ -46,11 +46,14 @@ physical entity, keep it under `ActivePhysicsFrame` and let
 or connection line, convert both endpoints into one semantic frame before
 generating cell-local geometry. Treat trajectory visibility as a work boundary:
 sample ephemeris and rebuild cell-local mesh only for an active trajectory view,
-and stamp per-vertex presentation data so an unchanged epoch does not trigger a
-full buffer upload. When the Celestial domain is in high-rate transport, including
-an independent Celestial clock scale, hold an existing curve sample while
-continuing current-epoch frame alignment; do not rebuild thousands of points on a
-wall-clock cadence.
+and keep explicit geometry/sampling/presentation revisions. Compute results must
+carry their input revisions and stale results must be discarded; missing or empty
+inputs must resolve once until a frame/provider/input revision changes. When the
+Celestial domain is in high-rate transport, including an independent Celestial
+clock scale, hold an existing curve sample while continuing current-epoch frame
+alignment; do not rebuild thousands of points on a wall-clock cadence. Trajectory
+workers are polled without waiting from the main schedule, and their visualization
+must not become a UI-cycle dependency.
 
 For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
 Read the complete composed local transform through the shared USD transform
@@ -58,14 +61,15 @@ decoder, including scale; do not inspect individual `xformOp:*` attributes in a
 second path.
 
 For waypoint labels, author `lunco:billboard*` on the waypoint and let the
-generic billboard renderer consume its propagated `GlobalTransform`. Do not
-project a route snapshot's active-frame coordinates yourself, subtract them from
-a camera pose, or add a second distance calculation. The terrain-grid/BigSpace
-hierarchy and the existing billboard path already own that conversion.
+generic billboard renderer consume its propagated `GlobalTransform`. The
+renderer uses the shared BigSpace world-pose machinery for the camera/subject
+range check; route projection does not add another distance or coordinate
+conversion owner. The terrain-grid/BigSpace hierarchy and the existing
+billboard path already own that conversion.
 Editor-created waypoints use the canonical USD billboard authoring helper;
-runtime-only waypoints attach the same `UsdBillboard` data to the shared marker
-root. Keep both paths on this one renderer and use the existing synthetic runtime
-key for the label index rather than adding a waypoint-specific overlay.
+runtime-only waypoints attach the same `UsdBillboard` data plus the generic
+`BillboardIndex` fact to the shared marker root. Keep both paths on this one
+renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
 ## Do not patch symptoms
 

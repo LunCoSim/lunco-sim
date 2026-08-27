@@ -105,9 +105,17 @@ reimplement distance/coordinate conversion. This keeps a label attached to its
 waypoint when celestial parents rotate and leaves the route snapshot responsible
 only for terrain-grid ribbon geometry and visited-marker state. The editor's
 waypoint authoring helper writes this contract for every new authored marker;
-runtime-only markers attach the same data-only `UsdBillboard` contract to their
-shared USD marker root and use their synthetic route key for `{index}`. Both
-paths therefore feed the same renderer without a route-specific label path.
+runtime-only markers attach the same data-only `UsdBillboard` contract plus the
+generic `BillboardIndex` fact to their shared USD marker root. Their `Name`
+identity remains owned by the spawn/catalog path; the route key is used only by
+arrival state. Both paths therefore feed the same renderer without a
+route-specific label path or alternate identity path.
+
+The change-gated surface projection uses the shared BigSpace conversion
+`position_in_grid_to_parent_local`: it samples in the active terrain frame and
+stores the result in the marker's actual parent, splitting a `CellCoord` only
+when that parent is a `Grid`. This keeps plain USD scene-root markers and
+terrain-grid markers on the same canonical hierarchy.
 
 `BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
 metadata" as an intended channel.
