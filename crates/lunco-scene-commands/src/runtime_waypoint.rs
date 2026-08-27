@@ -24,7 +24,7 @@ use lunco_usd::document::{
     WAYPOINT_MARKER_ASSET,
 };
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_sim::billboard::UsdBillboard;
+use lunco_usd_sim::billboard::{BillboardIndex, UsdBillboard};
 
 use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 
@@ -69,18 +69,17 @@ pub struct RuntimeWaypointSpawner<'w, 's> {
     >,
 }
 
-/// The synthetic key used by the live route and by the arrival set.
+/// The canonical route-state key used by live routes and arrival state.
 pub fn runtime_waypoint_key(index: usize) -> String {
     format!("/__runtime_waypoint_{index}")
 }
 
 /// Attach the same generic billboard contract used by authored waypoint
-/// prims. The synthetic runtime key becomes the temporary `Name` so the
-/// shared `{index}` formatter can render the route index without teaching the
-/// billboard renderer about runtime patrol bindings.
-fn runtime_waypoint_label(index: usize) -> (Name, UsdBillboard) {
+/// prims. The index is a generic billboard fact; the marker keeps the identity
+/// assigned by `spawn_usd_entry` and does not replace its `Name`.
+fn runtime_waypoint_billboard(index: usize) -> (BillboardIndex, UsdBillboard) {
     (
-        Name::new(runtime_waypoint_key(index)),
+        BillboardIndex(index),
         UsdBillboard {
             template: WAYPOINT_BILLBOARD_TEXT.into(),
             offset_y: WAYPOINT_BILLBOARD_OFFSET_Y,
@@ -187,10 +186,10 @@ fn spawn_runtime_waypoint_marker(
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
-    let (label_name, billboard) = runtime_waypoint_label(index);
+    let (billboard_index, billboard) = runtime_waypoint_billboard(index);
     commands.entity(marker.root_entity).try_insert((
         RuntimeWaypointBinding { vessel, index },
-        label_name,
+        billboard_index,
         billboard,
     ));
     Ok(())
@@ -514,9 +513,10 @@ pub fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_runtime_patrol, authored_waypoint_is_next, runtime_waypoint_is_next,
-        runtime_waypoint_key, runtime_waypoint_label,
+        append_runtime_patrol, authored_waypoint_is_next, runtime_waypoint_billboard,
+        runtime_waypoint_is_next, runtime_waypoint_key,
     };
+    use lunco_usd_sim::billboard::BillboardIndex;
     use std::collections::HashSet;
 
     #[test]
@@ -571,10 +571,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_waypoint_label_uses_the_generic_billboard_contract() {
-        let (name, billboard) = runtime_waypoint_label(7);
+    fn runtime_waypoint_billboard_uses_the_generic_contract() {
+        let (index, billboard) = runtime_waypoint_billboard(7);
 
-        assert_eq!(name.as_str(), "/__runtime_waypoint_7");
+        assert_eq!(index, BillboardIndex(7));
         assert_eq!(
             billboard.template,
             lunco_usd::document::WAYPOINT_BILLBOARD_TEXT

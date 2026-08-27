@@ -196,16 +196,16 @@ solved every frame, for increments too small to see.
 Trajectory overlays have an additional presentation boundary. Their ephemeris
 sampling and mesh rebuild run only for an active `TrajectoryView` (`is_visible &&
 user_visible`); a hidden authored orbit must not consume orbital or GPU budget.
-The per-vertex time-fade buffer is stamped by epoch, path, sampling range, and
-vertex count, so an unchanged or paused clock does not reallocate and re-upload
-the full color attribute. An existing active curve also holds its stamped fade
-while the Celestial domain is in high-rate transport (including an independently
-scaled Celestial clock); a newly-created or structurally changed path still
-initializes its buffer once. High-rate clock transport therefore cannot turn
-either trajectory geometry or its color buffer into a periodic frame stall. The
-body and frame poses continue to use the current epoch. Ephemeris sampling,
-spline tessellation, and alpha-buffer construction are compute tasks; the main
-schedule only polls completed results and commits the already-prepared mesh
-attributes. Anchored curve alignment reads the already-solved tracked/reference
-frame pose through `lunco_core::coords::pose_in_grid`; it does not evaluate
-ephemeris endpoints again for presentation.
+The sampled path owns a geometry revision, while the runtime state owns separate
+sampling, frame/provider, and presentation revisions. Mesh and fade tasks carry
+those revisions and stale results are discarded; empty or failed inputs are
+resolved once until an input revision changes. This prevents an unchanged or
+paused clock from reallocating and re-uploading trajectory buffers, and prevents
+missing frame/data from retrying every frame. An existing active curve also holds
+its stamped fade during high-rate Celestial transport, including an independently
+scaled Celestial clock. The body and frame poses continue to use the current
+epoch. Ephemeris sampling, spline tessellation, and alpha-buffer construction
+are compute tasks; the main schedule performs one non-blocking poll and commits
+only a current, prepared result. Anchored curve alignment reads the already-
+solved tracked/reference frame pose through `lunco_core::coords::pose_in_grid`;
+it does not evaluate ephemeris endpoints again for presentation.

@@ -1779,7 +1779,7 @@ pub(crate) fn arm_route_projection_rebuild(
     if !q_route_inputs.is_empty()
         || !q_route_poses.is_empty()
         || !q_surface.is_empty()
-        || removed_xml.read().next().is_some()
+        || removed_xml.read().count() > 0
         || active_frame.is_changed()
         || selected.is_changed()
         || local_avatar.is_changed()
@@ -1803,6 +1803,7 @@ pub(crate) fn route_projection_rebuild_is_pending(
 /// route projection owns only the transient line view. It is change-gated by
 /// the same authoritative inputs and does no work while they are stable.
 pub(crate) fn project_waypoint_markers_to_surface(
+    mut commands: Commands,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
@@ -1811,14 +1812,16 @@ pub(crate) fn project_waypoint_markers_to_surface(
         Query<(
             Entity,
             &lunco_usd_sim::marker::WaypointMarker,
-            &mut big_space::grid::cell::CellCoord,
+            Option<&mut big_space::grid::cell::CellCoord>,
             &mut Transform,
         )>,
     )>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
 ) {
     let frame = active_frame.0;
-    let Ok(grid) = q_grids.get(frame) else { return };
+    if q_grids.get(frame).is_err() {
+        return;
+    }
     if !surface.has_terrain() {
         return;
     }
@@ -1837,21 +1840,37 @@ pub(crate) fn project_waypoint_markers_to_surface(
                     entity, frame, &q_parents, &q_grids, &q_spatial,
                 )?;
                 let ground = surface.height_at(lunco_core::coords::GridPos(position))?;
-                Some((
+                lunco_core::coords::position_in_grid_to_parent_local(
                     entity,
-                    grid.translation_to_grid(DVec3::new(position.x, ground, position.z)),
-                ))
+                    DVec3::new(position.x, ground, position.z),
+                    frame,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                )
+                .map(|(cell, local)| (entity, cell, local))
             })
             .collect::<Vec<_>>()
     };
 
     let mut q_markers = spatial.p1();
-    for (entity, (cell, local)) in updates {
+    for (entity, cell, local) in updates {
         let Ok((_, _, mut marker_cell, mut transform)) = q_markers.get_mut(entity) else {
             continue;
         };
-        if *marker_cell != cell {
-            *marker_cell = cell;
+        match (cell, marker_cell.as_deref_mut()) {
+            (Some(next), Some(current)) if *current != next => *current = next,
+            (Some(next), None) => {
+                commands.entity(entity).insert(next);
+            }
+            (None, Some(_)) => {
+                // A marker under a plain parent stores no BigSpace cell.
+                // Remove a component that is not valid for that parent.
+                commands
+                    .entity(entity)
+                    .remove::<big_space::grid::cell::CellCoord>();
+            }
+            _ => {}
         }
         if transform.translation != local {
             transform.translation = local;

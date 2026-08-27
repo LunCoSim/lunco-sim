@@ -151,6 +151,9 @@ pub fn inherited_reference_frame(
 pub struct ReferenceFrameIndex {
     grids: HashMap<ReferenceFrame, Entity>,
     ambiguous: HashSet<ReferenceFrame>,
+    /// Changes whenever a frame/grid declaration changes. Consumers use this
+    /// as an event revision instead of rescanning the hierarchy each frame.
+    pub(crate) revision: u64,
 }
 
 impl ReferenceFrameIndex {
@@ -212,8 +215,7 @@ pub fn update_reference_frame_index(
     mut removed_frames: RemovedComponents<ReferenceFrame>,
     mut removed_grids: RemovedComponents<Grid>,
 ) {
-    let removed_any =
-        removed_frames.read().next().is_some() || removed_grids.read().next().is_some();
+    let removed_any = removed_frames.read().count() > 0 || removed_grids.read().count() > 0;
     if changed.is_empty() && !removed_any {
         return;
     }
@@ -225,7 +227,10 @@ pub fn update_reference_frame_index(
             index.ambiguous.insert(*frame);
         }
     }
-    let ReferenceFrameIndex { grids, ambiguous } = &mut *index;
+    index.revision = index.revision.wrapping_add(1);
+    let ReferenceFrameIndex {
+        grids, ambiguous, ..
+    } = &mut *index;
     grids.retain(|frame, _| !ambiguous.contains(frame));
     for frame in ambiguous.iter() {
         error!(

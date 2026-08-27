@@ -4,13 +4,8 @@
 //! Earth/Moon are tens of MB, so they load from declared lunco texture
 //! resources over HTTP on web (see big_space_setup), not from the binary.
 //!
-//! **No shaders are embedded here any more.** The only one ever was
-//! `trajectory.wgsl`, held by a const `Handle<Shader>` for a `MaterialExtension`
-//! that was never instantiated (see the removal note in `trajectories.rs`).
-//! `Handle<Shader>` is `bevy_shader`, which pulls naga, so holding one made this
-//! crate — and every binary linking it, `--no-ui` server included — link the GPU
-//! stack for a dead asset. Live shaders are named by PATH in a `ShaderLook` and
-//! loaded by `lunco-render-bevy`.
+//! This module embeds no shaders or textures. Live shaders are named by path in
+//! a `ShaderLook` and loaded by `lunco-render-bevy`.
 //!
 //! On desktop, this plugin is a no-op — assets load normally from disk.
 
@@ -36,7 +31,7 @@ const ARTEMIS_2_EPHEMERIS_CSV: &str =
 // Embedded Assets Plugin
 // ============================================================================
 
-/// Registers all embedded assets (shaders, textures, missions) into the asset server.
+/// Registers the embedded mission/ephemeris data into the asset server.
 /// On desktop this is a no-op; on wasm32 it's the only way to get assets.
 pub struct EmbeddedAssetsPlugin;
 

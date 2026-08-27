@@ -1,6 +1,7 @@
-use crate::ephemeris::EphemerisResource;
-use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
+use crate::ephemeris::{EphemerisProvider, EphemerisResource};
+use crate::registry::{BodyDescriptor, CelestialBodyRegistry, ReferenceFrame};
 use bevy::asset::RenderAssetUsages;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::Task;
 use bevy_mesh::PrimitiveTopology;
@@ -14,16 +15,6 @@ use bevy::math::cubic_splines::CubicCardinalSpline;
 use lunco_render::{PbrLook, SurfaceAlpha};
 
 pub struct TrajectoryPlugin;
-
-// REMOVED (2026-07-13, render decoupling): `TrajectoryExtension` /
-// `TrajectoryMaterial` (an `ExtendedMaterial<StandardMaterial, _>`),
-// `TrajectoryShaderPlugin` and `TrajectoryShaderHandle`. The material type was
-// DEAD — declared, `AsBindGroup`-derived, and never instantiated anywhere in the
-// workspace (`trajectory_mesh_update_system` uses a plain unlit `PbrLook`).
-// All it did was pull `bevy_pbr` +
-// `bevy_shader` (→ naga) into every binary that links this crate, and register a
-// `trajectory.wgsl` no pipeline ever read. `assets/shaders/trajectory.wgsl` is left
-// on disk; nothing loads it.
 
 #[derive(Component, Reflect, Clone, Copy, Debug)]
 #[reflect(Component)]
@@ -72,27 +63,15 @@ pub struct TrajectoryPath {
     /// Reference-frame offset that was subtracted from every point (the
     /// tracked body's position at `update_epoch`). Applied back as the view
     /// entity's cell + translation by `trajectory_alignment_system`, so the
-    /// f32 mesh vertices stay SMALL near the tracked body. `ZERO` for
-    /// un-anchored (mission/spacecraft) paths. See
-    /// `spawn_trajectory_update_task`.
+    /// f32 mesh vertices stay SMALL near the tracked body. `anchored` is the
+    /// authoritative mode bit; the offset itself may legitimately be zero.
     pub anchor: bevy::math::DVec3,
-    /// `Time<Real>` seconds at the last rebuild — the wall-clock rate limiter.
-    ///
-    /// A trajectory is a **view** of a slowly-varying ellipse, and its rebuild cost is
-    /// real (1 500–2 400 ephemeris samples, then a mesh rebuild + GPU upload). The
-    /// rebuild trigger is `|epoch − update_epoch| > sampling_step`, which is a *sim*
-    /// condition — so once the celestial clock runs fast enough (100 000× advances the
-    /// epoch ~1.2 days per WALL second), the trigger is open on every render frame.
-    /// Active views are still bounded by the wall-clock interval below; hidden views
-    /// do not sample at all.
-    ///
-    /// The view does not need to track a 100 000× clock at 60 Hz to look right. At
-    /// realtime rates this caps rebuilds in WALL time; during high-rate Celestial
-    /// transport (including an independent domain scale) the existing curve is
-    /// held until realtime transport resumes. Ephemeris sampling, tessellation,
-    /// and buffer preparation run in compute tasks; the main schedule only
-    /// commits completed presentation data.
-    pub last_rebuild_real_secs: f64,
+    /// Whether the sampled points are relative to the tracked body's frame.
+    pub anchored: bool,
+    /// Monotonic revision of the committed sampled geometry. Mesh and alpha
+    /// workers fence their results against this value instead of using an epoch
+    /// as an identity stamp.
+    pub geometry_revision: u64,
 }
 
 /// Minimum wall-clock seconds between trajectory rebuilds.
@@ -105,54 +84,249 @@ pub struct TrajectoryPath {
 /// compute task before the main schedule commits the prepared asset data.
 const MIN_REBUILD_INTERVAL_SECS: f64 = 1.0;
 
-#[derive(Component)]
-pub struct TrajectoryTask(pub Task<TrajectoryData>);
+/// The part of a view that determines sampled geometry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TrajectoryViewSignature {
+    tracked_id: i32,
+    reference_id: i32,
+    frame: TrajectoryFrame,
+    sampling_days: f64,
+    sampling_step: f64,
+    start_epoch: Option<f64>,
+    end_epoch: Option<f64>,
+}
 
-pub struct TrajectoryData {
-    pub points: Vec<bevy::math::DVec3>,
-    pub epoch: f64,
-    pub anchor: bevy::math::DVec3,
+fn trajectory_view_signature(view: &TrajectoryView) -> TrajectoryViewSignature {
+    TrajectoryViewSignature {
+        tracked_id: view.tracked_id,
+        reference_id: view.reference_id,
+        frame: view.frame,
+        sampling_days: view.sampling_days,
+        sampling_step: view.sampling_step,
+        start_epoch: view.start_epoch,
+        end_epoch: view.end_epoch,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrajectorySamplingStatus {
+    Pending,
+    Ready,
+    Empty,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EphemerisRevision {
+    available: bool,
+    motion: u64,
+}
+
+fn ephemeris_revision(ephemeris: Option<&EphemerisResource>) -> EphemerisRevision {
+    ephemeris.map_or(
+        EphemerisRevision {
+            available: false,
+            motion: 0,
+        },
+        |ephemeris| EphemerisRevision {
+            available: true,
+            motion: ephemeris.provider.motion_revision(),
+        },
+    )
+}
+
+impl Default for TrajectorySamplingStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+/// Runtime bookkeeping for the sampled presentation. It is deliberately
+/// separate from `TrajectoryPath`: the wall-clock scheduler must not make the
+/// geometry component look changed and trigger a mesh rebuild.
+#[derive(Component, Debug)]
+pub(crate) struct TrajectoryRuntimeState {
+    presentation_revision: u64,
+    sampling_revision: u64,
+    view_signature: Option<TrajectoryViewSignature>,
+    resolved_sampling_revision: Option<u64>,
+    resolved_frame_revision: Option<u64>,
+    /// Provider availability and motion revision are part of the input
+    /// identity, so provider insertion at runtime reopens a failed view.
+    resolved_provider_revision: Option<EphemerisRevision>,
+    status: TrajectorySamplingStatus,
+    last_rebuild_real_secs: f64,
+}
+
+impl Default for TrajectoryRuntimeState {
+    fn default() -> Self {
+        Self {
+            presentation_revision: 0,
+            sampling_revision: 0,
+            view_signature: None,
+            resolved_sampling_revision: None,
+            resolved_frame_revision: None,
+            resolved_provider_revision: None,
+            status: TrajectorySamplingStatus::Pending,
+            last_rebuild_real_secs: 0.0,
+        }
+    }
+}
+
+impl TrajectoryRuntimeState {
+    fn observe_view(&mut self, view: &TrajectoryView) {
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        let signature = trajectory_view_signature(view);
+        if self.view_signature != Some(signature) {
+            self.sampling_revision = self.sampling_revision.wrapping_add(1);
+            self.view_signature = Some(signature);
+            self.resolved_sampling_revision = None;
+            self.status = TrajectorySamplingStatus::Pending;
+        }
+    }
+}
+
+/// Sampling and mesh preparation are bounded so malformed but finite authored
+/// ranges cannot turn a visualization worker into an unbounded allocator.
+const MAX_TRAJECTORY_SAMPLES: usize = 20_001;
+
+#[derive(Component)]
+struct TrajectoryTask(Task<TrajectoryData>);
+
+struct TrajectoryData {
+    signature: TrajectoryViewSignature,
+    sampling_revision: u64,
+    frame_revision: u64,
+    provider_revision: EphemerisRevision,
+    sample: Result<TrajectorySample, TrajectorySampleError>,
+}
+
+struct TrajectorySample {
+    points: Vec<bevy::math::DVec3>,
+    epoch: f64,
+    anchor: bevy::math::DVec3,
+    anchored: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrajectorySampleError {
+    InvalidSampling,
+    MissingAnchor,
+    MissingBodyDescriptor,
+    NoSamples,
+    NonFiniteSample,
+    TooManySamples,
 }
 
 #[derive(Component)]
 pub struct TrajectoryMeshMarker;
 
 /// Change stamp for the per-vertex time-fade attribute.
-///
-/// The trajectory mesh owns a committed geometry generation stamp. The alpha
-/// attribute has a different producer: the current world epoch. Keep both
-/// stamps on the trajectory entity so a paused or unchanged clock does not
-/// cause a full color-buffer allocation and GPU upload every frame, and an
-/// in-flight stale mesh result remains retryable.
 #[derive(Component, Default)]
 struct TrajectoryAlphaState {
     epoch_jd: Option<f64>,
-    path_epoch: Option<f64>,
+    geometry_revision: Option<u64>,
     sampling_days: f64,
     start_epoch: Option<f64>,
     end_epoch: Option<f64>,
     num_points: usize,
 }
 
-/// Generation stamp for the committed geometry. This is separate from the
-/// alpha stamp because a path can change while a mesh task is in flight; the
-/// next frame must be able to observe the missed generation and reschedule it.
+/// Generation stamp for the committed geometry and its current appearance.
 #[derive(Component, Default)]
 struct TrajectoryMeshState {
-    path_epoch: Option<f64>,
+    geometry_revision: Option<u64>,
+    presentation_revision: Option<u64>,
     num_points: usize,
+    failed: bool,
 }
 
 /// Presentation policy shared by the trajectory producers and the alpha pass.
-///
-/// The clock is resolved once in `spawn_trajectory_update_task`; keeping the
-/// result here means the color-buffer consumer does not independently inspect
-/// clock domains or derive a second effective rate. The resource is deliberately
-/// only a policy bit: it does not replace `WorldTime` or `ResolvedDomains` as
-/// time authorities.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 struct TrajectoryPresentationState {
     hold_curve: bool,
+}
+
+#[inline]
+fn trajectory_is_renderable(
+    view: &TrajectoryView,
+    state: &TrajectoryRuntimeState,
+    path: &TrajectoryPath,
+) -> bool {
+    trajectory_is_active(view)
+        && state.status == TrajectorySamplingStatus::Ready
+        && !path.points.is_empty()
+}
+
+#[inline]
+fn trajectory_mesh_is_current(
+    path: &TrajectoryPath,
+    runtime: &TrajectoryRuntimeState,
+    mesh_state: Option<&TrajectoryMeshState>,
+) -> bool {
+    mesh_state.is_some_and(|state| {
+        state.geometry_revision == Some(path.geometry_revision)
+            && state.presentation_revision == Some(runtime.presentation_revision)
+            && !state.failed
+            && state.num_points > 0
+    })
+}
+
+#[inline]
+fn trajectory_is_presented(
+    view: &TrajectoryView,
+    runtime: &TrajectoryRuntimeState,
+    path: &TrajectoryPath,
+    mesh_state: Option<&TrajectoryMeshState>,
+) -> bool {
+    trajectory_is_renderable(view, runtime, path)
+        && trajectory_mesh_is_current(path, runtime, mesh_state)
+}
+
+fn clear_trajectory_path(path: &mut TrajectoryPath) {
+    path.points.clear();
+    path.anchor = DVec3::ZERO;
+    path.anchored = false;
+    path.geometry_revision = path.geometry_revision.wrapping_add(1);
+}
+
+fn mark_sampling_resolution(
+    state: &mut TrajectoryRuntimeState,
+    status: TrajectorySamplingStatus,
+    sampling_revision: u64,
+    frame_revision: u64,
+    provider_revision: EphemerisRevision,
+) {
+    state.status = status;
+    state.resolved_sampling_revision = Some(sampling_revision);
+    state.resolved_frame_revision = Some(frame_revision);
+    state.resolved_provider_revision = Some(provider_revision);
+}
+
+fn trajectory_children_visible(
+    entity: Entity,
+    visible: bool,
+    q_children: &Query<&Children>,
+    q_marker: &Query<(), With<TrajectoryMeshMarker>>,
+    q_visibility: &mut Query<&mut Visibility>,
+) {
+    let Ok(children) = q_children.get(entity) else {
+        return;
+    };
+    for child in children.iter() {
+        if q_marker.contains(child) {
+            if let Ok(mut visibility) = q_visibility.get_mut(child) {
+                let next = if visible {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+                if *visibility != next {
+                    *visibility = next;
+                }
+            }
+        }
+    }
 }
 
 #[inline]
@@ -173,35 +347,11 @@ fn alpha_update_is_needed(
         return true;
     };
     (!hold_curve && state.epoch_jd != Some(epoch_jd))
-        || state.path_epoch != Some(path.update_epoch)
+        || state.geometry_revision != Some(path.geometry_revision)
         || state.sampling_days != view.sampling_days
         || state.start_epoch != view.start_epoch
         || state.end_epoch != view.end_epoch
         || state.num_points != num_points
-}
-
-#[inline]
-fn trajectory_needs_update(
-    view: &TrajectoryView,
-    path: &TrajectoryPath,
-    current_epoch: f64,
-    hold_curve: bool,
-) -> bool {
-    if path.points.is_empty() {
-        return true;
-    }
-    if view.start_epoch.is_some() && view.end_epoch.is_some() {
-        return false;
-    }
-    // During high celestial warp the body/frame pose consumers continue to solve
-    // from the current epoch, but the rendered orbit curve is deliberately a
-    // held presentation sample. Rebuilding thousands of points once per wall
-    // second adds no useful visual fidelity at 100000x and causes a main-thread
-    // mesh/GPU upload spike. Re-entering realtime physics reopens this trigger.
-    if hold_curve {
-        return false;
-    }
-    (path.update_epoch - current_epoch).abs() > view.sampling_step
 }
 
 #[inline]
@@ -222,44 +372,19 @@ impl Plugin for TrajectoryPlugin {
             .register_type::<TrajectoryPath>()
             .init_resource::<TrajectoryPresentationState>();
 
-        // NO Rust-spawned trajectory views. An orbit line is CONTENT — a scene
-        // says which paths it wants drawn, with `lunco:trajectory:*` on a prim
-        // (`LunCoMissionTrajectoryAPI` → `MissionTrajectoryDecl` →
-        // `spawn_declared_missions`). The Earth and Moon orbit views now live in
-        // `assets/celestial/solar_system.usda` next to the bodies they belong to,
-        // authored `userVisible = false`.
+        // Trajectories are content: a scene declares them through
+        // `lunco:trajectory:*` (`MissionTrajectoryDecl`), and no trajectory is
+        // created for an undeclared body.
         //
-        // The history is why this matters twice over. First these were an
-        // unconditional `Startup` spawn, so every scene — including the flat
-        // sandbox arena that asks for no sky — got orbit geometry for planets it
-        // had not declared. Gating them on "the scene declared bodies" fixed the
-        // arena but kept the deeper error: a scene could ask for a SKY and get
-        // ORBIT LINES it never mentioned, with no way to say no. Declaring the
-        // Sun is not asking for a 400-day Earth ellipse across your horizon.
-        //
-        // Now the only way an orbit line exists is that a prim asked for it, and
-        // an unauthored `userVisible` reads as OFF — see `MissionTrajectoryDecl`.
-
-        // CHAINED: a rebuild must be ATOMIC within one frame.
-        //
-        // `handle_trajectory_tasks` writes `path.points` AND `path.anchor`
-        // together; `trajectory_mesh_update_system` schedules the off-thread
-        // conversion to f32 vertices and `handle_trajectory_mesh_tasks` commits it;
-        // `trajectory_alignment_system` (PostUpdate) places the curve
-        // using the anchor. The vertices are stored RELATIVE to the anchor, so
-        // the two must agree.
-        //
-        // Unordered, the mesh system could run before `handle_trajectory_tasks`
-        // and only pick the change up on the NEXT frame — while alignment
-        // already applied the new anchor in this frame's PostUpdate. For that
-        // one frame the curve was drawn a whole rebuild-step out of place:
-        // ~1.7e6 m for the Moon line, ~1.3e9 m for Earth's. That is the "orbits
-        // jumping around" flash, and rebuilds only fire while the clock runs,
-        // which is why a paused scene never showed it.
+        // The Update chain fences each stage of the asynchronous presentation.
+        // Sampling commits points, anchor, and mode together; mesh preparation
+        // and alpha preparation carry those revisions; stale results are
+        // discarded before they can change the visible asset.
         app.add_systems(
             Update,
             (
                 mission_visibility_system,
+                track_trajectory_view_changes,
                 spawn_trajectory_update_task,
                 handle_trajectory_tasks,
                 trajectory_mesh_update_system,
@@ -271,246 +396,177 @@ impl Plugin for TrajectoryPlugin {
                 .chain(),
         );
 
-        // Alignment must run in `PostUpdate`, NOT `Update`.
-        //
-        // A trajectory view is parented to a celestial frame and its local pose
-        // is derived from that frame's CURRENT transform. The orbital view-pin
-        // re-anchors the whole celestial tree in `PostUpdate` (after the camera
-        // publishes `dir`/`distance`; see `lunco-avatar`). Aligning in `Update`
-        // therefore used the PREVIOUS frame's pinned tree: while the user
-        // dragged or zoomed, the orbit lines lagged the bodies by one frame and
-        // swam against them ("the orbital lines still jitter"). Same one-frame
-        // lag that made the whole sky wobble before the pin moved to PostUpdate.
-        //
-        // Read the already-projected celestial frame and write the local pose
-        // before `Propagate`, so the fresh pose reaches this frame's
-        // `GlobalTransform`s. The solar hierarchy is never re-posed as a pin.
+        // The alignment write belongs in PostUpdate before transform
+        // propagation: it reads the current celestial frame pose and publishes
+        // the view's local BigSpace placement for this render frame.
         app.add_systems(
             PostUpdate,
             trajectory_alignment_system
                 .before(bevy::transform::TransformSystems::Propagate)
-                // Same angular budget as the rest of the celestial cluster: an
-                // orbit line whose bodies moved <0.01° has not visibly moved
-                // either, and re-placing it every frame cost 2.6 ms. A newly
-                // authored or edited trajectory is nevertheless a structural
-                // frame change and must be mounted in this frame, even when the
-                // celestial epoch is standing still.
+                // Epoch motion uses the shared celestial cadence; a new or
+                // edited frame assignment is handled immediately.
                 .run_if(
                     crate::cadence::tracked_needs_solve()
                         .or_else(trajectory_frame_assignment_changed),
                 ),
         );
-
-        // Drag diagnostic — reads the FINAL `GlobalTransform`s, so it must run
-        // after propagation. Opt-in: `LUNCO_TRAJ_PROBE=1`.
-        if std::env::var("LUNCO_TRAJ_PROBE").is_ok_and(|v| v == "1") {
-            app.add_systems(
-                PostUpdate,
-                trajectory_probe_system.after(bevy::transform::TransformSystems::Propagate),
-            );
-        }
-
-        // Whole-scene jump detector — per-frame, per-landmark discontinuity
-        // attribution. Opt-in: `LUNCO_JUMP_PROBE=1`.
-        if std::env::var("LUNCO_JUMP_PROBE").is_ok_and(|v| v == "1") {
-            app.add_systems(
-                PostUpdate,
-                jump_probe_system.after(bevy::transform::TransformSystems::Propagate),
-            );
-        }
     }
 }
 
-/// Opt-in whole-scene jump detector: `LUNCO_JUMP_PROBE=1`.
-///
-/// Screenshots and sampled probes cannot catch single-frame glitches — this
-/// runs AFTER propagation every frame and tracks each landmark's rendered
-/// position relative to the origin-tracking anchor (world axes, so pure
-/// camera rotation is invisible to it). A visible "jump" is a DISCONTINUITY
-/// in that relative motion, i.e. a large second difference: smooth orbiting
-/// (even fast dragging) produces a steady per-frame delta; a one-frame
-/// convention flip / stale GT produces a delta spike. Logs the entity name,
-/// the spike size, and the frame — plus a once-per-second heartbeat of the
-/// largest spike seen so a silent log provably means "no jumps".
-///
-/// Landmarks: celestial bodies, reference-frame grids, trajectory views,
-/// grid-anchored scene roots, the active avatar, streamed terrain, and the
-/// `WorldGrid` (the root-composition victim class of the 2026-07-10
-/// regression).  The avatar and terrain are deliberately included as a pair:
-/// a floating-origin rebranch may move both in world coordinates, but it must
-/// never change their relative rendered pose.
-#[allow(clippy::type_complexity)]
-pub fn jump_probe_system(
-    q_cam: Query<&GlobalTransform, With<big_space::prelude::FloatingOrigin>>,
-    q_marks: Query<
-        (Entity, Option<&Name>, &GlobalTransform),
-        Or<(
-            With<crate::registry::CelestialBody>,
-            With<ReferenceFrame>,
-            With<TrajectoryView>,
-            With<lunco_core::GridAnchor>,
-            With<lunco_core::WorldGrid>,
-            With<lunco_core::Avatar>,
-            With<lunco_terrain_surface::stream_viz::TerrainLodViz>,
-        )>,
+/// Converts Bevy's component change tick into explicit presentation and
+/// sampling revisions. A visibility or colour edit only invalidates the
+/// presentation; a geometry edit also invalidates the ephemeris sample.
+fn track_trajectory_view_changes(
+    mut commands: Commands,
+    mut q_views: Query<
+        (Entity, &TrajectoryView, Option<&mut TrajectoryRuntimeState>),
+        Or<(Added<TrajectoryView>, Changed<TrajectoryView>)>,
     >,
-    q_parents: Query<&ChildOf>,
-    q_names: Query<&Name>,
-    mut last: Local<std::collections::HashMap<Entity, (bevy::math::DVec3, bevy::math::DVec3)>>,
-    mut last_parent: Local<std::collections::HashMap<Entity, Entity>>,
-    mut frame: Local<u64>,
-    mut heartbeat: Local<(f64, String)>,
-    mut trace: Local<Option<Option<String>>>,
 ) {
-    *frame += 1;
-    let Ok(cam_gt) = q_cam.single() else { return };
-    let cam = cam_gt.translation().as_dvec3();
-    // LUNCO_GT_TRACE=<name substring>: dump matching landmarks' camera-relative
-    // GT EVERY frame. Post-analysis of the series distinguishes smooth motion,
-    // f32-quat ULP stepping (~1e4 m at 1.5e11), and compat-pass f32 buckets
-    // (1.5e11·2⁻²³ ≈ 1.8e4 m) — different residual mechanisms, different fixes.
-    if trace.is_none() {
-        *trace = Some(std::env::var("LUNCO_GT_TRACE").ok());
-    }
-    let label = |e: Entity, q: &Query<&Name>| -> String {
-        q.get(e)
-            .map(|n| n.as_str().to_string())
-            .unwrap_or_else(|_| format!("{e:?}"))
-    };
-    for (e, name, gt) in q_marks.iter() {
-        // Attribute the tug-of-war directly: log every PARENT flip, jump or not.
-        let parent = q_parents.get(e).map(|p| p.parent()).ok();
-        if let Some(parent) = parent {
-            match last_parent.get(&e) {
-                Some(prev) if *prev != parent => {
-                    bevy::log::warn!(
-                        "[jump-probe] f{} {}: PARENT {} -> {}",
-                        *frame,
-                        name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
-                        label(*prev, &q_names),
-                        label(parent, &q_names),
-                    );
-                    last_parent.insert(e, parent);
-                }
-                None => {
-                    last_parent.insert(e, parent);
-                }
-                _ => {}
-            }
-        }
-        let p = gt.translation().as_dvec3() - cam;
-        if let Some(Some(filter)) = trace.as_ref() {
-            let n = name.map(|n| n.as_str()).unwrap_or("");
-            if !filter.is_empty() && n.contains(filter.as_str()) {
-                bevy::log::info!(
-                    "[gt-trace] f{} {}: {:.3} {:.3} {:.3}",
-                    *frame,
-                    n,
-                    p.x,
-                    p.y,
-                    p.z
-                );
-            }
-        }
-        if let Some((prev_p, prev_d)) = last.get(&e).copied() {
-            let d = p - prev_p;
-            let jerk = (d - prev_d).length();
-            // Tolerate smooth motion (epoch drift, drag) with frame-time
-            // variation; flag genuine discontinuities. Headless uncapped runs
-            // wobble ±30% in dt, so the floor sits above that noise (real
-            // convention flips measured ≥3.5e8 m; rebuild snaps ~1.8e6 m).
-            if jerk > 5.0e4_f64.max(0.75 * prev_d.length()) && jerk > 0.001 * p.length() {
-                bevy::log::warn!(
-                    "[jump-probe] f{} {}: JUMP {:.3e} m (motion {:.3e} -> {:.3e} m/frame, dist {:.3e}, parent {})",
-                    *frame,
-                    name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
-                    jerk,
-                    prev_d.length(),
-                    d.length(),
-                    p.length(),
-                    parent
-                        .map(|pe| label(pe, &q_names))
-                        .unwrap_or_else(|| "<none>".into()),
-                );
-            }
-            if jerk > heartbeat.0 {
-                *heartbeat = (
-                    jerk,
-                    name.map(|n| n.as_str().to_string()).unwrap_or_default(),
-                );
-            }
-            last.insert(e, (p, d));
+    for (entity, view, state) in q_views.iter_mut() {
+        if let Some(mut state) = state {
+            state.observe_view(view);
         } else {
-            last.insert(e, (p, bevy::math::DVec3::ZERO));
+            let mut state = TrajectoryRuntimeState::default();
+            state.observe_view(view);
+            commands.entity(entity).insert(state);
         }
-    }
-    if (*frame).is_multiple_of(120) {
-        bevy::log::info!(
-            "[jump-probe] f{} heartbeat: max jerk since last = {:.3e} m ({})",
-            *frame,
-            heartbeat.0,
-            heartbeat.1
-        );
-        *heartbeat = (0.0, String::new());
     }
 }
 
-/// Opt-in drag diagnostic: `LUNCO_TRAJ_PROBE=1`.
-///
-/// The orbit lines cannot be jitter-tested headlessly — rotate/zoom are raw mouse
-/// input the API cannot inject, and `FocusEntityById`'s `distance` is ignored once
-/// the pin owns the view. So log the invariant instead and let a human drag.
-///
-/// A view is a CHILD of its tracked body's grid, offset by `desired_local`. So the
-/// RENDERED gap between the view and that grid must equal `|desired_local|` every
-/// frame. Two independent numbers are printed:
-///
-/// * `gt_gap`   — from `GlobalTransform`s (what the renderer actually draws).
-/// * `want`     — `|cell×edge + translation|`, the pose the aligner wrote.
-///
-/// If `gt_gap` tracks `want`, the curve is glued and any jitter is elsewhere.
-/// If `gt_gap` jumps to ~the camera distance while `want` stays put, a
-/// `GlobalTransform` writer is losing the `CellCoord`s (the bevy-compat pass —
-/// see the doc 45 correction block — class 2).
-#[allow(clippy::type_complexity)]
-pub fn trajectory_probe_system(
-    q_views: Query<
-        (
-            &Name,
-            &TrajectoryView,
-            &CellCoord,
-            &Transform,
-            &GlobalTransform,
-            &ChildOf,
-        ),
-        With<TrajectoryPath>,
-    >,
-    q_frames: Query<(&GlobalTransform, &big_space::prelude::Grid)>,
-    mut tick: Local<u32>,
-) {
-    *tick += 1;
-    if !(*tick).is_multiple_of(20) {
-        return;
+fn sample_trajectory(
+    provider: &dyn EphemerisProvider,
+    view: TrajectoryView,
+    aligned_epoch: f64,
+    anchored: bool,
+    body_descriptor: Option<&BodyDescriptor>,
+) -> Result<TrajectorySample, TrajectorySampleError> {
+    if !view.sampling_step.is_finite() || view.sampling_step <= 0.0 {
+        return Err(TrajectorySampleError::InvalidSampling);
     }
-    for (name, _view, cell, tf, gt, child_of) in q_views.iter() {
-        let Ok((parent_gt, parent_grid)) = q_frames.get(child_of.parent()) else {
-            bevy::log::info!("[traj-probe] {name}: parent has NO Grid (unparented?)");
-            continue;
+    if view.frame == TrajectoryFrame::BodyFixed && body_descriptor.is_none() {
+        return Err(TrajectorySampleError::MissingBodyDescriptor);
+    }
+
+    let anchor = if anchored {
+        let (Some(target), Some(reference)) = (
+            provider.global_position(view.tracked_id, aligned_epoch),
+            provider.global_position(view.reference_id, aligned_epoch),
+        ) else {
+            return Err(TrajectorySampleError::MissingAnchor);
         };
-        let edge = parent_grid.cell_edge_length() as f64;
-        let want = bevy::math::DVec3::new(
-            cell.x as f64 * edge + tf.translation.x as f64,
-            cell.y as f64 * edge + tf.translation.y as f64,
-            cell.z as f64 * edge + tf.translation.z as f64,
-        )
-        .length();
-        let gt_gap = (gt.translation() - parent_gt.translation()).length() as f64;
-        bevy::log::info!(
-            "[traj-probe] {name}: gt_gap={gt_gap:.4e} want={want:.4e} ratio={:.4} |gt|={:.4e} |parent_gt|={:.4e}",
-            if want > 1.0 { gt_gap / want } else { f64::NAN },
-            gt.translation().length(),
-            parent_gt.translation().length(),
-        );
+        let anchor = crate::coords::ecliptic_to_bevy(target - reference).raw();
+        if !anchor.is_finite() {
+            return Err(TrajectorySampleError::NonFiniteSample);
+        }
+        anchor
+    } else {
+        DVec3::ZERO
+    };
+
+    let mut points = Vec::new();
+    let mut append_sample = |jd: f64| {
+        let (Some(target), Some(reference)) = (
+            provider.global_position(view.tracked_id, jd),
+            provider.global_position(view.reference_id, jd),
+        ) else {
+            return Ok(());
+        };
+        let mut relative = crate::coords::ecliptic_to_bevy(target - reference).raw();
+        if view.frame == TrajectoryFrame::BodyFixed {
+            // The IAU model is the sole owner of the body-fixed conversion.
+            let Some(body_descriptor) = body_descriptor else {
+                return Err(TrajectorySampleError::MissingBodyDescriptor);
+            };
+            relative = crate::geo::body_rotation(body_descriptor, jd).inverse() * relative;
+        }
+        let point = relative - anchor;
+        if !point.is_finite() {
+            return Err(TrajectorySampleError::NonFiniteSample);
+        }
+        points.push(point);
+        Ok(())
+    };
+
+    match (view.start_epoch, view.end_epoch) {
+        (Some(start), Some(end)) => {
+            if !start.is_finite() || !end.is_finite() || end < start {
+                return Err(TrajectorySampleError::InvalidSampling);
+            }
+            let count = ((end - start) / view.sampling_step).ceil();
+            if !count.is_finite() || count < 0.0 || count + 1.0 > MAX_TRAJECTORY_SAMPLES as f64 {
+                return Err(TrajectorySampleError::TooManySamples);
+            }
+            for i in 0..=count as usize {
+                let jd = start + i as f64 * view.sampling_step;
+                if jd > end {
+                    break;
+                }
+                append_sample(jd)?;
+            }
+        }
+        (None, None) => {
+            if !view.sampling_days.is_finite() || view.sampling_days < 0.0 {
+                return Err(TrajectorySampleError::InvalidSampling);
+            }
+            let half_count = (view.sampling_days / view.sampling_step / 2.0).ceil();
+            if !half_count.is_finite()
+                || half_count < 0.0
+                || 2.0 * half_count + 1.0 > MAX_TRAJECTORY_SAMPLES as f64
+            {
+                return Err(TrajectorySampleError::TooManySamples);
+            }
+            let half_count = half_count as usize;
+            for i in -(half_count as isize)..=(half_count as isize) {
+                append_sample(aligned_epoch + i as f64 * view.sampling_step)?;
+            }
+        }
+        _ => return Err(TrajectorySampleError::InvalidSampling),
+    }
+
+    if points.is_empty() {
+        return Err(TrajectorySampleError::NoSamples);
+    }
+    Ok(TrajectorySample {
+        points,
+        epoch: aligned_epoch,
+        anchor,
+        anchored,
+    })
+}
+
+fn trajectory_needs_update_revisioned(
+    view: &TrajectoryView,
+    path: &TrajectoryPath,
+    state: &TrajectoryRuntimeState,
+    current_epoch: f64,
+    hold_curve: bool,
+    frame_revision: u64,
+    provider_revision: EphemerisRevision,
+) -> bool {
+    let signature = trajectory_view_signature(view);
+    if state.view_signature != Some(signature)
+        || state.resolved_sampling_revision != Some(state.sampling_revision)
+        || state.resolved_frame_revision != Some(frame_revision)
+        || state.resolved_provider_revision != Some(provider_revision)
+    {
+        return true;
+    }
+    match state.status {
+        TrajectorySamplingStatus::Pending => true,
+        TrajectorySamplingStatus::Empty | TrajectorySamplingStatus::Failed => false,
+        TrajectorySamplingStatus::Ready => {
+            if path.points.is_empty() {
+                return true;
+            }
+            if view.start_epoch.is_some() && view.end_epoch.is_some() {
+                return false;
+            }
+            if hold_curve {
+                return false;
+            }
+            (path.update_epoch - current_epoch).abs() > view.sampling_step
+        }
     }
 }
 
@@ -524,7 +580,12 @@ fn spawn_trajectory_update_task(
     mut commands: Commands,
     mut presentation: ResMut<TrajectoryPresentationState>,
     mut q_views: Query<
-        (Entity, &TrajectoryView, &mut TrajectoryPath),
+        (
+            Entity,
+            &TrajectoryView,
+            &mut TrajectoryPath,
+            &mut TrajectoryRuntimeState,
+        ),
         (
             Without<TrajectoryTask>,
             Without<TrajectoryMeshTask>,
@@ -534,7 +595,6 @@ fn spawn_trajectory_update_task(
     frame_index: Res<crate::ReferenceFrameIndex>,
     q_domains: Query<&lunco_time::TimeDomain>,
 ) {
-    let current_epoch = world.epoch_jd;
     let celestial_domain = clocks
         .as_deref()
         .and_then(|clocks| q_domains.get(clocks.celestial).ok());
@@ -549,199 +609,199 @@ fn spawn_trajectory_update_task(
             });
     let hold_curve = celestial_clock_is_high_rate(world.regime, domain_scale, effective_rate);
     presentation.hold_curve = hold_curve;
-
-    let Some(ephemeris) = ephemeris else {
-        return;
-    };
+    let provider_revision = ephemeris_revision(ephemeris.as_deref());
     let now_real = real.elapsed_secs_f64();
     let pool = bevy::tasks::ComputeTaskPool::get();
 
-    for (entity, view, mut path) in q_views.iter_mut() {
-        // Visibility is a consumer contract, not just a renderer hint. A hidden
-        // orbit must not spend ephemeris/task/mesh budget until the user or a
-        // mission range makes it active.
+    for (entity, view, mut path, mut state) in q_views.iter_mut() {
+        if state.view_signature.is_none() {
+            state.observe_view(view);
+        }
         if !trajectory_is_active(view) {
             continue;
         }
+        let needs_update = trajectory_needs_update_revisioned(
+            view,
+            &path,
+            &state,
+            world.epoch_jd,
+            hold_curve,
+            frame_index.revision,
+            provider_revision,
+        );
+        if !needs_update {
+            continue;
+        }
 
-        // Body orbit views (the tracked id has its own reference frame in
-        // the scene — Earth around the Sun, Moon around the Earth) are
-        // ANCHORED: points are stored relative to the tracked body's
-        // position at the sampling epoch, and that anchor goes back into
-        // the view entity's cell + translation (exact big_space math). The
-        // f32 mesh vertices are then small exactly where the viewer looks —
-        // at the body — instead of reference-frame magnitudes (~4e8 m for
-        // the Moon around Earth, which cancels to ~64 m of per-frame
-        // model-view wobble up close: the "moon offset from its jittering
-        // orbit" report). The curve itself stays static in the reference
-        // frame — the body slides along it. Mission/spacecraft trajectories
-        // (no frame for the tracked id) keep zero anchor.
+        let required_frame = match view.frame {
+            TrajectoryFrame::Inertial => ReferenceFrame::EclipticJ2000 {
+                center: view.reference_id,
+            },
+            TrajectoryFrame::BodyFixed => ReferenceFrame::BodyFixed {
+                body: view.reference_id,
+            },
+        };
+        if frame_index.resolve(required_frame).is_none() {
+            clear_trajectory_path(&mut path);
+            let sampling_revision = state.sampling_revision;
+            mark_sampling_resolution(
+                &mut state,
+                TrajectorySamplingStatus::Failed,
+                sampling_revision,
+                frame_index.revision,
+                provider_revision,
+            );
+            continue;
+        }
+
+        let body_descriptor = (view.frame == TrajectoryFrame::BodyFixed)
+            .then(|| {
+                registry
+                    .bodies
+                    .iter()
+                    .find(|body| body.ephemeris_id == view.reference_id)
+                    .cloned()
+            })
+            .flatten();
+        if view.frame == TrajectoryFrame::BodyFixed && body_descriptor.is_none() {
+            clear_trajectory_path(&mut path);
+            let sampling_revision = state.sampling_revision;
+            mark_sampling_resolution(
+                &mut state,
+                TrajectorySamplingStatus::Failed,
+                sampling_revision,
+                frame_index.revision,
+                provider_revision,
+            );
+            continue;
+        }
+
+        if state.status == TrajectorySamplingStatus::Ready
+            && !path.points.is_empty()
+            && now_real - state.last_rebuild_real_secs < MIN_REBUILD_INTERVAL_SECS
+        {
+            continue;
+        }
+        let Some(ephemeris) = ephemeris.as_deref() else {
+            clear_trajectory_path(&mut path);
+            let sampling_revision = state.sampling_revision;
+            mark_sampling_resolution(
+                &mut state,
+                TrajectorySamplingStatus::Failed,
+                sampling_revision,
+                frame_index.revision,
+                provider_revision,
+            );
+            continue;
+        };
+
+        state.last_rebuild_real_secs = now_real;
+        state.status = TrajectorySamplingStatus::Pending;
+        let sampling_revision = state.sampling_revision;
+        let frame_revision = frame_index.revision;
+        let signature = trajectory_view_signature(view);
+        let view_copy = *view;
+        let provider = Arc::clone(&ephemeris.provider);
         let anchored = view.frame == TrajectoryFrame::Inertial
             && frame_index
                 .resolve(ReferenceFrame::EclipticJ2000 {
                     center: view.tracked_id,
                 })
                 .is_some();
-        let needs_update = trajectory_needs_update(view, &path, current_epoch, hold_curve);
-
-        // Wall-clock rate limit for realtime transport. The trigger above is a SIM
-        // condition, so a fast realtime rate can open it repeatedly; high-rate
-        // Celestial transport holds existing geometry instead. The first build
-        // (`points.is_empty()`) is never delayed.
-        if needs_update
-            && !path.points.is_empty()
-            && now_real - path.last_rebuild_real_secs < MIN_REBUILD_INTERVAL_SECS
-        {
-            continue;
-        }
-
-        if needs_update {
-            path.last_rebuild_real_secs = now_real;
-            let provider = Arc::clone(&ephemeris.provider);
-            let registry_arc = Arc::new((*registry).clone());
-            let view_copy = *view;
-
-            let aligned_epoch =
-                if let (Some(start), Some(_end)) = (view_copy.start_epoch, view_copy.end_epoch) {
-                    // If fixed range, update_epoch is not moving.
-                    start
-                } else {
-                    (current_epoch / view_copy.sampling_step).round() * view_copy.sampling_step
-                };
-
-            let task = pool.spawn(async move {
-                let mut points = Vec::new();
-
-                // Anchor: tracked body's reference-relative position at the
-                // aligned epoch — subtracted from every sample so the curve
-                // is expressed relative to the tracked body (see above).
-                let anchor = if anchored {
-                    // No ephemeris for either end ⇒ no anchor. Falling back to ZERO would pin
-                    // the trajectory to the Sun's centre and look like a real answer.
-                    match (
-                        provider.global_position(view_copy.tracked_id, aligned_epoch),
-                        provider.global_position(view_copy.reference_id, aligned_epoch),
-                    ) {
-                        (Some(p_target), Some(p_ref)) => {
-                            crate::coords::ecliptic_to_bevy(p_target - p_ref).raw()
-                        }
-                        _ => bevy::math::DVec3::ZERO,
-                    }
-                } else {
-                    bevy::math::DVec3::ZERO
-                };
-
-                if let (Some(start), Some(end)) = (view_copy.start_epoch, view_copy.end_epoch) {
-                    let count = ((end - start) / view_copy.sampling_step).ceil() as usize + 1;
-                    points.reserve(count);
-
-                    for i in 0..count {
-                        let jd = start + (i as f64) * view_copy.sampling_step;
-                        if jd > end {
-                            break;
-                        } // Don't overshoot
-
-                        // A sample we cannot compute is a sample we do not plot — it used to
-                        // become a point at the Sun's centre, dragging a spurious line across
-                        // the whole solar system.
-                        let (Some(p_target), Some(p_ref)) = (
-                            provider.global_position(view_copy.tracked_id, jd),
-                            provider.global_position(view_copy.reference_id, jd),
-                        ) else {
-                            continue;
-                        };
-                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
-
-                        if view_copy.frame == TrajectoryFrame::BodyFixed {
-                            if let Some(desc) = registry_arc
-                                .bodies
-                                .iter()
-                                .find(|b| b.ephemeris_id == view_copy.reference_id)
-                            {
-                                // Share `geo::body_rotation` — the IAU model — rather than
-                                // re-deriving a rotation here. This local copy was a THIRD
-                                // spelling of the body rotation, and it was doubly wrong:
-                                // no `W₀` phase (like the original `geo`) AND it spun about
-                                // the polar axis without first mapping body-fixed +Y onto
-                                // it, so body-fixed ground tracks were tilted as well as
-                                // rotated.
-                                rel_pos = crate::geo::body_rotation(desc, jd).inverse() * rel_pos;
-                            }
-                        }
-
-                        points.push(rel_pos - anchor);
-                    }
-                } else {
-                    let half_count =
-                        (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
-                    points.reserve((half_count * 2 + 1) as usize);
-
-                    for i in -half_count..=half_count {
-                        let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
-                        let (Some(p_target), Some(p_ref)) = (
-                            provider.global_position(view_copy.tracked_id, jd),
-                            provider.global_position(view_copy.reference_id, jd),
-                        ) else {
-                            continue; // no data for this sample — plot nothing, invent nothing
-                        };
-                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
-
-                        if view_copy.frame == TrajectoryFrame::BodyFixed {
-                            if let Some(desc) = registry_arc
-                                .bodies
-                                .iter()
-                                .find(|b| b.ephemeris_id == view_copy.reference_id)
-                            {
-                                // Share `geo::body_rotation` — the IAU model — rather than
-                                // re-deriving a rotation here. This local copy was a THIRD
-                                // spelling of the body rotation, and it was doubly wrong:
-                                // no `W₀` phase (like the original `geo`) AND it spun about
-                                // the polar axis without first mapping body-fixed +Y onto
-                                // it, so body-fixed ground tracks were tilted as well as
-                                // rotated.
-                                rel_pos = crate::geo::body_rotation(desc, jd).inverse() * rel_pos;
-                            }
-                        }
-
-                        points.push(rel_pos - anchor);
-                    }
-                }
-
-                TrajectoryData {
-                    points,
-                    epoch: aligned_epoch,
-                    anchor,
-                }
-            });
-
-            commands.entity(entity).try_insert(TrajectoryTask(task));
-        }
+        let aligned_epoch = view_copy.start_epoch.unwrap_or_else(|| {
+            if view_copy.sampling_step.is_finite() && view_copy.sampling_step > 0.0 {
+                (world.epoch_jd / view_copy.sampling_step).round() * view_copy.sampling_step
+            } else {
+                world.epoch_jd
+            }
+        });
+        let task = pool.spawn(async move {
+            TrajectoryData {
+                signature,
+                sampling_revision,
+                frame_revision,
+                provider_revision,
+                sample: sample_trajectory(
+                    provider.as_ref(),
+                    view_copy,
+                    aligned_epoch,
+                    anchored,
+                    body_descriptor.as_ref(),
+                ),
+            }
+        });
+        commands.entity(entity).insert(TrajectoryTask(task));
     }
 }
 
-pub fn handle_trajectory_tasks(
+fn handle_trajectory_tasks(
     mut commands: Commands,
+    frame_index: Res<crate::ReferenceFrameIndex>,
+    ephemeris: Option<Res<EphemerisResource>>,
     mut q_tasks: Query<(
         Entity,
         &mut TrajectoryTask,
         &mut TrajectoryPath,
         &TrajectoryView,
+        &mut TrajectoryRuntimeState,
     )>,
 ) {
-    for (entity, mut task, mut path, view) in q_tasks.iter_mut() {
-        if let Some(data) = future::block_on(future::poll_once(&mut task.0)) {
-            path.points = data.points;
-            path.update_epoch = data.epoch;
-            path.anchor = data.anchor;
-            commands.entity(entity).remove::<TrajectoryTask>();
-            debug!(
-                "Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
-                entity,
-                path.points.len(),
-                path.anchor.length(),
-                view.tracked_id,
-                view.reference_id
-            );
+    let provider_revision = ephemeris_revision(ephemeris.as_deref());
+    for (entity, mut task, mut path, view, mut state) in q_tasks.iter_mut() {
+        let Some(data) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
+        commands.entity(entity).remove::<TrajectoryTask>();
+        if data.signature != trajectory_view_signature(view)
+            || data.sampling_revision != state.sampling_revision
+            || data.frame_revision != frame_index.revision
+            || data.provider_revision != provider_revision
+        {
+            continue;
+        }
+
+        match data.sample {
+            Ok(sample) => {
+                path.points = sample.points;
+                path.update_epoch = sample.epoch;
+                path.anchor = sample.anchor;
+                path.anchored = sample.anchored;
+                path.geometry_revision = path.geometry_revision.wrapping_add(1);
+                mark_sampling_resolution(
+                    &mut state,
+                    TrajectorySamplingStatus::Ready,
+                    data.sampling_revision,
+                    data.frame_revision,
+                    data.provider_revision,
+                );
+                debug!(
+                    "Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
+                    entity,
+                    path.points.len(),
+                    path.anchor.length(),
+                    view.tracked_id,
+                    view.reference_id
+                );
+            }
+            Err(error) => {
+                clear_trajectory_path(&mut path);
+                let status = if error == TrajectorySampleError::NoSamples {
+                    TrajectorySamplingStatus::Empty
+                } else {
+                    TrajectorySamplingStatus::Failed
+                };
+                mark_sampling_resolution(
+                    &mut state,
+                    status,
+                    data.sampling_revision,
+                    data.frame_revision,
+                    data.provider_revision,
+                );
+                warn!(
+                    "Trajectory {:?} is not renderable ({error:?}); sampling is fenced until its input changes",
+                    entity
+                );
+            }
         }
     }
 }
@@ -750,32 +810,53 @@ pub fn handle_trajectory_tasks(
 struct TrajectoryMeshTask(Task<TrajectoryMeshData>);
 
 struct TrajectoryMeshData {
-    path_epoch: f64,
+    geometry_revision: u64,
+    presentation_revision: u64,
+    color: LinearRgba,
     epoch_jd: f64,
     sampling_days: f64,
     start_epoch: Option<f64>,
     end_epoch: Option<f64>,
-    points: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
+    result: Result<(Vec<[f32; 3]>, Vec<[f32; 4]>), TrajectoryMeshError>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrajectoryMeshError {
+    SplineConstruction,
+    EmptyGeometry,
 }
 
 /// Tessellate a trajectory off the main/UI schedule. A trajectory is a view;
 /// its Catmull-Rom presentation must never make the input and egui cycles wait
 /// for a spline over thousands of samples.
-fn trajectory_mesh_points(points: &[bevy::math::DVec3]) -> Vec<[f32; 3]> {
-    if points.len() >= 4 {
-        let control_points: Vec<Vec3> = points.iter().map(|p| p.as_vec3()).collect();
-        let spline = CubicCardinalSpline::new_catmull_rom(control_points);
-        match spline.to_curve() {
-            Ok(curve) => {
-                let n = (points.len() - 1) * 3;
-                curve.iter_positions(n).map(|p| p.to_array()).collect()
-            }
-            Err(_) => points.iter().map(|p| p.as_vec3().to_array()).collect(),
-        }
-    } else {
-        points.iter().map(|p| p.as_vec3().to_array()).collect()
+fn trajectory_mesh_points(
+    points: &[bevy::math::DVec3],
+) -> Result<Vec<[f32; 3]>, TrajectoryMeshError> {
+    if points.is_empty() {
+        return Err(TrajectoryMeshError::EmptyGeometry);
     }
+    if points.len() >= 4 {
+        let control_points: Vec<Vec3> = points.iter().map(|point| point.as_vec3()).collect();
+        let spline = CubicCardinalSpline::new_catmull_rom(control_points);
+        let curve = spline
+            .to_curve()
+            .map_err(|_| TrajectoryMeshError::SplineConstruction)?;
+        let count = (points.len() - 1) * 3;
+        Ok(curve
+            .iter_positions(count)
+            .map(|point| point.to_array())
+            .collect())
+    } else {
+        Ok(points
+            .iter()
+            .map(|point| point.as_vec3().to_array())
+            .collect())
+    }
+}
+
+fn trajectory_color(color: LinearRgba) -> LinearRgba {
+    let emissive = color * 15.0;
+    LinearRgba::new(emissive.red, emissive.green, emissive.blue, 1.0)
 }
 
 fn trajectory_mesh_update_system(
@@ -784,55 +865,64 @@ fn trajectory_mesh_update_system(
     q_paths: Query<
         (
             Entity,
-            Ref<TrajectoryPath>,
+            &TrajectoryPath,
             &TrajectoryView,
+            &TrajectoryRuntimeState,
             Option<&TrajectoryMeshState>,
         ),
-        (Without<TrajectoryMeshTask>, Without<TrajectoryAlphaTask>),
+        (
+            Without<TrajectoryTask>,
+            Without<TrajectoryMeshTask>,
+            Without<TrajectoryAlphaTask>,
+        ),
     >,
 ) {
     let pool = bevy::tasks::ComputeTaskPool::get();
-    for (entity, path, view, mesh_state) in q_paths.iter() {
-        if !trajectory_is_active(view) || path.points.is_empty() {
+    for (entity, path, view, runtime, mesh_state) in q_paths.iter() {
+        if !trajectory_is_renderable(view, runtime, path) {
             continue;
         }
-        // The change tick handles the normal path update. The generation stamp
-        // closes the less common race where an external path writer changes the
-        // component while the previous task is in flight: that task is fenced
-        // out by `path_epoch`, and this mismatch keeps the rebuild retryable.
         let mesh_is_current = mesh_state.is_some_and(|state| {
-            state.path_epoch == Some(path.update_epoch) && state.num_points > 0
+            state.geometry_revision == Some(path.geometry_revision)
+                && state.presentation_revision == Some(runtime.presentation_revision)
+                && (state.num_points > 0 || state.failed)
         });
-        if !path.is_changed() && mesh_is_current {
+        if mesh_is_current {
             continue;
         }
 
         let source = path.points.clone();
-        let path_epoch = path.update_epoch;
+        let geometry_revision = path.geometry_revision;
+        let presentation_revision = runtime.presentation_revision;
+        let trajectory_epoch = path.update_epoch;
         let epoch_jd = world.epoch_jd;
         let sampling_days = view.sampling_days;
         let start_epoch = view.start_epoch;
         let end_epoch = view.end_epoch;
+        let color = view.color;
         let task = pool.spawn(async move {
-            let points = trajectory_mesh_points(&source);
-            let fade_start = start_epoch.unwrap_or(path_epoch - sampling_days / 2.0);
-            let total_sampling_days = match (start_epoch, end_epoch) {
-                (Some(start), Some(end)) => end - start,
-                _ => sampling_days,
-            };
-            let colors = if source.len() < 2 {
-                vec![[1.0, 1.0, 1.0, 1.0]; points.len()]
-            } else {
-                trajectory_alpha_colors(epoch_jd, fade_start, total_sampling_days, points.len())
-            };
+            let result = trajectory_mesh_points(&source).map(|points| {
+                let fade_start = start_epoch.unwrap_or(trajectory_epoch - sampling_days / 2.0);
+                let total_sampling_days = match (start_epoch, end_epoch) {
+                    (Some(start), Some(end)) => end - start,
+                    _ => sampling_days,
+                };
+                let colors = if source.len() < 2 {
+                    vec![[1.0, 1.0, 1.0, 1.0]; points.len()]
+                } else {
+                    trajectory_alpha_colors(epoch_jd, fade_start, total_sampling_days, points.len())
+                };
+                (points, colors)
+            });
             TrajectoryMeshData {
-                path_epoch,
+                geometry_revision,
+                presentation_revision,
+                color,
                 epoch_jd,
                 sampling_days,
                 start_epoch,
                 end_epoch,
-                points,
-                colors,
+                result,
             }
         });
         commands.entity(entity).insert(TrajectoryMeshTask(task));
@@ -847,45 +937,83 @@ fn handle_trajectory_mesh_tasks(
         &mut TrajectoryMeshTask,
         &TrajectoryPath,
         &TrajectoryView,
+        &TrajectoryRuntimeState,
         &Children,
     )>,
-    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+    mut q_marker: Query<(&Mesh3d, &mut PbrLook), With<TrajectoryMeshMarker>>,
+    mut q_visibility: Query<&mut Visibility>,
 ) {
-    for (entity, mut task, path, view, children) in q_tasks.iter_mut() {
+    for (entity, mut task, path, view, runtime, children) in q_tasks.iter_mut() {
         let Some(data) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).remove::<TrajectoryMeshTask>();
 
-        // A path is normally serialized behind this task, but keep the
-        // generation stamp as a hard stale-result fence for future writers.
-        if data.path_epoch != path.update_epoch || data.points.is_empty() {
+        if data.geometry_revision != path.geometry_revision
+            || data.presentation_revision != runtime.presentation_revision
+            || !trajectory_is_renderable(view, runtime, path)
+        {
             continue;
         }
-        let num_points = data.colors.len();
+        let (points, colors) = match data.result {
+            Ok(result) => result,
+            Err(error) => {
+                warn!(
+                    "Trajectory mesh {:?} was not built ({error:?}); presentation is hidden until its input changes",
+                    entity
+                );
+                for child in children.iter() {
+                    if q_marker.get(child).is_ok() {
+                        if let Ok(mut visibility) = q_visibility.get_mut(child) {
+                            *visibility = Visibility::Hidden;
+                        }
+                    }
+                }
+                commands.entity(entity).insert(TrajectoryMeshState {
+                    geometry_revision: Some(data.geometry_revision),
+                    presentation_revision: Some(data.presentation_revision),
+                    num_points: 0,
+                    failed: true,
+                });
+                continue;
+            }
+        };
+        let num_points = colors.len();
         let alpha_epoch = data.epoch_jd;
-        let alpha_path_epoch = data.path_epoch;
+        let alpha_geometry_revision = data.geometry_revision;
         let alpha_sampling_days = data.sampling_days;
         let alpha_start_epoch = data.start_epoch;
         let alpha_end_epoch = data.end_epoch;
 
-        let mesh_handle = children.iter().find_map(|child| q_marker.get(child).ok());
+        let mesh_handle = children
+            .iter()
+            .find_map(|child| q_marker.get(child).ok().map(|(mesh, _)| mesh.0.clone()));
         if let Some(mesh_handle) = mesh_handle {
             let mut committed = false;
-            if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.points);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors);
+            if let Some(mut mesh) = meshes.get_mut(&mesh_handle) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, points);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
                 committed = true;
+            }
+            if committed {
+                if let Some(child) = children.iter().find(|child| q_marker.get(*child).is_ok()) {
+                    if let Ok((_, mut look)) = q_marker.get_mut(child) {
+                        look.base_color = trajectory_color(data.color);
+                        look.unshared = true;
+                    }
+                }
             }
             if committed && path.points.len() >= 2 {
                 commands.entity(entity).insert((
                     TrajectoryMeshState {
-                        path_epoch: Some(data.path_epoch),
+                        geometry_revision: Some(data.geometry_revision),
+                        presentation_revision: Some(data.presentation_revision),
                         num_points,
+                        failed: false,
                     },
                     TrajectoryAlphaState {
                         epoch_jd: Some(alpha_epoch),
-                        path_epoch: Some(alpha_path_epoch),
+                        geometry_revision: Some(alpha_geometry_revision),
                         sampling_days: alpha_sampling_days,
                         start_epoch: alpha_start_epoch,
                         end_epoch: alpha_end_epoch,
@@ -894,8 +1022,28 @@ fn handle_trajectory_mesh_tasks(
                 ));
             } else if committed {
                 commands.entity(entity).insert(TrajectoryMeshState {
-                    path_epoch: Some(data.path_epoch),
+                    geometry_revision: Some(data.geometry_revision),
+                    presentation_revision: Some(data.presentation_revision),
                     num_points,
+                    failed: false,
+                });
+            } else {
+                warn!(
+                    "Trajectory mesh asset for {:?} is unavailable; presentation is hidden until its input changes",
+                    entity
+                );
+                for child in children.iter() {
+                    if q_marker.get(child).is_ok() {
+                        if let Ok(mut visibility) = q_visibility.get_mut(child) {
+                            *visibility = Visibility::Hidden;
+                        }
+                    }
+                }
+                commands.entity(entity).insert(TrajectoryMeshState {
+                    geometry_revision: Some(data.geometry_revision),
+                    presentation_revision: Some(data.presentation_revision),
+                    num_points: 0,
+                    failed: true,
                 });
             }
             continue;
@@ -908,17 +1056,19 @@ fn handle_trajectory_mesh_tasks(
             PrimitiveTopology::LineStrip,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.points);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, points);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         let mesh_handle = meshes.add(mesh);
         commands.entity(entity).insert(TrajectoryMeshState {
-            path_epoch: Some(data.path_epoch),
+            geometry_revision: Some(data.geometry_revision),
+            presentation_revision: Some(data.presentation_revision),
             num_points,
+            failed: false,
         });
         if path.points.len() >= 2 {
             commands.entity(entity).insert(TrajectoryAlphaState {
                 epoch_jd: Some(alpha_epoch),
-                path_epoch: Some(alpha_path_epoch),
+                geometry_revision: Some(alpha_geometry_revision),
                 sampling_days: alpha_sampling_days,
                 start_epoch: alpha_start_epoch,
                 end_epoch: alpha_end_epoch,
@@ -929,16 +1079,11 @@ fn handle_trajectory_mesh_tasks(
         // `assets/shaders/starfield.wgsl`, which must output alpha 0 to be additive.
         // The trajectory material reaches bevy's premultiply path, so zeroing the
         // vertex alpha would make the line invisible rather than more additive.
-        let emissive_color = view.color * 15.0;
         let look = PbrLook {
-            base_color: LinearRgba::new(
-                emissive_color.red,
-                emissive_color.green,
-                emissive_color.blue,
-                1.0,
-            ),
+            base_color: trajectory_color(data.color),
             unlit: true,
             alpha: SurfaceAlpha::Add,
+            unshared: true,
             ..default()
         };
         commands.entity(entity).with_children(|parent| {
@@ -961,7 +1106,7 @@ struct TrajectoryAlphaTask(Task<TrajectoryAlphaData>);
 
 struct TrajectoryAlphaData {
     epoch_jd: f64,
-    path_epoch: f64,
+    geometry_revision: u64,
     sampling_days: f64,
     start_epoch: Option<f64>,
     end_epoch: Option<f64>,
@@ -1010,17 +1155,23 @@ fn trajectory_alpha_update_system(
             Entity,
             &TrajectoryPath,
             &TrajectoryView,
+            &TrajectoryRuntimeState,
             &Children,
+            Option<&TrajectoryMeshState>,
             Option<&TrajectoryAlphaState>,
         ),
-        (Without<TrajectoryAlphaTask>, Without<TrajectoryMeshTask>),
+        (
+            Without<TrajectoryTask>,
+            Without<TrajectoryAlphaTask>,
+            Without<TrajectoryMeshTask>,
+        ),
     >,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
     // This system only schedules a worker. It never constructs the color
     // buffer or mutates a mesh, so a moving epoch cannot block the UI cycle.
-    for (entity, path, view, children, state) in q_paths.iter() {
-        if !trajectory_is_active(view) || path.points.len() < 2 {
+    for (entity, path, view, runtime, children, mesh_state, state) in q_paths.iter() {
+        if !trajectory_is_presented(view, runtime, path, mesh_state) || path.points.len() < 2 {
             continue;
         }
         let Some((num_points, has_colors)) = children.iter().find_map(|child| {
@@ -1047,11 +1198,12 @@ fn trajectory_alpha_update_system(
         }
 
         let epoch_jd = world.epoch_jd;
-        let path_epoch = path.update_epoch;
+        let geometry_revision = path.geometry_revision;
+        let trajectory_epoch = path.update_epoch;
         let sampling_days = view.sampling_days;
         let start_epoch = view.start_epoch;
         let end_epoch = view.end_epoch;
-        let fade_start = start_epoch.unwrap_or(path_epoch - sampling_days / 2.0);
+        let fade_start = start_epoch.unwrap_or(trajectory_epoch - sampling_days / 2.0);
         let total_sampling_days = match (start_epoch, end_epoch) {
             (Some(start), Some(end)) => end - start,
             _ => sampling_days,
@@ -1059,7 +1211,7 @@ fn trajectory_alpha_update_system(
         let task = bevy::tasks::ComputeTaskPool::get().spawn(async move {
             TrajectoryAlphaData {
                 epoch_jd,
-                path_epoch,
+                geometry_revision,
                 sampling_days,
                 start_epoch,
                 end_epoch,
@@ -1084,21 +1236,23 @@ fn handle_trajectory_alpha_tasks(
         &mut TrajectoryAlphaTask,
         &TrajectoryPath,
         &TrajectoryView,
+        &TrajectoryRuntimeState,
         &Children,
+        Option<&TrajectoryMeshState>,
     )>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-    for (entity, mut task, path, view, children) in q_tasks.iter_mut() {
+    for (entity, mut task, path, view, runtime, children, mesh_state) in q_tasks.iter_mut() {
         let Some(data) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).remove::<TrajectoryAlphaTask>();
 
-        if data.path_epoch != path.update_epoch
+        if data.geometry_revision != path.geometry_revision
             || data.sampling_days != view.sampling_days
             || data.start_epoch != view.start_epoch
             || data.end_epoch != view.end_epoch
-            || !trajectory_is_active(view)
+            || !trajectory_is_presented(view, runtime, path, mesh_state)
         {
             continue;
         }
@@ -1125,7 +1279,7 @@ fn handle_trajectory_alpha_tasks(
         if updated {
             commands.entity(entity).insert(TrajectoryAlphaState {
                 epoch_jd: Some(data.epoch_jd),
-                path_epoch: Some(data.path_epoch),
+                geometry_revision: Some(data.geometry_revision),
                 sampling_days: data.sampling_days,
                 start_epoch: data.start_epoch,
                 end_epoch: data.end_epoch,
@@ -1163,7 +1317,7 @@ mod tests {
         };
         let state = TrajectoryAlphaState {
             epoch_jd: Some(2451545.5),
-            path_epoch: Some(path.update_epoch),
+            geometry_revision: Some(path.geometry_revision),
             sampling_days: view.sampling_days,
             start_epoch: view.start_epoch,
             end_epoch: view.end_epoch,
@@ -1198,7 +1352,7 @@ mod tests {
             Some(&state),
             2451545.6,
             &TrajectoryPath {
-                update_epoch: path.update_epoch + 1.0,
+                geometry_revision: path.geometry_revision + 1,
                 ..path
             },
             &view,
@@ -1216,12 +1370,133 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!trajectory_needs_update(&view, &path, 2451600.0, true));
-        assert!(trajectory_needs_update(
+        let mut runtime = TrajectoryRuntimeState::default();
+        runtime.observe_view(&view);
+        runtime.status = TrajectorySamplingStatus::Ready;
+        runtime.resolved_sampling_revision = Some(runtime.sampling_revision);
+        runtime.resolved_frame_revision = Some(0);
+        runtime.resolved_provider_revision = Some(EphemerisRevision {
+            available: true,
+            motion: 0,
+        });
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &path,
+            &runtime,
+            2451600.0,
+            true,
+            0,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
             &view,
             &TrajectoryPath::default(),
+            &runtime,
             2451600.0,
-            true
+            true,
+            0,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
+        ));
+    }
+
+    #[test]
+    fn view_revision_separates_presentation_from_sampling() {
+        let mut view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        let sampling_revision = state.sampling_revision;
+
+        view.color = LinearRgba::RED;
+        state.observe_view(&view);
+        assert!(state.presentation_revision > 1);
+        assert_eq!(state.sampling_revision, sampling_revision);
+
+        view.sampling_step *= 2.0;
+        state.observe_view(&view);
+        assert!(state.sampling_revision > sampling_revision);
+        assert_eq!(state.status, TrajectorySamplingStatus::Pending);
+    }
+
+    #[test]
+    fn resolved_failure_does_not_reschedule_without_new_inputs() {
+        let view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        state.status = TrajectorySamplingStatus::Failed;
+        state.resolved_sampling_revision = Some(state.sampling_revision);
+        state.resolved_frame_revision = Some(3);
+        state.resolved_provider_revision = Some(EphemerisRevision {
+            available: true,
+            motion: 4,
+        });
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: true,
+                motion: 4,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            4,
+            EphemerisRevision {
+                available: true,
+                motion: 4,
+            },
+        ));
+    }
+
+    #[test]
+    fn missing_provider_is_reopened_when_provider_appears() {
+        let view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        state.status = TrajectorySamplingStatus::Failed;
+        state.resolved_sampling_revision = Some(state.sampling_revision);
+        state.resolved_frame_revision = Some(3);
+        state.resolved_provider_revision = Some(EphemerisRevision {
+            available: false,
+            motion: 0,
+        });
+
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: false,
+                motion: 0,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
         ));
     }
 
@@ -1261,27 +1536,38 @@ pub fn mission_visibility_system(world: Res<WorldTime>, mut q_views: Query<&mut 
     }
 }
 
-pub fn trajectory_visibility_system(
-    q_views: Query<(&TrajectoryView, &Children), Changed<TrajectoryView>>,
+fn trajectory_visibility_system(
+    q_views: Query<
+        (
+            Entity,
+            &TrajectoryView,
+            &TrajectoryPath,
+            &TrajectoryRuntimeState,
+            Option<&TrajectoryMeshState>,
+        ),
+        Or<(
+            Changed<TrajectoryView>,
+            Changed<TrajectoryPath>,
+            Changed<TrajectoryRuntimeState>,
+            Changed<TrajectoryMeshState>,
+        )>,
+    >,
+    q_children: Query<&Children>,
+    q_marker: Query<(), With<TrajectoryMeshMarker>>,
     mut q_visibility: Query<&mut Visibility>,
 ) {
-    for (view, children) in q_views.iter() {
-        for child in children.iter() {
-            if let Ok(mut vis) = q_visibility.get_mut(child) {
-                // Combine mission-controlled visibility and user-controlled visibility
-                let final_visible = view.is_visible && view.user_visible;
-                // Use Visible instead of Inherited to prevent frustum culling of large meshes
-                *vis = if final_visible {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                };
-            }
-        }
+    for (entity, view, path, runtime, mesh_state) in q_views.iter() {
+        trajectory_children_visible(
+            entity,
+            trajectory_is_presented(view, runtime, path, mesh_state),
+            &q_children,
+            &q_marker,
+            &mut q_visibility,
+        );
     }
 }
 
-pub fn trajectory_alignment_system(
+fn trajectory_alignment_system(
     mut commands: Commands,
     frame_index: Res<crate::ReferenceFrameIndex>,
     q_grids: Query<&big_space::prelude::Grid>,
@@ -1296,6 +1582,8 @@ pub fn trajectory_alignment_system(
             Entity,
             &TrajectoryView,
             &TrajectoryPath,
+            Option<&TrajectoryRuntimeState>,
+            Option<&TrajectoryMeshState>,
             &mut Transform,
             Option<&mut CellCoord>,
             Option<&ChildOf>,
@@ -1304,8 +1592,11 @@ pub fn trajectory_alignment_system(
     >,
     q_view_children: Query<&Children>,
     q_traj_mesh: Query<(), With<TrajectoryMeshMarker>>,
+    mut q_visibility: Query<&mut Visibility>,
 ) {
-    for (v_entity, view, path, mut transform, cell, current_parent) in q_vistas.iter_mut() {
+    for (v_entity, view, path, runtime, mesh_state, mut transform, cell, current_parent) in
+        q_vistas.iter_mut()
+    {
         let mut target_parent = None;
         let mut parent_grid: Option<&big_space::prelude::Grid> = None;
         // For anchored views: the tracked body's CURRENT position in the SAME
@@ -1315,25 +1606,18 @@ pub fn trajectory_alignment_system(
         let mut tracked_translation: Option<bevy::math::DVec3> = None;
 
         if view.frame == TrajectoryFrame::BodyFixed {
-            // Body-fixed points belong on the body's (spinning) reference-frame
-            // GRID: the grid's rotation IS the body-fixed frame, and big_space only propagates
-            // a cell-entity whose direct parent is a `Grid` — a cell-entity
-            // under a plain body entity is silently left to the f32 compat
-            // pass (doc 45 correction block, class 2; the "Artemis 2
-            // Moon-Relative: parent has NO Grid" probe warning).
+            // Body-fixed points belong on the body's rotating reference-frame
+            // Grid. The grid rotation supplies the body-fixed axes.
             if let Some(f_entity) = frame_index.resolve(ReferenceFrame::BodyFixed {
                 body: view.reference_id,
             }) {
                 target_parent = Some(f_entity);
                 parent_grid = q_grids.get(f_entity).ok();
             }
-        } else if path.anchor != bevy::math::DVec3::ZERO {
-            // ANCHORED body-orbit view (points stored relative to the tracked
-            // body at the rebuild epoch). Parent to the TRACKED body's frame;
-            // the placement write below subtracts the body's CURRENT position
-            // so the curve stays fixed in inertial space and the body slides
-            // along it (continuous anchor — kills the "offset from its orbit
-            // unless I scroll away" drift-then-snap; KSA v2025.11.9 fix).
+        } else if path.anchored {
+            // Anchored points are relative to the tracked body at the sample
+            // epoch. Parent to that body's frame and subtract its current
+            // reference-frame position so the inertial curve remains stable.
             if let Some(f_entity) = frame_index.resolve(ReferenceFrame::EclipticJ2000 {
                 center: view.tracked_id,
             }) {
@@ -1392,6 +1676,17 @@ pub fn trajectory_alignment_system(
             }
         }
 
+        if path.anchored && tracked_translation.is_none() {
+            trajectory_children_visible(
+                v_entity,
+                false,
+                &q_view_children,
+                &q_traj_mesh,
+                &mut q_visibility,
+            );
+            continue;
+        }
+
         if let (Some(parent_ent), Some(parent_grid)) = (target_parent, parent_grid) {
             let is_current_parent = current_parent
                 .map(|p| p.parent() == parent_ent)
@@ -1432,15 +1727,9 @@ pub fn trajectory_alignment_system(
                     transform.rotation = Quat::IDENTITY;
                 }
             }
-            // Re-stamp the mesh children's `LowPrecisionRoot` on the two
-            // transitions that make this view a VALID cell-entity parent.
-            // big_space's `tag_low_precision_roots` strips the marker while
-            // the view is still unparented/cell-less (spawn-order window at
-            // scene load), and its re-tag only fires on the CHILD's
-            // Changed<ChildOf>/Added<Transform> — never again. Without the
-            // marker NO pass owns the mesh's GlobalTransform (the compat
-            // walk is severed at the Transform-less WorldRoot), so the
-            // polyline renders stale — visible trajectory-line jitter.
+            // The mesh child is a low-precision subtree below this cell entity.
+            // Stamp that ownership when the view first receives its target
+            // parent or its first cell, including the asynchronous spawn case.
             if !is_current_parent || !had_cell {
                 if let Ok(children) = q_view_children.get(v_entity) {
                     for child in children.iter() {
@@ -1452,6 +1741,23 @@ pub fn trajectory_alignment_system(
                     }
                 }
             }
+            trajectory_children_visible(
+                v_entity,
+                runtime.is_some_and(|runtime| {
+                    trajectory_is_presented(view, runtime, path, mesh_state)
+                }),
+                &q_view_children,
+                &q_traj_mesh,
+                &mut q_visibility,
+            );
+        } else {
+            trajectory_children_visible(
+                v_entity,
+                false,
+                &q_view_children,
+                &q_traj_mesh,
+                &mut q_visibility,
+            );
         }
     }
 }
@@ -1463,12 +1769,16 @@ pub fn trajectory_alignment_system(
 fn trajectory_frame_assignment_changed(
     changed: Query<
         (),
-        Or<(
-            Changed<TrajectoryView>,
-            Changed<TrajectoryPath>,
-            Changed<ChildOf>,
-        )>,
+        (
+            With<TrajectoryView>,
+            Or<(
+                Changed<TrajectoryView>,
+                Changed<TrajectoryPath>,
+                Changed<ChildOf>,
+            )>,
+        ),
     >,
+    frame_index: Res<crate::ReferenceFrameIndex>,
 ) -> bool {
-    !changed.is_empty()
+    frame_index.is_changed() || !changed.is_empty()
 }

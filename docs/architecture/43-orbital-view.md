@@ -68,16 +68,20 @@ and use the common f64 conversion/migration path.
 Orbit lines are presentation views, not an implicit consequence of loading a
 celestial body. USD controls whether a trajectory is user-visible, and the
 trajectory owner samples ephemeris only while the view is active. Its mesh and
-per-vertex fade projections are change-gated. When the Celestial domain enters
-high-rate transport, including through an independent Celestial clock scale, an
-already-sampled active curve and its stamped fade buffer are held while its
-body/frame alignment continues to follow the current epoch; a high-rate clock
-therefore does not trigger periodic trajectory geometry or color-buffer rebuilds.
-Ephemeris sampling, spline tessellation, and alpha-buffer construction happen in
-compute tasks; the UI/update schedule only polls and commits completed buffers.
-Anchored alignment uses the existing BigSpace `pose_in_grid` machinery to read
-the current tracked/reference frame relationship, so the presentation path does
-not perform another orbital propagation.
+per-vertex fade projections are change-gated. The path owns the committed
+geometry revision; runtime state owns the view, frame/provider, and presentation
+revisions. Every compute result carries those revisions and is discarded when
+stale. Missing or empty data is an explicit failed/empty state, not a per-frame
+retry. When the Celestial domain enters high-rate transport, including through
+an independent Celestial clock scale, an already-sampled active curve and its
+fade buffer are held while body/frame alignment follows the current epoch; a
+high-rate clock therefore cannot trigger periodic trajectory geometry or
+color-buffer rebuilds. Sampling, spline tessellation, and alpha construction
+happen in compute tasks; the UI/update schedule only performs non-blocking polls
+and commits current prepared buffers. Anchored alignment uses the existing
+BigSpace `pose_in_grid` machinery to read the current tracked/reference frame
+relationship, so the presentation path does not perform another orbital
+propagation.
 
 ## Coordinate and physics boundary
 

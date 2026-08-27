@@ -75,7 +75,11 @@ semantic f64 pose → target Grid::translation_to_grid → (CellCoord, Transform
 `Transform` is cell-local render/bridge state. `GlobalTransform` is derived
 and camera-relative; it is never an ephemeris, telemetry, network, or physics
 source of truth. Use `ActiveFramePoseQuery`, `grid_relative_pose`, or the
-typed frame conversion helpers for reads.
+typed frame conversion helpers for reads. For a placement command whose
+semantic input is in one grid but whose entity may be below a plain scene
+parent or a direct Grid, use `position_in_grid_to_parent_local`; it performs
+the complete parent-pose inverse and splits a `CellCoord` only for a Grid
+parent.
 
 An entity migration is one atomic `(ChildOf, CellCoord, Transform)` operation
 through `lunco_core::attach::migrate_to_grid`. Compute the complete f64 pose in

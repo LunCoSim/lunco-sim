@@ -12,7 +12,9 @@
 //! onto the declaration components below. No mission prim ⇒ no mission. There is
 //! no filesystem scan and no implicit set.
 
-use crate::trajectories::{TrajectoryFrame, TrajectoryPath, TrajectoryView};
+use crate::trajectories::{
+    TrajectoryFrame, TrajectoryPath, TrajectoryRuntimeState, TrajectoryView,
+};
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_render::{PbrLook, WorldLabel};
@@ -264,6 +266,7 @@ pub fn spawn_declared_missions(
                 end_epoch: traj.end_epoch_jd,
             },
             TrajectoryPath::default(),
+            TrajectoryRuntimeState::default(),
             Transform::default(),
             GlobalTransform::default(),
             Visibility::default(),

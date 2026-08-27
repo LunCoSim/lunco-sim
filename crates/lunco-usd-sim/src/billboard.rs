@@ -23,7 +23,7 @@
 //! | token | value |
 //! |---|---|
 //! | `{name}` | the prim's leaf name (`W3`) |
-//! | `{index}` | trailing digits of the leaf name (`W3` → `3`), else the name |
+//! | `{index}` | an explicit [`BillboardIndex`] when supplied, otherwise trailing digits of the leaf name (`W3` → `3`) |
 //! | `{label}` | `ui:displayName` if authored, else the leaf name |
 //! | `{lat}` `{lon}` | geodetic degrees, resolved live through the site anchor |
 //! | `{height}` | metres, body datum |
@@ -56,6 +56,14 @@ pub struct UsdBillboard {
     pub fade_end: f32,
 }
 
+/// Optional authoritative index for a generic billboard.
+///
+/// Runtime-created markers do not have an authored prim name whose trailing
+/// digits can carry their route index. Keeping that fact as a generic billboard
+/// input avoids overwriting [`Name`] or teaching the renderer about a route.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BillboardIndex(pub usize);
+
 impl Default for UsdBillboard {
     fn default() -> Self {
         Self {
@@ -71,6 +79,7 @@ impl Default for UsdBillboard {
 pub struct BillboardFacts<'a> {
     pub name: &'a str,
     pub label: Option<&'a str>,
+    pub index: Option<usize>,
     /// `None` when the scene is not site-anchored — geo tokens then render as
     /// `—` rather than a fabricated zero.
     pub geo: Option<lunco_celestial::Geodetic>,
@@ -118,7 +127,11 @@ fn expand_token(token: &str, facts: &BillboardFacts<'_>) -> Option<String> {
     match name {
         "name" => Some(facts.name.to_string()),
         "label" => Some(facts.label.unwrap_or(facts.name).to_string()),
-        "index" => Some(index_of(facts.name)),
+        "index" => Some(
+            facts
+                .index
+                .map_or_else(|| index_of(facts.name), |index| index.to_string()),
+        ),
         "lat" => Some(facts.geo.map_or_else(|| "—".into(), |g| num(g.lat_deg, 5))),
         "lon" => Some(facts.geo.map_or_else(|| "—".into(), |g| num(g.lon_deg, 5))),
         "height" => Some(facts.geo.map_or_else(|| "—".into(), |g| num(g.height_m, 1))),
@@ -153,6 +166,7 @@ mod tests {
         BillboardFacts {
             name: "W3",
             label: None,
+            index: None,
             geo: Some(lunco_celestial::Geodetic::new(26.03713, 3.65841, -1950.88)),
         }
     }
@@ -178,6 +192,7 @@ mod tests {
     fn missing_site_anchor_renders_a_dash_not_a_zero() {
         let f = BillboardFacts {
             name: "W3",
+            index: None,
             label: None,
             geo: None,
         };
@@ -207,5 +222,16 @@ mod tests {
         assert_eq!(index_of("W3"), "3");
         assert_eq!(index_of("Waypoint_12"), "12");
         assert_eq!(index_of("Base"), "Base");
+    }
+
+    #[test]
+    fn explicit_index_does_not_depend_on_prim_name() {
+        let facts = BillboardFacts {
+            name: "WaypointMarker",
+            label: None,
+            index: Some(7),
+            geo: None,
+        };
+        assert_eq!(render_billboard("{index}", &facts), "7");
     }
 }
