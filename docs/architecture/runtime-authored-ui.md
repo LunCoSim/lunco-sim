@@ -107,12 +107,58 @@ The fields are:
 | `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, or `overlay.terrain.dismiss`). |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
+| `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
+| `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
 callbacks, unsafe relative paths, empty contract names, unsupported actions, and
 non-finite or non-positive window geometry before any surface is mounted.
+
+### Twin settings and camera policy
+
+Project-owned presentation policy belongs in the active Twin manifest, not in a
+Rust field or the user's global settings file. The generic scalar map is
+available to Rhai as `get_twin_setting(key)` and is changed through
+`set_twin_setting(key, value)`, which persists through the workspace command
+owner. A surface opts into that policy with `setting` and declares its omitted
+value with `setting_default`.
+
+The camera-status surface is the reference composition. Rust publishes only
+the current camera fact (`active_name`) through the generic `camera-status`
+exposure. Rhai owns camera-selection policy through `set_camera(name)` and can
+read that fact with `get_exposure(...)`; HUI/CSS owns only the retained
+rendering. No camera list, selection heuristic, or presentation wording is
+duplicated in the exposure producer.
+
+Camera and exposure updates are reactive: camera status is rebuilt after its
+selection, viewport, camera-entity, or track inputs change; it emits a
+`CameraSelectionStatusChanged` event; and the camera exposure observer updates
+the retained snapshot from that event. The exposure registry advances only
+when a value changes, and the retained UI applies only new exposure revisions
+or lifecycle changes. Production Rhai does not use `on_tick` for this path.
+
+### Overlay ownership audit
+
+Moving every overlay into the Twin would mix persistent project policy with
+transient session state. The correct split for the shipped surfaces is:
+
+| Surface/state | Owner | Twin policy? |
+|---|---|---|
+| `camera-status` visibility | `runtime_surfaces.json` + active Twin `[settings]` | Yes; `ui.camera_status`, default on |
+| `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
+| lander control cards | authored USD `lunco:ui:controlHud` metadata | Already scene/Twin-authored opt-in |
+| `lunica-schema` | selected authored USD schema root | No; selection-derived |
+| `celestial-view` | runtime exposure plus global view-switcher host gate | Not migrated; it is currently an application view control |
+| terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
+| tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
+| notifications, blackout, perf/input overlays, theme, window geometry | runtime or user-global settings | No; session/diagnostic/application scope |
+
+When a future surface needs project-authored policy, add a manifest `setting`
+binding and use the generic Twin map. Do not persist its live progress, current
+selection, or network state in the Twin merely because the pixels are rendered
+by HUI.
 
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the
@@ -208,8 +254,9 @@ ui.property("state_color", "var(--ok-color)");
 The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
-20 Hz). `EngineExposures.revision` advances only when a visibility flag or value
-actually changes; it is not a frame counter.
+20 Hz); discrete lifecycle facts should use an event observer. Camera status
+is the latter. `EngineExposures.revision` advances only when a visibility flag
+or value actually changes; it is not a frame counter.
 
 Use `ReadExposures` when inspecting a running session or building another
 consumer:

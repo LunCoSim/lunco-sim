@@ -1,6 +1,7 @@
 //! `twin.toml` — the Twin manifest.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -92,7 +93,46 @@ pub struct TwinManifest {
     /// prompt when this project is opened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloads: Option<DownloadManifest>,
+
+    /// Generic project-owned settings (`[settings]`). Keys are namespaced
+    /// strings and values are scalar TOML values. This is the extensibility
+    /// seam for Twin policy: adding a new setting does not add a Rust field or
+    /// a new global application setting section.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, TwinSettingValue>,
 }
+
+/// A scalar value persisted in a Twin's generic `[settings]` map.
+///
+/// Arrays and tables are intentionally not accepted here. A setting is a
+/// small policy value, not an untyped document store; structured authoring
+/// belongs in the owning domain's manifest section or USD/Rhai data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TwinSettingValue {
+    /// Boolean setting value.
+    Bool(bool),
+    /// Signed integer setting value.
+    Integer(i64),
+    /// Finite floating-point setting value.
+    Number(f64),
+    /// Text setting value.
+    Text(String),
+}
+
+impl PartialEq for TwinSettingValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Integer(a), Self::Integer(b)) => a == b,
+            (Self::Number(a), Self::Number(b)) => a.to_bits() == b.to_bits(),
+            (Self::Text(a), Self::Text(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TwinSettingValue {}
 
 /// The `[journal]` section of `twin.toml`.
 ///
@@ -249,7 +289,37 @@ impl TwinManifest {
             usd: None,
             journal: None,
             downloads: None,
+            settings: BTreeMap::new(),
         }
+    }
+
+    /// Read a generic project-owned setting by key.
+    pub fn setting(&self, key: &str) -> Option<&TwinSettingValue> {
+        self.settings.get(key)
+    }
+
+    /// Set a generic project-owned setting. Returns whether the persisted
+    /// value changed. Invalid keys and non-finite numbers fail at this owner.
+    pub fn set_setting(
+        &mut self,
+        key: impl Into<String>,
+        value: TwinSettingValue,
+    ) -> Result<bool, String> {
+        let key = key.into();
+        validate_setting_key(&key)?;
+        if let TwinSettingValue::Number(number) = &value {
+            if !number.is_finite() {
+                return Err(format!("setting `{key}` must be finite"));
+            }
+        }
+        let changed = self.settings.get(&key) != Some(&value);
+        self.settings.insert(key, value);
+        Ok(changed)
+    }
+
+    /// Validate a generic setting key without modifying the manifest.
+    pub fn validate_setting_key(key: &str) -> Result<(), String> {
+        validate_setting_key(key)
     }
 
     /// Whether this project has opted out of the missing-asset consent prompt.
@@ -298,6 +368,23 @@ impl TwinManifest {
     }
 }
 
+fn validate_setting_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > 128 {
+        return Err("setting key must be 1..=128 bytes".to_string());
+    }
+    if key.split('.').any(|segment| {
+        segment.is_empty()
+            || segment
+                .bytes()
+                .any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
+    }) {
+        return Err(format!(
+            "setting key `{key}` must contain non-empty dot-separated ASCII name segments"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +401,7 @@ mod tests {
             usd: None,
             journal: None,
             downloads: None,
+            settings: BTreeMap::new(),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -348,6 +436,11 @@ mod tests {
             downloads: Some(DownloadManifest {
                 suppress_missing_prompt: true,
             }),
+            settings: BTreeMap::from([
+                ("ui.camera_status".into(), TwinSettingValue::Bool(true)),
+                ("simulation.rate".into(), TwinSettingValue::Number(2.5)),
+                ("mission.name".into(), TwinSettingValue::Text("demo".into())),
+            ]),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -367,6 +460,7 @@ mod tests {
             usd: None,
             journal: None,
             downloads: None,
+            settings: BTreeMap::new(),
         };
         let path =
             std::env::temp_dir().join(format!("lunco_twin_manifest_{}.toml", std::process::id()));
@@ -400,6 +494,7 @@ version = "0.1.0"
         assert_eq!(parsed.usd, None);
         assert_eq!(parsed.uuid, None);
         assert_eq!(parsed.downloads, None);
+        assert!(parsed.settings.is_empty());
 
         // Re-serializing should not add the optional keys with null/empty values.
         let out = toml::to_string_pretty(&parsed).unwrap();
@@ -409,6 +504,7 @@ version = "0.1.0"
         assert!(!out.contains("usd"));
         assert!(!out.contains("uuid"));
         assert!(!out.contains("downloads"));
+        assert!(!out.contains("settings"));
     }
 
     #[test]
@@ -425,6 +521,28 @@ suppress_missing_prompt = true
 "#;
         let parsed: TwinManifest = toml::from_str(text).unwrap();
         assert!(parsed.suppress_missing_asset_prompt());
+    }
+
+    #[test]
+    fn generic_settings_validate_and_update_without_schema_fields() {
+        let mut manifest = TwinManifest::new("x");
+        assert_eq!(manifest.setting("ui.camera_status"), None);
+        assert!(manifest
+            .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
+            .unwrap());
+        assert!(!manifest
+            .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
+            .unwrap());
+        assert_eq!(
+            manifest.setting("ui.camera_status"),
+            Some(&TwinSettingValue::Bool(true))
+        );
+        assert!(manifest
+            .set_setting("ui.bad key", TwinSettingValue::Bool(true))
+            .is_err());
+        assert!(manifest
+            .set_setting("ui.bad", TwinSettingValue::Number(f64::NAN))
+            .is_err());
     }
 
     #[test]
@@ -487,6 +605,7 @@ uuid = "{id}"
             usd: None,
             journal: None,
             downloads: None,
+            settings: BTreeMap::new(),
         };
         let minted = bare.ensure_uuid();
         assert!(bare.uuid == Some(minted));

@@ -1269,6 +1269,47 @@ pub fn twin_root() -> String {
     .unwrap_or_default()
 }
 
+/// `get_twin_setting("ui.camera_status")` — read a scalar setting from the
+/// active Twin manifest. Missing keys, plain folders, and no active Twin are
+/// represented as the backend's unit value by the caller.
+#[cfg(feature = "rhai")]
+pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
+    with_world(|world| {
+        let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
+        let twin_id = workspace.active_twin?;
+        let value = workspace.twin(twin_id)?.manifest.as_ref()?.setting(key)?;
+        Some(match value {
+            lunco_workspace::TwinSettingValue::Bool(value) => b.bool(*value),
+            lunco_workspace::TwinSettingValue::Integer(value) => b.int(*value),
+            lunco_workspace::TwinSettingValue::Number(value) => b.float(*value),
+            lunco_workspace::TwinSettingValue::Text(value) => b.string(value),
+        })
+    })
+    .flatten()
+}
+
+/// Read one scalar from the generic engine exposure registry. This is the
+/// language-neutral bridge for Rhai-owned presentation policy: an engine
+/// producer publishes facts, and a script can consume them without importing
+/// the producer's domain crate.
+#[cfg(feature = "rhai")]
+pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> Option<B::Value> {
+    with_world(|world| {
+        let exposures = world.get_resource::<lunco_core::exposure::EngineExposures>()?;
+        let value = exposures
+            .surfaces
+            .get(namespace)?
+            .properties
+            .get(property)?;
+        Some(match value {
+            lunco_core::exposure::ExposureValue::Text(value) => b.string(value),
+            lunco_core::exposure::ExposureValue::Bool(value) => b.bool(*value),
+            lunco_core::exposure::ExposureValue::Number(value) => b.float(*value),
+        })
+    })
+    .flatten()
+}
+
 /// `is_unattended()` — whether NOTHING can take user input this run, so a
 /// scenario carrying an autopilot should drive itself. See
 /// [`ScenarioAudience`](crate::scenario::ScenarioAudience) for how it's resolved

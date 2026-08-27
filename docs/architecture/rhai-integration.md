@@ -96,6 +96,8 @@ not part of the production mission contract.
 | `get(id, "Comp.field")` | read | generic reflected component-field read |
 | `set(id, "Comp.field", value)` | local write | host-side tuning of a supported reflected field or canonical scalar co-simulation port; not a command-bus hold |
 | `get_setting("Res.field")` / `set_setting("Res.field", value)` | read / local write | reflected resource access for host settings/configuration |
+| `get_twin_setting("namespace.key")` / `set_twin_setting("namespace.key", value)` | read / persistent write | generic scalar policy in the active Twin manifest; no per-setting Rust binding |
+| `get_exposure("namespace", "property")` | read | one raw value from the generic engine exposure registry; Rhai owns presentation policy |
 | `find(name)` / `list_entities()` | read | entity lookup by `Name` / enumerate |
 | `sim_tick()` | read | current FixedUpdate tick |
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |

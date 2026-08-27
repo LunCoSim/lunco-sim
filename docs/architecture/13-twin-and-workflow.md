@@ -276,10 +276,27 @@ default = "build"                 # which workspace opens by default
 # Suppress the missing-declared-assets consent window for this project.
 # Omitted/false shows the window when assets are missing.
 suppress_missing_prompt = false
+
+[settings]
+# Generic project-owned scalar settings. The camera-status HUD defaults on
+# when this key is omitted; set false to hide it for this Twin.
+"ui.camera_status" = true
 ```
 
 Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are
 used). Everything else has sensible defaults.
+
+`[settings]` is the extensibility seam for project policy. Keys are dotted,
+namespaced scalars (`bool`, integer, number, or string), and are stored in the
+manifest without a Rust field for each setting. Rhai reads them with
+`get_twin_setting("namespace.key")` and writes them with
+`set_twin_setting("namespace.key", value)`, which persists through the
+workspace's generic `SetTwinSetting` command. A missing key is not the same as
+an explicit `false`: each consuming authored surface declares its own default
+with `setting_default`; the shipped camera-status surface declares `true`.
+Twin settings are project-owned and are reset with Twin lifecycle; user-global
+preferences such as diagnostics, theme, input visualisation, and window
+geometry remain in `~/.lunco/settings.json`.
 
 ## 3a. Twin is the simulation control surface — ASPIRATIONAL (not yet built)
 

@@ -193,6 +193,13 @@ explicit entity or a missing local camera is rejected at the avatar-camera
 boundary and remains visible through runtime diagnostics; no entity-order
 selection is permitted.
 
+The local avatar also carries an `InputPorts` surface for free-flight movement,
+but the `Avatar` domain marker makes that endpoint ineligible for vessel
+possession. Plain-click resolution continues past an avatar endpoint to the
+nearest non-avatar input surface, and direct `PossessVessel` requests apply the
+same rule before either camera binding or authority claim. Render markers such
+as `SceneCamera` do not participate in this control decision.
+
 ---
 
 ## Technical Reference

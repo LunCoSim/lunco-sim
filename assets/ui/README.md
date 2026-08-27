@@ -92,7 +92,12 @@ other systems and do not reload HTML/CSS. The headless/server feature does not
 link this UI or its file watcher; web builds use the normal bundled-asset cache
 workflow.
 
-The shipped surfaces are the rover HUD, celestial view switcher, terrain
-progress card, and networking scenario-download card. Rich text editors and
-UTC date editing remain workbench-owned egui panels until explicit text-input
-semantics are added to this contract.
+The shipped surfaces are the rover HUD, camera-status card, celestial view
+switcher, terrain progress card, and networking scenario-download card. The
+camera-status card is gated by the active Twin's generic `ui.camera_status`
+setting and defaults on when that key is absent; set it to `false` in
+`twin.toml` to hide it. Rhai owns camera selection and can read the current
+camera fact through `get_exposure("camera-status", "active_name")`;
+camera changes update the exposure through an event observer. Rich text editors
+and UTC date editing remain workbench-owned egui panels until explicit
+text-input semantics are added to this contract.

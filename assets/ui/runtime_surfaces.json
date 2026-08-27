@@ -173,6 +173,25 @@
       "placement": { "mode": "viewport" }
     },
     {
+      "id": "camera-status",
+      "template": "ui/camera_status.html",
+      "stylesheet": "ui/camera_status.css",
+      "namespace": "camera-status",
+      "setting": "ui.camera_status",
+      "setting_default": true,
+      "bindings": {
+        "active_name": { "source": "active_name" }
+      },
+      "visible_in_perspective": "sandbox_view",
+      "placement": {
+        "mode": "window",
+        "anchor": "top_right",
+        "offset": [-16.0, 16.0],
+        "width": 280.0,
+        "height": 68.0
+      }
+    },
+    {
       "id": "celestial-view",
       "template": "ui/view_mode.html",
       "stylesheet": "ui/view_mode.css",

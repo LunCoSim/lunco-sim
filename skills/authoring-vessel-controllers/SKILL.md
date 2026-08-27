@@ -163,7 +163,7 @@ those bypass possession, arbitration, and the authored input contract.
 
 ## What makes an entity *active* — the intent→port `Controls` scope
 
-An entity is **possessable + drivable** when it carries two things:
+A vessel is **possessable + drivable** when it carries two things:
 
 1. **An actuation surface** — the command ports a pilot or AI writes. A rover gets
    `throttle/steer/brake` from `PhysxVehicleContextAPI` (+ a `DriveMix` chosen by the
@@ -174,6 +174,12 @@ An entity is **possessable + drivable** when it carries two things:
    `lunco_core::ControlBinding`. Without it a vessel can be possessed but **keyboard
    input does nothing** — `drive_from_bindings` skips a bindingless vessel. (API /
    `set_input` / rhai can still drive it by port name — that path needs only the surface.)
+
+The local `Avatar` is a separate domain role. It also has an `InputPorts` surface and
+binding, but those ports are its free-flight embodiment and are not a vessel
+possession target. Click resolution and `PossessVessel` enforce this boundary by
+accepting a non-`Avatar` input surface; `SceneCamera` is presentation metadata and
+does not participate in possession.
 
 Author the scope as a **child `references` arc** to the shared profile — the SAME arc
 kind the wheels use, so it composes through a spawn/reference. (Root `subLayers` +

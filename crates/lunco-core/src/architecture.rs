@@ -465,8 +465,9 @@ pub struct PhysicsStateReady;
 /// can supply any normalized or physical value. The keys are seeded from the vessel's
 /// [`ControlBinding`] (i.e. from its authored `Controls` scope) for USD vessels;
 /// runtime-built endpoints may declare the same surface directly with
-/// [`InputPorts::new`]. The surface, not the optional binding, is the authority
-/// and possession boundary.
+/// [`InputPorts::new`]. The surface, not the optional binding, is the command
+/// endpoint. The avatar domain uses a non-`Avatar` surface as the vessel
+/// possession boundary; an avatar's own surface is reserved for free flight.
 ///
 /// Written through the shared port substrate (`SetPorts` → `PortRegistry`)
 /// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a

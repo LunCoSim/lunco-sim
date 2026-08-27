@@ -22,7 +22,7 @@ use lunco_core::{
     on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
 use lunco_storage::{StorageEntryKind, StorageError};
-use lunco_twin::{TwinError, TwinManifest, TwinMode, UsdManifest};
+use lunco_twin::{TwinError, TwinManifest, TwinMode, TwinSettingValue, UsdManifest};
 
 use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 
@@ -44,6 +44,98 @@ use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 /// The payload is a human-readable string naming WHICH command, WHICH path, and
 /// WHY — that string is what a status bar / diagnostics row shows verbatim.
 pub const TWIN_OPEN_FAILED: &str = "TWIN_OPEN_FAILED";
+
+/// Scalar wire value accepted by [`SetTwinSetting`]. The command uses a
+/// generic value enum rather than a field for each preference, so adding a new
+/// Twin setting never changes the Rust command surface.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[reflect(Deserialize)]
+#[serde(untagged)]
+pub enum TwinSettingInput {
+    /// Boolean value.
+    Bool(bool),
+    /// Signed integer value.
+    Integer(i64),
+    /// Floating-point value.
+    Number(f64),
+    /// Text value.
+    Text(String),
+}
+
+/// Persist one generic project-owned setting on the active Twin.
+#[Command]
+pub struct SetTwinSetting {
+    /// Namespaced setting key, for example `ui.camera_status`.
+    pub key: String,
+    /// Scalar value to persist in the Twin manifest.
+    pub value: TwinSettingInput,
+}
+
+fn into_twin_setting(value: TwinSettingInput) -> TwinSettingValue {
+    match value {
+        TwinSettingInput::Bool(value) => TwinSettingValue::Bool(value),
+        TwinSettingInput::Integer(value) => TwinSettingValue::Integer(value),
+        TwinSettingInput::Number(value) => TwinSettingValue::Number(value),
+        TwinSettingInput::Text(value) => TwinSettingValue::Text(value),
+    }
+}
+
+#[on_command(SetTwinSetting)]
+fn on_set_twin_setting(trigger: On<SetTwinSetting>, mut workspace: ResMut<WorkspaceResource>) {
+    let event = trigger.event();
+    let twin_id = workspace.active_twin;
+    let Some(twin_id) = twin_id else {
+        warn!("SetTwinSetting ignored: no active Twin");
+        return;
+    };
+    let old = workspace
+        .twin(twin_id)
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|manifest| manifest.setting(&event.key).cloned());
+    let value = into_twin_setting(event.value.clone());
+    let changed = match workspace.twin_mut(twin_id) {
+        Some(twin) => match twin.manifest.as_mut() {
+            Some(manifest) => match manifest.set_setting(event.key.clone(), value) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    warn!("SetTwinSetting rejected: {error}");
+                    return;
+                }
+            },
+            None => {
+                warn!("SetTwinSetting ignored: active workspace root is not a Twin");
+                return;
+            }
+        },
+        None => {
+            warn!("SetTwinSetting ignored: active Twin no longer exists");
+            return;
+        }
+    };
+    if !changed {
+        return;
+    }
+
+    if let Err(error) = workspace
+        .twin(twin_id)
+        .expect("active Twin exists after setting mutation")
+        .save_manifest()
+    {
+        if let Some(twin) = workspace.twin_mut(twin_id) {
+            if let Some(manifest) = twin.manifest.as_mut() {
+                match old {
+                    Some(value) => {
+                        manifest.settings.insert(event.key.clone(), value);
+                    }
+                    None => {
+                        manifest.settings.remove(&event.key);
+                    }
+                }
+            }
+        }
+        warn!("SetTwinSetting failed to persist `{}`: {error}", event.key);
+    }
+}
 
 /// The one shape every [`TWIN_OPEN_FAILED`] publication takes, so the payload
 /// convention cannot drift between the failure arms.
@@ -534,6 +626,7 @@ register_commands!(
     on_open_folder,
     on_add_folder_to_workspace,
     on_add_twin,
+    on_set_twin_setting,
 );
 
 #[cfg(test)]
@@ -604,6 +697,39 @@ mod tests {
             .expect("created Twin is registered");
         assert_eq!(twin.1.root, root);
         assert_eq!(twin.1.manifest.as_ref().unwrap().name, "Command Twin");
+    }
+
+    #[test]
+    fn set_twin_setting_command_persists_generic_value_on_active_twin() {
+        let tmp = tempfile::tempdir().expect("Twin directory");
+        std::fs::write(
+            tmp.path().join(lunco_twin::MANIFEST_FILENAME),
+            "name = \"Settings Twin\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("manifest");
+        let twin = match TwinMode::open(tmp.path()).expect("open Twin") {
+            TwinMode::Twin(twin) => twin,
+            other => panic!("expected Twin, got {other:?}"),
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::session::WorkspacePlugin);
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+
+        app.world_mut().trigger(SetTwinSetting {
+            key: "ui.camera_status".into(),
+            value: TwinSettingInput::Bool(false),
+        });
+
+        let manifest = TwinManifest::read(&tmp.path().join(lunco_twin::MANIFEST_FILENAME))
+            .expect("persisted manifest");
+        assert_eq!(
+            manifest.setting("ui.camera_status"),
+            Some(&TwinSettingValue::Bool(false))
+        );
     }
 
     #[test]
