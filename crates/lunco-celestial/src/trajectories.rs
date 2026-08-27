@@ -89,7 +89,9 @@ pub struct TrajectoryPath {
     /// The view does not need to track a 100 000× clock at 60 Hz to look right. At
     /// realtime rates this caps rebuilds in WALL time; during high-rate Celestial
     /// transport (including an independent domain scale) the existing curve is
-    /// held until realtime transport resumes.
+    /// held until realtime transport resumes. Ephemeris sampling, tessellation,
+    /// and buffer preparation run in compute tasks; the main schedule only
+    /// commits completed presentation data.
     pub last_rebuild_real_secs: f64,
 }
 
@@ -100,7 +102,7 @@ pub struct TrajectoryPath {
 /// *along* the curve, not the curve itself. So 1 Hz is plenty while realtime runs,
 /// and high-rate Celestial transport holds the existing sample entirely. Each
 /// rebuild re-samples 800–1500 ephemeris points and re-splines the mesh on the
-/// main thread.
+/// compute task before the main schedule commits the prepared asset data.
 const MIN_REBUILD_INTERVAL_SECS: f64 = 1.0;
 
 #[derive(Component)]
@@ -117,10 +119,11 @@ pub struct TrajectoryMeshMarker;
 
 /// Change stamp for the per-vertex time-fade attribute.
 ///
-/// The trajectory mesh owns the geometry stamp (`Changed<TrajectoryPath>`). The
-/// alpha attribute has a different producer: the current world epoch. Keep its
-/// stamp on the trajectory entity so a paused or unchanged clock does not cause
-/// a full color-buffer allocation and GPU upload every frame.
+/// The trajectory mesh owns a committed geometry generation stamp. The alpha
+/// attribute has a different producer: the current world epoch. Keep both
+/// stamps on the trajectory entity so a paused or unchanged clock does not
+/// cause a full color-buffer allocation and GPU upload every frame, and an
+/// in-flight stale mesh result remains retryable.
 #[derive(Component, Default)]
 struct TrajectoryAlphaState {
     epoch_jd: Option<f64>,
@@ -129,6 +132,27 @@ struct TrajectoryAlphaState {
     start_epoch: Option<f64>,
     end_epoch: Option<f64>,
     num_points: usize,
+}
+
+/// Generation stamp for the committed geometry. This is separate from the
+/// alpha stamp because a path can change while a mesh task is in flight; the
+/// next frame must be able to observe the missed generation and reschedule it.
+#[derive(Component, Default)]
+struct TrajectoryMeshState {
+    path_epoch: Option<f64>,
+    num_points: usize,
+}
+
+/// Presentation policy shared by the trajectory producers and the alpha pass.
+///
+/// The clock is resolved once in `spawn_trajectory_update_task`; keeping the
+/// result here means the color-buffer consumer does not independently inspect
+/// clock domains or derive a second effective rate. The resource is deliberately
+/// only a policy bit: it does not replace `WorldTime` or `ResolvedDomains` as
+/// time authorities.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+struct TrajectoryPresentationState {
+    hold_curve: bool,
 }
 
 #[inline]
@@ -143,11 +167,12 @@ fn alpha_update_is_needed(
     path: &TrajectoryPath,
     view: &TrajectoryView,
     num_points: usize,
+    hold_curve: bool,
 ) -> bool {
     let Some(state) = state else {
         return true;
     };
-    state.epoch_jd != Some(epoch_jd)
+    (!hold_curve && state.epoch_jd != Some(epoch_jd))
         || state.path_epoch != Some(path.update_epoch)
         || state.sampling_days != view.sampling_days
         || state.start_epoch != view.start_epoch
@@ -194,7 +219,8 @@ impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<TrajectoryView>()
             .register_type::<TrajectoryFrame>()
-            .register_type::<TrajectoryPath>();
+            .register_type::<TrajectoryPath>()
+            .init_resource::<TrajectoryPresentationState>();
 
         // NO Rust-spawned trajectory views. An orbit line is CONTENT — a scene
         // says which paths it wants drawn, with `lunco:trajectory:*` on a prim
@@ -217,8 +243,9 @@ impl Plugin for TrajectoryPlugin {
         // CHAINED: a rebuild must be ATOMIC within one frame.
         //
         // `handle_trajectory_tasks` writes `path.points` AND `path.anchor`
-        // together; `trajectory_mesh_update_system` turns the points into f32
-        // vertices; `trajectory_alignment_system` (PostUpdate) places the curve
+        // together; `trajectory_mesh_update_system` schedules the off-thread
+        // conversion to f32 vertices and `handle_trajectory_mesh_tasks` commits it;
+        // `trajectory_alignment_system` (PostUpdate) places the curve
         // using the anchor. The vertices are stored RELATIVE to the anchor, so
         // the two must agree.
         //
@@ -236,7 +263,9 @@ impl Plugin for TrajectoryPlugin {
                 spawn_trajectory_update_task,
                 handle_trajectory_tasks,
                 trajectory_mesh_update_system,
+                handle_trajectory_mesh_tasks,
                 trajectory_alpha_update_system,
+                handle_trajectory_alpha_tasks,
                 trajectory_visibility_system,
             )
                 .chain(),
@@ -485,7 +514,7 @@ pub fn trajectory_probe_system(
     }
 }
 
-pub fn spawn_trajectory_update_task(
+fn spawn_trajectory_update_task(
     world: Res<WorldTime>,
     real: Res<Time<bevy::time::Real>>,
     clocks: Option<Res<lunco_time::Clocks>>,
@@ -493,16 +522,19 @@ pub fn spawn_trajectory_update_task(
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
-    mut q_views: Query<(Entity, &TrajectoryView, &mut TrajectoryPath), Without<TrajectoryTask>>,
+    mut presentation: ResMut<TrajectoryPresentationState>,
+    mut q_views: Query<
+        (Entity, &TrajectoryView, &mut TrajectoryPath),
+        (
+            Without<TrajectoryTask>,
+            Without<TrajectoryMeshTask>,
+            Without<TrajectoryAlphaTask>,
+        ),
+    >,
     frame_index: Res<crate::ReferenceFrameIndex>,
     q_domains: Query<&lunco_time::TimeDomain>,
 ) {
-    let Some(ephemeris) = ephemeris else {
-        return;
-    };
     let current_epoch = world.epoch_jd;
-    let now_real = real.elapsed_secs_f64();
-    let pool = bevy::tasks::ComputeTaskPool::get();
     let celestial_domain = clocks
         .as_deref()
         .and_then(|clocks| q_domains.get(clocks.celestial).ok());
@@ -516,6 +548,13 @@ pub fn spawn_trajectory_update_task(
                 (real_dt > 0.0).then(|| resolved.delta(clocks.celestial) / real_dt)
             });
     let hold_curve = celestial_clock_is_high_rate(world.regime, domain_scale, effective_rate);
+    presentation.hold_curve = hold_curve;
+
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
+    let now_real = real.elapsed_secs_f64();
+    let pool = bevy::tasks::ComputeTaskPool::get();
 
     for (entity, view, mut path) in q_views.iter_mut() {
         // Visibility is a consumer contract, not just a renderer hint. A hidden
@@ -707,92 +746,189 @@ pub fn handle_trajectory_tasks(
     }
 }
 
-pub fn trajectory_mesh_update_system(
+#[derive(Component)]
+struct TrajectoryMeshTask(Task<TrajectoryMeshData>);
+
+struct TrajectoryMeshData {
+    path_epoch: f64,
+    epoch_jd: f64,
+    sampling_days: f64,
+    start_epoch: Option<f64>,
+    end_epoch: Option<f64>,
+    points: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+}
+
+/// Tessellate a trajectory off the main/UI schedule. A trajectory is a view;
+/// its Catmull-Rom presentation must never make the input and egui cycles wait
+/// for a spline over thousands of samples.
+fn trajectory_mesh_points(points: &[bevy::math::DVec3]) -> Vec<[f32; 3]> {
+    if points.len() >= 4 {
+        let control_points: Vec<Vec3> = points.iter().map(|p| p.as_vec3()).collect();
+        let spline = CubicCardinalSpline::new_catmull_rom(control_points);
+        match spline.to_curve() {
+            Ok(curve) => {
+                let n = (points.len() - 1) * 3;
+                curve.iter_positions(n).map(|p| p.to_array()).collect()
+            }
+            Err(_) => points.iter().map(|p| p.as_vec3().to_array()).collect(),
+        }
+    } else {
+        points.iter().map(|p| p.as_vec3().to_array()).collect()
+    }
+}
+
+fn trajectory_mesh_update_system(
+    world: Res<WorldTime>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    q_paths: Query<(Entity, &TrajectoryPath, &TrajectoryView, &Children), Changed<TrajectoryPath>>,
-    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+    q_paths: Query<
+        (
+            Entity,
+            Ref<TrajectoryPath>,
+            &TrajectoryView,
+            Option<&TrajectoryMeshState>,
+        ),
+        (Without<TrajectoryMeshTask>, Without<TrajectoryAlphaTask>),
+    >,
 ) {
-    for (entity, path, view, children) in q_paths.iter() {
+    let pool = bevy::tasks::ComputeTaskPool::get();
+    for (entity, path, view, mesh_state) in q_paths.iter() {
         if !trajectory_is_active(view) || path.points.is_empty() {
             continue;
         }
+        // The change tick handles the normal path update. The generation stamp
+        // closes the less common race where an external path writer changes the
+        // component while the previous task is in flight: that task is fenced
+        // out by `path_epoch`, and this mismatch keeps the rebuild retryable.
+        let mesh_is_current = mesh_state.is_some_and(|state| {
+            state.path_epoch == Some(path.update_epoch) && state.num_points > 0
+        });
+        if !path.is_changed() && mesh_is_current {
+            continue;
+        }
 
-        // Use Catmull-Rom spline for smooth curves (needs >= 4 points)
-        let final_pts: Vec<[f32; 3]> = if path.points.len() >= 4 {
-            let control_points: Vec<Vec3> = path.points.iter().map(|p| p.as_vec3()).collect();
-            let spline = CubicCardinalSpline::new_catmull_rom(control_points);
-            match spline.to_curve() {
-                Ok(curve) => {
-                    let n = (path.points.len() - 1) * 3;
-                    curve.iter_positions(n).map(|p| p.to_array()).collect()
-                }
-                Err(_) => path.points.iter().map(|p| p.as_vec3().to_array()).collect(),
+        let source = path.points.clone();
+        let path_epoch = path.update_epoch;
+        let epoch_jd = world.epoch_jd;
+        let sampling_days = view.sampling_days;
+        let start_epoch = view.start_epoch;
+        let end_epoch = view.end_epoch;
+        let task = pool.spawn(async move {
+            let points = trajectory_mesh_points(&source);
+            let fade_start = start_epoch.unwrap_or(path_epoch - sampling_days / 2.0);
+            let total_sampling_days = match (start_epoch, end_epoch) {
+                (Some(start), Some(end)) => end - start,
+                _ => sampling_days,
+            };
+            let colors = if source.len() < 2 {
+                vec![[1.0, 1.0, 1.0, 1.0]; points.len()]
+            } else {
+                trajectory_alpha_colors(epoch_jd, fade_start, total_sampling_days, points.len())
+            };
+            TrajectoryMeshData {
+                path_epoch,
+                epoch_jd,
+                sampling_days,
+                start_epoch,
+                end_epoch,
+                points,
+                colors,
             }
-        } else {
-            path.points.iter().map(|p| p.as_vec3().to_array()).collect()
-        };
+        });
+        commands.entity(entity).insert(TrajectoryMeshTask(task));
+    }
+}
 
-        // `ATTRIBUTE_COLOR` is NOT written here when the alpha pass will write it.
-        //
-        // ⚠ VERTEX COLOUR MULTIPLIES `base_color`, IT DOES NOT REPLACE IT. bevy's
-        // `pbr_fragment.wgsl` seeds `material.base_color` from the vertex colour and
-        // then does `base_color *= material.base_color` — so anything this attribute
-        // carries in RGB is applied ON TOP of the tint the material already holds.
-        // Writing `view.color` here therefore SQUARES the tint (the material carries
-        // `view.color * 15`, so the line renders `view.color² * 15`): every channel
-        // below 1.0 is pulled down against the strongest one, and the line comes out
-        // more saturated and darker than the colour anybody authored. It used to do
-        // exactly that, on the belief — stated in this comment — that a per-vertex
-        // copy of a constant "says nothing".
-        //
-        // So RGB is 1.0: the MATERIAL owns the tint outright, and this attribute
-        // carries only what is genuinely per-vertex — the ALPHA, which fades the past
-        // half of the orbit out. `trajectory_alpha_update_system` runs immediately
-        // after this system in the same `.chain()`, in the same frame, and overwrites
-        // the whole attribute from the vertex count it finds; building a full
-        // `Vec<[f32; 4]>` here only to throw it away one system later is an
-        // allocation and a GPU upload per rebuild, and a trajectory rebuild is
-        // thousands of vertices.
-        //
-        // The one case the alpha pass declines is a path with fewer than two points,
-        // where there is no time axis to fade along. Seed those here, so the
-        // attribute's vertex count can never disagree with `POSITION`.
-        let colors: Option<Vec<[f32; 4]>> =
-            (path.points.len() < 2).then(|| vec![[1.0, 1.0, 1.0, 1.0]; final_pts.len()]);
+fn handle_trajectory_mesh_tasks(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut q_tasks: Query<(
+        Entity,
+        &mut TrajectoryMeshTask,
+        &TrajectoryPath,
+        &TrajectoryView,
+        &Children,
+    )>,
+    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+) {
+    for (entity, mut task, path, view, children) in q_tasks.iter_mut() {
+        let Some(data) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
+        commands.entity(entity).remove::<TrajectoryMeshTask>();
+
+        // A path is normally serialized behind this task, but keep the
+        // generation stamp as a hard stale-result fence for future writers.
+        if data.path_epoch != path.update_epoch || data.points.is_empty() {
+            continue;
+        }
+        let num_points = data.colors.len();
+        let alpha_epoch = data.epoch_jd;
+        let alpha_path_epoch = data.path_epoch;
+        let alpha_sampling_days = data.sampling_days;
+        let alpha_start_epoch = data.start_epoch;
+        let alpha_end_epoch = data.end_epoch;
 
         let mesh_handle = children.iter().find_map(|child| q_marker.get(child).ok());
         if let Some(mesh_handle) = mesh_handle {
+            let mut committed = false;
             if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
-                if let Some(colors) = colors {
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-                }
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.points);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors);
+                committed = true;
+            }
+            if committed && path.points.len() >= 2 {
+                commands.entity(entity).insert((
+                    TrajectoryMeshState {
+                        path_epoch: Some(data.path_epoch),
+                        num_points,
+                    },
+                    TrajectoryAlphaState {
+                        epoch_jd: Some(alpha_epoch),
+                        path_epoch: Some(alpha_path_epoch),
+                        sampling_days: alpha_sampling_days,
+                        start_epoch: alpha_start_epoch,
+                        end_epoch: alpha_end_epoch,
+                        num_points,
+                    },
+                ));
+            } else if committed {
+                commands.entity(entity).insert(TrajectoryMeshState {
+                    path_epoch: Some(data.path_epoch),
+                    num_points,
+                });
             }
             continue;
         }
 
         // Bevy 0.19's slab allocator allocates no storage for a zero-byte mesh,
-        // but the render extraction path still attempts its copy. Do not create a
-        // placeholder mesh: publish this child only with its first real point set.
+        // but the render extraction path still attempts its copy. Do not create
+        // a placeholder mesh: publish this child only with its first real point set.
         let mut mesh = Mesh::new(
             PrimitiveTopology::LineStrip,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
-        if let Some(colors) = colors {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.points);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors);
         let mesh_handle = meshes.add(mesh);
+        commands.entity(entity).insert(TrajectoryMeshState {
+            path_epoch: Some(data.path_epoch),
+            num_points,
+        });
+        if path.points.len() >= 2 {
+            commands.entity(entity).insert(TrajectoryAlphaState {
+                epoch_jd: Some(alpha_epoch),
+                path_epoch: Some(alpha_path_epoch),
+                sampling_days: alpha_sampling_days,
+                start_epoch: alpha_start_epoch,
+                end_epoch: alpha_end_epoch,
+                num_points,
+            });
+        }
         // ALPHA 1.0 IS CORRECT HERE, and it is correct for the opposite reason to
         // `assets/shaders/starfield.wgsl`, which must output alpha 0 to be additive.
-        // Both take bevy's `BLEND_PREMULTIPLIED_ALPHA` pass (`src + dst * (1 - src.a)`),
-        // where a non-zero alpha eats the background — but a StandardMaterial goes
-        // through `premultiply_alpha()`, which under `ALPHA_MODE_ADD` returns
-        // `vec4(rgb * a, 0.0)` and does the premultiply itself. The starfield is a
-        // custom `ShaderMaterial` whose fragment never reaches that function, so it
-        // has to premultiply by hand. Zeroing the alpha here would not make this
-        // *more* additive, it would make every trajectory line INVISIBLE — `rgb * 0`.
+        // The trajectory material reaches bevy's premultiply path, so zeroing the
+        // vertex alpha would make the line invisible rather than more additive.
         let emissive_color = view.color * 15.0;
         let look = PbrLook {
             base_color: LinearRgba::new(
@@ -820,93 +956,180 @@ pub fn trajectory_mesh_update_system(
     }
 }
 
+#[derive(Component)]
+struct TrajectoryAlphaTask(Task<TrajectoryAlphaData>);
+
+struct TrajectoryAlphaData {
+    epoch_jd: f64,
+    path_epoch: f64,
+    sampling_days: f64,
+    start_epoch: Option<f64>,
+    end_epoch: Option<f64>,
+    num_points: usize,
+    colors: Vec<[f32; 4]>,
+}
+
+fn trajectory_alpha_colors(
+    epoch_jd: f64,
+    start_epoch: f64,
+    total_sampling_days: f64,
+    num_points: usize,
+) -> Vec<[f32; 4]> {
+    (0..num_points)
+        .map(|i| {
+            let t = i as f64 / (num_points - 1) as f64;
+            let pt_epoch = start_epoch + t * total_sampling_days;
+
+            let days_past = epoch_jd - pt_epoch;
+            let alpha = if days_past > 0.0 {
+                // Smoothly fade out the past trajectory over 10% of total duration
+                // (capped between 1 to 20 days).
+                let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
+                let a = 1.0 - (days_past / fade_days);
+                // With additive blending at 15x brightness, alpha must approach
+                // zero rather than 0.05.
+                a.max(0.001) as f32
+            } else {
+                1.0
+            };
+
+            // RGB is 1.0 — the MATERIAL owns the tint. Alpha is the only
+            // genuinely per-vertex part of this attribute.
+            [1.0, 1.0, 1.0, alpha]
+        })
+        .collect()
+}
+
 fn trajectory_alpha_update_system(
     world: Res<WorldTime>,
+    presentation: Res<TrajectoryPresentationState>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    q_paths: Query<(
-        Entity,
-        &TrajectoryPath,
-        &TrajectoryView,
-        &Children,
-        Option<&TrajectoryAlphaState>,
-    )>,
+    meshes: Res<Assets<Mesh>>,
+    q_paths: Query<
+        (
+            Entity,
+            &TrajectoryPath,
+            &TrajectoryView,
+            &Children,
+            Option<&TrajectoryAlphaState>,
+        ),
+        (Without<TrajectoryAlphaTask>, Without<TrajectoryMeshTask>),
+    >,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-    // The alpha curve is a presentation projection of the world epoch. It is
-    // updated only when that epoch, the path, the sampling range, or the mesh
-    // vertex count changes. In particular, a paused/unchanged clock does not
-    // rebuild the full color buffer.
+    // This system only schedules a worker. It never constructs the color
+    // buffer or mutates a mesh, so a moving epoch cannot block the UI cycle.
     for (entity, path, view, children, state) in q_paths.iter() {
         if !trajectory_is_active(view) || path.points.len() < 2 {
             continue;
         }
+        let Some((num_points, has_colors)) = children.iter().find_map(|child| {
+            let mesh_handle = q_marker.get(child).ok()?;
+            let mesh = meshes.get(&mesh_handle.0)?;
+            let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?;
+            Some((
+                positions.len(),
+                mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some(),
+            ))
+        }) else {
+            continue;
+        };
+        if !alpha_update_is_needed(
+            state,
+            world.epoch_jd,
+            path,
+            view,
+            num_points,
+            presentation.hold_curve,
+        ) && has_colors
+        {
+            continue;
+        }
+
+        let epoch_jd = world.epoch_jd;
+        let path_epoch = path.update_epoch;
+        let sampling_days = view.sampling_days;
+        let start_epoch = view.start_epoch;
+        let end_epoch = view.end_epoch;
+        let fade_start = start_epoch.unwrap_or(path_epoch - sampling_days / 2.0);
+        let total_sampling_days = match (start_epoch, end_epoch) {
+            (Some(start), Some(end)) => end - start,
+            _ => sampling_days,
+        };
+        let task = bevy::tasks::ComputeTaskPool::get().spawn(async move {
+            TrajectoryAlphaData {
+                epoch_jd,
+                path_epoch,
+                sampling_days,
+                start_epoch,
+                end_epoch,
+                num_points,
+                colors: trajectory_alpha_colors(
+                    epoch_jd,
+                    fade_start,
+                    total_sampling_days,
+                    num_points,
+                ),
+            }
+        });
+        commands.entity(entity).insert(TrajectoryAlphaTask(task));
+    }
+}
+
+fn handle_trajectory_alpha_tasks(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut q_tasks: Query<(
+        Entity,
+        &mut TrajectoryAlphaTask,
+        &TrajectoryPath,
+        &TrajectoryView,
+        &Children,
+    )>,
+    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+) {
+    for (entity, mut task, path, view, children) in q_tasks.iter_mut() {
+        let Some(data) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
+        commands.entity(entity).remove::<TrajectoryAlphaTask>();
+
+        if data.path_epoch != path.update_epoch
+            || data.sampling_days != view.sampling_days
+            || data.start_epoch != view.start_epoch
+            || data.end_epoch != view.end_epoch
+            || !trajectory_is_active(view)
+        {
+            continue;
+        }
 
         let mut updated = false;
-        let mut updated_num_points = None;
         for child in children.iter() {
-            if let Ok(mesh_handle) = q_marker.get(child) {
-                if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-                    let num_points = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
-                    if !alpha_update_is_needed(state, world.epoch_jd, path, view, num_points)
-                        && mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some()
-                    {
-                        continue;
-                    }
-
-                    let start_epoch = if let Some(s) = view.start_epoch {
-                        s
-                    } else {
-                        path.update_epoch - (view.sampling_days / 2.0)
-                    };
-                    let total_sampling_days =
-                        if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
-                            end - start
-                        } else {
-                            view.sampling_days
-                        };
-
-                    let colors: Vec<[f32; 4]> = (0..num_points)
-                        .map(|i| {
-                            let t = i as f64 / (num_points - 1) as f64;
-                            let pt_epoch = start_epoch + t * total_sampling_days;
-
-                            let days_past = world.epoch_jd - pt_epoch;
-                            let alpha = if days_past > 0.0 {
-                                // Smoothly fade out the past trajectory over 10% of total duration (capped between 1 to 20 days)
-                                let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
-                                let a = 1.0 - (days_past / fade_days);
-                                // With additive blending at 15x brightness, we need alpha to approach zero, not 0.05!
-                                a.max(0.001) as f32 // Gentle curve drop-off
-                            } else {
-                                1.0
-                            };
-
-                            // RGB is 1.0 — the MATERIAL owns the tint, and a copy of
-                            // it here would multiply in a second time. Alpha is the
-                            // fade, and under `AlphaMode::Add` bevy premultiplies it
-                            // for us (`vec4(rgb * a, 0.0)` in `premultiply_alpha`),
-                            // so alpha DIMS the line rather than erasing what is
-                            // behind it. See the seed site in the rebuild system.
-                            [1.0, 1.0, 1.0, alpha]
-                        })
-                        .collect();
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-                    updated = true;
-                    updated_num_points = Some(num_points);
-                    trace!("Trajectory alpha updated for {} points", num_points);
-                }
+            let Ok(mesh_handle) = q_marker.get(child) else {
+                continue;
+            };
+            let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) else {
+                continue;
+            };
+            let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+                continue;
+            };
+            if positions.len() != data.num_points {
+                continue;
             }
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors.clone());
+            updated = true;
+            trace!("Trajectory alpha updated for {} points", data.num_points);
         }
 
         if updated {
             commands.entity(entity).insert(TrajectoryAlphaState {
-                epoch_jd: Some(world.epoch_jd),
-                path_epoch: Some(path.update_epoch),
-                sampling_days: view.sampling_days,
-                start_epoch: view.start_epoch,
-                end_epoch: view.end_epoch,
-                num_points: updated_num_points.expect("updated trajectory has mesh points"),
+                epoch_jd: Some(data.epoch_jd),
+                path_epoch: Some(data.path_epoch),
+                sampling_days: data.sampling_days,
+                start_epoch: data.start_epoch,
+                end_epoch: data.end_epoch,
+                num_points: data.num_points,
             });
         }
     }
@@ -952,14 +1175,35 @@ mod tests {
             2451545.5,
             &path,
             &view,
-            2
+            2,
+            false
         ));
         assert!(alpha_update_is_needed(
             Some(&state),
             2451545.6,
             &path,
             &view,
-            2
+            2,
+            false
+        ));
+        assert!(!alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &path,
+            &view,
+            2,
+            true
+        ));
+        assert!(alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &TrajectoryPath {
+                update_epoch: path.update_epoch + 1.0,
+                ..path
+            },
+            &view,
+            2,
+            true
         ));
     }
 
@@ -1039,10 +1283,14 @@ pub fn trajectory_visibility_system(
 
 pub fn trajectory_alignment_system(
     mut commands: Commands,
-    world: Res<WorldTime>,
-    ephemeris: Option<Res<EphemerisResource>>,
     frame_index: Res<crate::ReferenceFrameIndex>,
     q_grids: Query<&big_space::prelude::Grid>,
+    q_parents: Query<&ChildOf>,
+    // Trajectory views are the only mutable spatial entities in this system.
+    // Excluding them from this read query makes the access disjoint while still
+    // allowing the canonical BigSpace pose helper to walk every celestial
+    // frame/grid ancestor.
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<TrajectoryPath>>,
     mut q_vistas: Query<
         (
             Entity,
@@ -1057,8 +1305,6 @@ pub fn trajectory_alignment_system(
     q_view_children: Query<&Children>,
     q_traj_mesh: Query<(), With<TrajectoryMeshMarker>>,
 ) {
-    let jd = world.epoch_jd;
-
     for (v_entity, view, path, mut transform, cell, current_parent) in q_vistas.iter_mut() {
         let mut target_parent = None;
         let mut parent_grid: Option<&big_space::prelude::Grid> = None;
@@ -1097,8 +1343,8 @@ pub fn trajectory_alignment_system(
                     // The tracked body's position relative to `reference_id`,
                     // at the CURRENT epoch — the same quantity, in the same
                     // frame, that `spawn_trajectory_update_task` sampled into
-                    // `path.anchor`. Read from the provider in f64, NOT from
-                    // the frame's `Transform`:
+                    // `path.anchor`. Read from the complete BigSpace pose, not
+                    // a sub-cell transform:
                     //
                     // * `Transform.translation` is parent-GRID-relative (Moon
                     //   frame → EMB, not → Earth), a different reference frame
@@ -1110,16 +1356,28 @@ pub fn trajectory_alignment_system(
                     //   the Moon in the EMB grid) whenever the body crosses a
                     //   boundary — the orbit line teleporting between frames.
                     //
-                    // Sampling both ends from the provider makes the "now"
-                    // point of the curve cancel to exactly the grid origin (=
-                    // the tracked body), whatever f32 rounding the stored grid
-                    // chain carries: the view is a CHILD of that grid, so it
-                    // inherits the identical rounding.
-                    tracked_translation = ephemeris.as_ref().and_then(|e| {
-                        let p_target = e.provider.global_position(view.tracked_id, jd)?;
-                        let p_ref = e.provider.global_position(view.reference_id, jd)?;
-                        Some(crate::coords::ecliptic_to_bevy(p_target - p_ref).raw())
-                    });
+                    // The celestial frame cluster already owns the current
+                    // tracked-body pose in BigSpace cells/transforms. Resolve
+                    // that pose in the declared reference grid instead of
+                    // evaluating both ephemeris endpoints again for every
+                    // trajectory on every high-rate frame. This is the same
+                    // canonical f64 hierarchy composition used by physics,
+                    // placement, and surface coordinates; no second orbital
+                    // calculation or coordinate conversion lives here.
+                    tracked_translation = frame_index
+                        .resolve(ReferenceFrame::EclipticJ2000 {
+                            center: view.reference_id,
+                        })
+                        .and_then(|reference_grid| {
+                            lunco_core::coords::pose_in_grid(
+                                f_entity,
+                                reference_grid,
+                                &q_parents,
+                                &q_grids,
+                                &q_spatial,
+                            )
+                            .map(|(position, _)| position)
+                        });
                 }
             }
         } else {

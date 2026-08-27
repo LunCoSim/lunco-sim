@@ -19,8 +19,12 @@ use lunco_core::{
     on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
     TelemetryEvent, TelemetryValue, TriggerZone,
 };
-use lunco_usd::document::WAYPOINT_MARKER_ASSET;
+use lunco_usd::document::{
+    WAYPOINT_BILLBOARD_FADE_END, WAYPOINT_BILLBOARD_OFFSET_Y, WAYPOINT_BILLBOARD_TEXT,
+    WAYPOINT_MARKER_ASSET,
+};
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_sim::billboard::UsdBillboard;
 
 use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 
@@ -68,6 +72,21 @@ pub struct RuntimeWaypointSpawner<'w, 's> {
 /// The synthetic key used by the live route and by the arrival set.
 pub fn runtime_waypoint_key(index: usize) -> String {
     format!("/__runtime_waypoint_{index}")
+}
+
+/// Attach the same generic billboard contract used by authored waypoint
+/// prims. The synthetic runtime key becomes the temporary `Name` so the
+/// shared `{index}` formatter can render the route index without teaching the
+/// billboard renderer about runtime patrol bindings.
+fn runtime_waypoint_label(index: usize) -> (Name, UsdBillboard) {
+    (
+        Name::new(runtime_waypoint_key(index)),
+        UsdBillboard {
+            template: WAYPOINT_BILLBOARD_TEXT.into(),
+            offset_y: WAYPOINT_BILLBOARD_OFFSET_Y,
+            fade_end: WAYPOINT_BILLBOARD_FADE_END,
+        },
+    )
 }
 
 /// Extend a runtime-only patrol without changing an authored behaviour shape.
@@ -171,9 +190,12 @@ fn spawn_runtime_waypoint_marker(
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
-    commands
-        .entity(marker.root_entity)
-        .try_insert(RuntimeWaypointBinding { vessel, index });
+    let (label_name, billboard) = runtime_waypoint_label(index);
+    commands.entity(marker.root_entity).try_insert((
+        RuntimeWaypointBinding { vessel, index },
+        label_name,
+        billboard,
+    ));
     Ok(())
 }
 
@@ -542,7 +564,7 @@ pub fn register(app: &mut App) {
 mod tests {
     use super::{
         append_runtime_patrol, authored_waypoint_is_next, runtime_waypoint_is_next,
-        runtime_waypoint_key,
+        runtime_waypoint_key, runtime_waypoint_label,
     };
     use std::collections::HashSet;
 
@@ -595,5 +617,24 @@ mod tests {
 
         assert!(!runtime_waypoint_is_next(2, &reached));
         assert!(runtime_waypoint_is_next(1, &reached));
+    }
+
+    #[test]
+    fn runtime_waypoint_label_uses_the_generic_billboard_contract() {
+        let (name, billboard) = runtime_waypoint_label(7);
+
+        assert_eq!(name.as_str(), "/__runtime_waypoint_7");
+        assert_eq!(
+            billboard.template,
+            lunco_usd::document::WAYPOINT_BILLBOARD_TEXT
+        );
+        assert_eq!(
+            billboard.offset_y,
+            lunco_usd::document::WAYPOINT_BILLBOARD_OFFSET_Y
+        );
+        assert_eq!(
+            billboard.fade_end,
+            lunco_usd::document::WAYPOINT_BILLBOARD_FADE_END
+        );
     }
 }

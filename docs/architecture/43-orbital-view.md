@@ -70,9 +70,14 @@ celestial body. USD controls whether a trajectory is user-visible, and the
 trajectory owner samples ephemeris only while the view is active. Its mesh and
 per-vertex fade projections are change-gated. When the Celestial domain enters
 high-rate transport, including through an independent Celestial clock scale, an
-already-sampled active curve is held while its body/frame alignment continues to
-follow the current epoch; a high-rate clock therefore does not trigger periodic
-trajectory mesh rebuilds.
+already-sampled active curve and its stamped fade buffer are held while its
+body/frame alignment continues to follow the current epoch; a high-rate clock
+therefore does not trigger periodic trajectory geometry or color-buffer rebuilds.
+Ephemeris sampling, spline tessellation, and alpha-buffer construction happen in
+compute tasks; the UI/update schedule only polls and commits completed buffers.
+Anchored alignment uses the existing BigSpace `pose_in_grid` machinery to read
+the current tracked/reference frame relationship, so the presentation path does
+not perform another orbital propagation.
 
 ## Coordinate and physics boundary
 

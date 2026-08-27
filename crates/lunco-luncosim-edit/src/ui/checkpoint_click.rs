@@ -46,7 +46,8 @@ use lunco_scene_commands::SelectedEntities;
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{
-    LayerId, UsdOp, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM, WAYPOINT_ROUTE_SCOPE,
+    waypoint_billboard_ops, LayerId, UsdOp, WAYPOINT_MARKER_ASSET, WAYPOINT_MISSION_PROGRAM,
+    WAYPOINT_ROUTE_SCOPE,
 };
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 
@@ -1193,6 +1194,7 @@ fn author_marker_ops(
         path: marker_path.clone(),
         value: [at.x, at.y, at.z],
     });
+    ops.extend(waypoint_billboard_ops(marker_path.clone()));
     (marker_path, ops)
 }
 
