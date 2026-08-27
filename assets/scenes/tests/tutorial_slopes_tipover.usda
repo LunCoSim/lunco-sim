@@ -52,6 +52,7 @@ def Xform "SlopeTest" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
     }
 
@@ -61,6 +62,7 @@ def Xform "SlopeTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_slopes_tipover.rhai@
         }
     }

@@ -215,6 +215,7 @@ def Xform "LinkTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/link.rhai@
         }
     }

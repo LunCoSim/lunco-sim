@@ -23,6 +23,7 @@ def Scope "LunCoSim" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/welcome.rhai@
         string lunco:tutorial:title = "Read the Sim UI"
         string lunco:tutorial:blurb = "Find the scene, live state, controls, and simulation time."
@@ -37,6 +38,7 @@ def Scope "LunCoSim" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@
         string lunco:tutorial:title = "Authority Handoff"
         string lunco:tutorial:blurb = "Take control of a rover, confirm the status, and release it."

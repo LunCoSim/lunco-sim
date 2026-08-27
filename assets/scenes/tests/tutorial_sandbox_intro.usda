@@ -19,6 +19,7 @@ def Xform "TutorialSandboxIntro"
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
     }
 
@@ -28,6 +29,7 @@ def Xform "TutorialSandboxIntro"
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_sandbox_intro.rhai@
         }
     }

@@ -165,6 +165,7 @@ def Xform "Rover_01" {
     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @lunco://scenarios/my_rover_mission.rhai@
         # …or author the source in place:
+        # uniform token info:implementationSource = "sourceCode"
         # uniform string info:sourceCode = '''<rhai source>'''
     }
 }
@@ -462,8 +463,8 @@ Available nodes include:
   - `uniform asset info:sourceAsset = @lunco://scenarios/foo.rhai@` — the shipped
     file, resolved through the asset boundary.
   - `uniform string info:sourceCode = '''<rhai>'''` — the source authored in place
-    in the USD layer. An edit to it is an ordinary attribute edit, so it journals, undoes
-    and replicates like any other.
+    in the USD layer when `info:implementationSource = "sourceCode"`. An edit to it is
+    an ordinary attribute edit, so it journals, undoes and replicates like any other.
   - `custom float lunco:param:<key> = <v>` — one typed attribute per per-instance setting,
     read in-script by `param(me, "<key>", default)`.
   The program child is the authored attachment point, but the runtime binds `me` to

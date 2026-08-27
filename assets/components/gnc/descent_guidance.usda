@@ -55,6 +55,7 @@ over "DescentGuidance"
         doc = "Velocity-scheduled powered-descent guidance. Flies the vehicle down on its altimeter."
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
 
         # This Modelica controller is authoritative co-simulation. Prediction

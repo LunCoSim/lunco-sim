@@ -607,9 +607,10 @@ class "LunCoProgramAPI" (
     and a script on the next; a rhai program can integrate state as readily as it can
     answer an event; one program can do both at once. What a program DOES is derived
     from what it declares — a program with `inputs:`/`outputs:` ports is a node in the
-    port graph and is stepped; a program without them runs for its effects alone. The
-    engine that runs it comes from its source's extension, exactly as USD chooses a file
-    format plugin by `.usda` / `.usdc` / `.usdz`.
+    port graph and is stepped; a program without them runs for its effects alone. Once
+    `info:implementationSource` selects `info:sourceAsset`, the engine that runs it
+    comes from that asset's extension, exactly as USD chooses a file format plugin by
+    `.usda` / `.usdc` / `.usdz`.
 
     PARAMETERS ARE PORTS. A gain is `float inputs:kv = 1.2` — an input with a constant
     instead of a connection. Wire it later and nothing about the program changes.
@@ -631,10 +632,14 @@ class "LunCoProgramAPI" (
     you want for an autopilot and must never have for an engine."""
 )
 {
-    uniform token info:implementationSource = "sourceAsset" (
+    uniform token info:implementationSource (
         doc = """Which property carries this program: a name the runtime already
         implements (`info:id`), an external file (`info:sourceAsset`), or text
         authored in place (`info:sourceCode`).
+
+        The selected arm is authoritative: exactly one of these implementation
+        arms may be populated. A populated non-selected arm is an authoring
+        conflict, not a fallback.
 
         These are `UsdShade`'s OWN property names, not a lunco spelling of them.
         `UsdShadeShader` asks exactly this question of a shader and carries exactly

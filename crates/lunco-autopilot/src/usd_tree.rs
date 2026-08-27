@@ -26,7 +26,8 @@
 //! ```usda
 //! def Xform "Rover" {
 //!     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-//!         uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@ # or inline info:sourceCode
+//!         uniform token info:implementationSource = "sourceCode"
+//!         uniform string info:sourceCode = "<root>...</root>"
 //!     }
 //! }
 //! def Scope "Route" {
@@ -39,8 +40,9 @@
 //!
 //! A mission is BOLTED ON: it is a `LunCoProgramAPI` child prim (conventionally named
 //! `Mission`) carrying the standard UsdShade-style source properties —
-//! `info:sourceCode` (inline) / `info:sourceAsset` (file), inline winning over the
-//! file. Delete the prim and the behaviour is gone. The engine is chosen by the
+//! `info:implementationSource` selects exactly one of `info:sourceCode` (inline) or
+//! `info:sourceAsset` (file); a populated non-selected arm is an authoring error.
+//! Delete the prim and the behaviour is gone. The engine is chosen by the selected
 //! source's EXTENSION: canonical `.btxml` (or interoperable `.xml`) → BT.CPP,
 //! exactly as `.mo` → Modelica and `.rhai` → script already work. There is no
 //! behaviour-specific schema and no separate
@@ -74,9 +76,9 @@ use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 use serde_json::Value;
 
-/// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the
-/// vessel's `LunCoProgramAPI` mission child, or the loaded contents of that prim's
-/// `info:sourceAsset`. Stamped on the VESSEL entity by the USD bridge
+/// The XML text of a vessel's behaviour tree — the selected inline
+/// `info:sourceCode` on the vessel's `LunCoProgramAPI` mission child, or the loaded
+/// contents of that prim's selected `info:sourceAsset`. Stamped on the VESSEL entity by the USD bridge
 /// (`lunco-usd-sim`).
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXml(pub String);

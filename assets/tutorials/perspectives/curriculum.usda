@@ -21,6 +21,7 @@ def Scope "Perspectives" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/perspectives/overview.rhai@
         string lunco:tutorial:title = "View, Build & Lunica"
         string lunco:tutorial:blurb = "Learn what each workbench perspective is for and choose the right one for the job."

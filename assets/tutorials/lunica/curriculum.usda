@@ -27,6 +27,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/overview.rhai@
         string lunco:tutorial:title = "Lunica Overview"
         string lunco:tutorial:blurb = "Learn the Lunica workbench in a short guided tour."
@@ -40,6 +41,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/workspace.rhai@
         string lunco:tutorial:title = "Your Workspace"
         string lunco:tutorial:blurb = "Find Twins, models, read-only libraries, and learning paths."
@@ -52,6 +54,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/model.rhai@
         string lunco:tutorial:title = "Open & View a Model"
         string lunco:tutorial:blurb = "Open a model, switch views, and add a connected component."
@@ -64,6 +67,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/run.rhai@
         string lunco:tutorial:title = "Compile & Run"
         string lunco:tutorial:blurb = "Compile a model, choose a run mode, and change a live input."
@@ -76,6 +80,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/experiments.rhai@
         string lunco:tutorial:title = "Experiments & Sweeps"
         string lunco:tutorial:blurb = "Override parameters and compare several runs without editing source."
@@ -88,6 +93,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/plots.rhai@
         string lunco:tutorial:title = "Plots & Results"
         string lunco:tutorial:blurb = "Read graphs, diagnostics, and solver messages."
@@ -100,6 +106,7 @@ def Scope "Lunica" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/lunica/scripting.rhai@
         string lunco:tutorial:title = "Automate with API + MCP"
         string lunco:tutorial:blurb = "Drive the workbench from scripts, the HTTP API, or MCP."

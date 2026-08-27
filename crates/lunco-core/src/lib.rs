@@ -449,6 +449,16 @@ pub struct Spacecraft {
 #[derive(Component)]
 pub struct SelectableRoot;
 
+/// Marks the topology-derived root of a mobility realization.
+///
+/// This shared capability lets mobility, networking, and USD projection agree
+/// on the vehicle owner without overloading an actuator-value registry. It is
+/// not a vehicle taxonomy: the applied USD mobility schema is the authority,
+/// and `OutputPorts` remains only the produced-value surface.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct MobilityRoot;
+
 /// Button-specific interaction intent authored by a USD prim.
 ///
 /// This deliberately lives in the render-free core.  USD loading can describe
@@ -958,6 +968,7 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<PhysicalProperties>()
             .register_type::<CelestialBody>()
             .register_type::<Spacecraft>()
+            .register_type::<MobilityRoot>()
             .register_type::<ActiveAction>()
             .register_type::<ActionStatus>()
             .register_type::<GlobalEntityId>()

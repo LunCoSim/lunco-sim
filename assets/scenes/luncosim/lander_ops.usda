@@ -235,6 +235,7 @@ def Xform "LanderTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://behaviors/lander_rover_patrol.btxml@
         }
     }
@@ -310,6 +311,7 @@ def Xform "LanderTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
         }
     }

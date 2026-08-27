@@ -190,6 +190,7 @@ def Xform "SunTrackerTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_x>
             float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Environment.outputs:sun_mount_y>
@@ -205,6 +206,7 @@ def Xform "SunTrackerTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/sun_tracker.rhai@
         }
     }

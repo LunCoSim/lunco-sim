@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use lunco_usd_bevy::{StageView, UsdRead};
+use lunco_usd_bevy::{program, StageView, UsdRead};
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -129,7 +129,23 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
         if !view.has_api_schema(&prim, "LunCoProgramAPI") {
             continue;
         }
-        let Some(source_asset) = view.asset(&prim, "info:sourceAsset") else {
+        let resolved = match program::resolve_program(&view, &prim) {
+            Ok(resolved) => resolved,
+            Err(issue) => {
+                return Err(format!(
+                    "{}: unresolved program {} at {}: {}",
+                    scene_path.display(),
+                    prim,
+                    issue.property,
+                    issue.message
+                ));
+            }
+        };
+        let program::ResolvedProgram {
+            backend: program::ProgramBackend::Rhai,
+            source: program::ProgramSource::Asset(source_asset),
+        } = resolved
+        else {
             continue;
         };
         let source_rel = lunco_assets::engine_asset_rel(&source_asset);

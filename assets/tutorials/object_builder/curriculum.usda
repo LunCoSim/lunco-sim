@@ -21,6 +21,7 @@ def Scope "ObjectBuilder" (
         prepend payload = @lunco://scenes/luncosim/sandbox_scene.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/object_builder/mount_components.rhai@
         string lunco:tutorial:title = "Build from Parts"
         string lunco:tutorial:blurb = "Select a host, inspect its USD mount sockets, and snap a component by its authored plug frame."

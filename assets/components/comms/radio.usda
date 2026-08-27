@@ -66,6 +66,7 @@ def Xform "CommsRadio" (
                     prepend apiSchemas = ["LunCoProgramAPI"]
                 )
                 {
+                    uniform token info:implementationSource = "sourceAsset"
                     uniform asset info:sourceAsset = @lunco://models/CommsLink.mo@
 
                     # This component is the rover radio endpoint. Keep its

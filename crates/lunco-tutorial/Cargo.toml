@@ -38,6 +38,9 @@ lunco-hooks = { path = "../lunco-hooks" }
 # Curriculum projection reads an already-composed USD stage from the public
 # USD boundary; it does not own asset traversal or stage assembly.
 lunco-usd-compose = { path = "../lunco-usd-compose" }
+# The shared LunCoProgramAPI resolver validates that each lesson selects one
+# Rhai sourceAsset arm before the launcher exposes it.
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 openusd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

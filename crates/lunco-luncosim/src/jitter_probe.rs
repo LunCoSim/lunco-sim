@@ -36,7 +36,7 @@ type Probed = (
 );
 
 fn sample(
-    q: Query<Probed, With<lunco_core::OutputPorts>>,
+    q: Query<Probed, With<lunco_core::MobilityRoot>>,
     time: Res<Time>,
     mut out: Local<Option<BufWriter<std::fs::File>>>,
     mut frame: Local<u64>,

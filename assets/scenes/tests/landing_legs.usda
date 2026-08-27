@@ -91,6 +91,7 @@ def Xform "LandingLegsTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/landing_legs.rhai@
         }
     }

@@ -193,6 +193,7 @@ def Xform "SandboxScene" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/g7_joints.rhai@
         }
     }

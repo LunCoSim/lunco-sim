@@ -60,6 +60,7 @@ def Xform "DiffRigTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/differential_rig.rhai@
 
             # Which case this stage is. The scenario asserts mirroring or

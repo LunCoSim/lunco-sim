@@ -3782,9 +3782,17 @@ pub fn resolve_member_classes(
                 if !view.has_api_schema(&member, "LunCoProgramAPI") {
                     continue;
                 }
-                let Some(asset) = view.asset(&member, "info:sourceAsset") else {
-                    continue;
+                let source_ref = match modelica_source_ref(&view, &member) {
+                    Ok(source_ref) => source_ref,
+                    Err(issue) => {
+                        warn!(
+                            "[domain-projection] member {} has unresolved Modelica source at {}: {}",
+                            member, issue.property, issue.message
+                        );
+                        continue;
+                    }
                 };
+                let asset = source_ref.asset;
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }

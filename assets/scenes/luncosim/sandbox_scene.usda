@@ -549,6 +549,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
@@ -558,6 +559,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/Amplifier.py@
         # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body
         # the client predicts, which only a realtime-safe program may drive.

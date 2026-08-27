@@ -29,6 +29,7 @@ def Xform "HdriTest" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/hdri.rhai@
     }
 

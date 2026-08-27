@@ -123,6 +123,7 @@ def Xform "RockerBogieTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
 
             # Which case this stage is — asserted on, not inferred from the

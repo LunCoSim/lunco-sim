@@ -34,7 +34,7 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
 - **Timeline storage** — `RegisterTimeline` / `RunStoredTimeline` +
   `ListTimelines` / `GetTimeline`, persisted to `<twin>/timelines/*.json`.
 - **USD-embedded scenarios (load)** — a `LunCoProgramAPI` child prim naming a `.rhai`
-  (`info:sourceAsset`, or `info:sourceCode` authored in place)
+  (`info:implementationSource = "sourceAsset"` or `"sourceCode"` authored in place)
   auto-attaches + runs on spawn.
 - **Execution scope** — host/standalone scenarios run authoritatively. A
   client-scoped scenario may run for local presentation and prediction, but its

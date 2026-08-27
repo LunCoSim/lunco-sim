@@ -166,7 +166,8 @@ those bypass possession, arbitration, and the authored input contract.
 A vessel is **possessable + drivable** when it carries two things:
 
 1. **An actuation surface** — the command ports a pilot or AI writes. A rover gets
-   `throttle/steer/brake` from `PhysxVehicleContextAPI` (+ a `DriveMix` chosen by the
+   `throttle/steer/brake` from `PhysxVehicleContextAPI` (the projection stamps a
+   separate `MobilityRoot` and `OutputPorts`, plus a `DriveMix` chosen by the
    drivetrain schema, e.g. `PhysxVehicleTankDifferentialAPI`); a cosim vessel gets its
    `.mo` inputs (`external_throttle`, `pitch`, …). This surface is topology-derived; you
    don't hand-write it.

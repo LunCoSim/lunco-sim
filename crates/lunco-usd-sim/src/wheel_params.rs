@@ -902,11 +902,10 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     }
     let mut vehicles: Vec<(Entity, String)> = Vec::new();
     {
-        // `OutputPorts` identifies a VEHICLE ROOT here (only a rover root carries
-        // one). Deliberately not `DriveMix`: a root whose mix failed to derive still
-        // needs to appear in this list, because the re-derive below is exactly what
-        // can give it one.
-        let mut q = world.query::<(Entity, &UsdPrimPath, &lunco_core::OutputPorts)>();
+        // `MobilityRoot` identifies the vehicle root. Deliberately not
+        // `DriveMix`: a root whose mix failed to derive still needs to appear in
+        // this list, because the re-derive below is exactly what can give it one.
+        let mut q = world.query::<(Entity, &UsdPrimPath, &lunco_core::MobilityRoot)>();
         for (e, prim, _) in q.iter(world) {
             if prim.stage_handle.id() == id {
                 vehicles.push((e, prim.path.clone()));

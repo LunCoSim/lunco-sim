@@ -69,6 +69,7 @@ def Xform "SandboxScene" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/filtered_pairs.rhai@
             custom float lunco:param:filtered = 0.0
         }

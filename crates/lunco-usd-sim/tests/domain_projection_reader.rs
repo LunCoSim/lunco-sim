@@ -187,13 +187,17 @@ fn rejects_members_whose_opinions_cannot_be_generated() {
     let view = stage.view();
     let root = SdfPath::new("/Rig").unwrap();
 
-    let errors =
-        read_network(&view, &root, &fixture_classes()).expect_err("unusable authoring is an error");
+    let errors = read_network(&view, &root, &fixture_classes())
+        .expect_err("unusable authoring is an error");
     assert!(
         errors
             .iter()
-            .any(|error| error.path == "/Rig/Battery.info:sourceAsset"
-                && error.message.contains("must author a .mo info:sourceAsset")),
+            .any(|error| {
+                error.path == "/Rig/Battery.info:sourceAsset"
+                    && error
+                        .message
+                        .contains("implementationSource selects sourceAsset but info:sourceAsset is empty")
+            }),
         "a member without a source asset must be rejected at the authored boundary: {errors:?}"
     );
     assert!(

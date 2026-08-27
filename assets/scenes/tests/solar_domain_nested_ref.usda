@@ -177,6 +177,7 @@ def Xform "SolarDomainNestedRef" (
         custom string lunco:scenario = "solar-domain-nested-ref"
         def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/solar_domain_nested_ref.rhai@
         }
     }

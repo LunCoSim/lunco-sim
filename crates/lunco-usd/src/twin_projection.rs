@@ -839,12 +839,10 @@ pub(crate) fn is_behavior_program(
         .is_some_and(|stage| {
             let view = stage.view();
             view.has_api_schema(path, "LunCoProgramAPI")
-                && (view
-                    .scalar::<String>(path, "info:sourceCode")
-                    .is_some_and(|source| source.trim_start().starts_with('<'))
-                    || lunco_usd_bevy::UsdRead::asset(&view, path, "info:sourceAsset").is_some_and(
-                        |source| lunco_core::programs::is_behavior_tree_asset(&source),
-                    ))
+                && matches!(
+                    lunco_usd_bevy::program::resolve_behavior_tree_source(&view, path),
+                    Ok(Some(_))
+                )
         })
 }
 
@@ -1027,24 +1025,19 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 // program prim. Updating its source is therefore a component
                 // replacement on that already-live vessel, NOT a subtree refresh:
                 // re-instantiating the rover here destroys its physics/cosim state.
-                if matches!(name.as_str(), "info:sourceCode" | "info:sourceAsset")
-                    && (is_behavior_program(world, scene_id, &sp)
-                        || owns_projected_behavior(world, scene_id, &sp))
+                if matches!(
+                    name.as_str(),
+                    "info:implementationSource" | "info:sourceCode" | "info:sourceAsset"
+                ) && (is_behavior_program(world, scene_id, &sp)
+                    || owns_projected_behavior(world, scene_id, &sp))
                 {
                     let source = world
                         .get_non_send::<lunco_usd_bevy::CanonicalStages>()
                         .and_then(|stages| stages.get(scene_id))
                         .map(|stage| {
                             let view = stage.view();
-                            let xml = view
-                                .scalar::<String>(&sp, "info:sourceCode")
-                                .filter(|source| source.trim_start().starts_with('<'));
-                            let asset =
-                                lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
-                                    .filter(|source| {
-                                        lunco_core::programs::is_behavior_tree_asset(source)
-                                    });
-                            (xml, asset)
+                            crate::program::selected_behavior_source_values(&view, &sp)
+                                .unwrap_or_default()
                         });
                     if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
                         let mut entity = world.entity_mut(owner);

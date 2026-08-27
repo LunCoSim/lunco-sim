@@ -4,7 +4,7 @@ use bevy::asset::AssetPlugin;
 /// ALL tests load REAL files from disk — no inline USD strings.
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_core::OutputPorts;
+use lunco_core::{MobilityRoot, OutputPorts};
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
@@ -193,11 +193,11 @@ fn test_all_rover_files_match_procedural() {
         // Find rover
         let mut q = app
             .world_mut()
-            .query_filtered::<Entity, With<OutputPorts>>();
+            .query_filtered::<Entity, With<MobilityRoot>>();
         let rover = q
             .iter(app.world())
             .next()
-            .unwrap_or_else(|| panic!("{label}: No OutputPorts (rover root) entity"));
+            .unwrap_or_else(|| panic!("{label}: No MobilityRoot (rover root) entity"));
 
         // Physics. Born Kinematic + `ShouldBeDynamic` until joints resolve and
         // readiness promotes — with no terrain in this world the hold is the

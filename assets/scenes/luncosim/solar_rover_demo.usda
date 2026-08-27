@@ -207,6 +207,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_x>
             float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_y>
@@ -234,6 +235,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://behaviors/solar_rover_patrol.btxml@
         }
 
@@ -298,6 +300,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/solar_rover_cinematic.rhai@
         }
     }

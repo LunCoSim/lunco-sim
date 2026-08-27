@@ -29,6 +29,7 @@ def Scope "Basic" (
         prepend payload = @lunco://tutorials/basic/driving_basics.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b1_driving_basics.rhai@
         string lunco:tutorial:title = "Moon Driving Basics"
         string lunco:tutorial:blurb = "Take control of a rover and climb a gentle lunar ramp."
@@ -42,6 +43,7 @@ def Scope "Basic" (
         prepend payload = @lunco://tutorials/basic/slope_test.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
         string lunco:tutorial:title = "Slopes & Tip-Over"
         string lunco:tutorial:blurb = "Tip a top-heavy rover across a slope, recover it, then climb the fall-line."
@@ -55,6 +57,7 @@ def Scope "Basic" (
         prepend payload = @lunco://tutorials/basic/rover_variants.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b4_rover_variants.rhai@
         string lunco:tutorial:title = "Rover Variants"
         string lunco:tutorial:blurb = "Compare Explorer LT, Standard, and Hauler on the same practice yard."
@@ -67,6 +70,7 @@ def Scope "Basic" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b5_join_team.rhai@
         string lunco:tutorial:title = "Join a Team Session"
         string lunco:tutorial:blurb = "Connect to a server, find your rover, and read its live telemetry."

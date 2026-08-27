@@ -1220,19 +1220,39 @@ fn process_usd_cosim_prim_read(
     // source with no declared interface is an authored source-only program; it
     // receives an observable terminal status instead of disappearing from the
     // cosim graph.
-    // A program names its source as an `asset`. The LANGUAGE comes from the file's
-    // extension, never from a second attribute: the same `.py` is a plant on one
-    // prim and a script on the next, so a `lunco:pythonModel`-style name would be
-    // asserting a role the file does not have. This is how USD itself dispatches
-    // `.usda` / `.usdc` / `.usdz`.
-    let source = reader.asset(sdf_path, "info:sourceAsset");
-    let (modelica_path, python_path) = match source.as_deref().map(solver_language) {
-        Some(Some(SolverLanguage::Modelica)) => (source.clone(), None),
-        Some(Some(SolverLanguage::Python)) => (None, source.clone()),
-        // A program this crate does not solve (a `.rhai` script, a `.xml` tree).
-        // It is somebody else's to run; it is not a cosim model.
-        Some(None) => return,
-        None => return,
+    // The shared USD resolver selects the source arm and dispatches by file
+    // format. This crate owns only Modelica and Python participants; Rhai and
+    // BehaviorTree sources remain with their own projections.
+    let resolved = match lunco_usd_bevy::program::resolve_program(reader, sdf_path) {
+        Ok(resolved) => resolved,
+        Err(issue) => {
+            warn!(
+                "[usd-cosim] program {} is unresolved at {}: {}",
+                prim_path.path, issue.property, issue.message
+            );
+            return;
+        }
+    };
+    let (backend, modelica_path, python_path) = match (resolved.backend, resolved.source) {
+        (
+            lunco_usd_bevy::program::ProgramBackend::Modelica,
+            lunco_usd_bevy::program::ProgramSource::Asset(path),
+        ) => (
+            lunco_usd_bevy::program::ProgramBackend::Modelica,
+            Some(path),
+            None,
+        ),
+        (
+            lunco_usd_bevy::program::ProgramBackend::Python,
+            lunco_usd_bevy::program::ProgramSource::Asset(path),
+        ) => (
+            lunco_usd_bevy::program::ProgramBackend::Python,
+            None,
+            Some(path),
+        ),
+        // A program this crate does not solve (a Rhai script, a behavior tree,
+        // or a built-in driver) is somebody else's to run.
+        _ => return,
     };
     let has_ports = reader
         .attr_names(sdf_path)
@@ -1435,8 +1455,8 @@ fn process_usd_cosim_prim_read(
             path.clone()
         }
         (_, Some(path)) => format!("Python:{path}"),
-        // Unreachable: `solver_language` above returned early for anything that is
-        // neither. Kept total so a new language can't silently skip publication.
+        // Unreachable after backend classification. Kept total so a new backend
+        // cannot silently skip interface publication.
         (None, None) => return,
     };
     commands.entity(entity).try_insert(SimComponent {
@@ -1482,11 +1502,7 @@ fn process_usd_cosim_prim_read(
         ),
     }
 
-    info!(
-        "[usd-cosim] program {} bound ({})",
-        prim_path.path,
-        source.as_deref().unwrap_or("<none>"),
-    );
+    info!("[usd-cosim] program {} bound ({backend:?})", prim_path.path);
 }
 
 /// A `connectors:*` property declares an acausal Modelica interface. Such a
@@ -1599,25 +1615,6 @@ fn validate_usd_modelica_port_contracts(
             .try_insert(ValidatedUsdModelicaPortContract {
                 session_id: model.session_id,
             });
-    }
-}
-
-/// The languages this crate can put a solver behind. Everything else is a program
-/// somebody else runs — the rhai engine, the behaviour-tree compiler — and this
-/// crate leaves it alone.
-enum SolverLanguage {
-    Modelica,
-    Python,
-}
-
-/// Which solver, if any, runs a program — decided by its file's extension, exactly
-/// as USD picks a file-format plugin by `.usda` / `.usdc` / `.usdz`. `None` is not
-/// an error: it is a program with a different engine behind it.
-fn solver_language(path: &str) -> Option<SolverLanguage> {
-    match path.rsplit_once('.').map(|(_, ext)| ext) {
-        Some("mo") => Some(SolverLanguage::Modelica),
-        Some("py") => Some(SolverLanguage::Python),
-        _ => None,
     }
 }
 

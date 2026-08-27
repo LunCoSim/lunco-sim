@@ -1062,6 +1062,7 @@ def Xform "DescentLander" (
     # see `models/Lander.mo`. Its `inputs:` are the vessel's control surface: the
     # control profile writes `external_throttle` / `pitch` / `roll` / `yaw` into them
     # when a session possesses this prim.
+    uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/Lander.mo@
     uniform bool lunco:program:realtimeSafe = true
 
@@ -1246,6 +1247,7 @@ def Xform "DescentLander" (
         doc = "Reacts to touchdown and propellant events. Does not fly the vehicle."
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/lander_subsystems.rhai@
     }
 
@@ -1519,6 +1521,7 @@ def Xform "DescentLander" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/BellNozzle.mo@
             float inputs:throat_radius = 0.35
             float inputs:exit_radius = 1.35
@@ -1622,6 +1625,7 @@ def Xform "DescentLander" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
             float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
             float inputs:w_max = 0.27

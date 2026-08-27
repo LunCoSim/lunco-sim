@@ -22,7 +22,8 @@ def Xform "SandboxScene" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/tests/sandbox_smoke.rhai@
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/sandbox_smoke.rhai@
         }
     }
 }

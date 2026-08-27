@@ -1,9 +1,11 @@
 //! Program drivers — the Rust half of `LunCoProgramAPI`.
 //!
-//! A `LunCoProgramAPI` prim names its implementation one of three ways, exactly as
-//! `UsdShade.Shader` does: `info:sourceAsset` (a file — the engine comes
-//! from its extension), `info:sourceCode` (text in place), or
+//! A `LunCoProgramAPI` prim selects its implementation with
+//! `info:implementationSource`, exactly as `UsdShade.Shader` does:
+//! `info:sourceAsset` (a file — the engine comes from its extension),
+//! `info:sourceCode` (text in place), or
 //! **`info:id`** — a name the runtime already implements, resolved here.
+//! The selector is strict: a populated non-selected arm is an authoring error.
 //! That third arm is `info:id = "UsdPreviewSurface"`: a thing every renderer is
 //! expected to have, named rather than shipped.
 //!

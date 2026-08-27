@@ -167,6 +167,7 @@ def Xform "PartsAttached" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached.rhai@
         }
     }

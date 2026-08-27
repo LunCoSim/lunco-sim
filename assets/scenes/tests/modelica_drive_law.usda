@@ -126,6 +126,7 @@ def Xform "ModelicaDriveLaw" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/modelica_drive_law.rhai@
         }
     }

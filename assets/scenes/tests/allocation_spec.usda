@@ -227,6 +227,7 @@ def Xform "AllocationSpec" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/allocation_spec.rhai@
         }
     }
