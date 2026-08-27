@@ -67,20 +67,13 @@ dest = "msl"
 
 ## Cache Directory
 
-All worktrees share the same cache directory via `LUNCOSIM_CACHE` in the workspace root `.cargo/config.toml`:
+All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
 
 ```
-luncosim-workspace/
-├── .cargo/config.toml    ← sets LUNCOSIM_CACHE
-├── .cache/               ← SHARED across all worktrees
-│   ├── textures/
-│   │   ├── earth_source.jpg   (downloaded)
-│   │   ├── earth.png          (processed)
-│   │   ├── moon_source.tif    (downloaded)
-│   │   └── moon.png           (processed)
-│   ├── msl/
-│   │   └── 4.1.0/             (extracted library)
-│   └── ephemeris/             (runtime-generated CSVs)
+~/.cache/lunco/            # Linux; OS equivalent on macOS/Windows
+├── textures/               (downloaded and processed)
+├── msl/                    (extracted library)
+└── ephemeris/              (runtime-generated CSVs)
 ```
 
 ## Workflow
@@ -88,7 +81,7 @@ luncosim-workspace/
 ```
 1. download  → 2. process  →  3. use
    (lunco-assets) (lunco-assets) (Bevy at runtime)
-   cache/                  cache/processed/
+   global cache/           global cache/
    earth_source.jpg        textures/earth.png
    moon_source.tif         textures/moon.png
    msl/4.1.0/

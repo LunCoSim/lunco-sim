@@ -25,12 +25,12 @@ scheme: naming the mistake legibly would make it permanent.
 
 | Scheme | Resolves to | For |
 |---|---|---|
-| `lunco://` | `assets/`, then `assets/.cache`, then a source tree's sibling `.cache/`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `lunco://` | `assets/`, then `assets/.cache`, then the machine-global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
 | `twin://<name>/…` | the Twin's authored root, then `<twin>/.cache`, then the global cache | Twin-owned content, downloaded scenarios, and intentional global reuse |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 
 Both schemes resolve **authored first, then the cache that travels with the
-unit, then (for a source checkout) its staging cache, then the shared pool**. So a downloaded binary is reachable at its logical
+unit, then the shared machine-global pool**. So a downloaded binary is reachable at its logical
 address without any authored file naming a cache, and a file the author
 committed always wins over a materialised copy of it.
 
@@ -57,15 +57,13 @@ we distribute:
   would have written to, and reports those datasets *installed* instead of
   offering to re-fetch files already on disk.
 
-During native development, the packer's `<workspace>/.cache` is also a read
-root. It is the source of the package's `assets/.cache`, so `cargo run` and the
-extracted package resolve the same fonts and processed imagery. The machine-wide `<cache>` sits underneath both as a shared convenience, never
-as a prerequisite. Writes still go there ([`DatasetScope::dest_root`]): a
-package may sit on a read-only mount, and one machine should not hold a copy of
-the same product per installation. `lunco_assets::cache_roots()` is the single
-place that order is decided; the `AssetSource`, the synchronous resolver
-(`engine_asset_local_path`) and the dataset registry all ask it, so a file the
-loader finds is a file the validator finds.
+During native development, downloads and processed outputs go directly to the
+machine-global cache. The packer copies selected manifest artifacts from that
+cache into `assets/.cache`, so a package remains self-contained while source
+runs and packaged runs use the same logical identities. `lunco_assets::cache_roots()`
+is the single place that order is decided; the `AssetSource`, the synchronous
+resolver (`engine_asset_local_path`) and the dataset registry all ask it, so a
+file the loader finds is a file the validator finds.
 
 Both `twin://` readers implement that fallback — the `AssetReader` and the
 `SchemeRegistry` handler — because they must agree: a file the asset server can
@@ -387,6 +385,6 @@ above.
 
 This keeps the manifest authoritative without bundling runtime datasets that
 must remain user-consented. The packaged `lunco://` reader checks authored
-assets, packed cache, development cache, and the machine-global cache in that
-order; Twin reads additionally check the Twin's authored/cache roots and then
-the same machine-global cache.
+assets, packed cache, and the machine-global cache in that order; Twin reads
+additionally check the Twin's authored/cache roots and then the same
+machine-global cache.

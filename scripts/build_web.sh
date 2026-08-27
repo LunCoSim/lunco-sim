@@ -53,6 +53,20 @@ error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Keep downloads on the same machine-global cache used by lunco-assets.
+# LUNCOSIM_CACHE is an explicit override for CI or custom installations.
+resolve_cache_dir() {
+    if [ -n "${LUNCOSIM_CACHE:-}" ]; then
+        echo "$LUNCOSIM_CACHE"
+        return
+    fi
+    case "$(uname -s)" in
+        Darwin*) echo "${HOME:?}/Library/Caches/lunco" ;;
+        MINGW*|MSYS*|CYGWIN*) echo "${LOCALAPPDATA:-${HOME:?}/AppData/Local}/lunco" ;;
+        *) echo "${XDG_CACHE_HOME:-${HOME:?}/.cache}/lunco" ;;
+    esac
+}
+
 # Get binary config
 get_binary_config() {
     local binary="$1"
@@ -579,7 +593,8 @@ generate_bindings() {
     # Bundle-declared runtime artifacts are staged by lunco-assets. The
     # manifest owns the delivered path and target, so a new required asset
     # cannot be silently omitted by a second hardcoded shell list.
-    local web_cache="${LUNCOSIM_CACHE:-$PROJECT_DIR/.cache}"
+    local web_cache
+    web_cache="$(resolve_cache_dir)"
     mkdir -p "$web_cache"
     LUNCOSIM_CACHE="$web_cache" cargo run -q -p lunco-assets -- download --bundle "${binary}-web"
     cargo run -q -p lunco-assets -- stage \
@@ -957,11 +972,7 @@ build_msl_bundle() {
     if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ -z "${MSL_EXCLUDE_LIBS:-}" ] \
         && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
         local msl_src
-        for candidate in \
-            "$PROJECT_DIR/../.cache/msl" \
-            "$PROJECT_DIR/.cache/msl"; do
-            if [ -d "$candidate" ]; then msl_src="$candidate"; break; fi
-        done
+        msl_src="$(resolve_cache_dir)/msl"
         if [ -n "$msl_src" ]; then
             local newer newer_bundler
             newer=$(find "$msl_src" -name '*.mo' -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
@@ -977,7 +988,7 @@ build_msl_bundle() {
     info "Packing MSL bundle for $binary..."
 
     # The bundler walks `lunco_assets::msl_source_root_path()` on the host,
-    # which lives at <workspace>/.cache/msl/ in this repo. If MSL isn't
+    # which lives at the global cache's `msl/` directory. If MSL isn't
     # materialised, the binary will exit non-zero with a clear message and
     # we surface that as a build error so we never ship without MSL.
     # Third-party libraries ship in the SAME bundle as MSL (one combined tar +
