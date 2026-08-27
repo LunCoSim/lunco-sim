@@ -50,7 +50,10 @@ This is a separate presentation path built on HUI/Flair. It uses the generic
 and the workbench's authoritative dock/pick geometry. It does not replace
 `Panel`/egui, create a second UI camera, or permit templates to mutate domain
 state. Use this skill for workbench panels and use `runtime-ui` for authored
-HTML/CSS surfaces; do not create a hybrid shim for one widget.
+HTML/CSS surfaces; do not create a hybrid shim for one widget. The
+`lunco-ui::modal` host is the canonical owner of queued modal outcomes,
+scrim, focus, Esc dismissal, and typed `CloseModal` dispatch; HUI does not yet
+supply those dialog semantics or checkbox/input state events.
 
 ## Adding a Panel
 

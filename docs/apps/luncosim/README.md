@@ -135,7 +135,7 @@ default; set `RENDER_QUALITY=balanced` when a lower-budget comparison is needed.
 ## Interactive Controls
 
 The active controls are user-configurable through the `input_bindings` section
-of `~/.lunco/settings.json`. The controller translates those bindings into
+of `<OS config dir>/lunco/settings.json`. The controller translates those bindings into
 semantic intents, and the in-app help/input overlay displays the resolved labels.
 Tutorials therefore describe actions such as forward, brake, thrust, cancel, or
 release rather than embedding physical keys. Editing or rebinding a setting is

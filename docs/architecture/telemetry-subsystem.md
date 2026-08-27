@@ -79,7 +79,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
 | **Command shape** | `ControlAnimation { playing: Option<bool>, seek_secs: Option<f64>, rate: Option<f64> }` — one verb, all-`Option`, each field a distinct control | **Copy this idiom exactly.** One `ControlTelemetry`, not five verbs. |
-| **Settings** | `SettingsSection` trait (`const KEY`) → `~/.lunco/settings.json` | `TelemetrySettings` owns telemetry defaults; its persisted section must have the current shape. |
+| **Settings** | `SettingsSection` trait (`const KEY`) → `<OS config dir>/lunco/settings.json` | `TelemetrySettings` owns telemetry defaults; its persisted section must have the current shape. |
 | **Journal** | `ExperimentOp` (`experiment_journal.rs`) — journals the *definition*, never the results | Journal channel **definitions** (undo/replay/network-sync). **Never journal samples** — `twin-journal/src/lib.rs:40` says so explicitly. |
 
 ---
@@ -405,7 +405,7 @@ value would launder a 1 Hz channel into looking like a 60 Hz one.
 
 ### A trap found while building Phase 3 — tests were writing the developer's real config
 
-`register_settings_section` **auto-adds `SettingsPlugin`**, which loads `~/.lunco/settings.json`
+`register_settings_section` **auto-adds `SettingsPlugin`**, which loads the shared LunCoSim settings file
 and installs a flush system that writes it back on *any* change to the typed resource. Correct
 for the app; actively dangerous in a test — a test app that merely installs a domain plugin
 inherits real, persistent, **cross-process** state.

@@ -52,7 +52,7 @@ impl Recents {
     ///
     /// Path resolution is the caller's job — the workbench passes the
     /// platform-appropriate config-dir path (e.g.
-    /// `lunco_assets::user_config_dir().join("recents.json")`).
+    /// `lunco_settings::user_config_dir().join("recents.json")`).
     pub fn load(path: &Path) -> Self {
         use lunco_storage::Storage;
         let bytes = match lunco_storage::FileStorage::new()
@@ -65,8 +65,8 @@ impl Recents {
     }
 
     /// Persist recents to a JSON file. Creates parent directories on
-    /// the way out — the caller doesn't have to pre-create
-    /// `~/.lunco/`.
+    /// the way out — the caller doesn't have to pre-create the config
+    /// directory.
     ///
     /// JSON rather than TOML because the document is mostly opaque
     /// path strings; serde_json round-trips them faster and produces

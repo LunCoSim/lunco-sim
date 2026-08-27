@@ -10,6 +10,7 @@ bevy = { workspace = true }
 bevy_egui = { workspace = true }
 catppuccin-egui = { workspace = true }
 lunco-assets = { workspace = true }
+lunco-settings = { path = "../lunco-settings" }
 serde = { workspace = true }
 
 # Wasm-only: fetch DejaVu Sans TTF over HTTP at runtime (the font is
@@ -17,10 +18,7 @@ serde = { workspace = true }
 # step in `scripts/build_web.sh`). Native loads from the workspace
 # cache via `std::fs` instead.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-js-sys = { workspace = true }
-web-sys = { workspace = true, features = ["Window", "Response"] }
 
 [lints]
 workspace = true

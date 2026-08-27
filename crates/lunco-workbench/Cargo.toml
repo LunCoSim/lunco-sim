@@ -79,8 +79,7 @@ lunco-storage = { path = "../lunco-storage" }
 # stable serialisation lets us skip writes when nothing changed.
 serde_json = { workspace = true }
 serde = { workspace = true }
-# `user_config_dir()` for cross-platform `~/.lunco/recents.json`
-# (Windows: `C:\Users\<user>\.lunco\`, etc.).
+# `user_config_dir()` for the cross-platform LunCoSim recents path.
 lunco-assets = { path = "../lunco-assets" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-render = { path = "../lunco-render" }

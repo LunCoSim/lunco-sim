@@ -2,13 +2,15 @@
 //!
 //! Extracted from lunco-modelica's MSL fetcher so **every** bundle distributor
 //! shares one implementation of "download a content-hashed blob over HTTP, cache
-//! it in the browser's Cache Storage, and unpack it". Two consumers today:
+//! it in the browser's Cache Storage, and unpack it". Consumers today:
 //!
 //! - **MSL** (`lunco-modelica`) — the Modelica Standard Library bundle.
 //! - **Twin terrain assets** (`lunco-terrain-surface`) — the server serves its
 //!   `twins/` directory over HTTP (staged under `assets/twins/…` next to the
 //!   wasm) and the browser client fetches the DEM heightmap/metadata from it —
 //!   the static sibling of the live `scenario_sync` transport.
+//! - **Bundled fonts** (`lunco-assets::font`) — the page-served DejaVu fallback
+//!   uses the same retry and body-resume path as every other browser asset.
 //!
 //! Everything here is **content-agnostic**: the caller passes the Cache-Storage
 //! *bucket name* (e.g. `"lunco-msl-v1"`, `"lunco-twin-v1"`) so each distributor
@@ -37,10 +39,175 @@ use std::path::PathBuf;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, RequestMode, Response};
+use web_sys::{Request, Response};
 
 #[wasm_bindgen(inline_js = "
-    export async function lunco_fetch_bytes_cached_with_progress(cacheName, path, expectedTotal, on_progress) {
+    function retryableStatus(status) {
+        return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+    }
+
+    function retryDelayMs(initialDelayMs, multiplier, maxDelayMs, failedAttempt) {
+        return Math.min(maxDelayMs, initialDelayMs * Math.pow(multiplier, Math.max(0, failedAttempt - 1)));
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function fetchWithRetry(path, headerName, headerValue, allowNotModified, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
+        const attempts = Math.max(1, maxAttempts);
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                const init = { method: 'GET', mode: 'same-origin' };
+                if (headerName && headerValue) {
+                    init.headers = { [headerName]: headerValue };
+                }
+                const response = await fetch(path, init);
+                if (response.ok || (allowNotModified && response.status === 304)) {
+                    return response;
+                }
+                const error = new Error('fetch ' + path + ': HTTP ' + response.status + ' ' + response.statusText);
+                if (!retryableStatus(response.status)) {
+                    error.nonRetryable = true;
+                }
+                throw error;
+            } catch (error) {
+                if (error && error.nonRetryable) {
+                    throw error;
+                }
+                lastError = error;
+                if (attempt < attempts) {
+                    await sleep(retryDelayMs(initialDelayMs, multiplier, maxDelayMs, attempt));
+                }
+            }
+        }
+        throw lastError || new Error('fetch ' + path + ': retry budget exhausted');
+    }
+
+    async function fetchBytesWithProgressAndResume(cache, path, expectedTotal, on_progress, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
+        const attempts = Math.max(1, maxAttempts);
+        let chunks = [];
+        let receivedLength = 0;
+        let total = expectedTotal || 0;
+        let responseForCache = null;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                const init = { method: 'GET', mode: 'same-origin' };
+                if (receivedLength > 0) {
+                    init.headers = { Range: 'bytes=' + receivedLength + '-' };
+                }
+                const response = await fetch(path, init);
+                if (!response.ok) {
+                    const error = new Error('fetch ' + path + ': HTTP ' + response.status + ' ' + response.statusText);
+                    if (!retryableStatus(response.status)) {
+                        error.nonRetryable = true;
+                    }
+                    throw error;
+                }
+
+                const status = response.status;
+                if (receivedLength > 0 && status === 206) {
+                    const contentRange = response.headers.get('content-range') || '';
+                    const match = /^bytes (\\d+)-\\d+\\/(\\d+|\\*)$/.exec(contentRange);
+                    if (!match || Number(match[1]) !== receivedLength) {
+                        const error = new Error('fetch ' + path + ': invalid resume Content-Range ' + contentRange);
+                        error.nonRetryable = true;
+                        throw error;
+                    }
+                    if (match[2] !== '*') {
+                        total = Number(match[2]) || total;
+                    }
+                } else if (receivedLength > 0 && status === 200) {
+                    // The origin ignored Range. It is safe to restart only because
+                    // this response is explicitly a complete representation.
+                    chunks = [];
+                    receivedLength = 0;
+                    total = Number(response.headers.get('content-length')) || expectedTotal || 0;
+                } else if (receivedLength === 0) {
+                    total = Number(response.headers.get('content-length')) || expectedTotal || 0;
+                }
+                responseForCache = response;
+                if (on_progress && receivedLength === 0) {
+                    try { on_progress(0, total); } catch (e) { console.warn('on_progress error:', e); }
+                }
+
+                if (!response.body) {
+                    const arrayBuffer = await response.array_buffer();
+                    const bytes = new Uint8Array(arrayBuffer);
+                    chunks.push(bytes);
+                    receivedLength += bytes.byteLength;
+                } else {
+                    const reader = response.body.getReader();
+                    while (true) {
+                        const {done, value} = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        receivedLength += value.length;
+                        if (on_progress) {
+                            try { on_progress(receivedLength, total || receivedLength); } catch (e) { console.warn('on_progress error:', e); }
+                        }
+                    }
+                }
+                if (total && receivedLength < total) {
+                    throw new Error('fetch ' + path + ': received ' + receivedLength + ' of ' + total + ' bytes');
+                }
+                const allChunks = new Uint8Array(receivedLength);
+                let position = 0;
+                for (const chunk of chunks) {
+                    allChunks.set(chunk, position);
+                    position += chunk.length;
+                }
+                if (on_progress) {
+                    try { on_progress(receivedLength, total || receivedLength); } catch (e) {}
+                }
+                if (cache) {
+                    try {
+                        const headers = new Headers(responseForCache.headers);
+                        headers.delete('content-range');
+                        headers.set('content-length', String(allChunks.byteLength));
+                        await cache.put(path, new Response(allChunks, {
+                            status: 200,
+                            headers: headers
+                        }));
+                    } catch (e) {
+                        console.warn('Failed to write to cache:', e);
+                    }
+                }
+                return allChunks;
+            } catch (error) {
+                if (error && error.nonRetryable) throw error;
+                if (attempt < attempts) {
+                    await sleep(retryDelayMs(initialDelayMs, multiplier, maxDelayMs, attempt));
+                } else {
+                    throw error;
+                }
+            }
+        }
+        throw new Error('fetch ' + path + ': retry budget exhausted');
+    }
+
+    export async function lunco_fetch_response_with_retries(path, headerName, headerValue, allowNotModified, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
+        return await fetchWithRetry(path, headerName, headerValue, allowNotModified, maxAttempts, initialDelayMs, multiplier, maxDelayMs);
+    }
+
+    export async function lunco_fetch_bytes_with_resume(path, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
+        return await fetchBytesWithProgressAndResume(null, path, 0, null, maxAttempts, initialDelayMs, multiplier, maxDelayMs);
+    }
+
+    export async function lunco_fetch_bytes_cached_with_resume(cacheName, path, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
+        let cache = null;
+        try {
+            if (typeof caches !== 'undefined' && caches) {
+                cache = await caches.open(cacheName);
+            }
+        } catch (e) {
+            console.warn('Cache Storage open failed, continuing without cache:', e);
+        }
+        return await fetchBytesWithProgressAndResume(cache, path, 0, null, maxAttempts, initialDelayMs, multiplier, maxDelayMs);
+    }
+
+    export async function lunco_fetch_bytes_cached_with_progress(cacheName, path, expectedTotal, on_progress, maxAttempts, initialDelayMs, multiplier, maxDelayMs) {
         let cache = null;
         try {
             if (typeof caches !== 'undefined' && caches) {
@@ -65,10 +232,7 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
             response = matchResponse;
             fromCache = true;
         } else {
-            response = await fetch(path);
-            if (!response.ok) {
-                throw new Error('fetch ' + path + ': HTTP ' + response.status + ' ' + response.statusText);
-            }
+            return await fetchBytesWithProgressAndResume(cache, path, expectedTotal, on_progress, maxAttempts, initialDelayMs, multiplier, maxDelayMs);
         }
 
         // Prefer the advertised Content-Length; fall back to the caller's known
@@ -154,7 +318,110 @@ extern "C" {
         path: &str,
         expected_total: f64,
         on_progress: &js_sys::Function,
+        max_attempts: f64,
+        initial_delay_ms: f64,
+        multiplier: f64,
+        max_delay_ms: f64,
     ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch)]
+    async fn lunco_fetch_response_with_retries(
+        path: &str,
+        header_name: Option<&str>,
+        header_value: Option<&str>,
+        allow_not_modified: bool,
+        max_attempts: f64,
+        initial_delay_ms: f64,
+        multiplier: f64,
+        max_delay_ms: f64,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch)]
+    async fn lunco_fetch_bytes_with_resume(
+        path: &str,
+        max_attempts: f64,
+        initial_delay_ms: f64,
+        multiplier: f64,
+        max_delay_ms: f64,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch)]
+    async fn lunco_fetch_bytes_cached_with_resume(
+        cache_name: &str,
+        path: &str,
+        max_attempts: f64,
+        initial_delay_ms: f64,
+        multiplier: f64,
+        max_delay_ms: f64,
+    ) -> Result<JsValue, JsValue>;
+}
+
+fn retry_arguments(settings: &lunco_settings::DownloadSettings) -> (f64, f64, f64, f64) {
+    (
+        settings.max_attempts as f64,
+        settings.retry_initial_delay_secs as f64 * 1000.0,
+        settings.retry_backoff_multiplier as f64,
+        settings.retry_max_delay_secs as f64 * 1000.0,
+    )
+}
+
+async fn fetch_response_with_retries(
+    path: &str,
+    conditional_header: Option<(&str, &str)>,
+    allow_not_modified: bool,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Response, String> {
+    let (max_attempts, initial_delay_ms, multiplier, max_delay_ms) = retry_arguments(settings);
+    let (header_name, header_value) = conditional_header
+        .map(|(name, value)| (Some(name), Some(value)))
+        .unwrap_or((None, None));
+    lunco_fetch_response_with_retries(
+        path,
+        header_name,
+        header_value,
+        allow_not_modified,
+        max_attempts,
+        initial_delay_ms,
+        multiplier,
+        max_delay_ms,
+    )
+    .await
+    .map_err(|e| format!("fetch {path}: {e:?}"))?
+    .dyn_into()
+    .map_err(|_| "fetch result not a Response".to_string())
+}
+
+async fn fetch_bytes_with_resume(
+    bucket: Option<&str>,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
+    let (max_attempts, initial_delay_ms, multiplier, max_delay_ms) = retry_arguments(settings);
+    let js = match bucket {
+        Some(bucket) => {
+            lunco_fetch_bytes_cached_with_resume(
+                bucket,
+                path,
+                max_attempts,
+                initial_delay_ms,
+                multiplier,
+                max_delay_ms,
+            )
+            .await
+        }
+        None => {
+            lunco_fetch_bytes_with_resume(
+                path,
+                max_attempts,
+                initial_delay_ms,
+                multiplier,
+                max_delay_ms,
+            )
+            .await
+        }
+    }
+    .map_err(|e| format!("fetch {path}: {e:?}"))?;
+    Ok(js_sys::Uint8Array::new(&js).to_vec())
 }
 
 /// Cache-first streamed fetch with per-chunk progress. Returns the full body.
@@ -174,11 +441,21 @@ pub async fn fetch_cached_with_progress(
     path: &str,
     expected_total: u64,
     on_progress: &js_sys::Function,
+    settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
-    let js =
-        lunco_fetch_bytes_cached_with_progress(bucket, path, expected_total as f64, on_progress)
-            .await
-            .map_err(|e| format!("fetch {path}: {e:?}"))?;
+    let (max_attempts, initial_delay_ms, multiplier, max_delay_ms) = retry_arguments(settings);
+    let js = lunco_fetch_bytes_cached_with_progress(
+        bucket,
+        path,
+        expected_total as f64,
+        on_progress,
+        max_attempts,
+        initial_delay_ms,
+        multiplier,
+        max_delay_ms,
+    )
+    .await
+    .map_err(|e| format!("fetch {path}: {e:?}"))?;
     Ok(js_sys::Uint8Array::new(&js).to_vec())
 }
 
@@ -209,34 +486,11 @@ pub async fn open_cache(bucket: &str) -> Result<web_sys::Cache, String> {
 /// Fetch `path` over the network **without** touching Cache Storage. The
 /// uncached fallback for insecure contexts (LAN IP / `file://`) where
 /// [`open_cache`] fails because `window.caches` is undefined.
-pub async fn network_fetch_uncached(path: &str) -> Result<Vec<u8>, String> {
-    let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-    let opts = RequestInit::new();
-    opts.set_method("GET");
-    opts.set_mode(RequestMode::SameOrigin);
-    let request = Request::new_with_str_and_init(path, &opts)
-        .map_err(|e| format!("Request::new {path}: {e:?}"))?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| format!("fetch {path}: {e:?}"))?;
-    let response: Response = resp_value
-        .dyn_into()
-        .map_err(|_| "fetch result not a Response".to_string())?;
-    if !response.ok() {
-        return Err(format!(
-            "fetch {path}: HTTP {} {}",
-            response.status(),
-            response.status_text()
-        ));
-    }
-    let array_buffer = JsFuture::from(
-        response
-            .array_buffer()
-            .map_err(|e| format!("array_buffer {path}: {e:?}"))?,
-    )
-    .await
-    .map_err(|e| format!("array_buffer await {path}: {e:?}"))?;
-    Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
+pub async fn network_fetch_uncached(
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
+    fetch_bytes_with_resume(None, path, settings).await
 }
 
 /// Cheap existence check — is `path` in `bucket`? Does **not** read the (up to
@@ -276,44 +530,11 @@ pub async fn cache_lookup(cache: &web_sys::Cache, path: &str) -> Result<Option<V
 /// Fetch `path` from the network and write the response into `cache`. Whole-body
 /// (no progress) — use [`fetch_cached_with_progress`] when you need a bar.
 pub async fn network_fetch_and_cache(
-    cache: &web_sys::Cache,
+    bucket: &str,
     path: &str,
+    settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
-    let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-    let opts = RequestInit::new();
-    opts.set_method("GET");
-    opts.set_mode(RequestMode::SameOrigin);
-    let request = Request::new_with_str_and_init(path, &opts)
-        .map_err(|e| format!("Request::new {path}: {e:?}"))?;
-
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| format!("fetch {path}: {e:?}"))?;
-    let response: Response = resp_value
-        .dyn_into()
-        .map_err(|_| "fetch result not a Response".to_string())?;
-    if !response.ok() {
-        return Err(format!(
-            "fetch {path}: HTTP {} {}",
-            response.status(),
-            response.status_text()
-        ));
-    }
-
-    // Clone the response to cache it while we read the body.
-    let response_to_cache = response
-        .clone()
-        .map_err(|e| format!("response.clone: {e:?}"))?;
-    let _ = JsFuture::from(cache.put_with_str(path, &response_to_cache)).await;
-
-    let array_buffer = JsFuture::from(
-        response
-            .array_buffer()
-            .map_err(|e| format!("array_buffer {path}: {e:?}"))?,
-    )
-    .await
-    .map_err(|e| format!("array_buffer await {path}: {e:?}"))?;
-    Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
+    fetch_bytes_with_resume(Some(bucket), path, settings).await
 }
 
 /// **Cache-first-forever** fetch of a same-origin asset: return the cached copy
@@ -323,17 +544,21 @@ pub async fn network_fetch_and_cache(
 /// [`fetch_bytes_cached_conditional`] instead. `path` is fetched verbatim
 /// (same-origin), so the caller passes the full origin-relative URL
 /// (e.g. `assets/twins/moonbase/terrain/…/heightmap.tif`).
-pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+pub async fn fetch_bytes_cached(
+    bucket: &str,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     // Insecure contexts (LAN IP / `file://`) have no Cache Storage — degrade to a
     // plain (uncached) fetch so the asset still loads instead of throwing.
     let cache = match open_cache(bucket).await {
         Ok(c) => c,
-        Err(_) => return network_fetch_uncached(path).await,
+        Err(_) => return network_fetch_uncached(path, settings).await,
     };
     if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
         return Ok(bytes);
     }
-    network_fetch_and_cache(&cache, path).await
+    network_fetch_and_cache(bucket, path, settings).await
 }
 
 /// **Stale-while-revalidate** fetch for the one *mutable* artifact per bucket
@@ -342,28 +567,31 @@ pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, Str
 /// blobs it names are themselves cache-first-forever, so serving last session's
 /// manifest just serves last session's (already-cached) blobs. Cold (no cached
 /// copy): fall back to the network, then to cache on a race.
-pub async fn fetch_bytes_revalidated(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+pub async fn fetch_bytes_revalidated(
+    bucket: &str,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     // No Cache Storage in insecure contexts — just fetch fresh each time.
     let cache = match open_cache(bucket).await {
         Ok(c) => c,
-        Err(_) => return network_fetch_uncached(path).await,
+        Err(_) => return network_fetch_uncached(path, settings).await,
     };
     if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
         // Serve stale now; refresh for next time off the critical path.
         let bucket = bucket.to_string();
         let p = path.to_string();
+        let settings = settings.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(c) = open_cache(&bucket).await {
-                if let Err(e) = network_fetch_and_cache(&c, &p).await {
-                    bevy::log::debug!("[web_fetch] {p}: background revalidate failed: {e}");
-                }
+            if let Err(e) = network_fetch_and_cache(&bucket, &p, &settings).await {
+                bevy::log::debug!("[web_fetch] {p}: background revalidate failed: {e}");
             }
         });
         return Ok(bytes);
     }
     // Cold cache — must hit the network. Fall back to a cached copy only if a
     // concurrent fetch landed one in the meantime.
-    match network_fetch_and_cache(&cache, path).await {
+    match network_fetch_and_cache(bucket, path, settings).await {
         Ok(bytes) => Ok(bytes),
         Err(net_err) => match cache_lookup(&cache, path).await {
             Ok(Some(bytes)) => {
@@ -386,19 +614,23 @@ pub async fn fetch_bytes_revalidated(bucket: &str, path: &str) -> Result<Vec<u8>
 /// the *next* load sees the new content. Unlike [`fetch_bytes_revalidated`]
 /// this never re-downloads an unchanged multi-MB body. Cold cache (or insecure
 /// context): same behavior as [`fetch_bytes_cached`].
-pub async fn fetch_bytes_cached_conditional(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+pub async fn fetch_bytes_cached_conditional(
+    bucket: &str,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     // No Cache Storage in insecure contexts — degrade to a plain (uncached)
     // fetch so the asset still loads instead of throwing.
     let cache = match open_cache(bucket).await {
         Ok(c) => c,
-        Err(_) => return network_fetch_uncached(path).await,
+        Err(_) => return network_fetch_uncached(path, settings).await,
     };
     if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
         // Serve stale now; validate against the server off the critical path.
-        spawn_conditional_revalidate(bucket, path);
+        spawn_conditional_revalidate(bucket, path, settings);
         return Ok(bytes);
     }
-    network_fetch_and_cache(&cache, path).await
+    network_fetch_and_cache(bucket, path, settings).await
 }
 
 /// [`fetch_cached_with_progress`] + the background *conditional* revalidation
@@ -413,25 +645,32 @@ pub async fn fetch_cached_with_progress_conditional(
     path: &str,
     expected_total: u64,
     on_progress: &js_sys::Function,
+    settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
     // Probe before the fetch: revalidation only applies to a pre-existing
     // cache entry. In insecure contexts this is `false` (no Cache Storage)
     // and the inline-JS fetch below degrades to a plain network fetch.
     let was_cached = cache_has(bucket, path).await;
-    let bytes = fetch_cached_with_progress(bucket, path, expected_total, on_progress).await?;
+    let bytes =
+        fetch_cached_with_progress(bucket, path, expected_total, on_progress, settings).await?;
     if was_cached {
-        spawn_conditional_revalidate(bucket, path);
+        spawn_conditional_revalidate(bucket, path, settings);
     }
     Ok(bytes)
 }
 
 /// Detach [`conditional_revalidate`] onto the browser event loop (best-effort;
 /// failures are logged at debug — the cached copy already served the caller).
-fn spawn_conditional_revalidate(bucket: &str, path: &str) {
+fn spawn_conditional_revalidate(
+    bucket: &str,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) {
     let bucket = bucket.to_string();
     let path = path.to_string();
+    let settings = settings.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = conditional_revalidate(&bucket, &path).await {
+        if let Err(e) = conditional_revalidate(&bucket, &path, &settings).await {
             bevy::log::debug!("[web_fetch] {path}: background conditional revalidate failed: {e}");
         }
     });
@@ -443,7 +682,11 @@ fn spawn_conditional_revalidate(bucket: &str, path: &str) {
 /// untouched; on 200 the fresh response replaces the entry so the next load
 /// picks it up — the running session keeps the bytes it already served (no
 /// hot-swap).
-async fn conditional_revalidate(bucket: &str, path: &str) -> Result<(), String> {
+async fn conditional_revalidate(
+    bucket: &str,
+    path: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<(), String> {
     let cache = open_cache(bucket).await?;
     let match_value = JsFuture::from(cache.match_with_str(path))
         .await
@@ -477,23 +720,8 @@ async fn conditional_revalidate(bucket: &str, path: &str) -> Result<(), String> 
         }
     };
 
-    let opts = RequestInit::new();
-    opts.set_method("GET");
-    opts.set_mode(RequestMode::SameOrigin);
-    let req_headers = web_sys::Headers::new().map_err(|e| format!("Headers::new: {e:?}"))?;
-    req_headers
-        .set(cond_header, &validator)
-        .map_err(|e| format!("Headers::set {cond_header}: {e:?}"))?;
-    opts.set_headers(req_headers.as_ref());
-    let request = Request::new_with_str_and_init(path, &opts)
-        .map_err(|e| format!("Request::new {path}: {e:?}"))?;
-    let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| format!("fetch {path}: {e:?}"))?;
-    let response: Response = resp_value
-        .dyn_into()
-        .map_err(|_| "fetch result not a Response".to_string())?;
+    let response =
+        fetch_response_with_retries(path, Some((cond_header, &validator)), true, settings).await?;
     match response.status() {
         304 => {
             bevy::log::debug!("[web_fetch] {path}: 304 Not Modified — cached copy is current");

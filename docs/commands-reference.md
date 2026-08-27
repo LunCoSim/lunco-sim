@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**191 commands** across **26** crates. All documented.
+**192 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -51,6 +51,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Workbench UI & panels**
 
+- [`lunco-ui`](#lunco-ui) (1 command)
 - [`lunco-workbench`](#lunco-workbench) (35 commands)
 
 **Tutorials & HUD**
@@ -493,9 +494,10 @@ actually call, with the fields the deserializer actually accepts. See the
  Authoritative: whatever camera mode the avatar is in (orbit focus on a
  planet, spring-arm follow, surface mode), this strips it and reinstates a
  `FreeFlightCamera` at the requested pose — an API client asking for a
- specific view must always get it. `eye` and `target` use the semantic
- `ActivePhysicsFrame`; the concrete grid is resolved from that resource so a
- previous orbit focus cannot put the camera in a different frame.
+ specific view must always get it. `eye` and `target` speak the semantic
+ [`lunco_core::ActivePhysicsFrame`]; the concrete grid is resolved from that
+ resource so a previous orbit focus or a canonical render-only grid cannot
+ put the camera in a different frame.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
@@ -1806,15 +1808,28 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ## Workbench UI & panels
 
+### `lunco-ui` <a id="lunco-ui"></a>
+
+#### `CloseModal`
+
+ Dismiss the currently displayed modal without closing the application.
+
+ This is intentionally separate from CloseWindow: external API/Rhai
+ callers must be able to release a UI consent dialog while the simulation,
+ network API, and download tasks continue running.
+
+- *defined in:* `crates/lunco-ui/src/modal/mod.rs`
+- *fields:* none — call with `CloseModal` (no params)
+
 ### `lunco-workbench` <a id="lunco-workbench"></a>
 
 #### `ActivatePerspective`
 
  Activate a registered [`Perspective`](crate::Perspective) by its
- `PerspectiveId` string. The luncosim registers `sandbox_view`, `rover_build`,
- `terrain_sculpt`, and `object_builder`; the last two are explicit authoring
- modes hidden from the default title-bar switcher. Unknown ids produce a
- user-visible status error.
+ `PerspectiveId` string. The luncosim registers `sandbox_view`,
+ `rover_build`, `terrain_sculpt`, and `object_builder`; the last two are
+ explicit authoring modes and are hidden from the default title-bar
+ switcher. Unknown ids produce a user-visible status error.
 
 - *defined in:* `crates/lunco-workbench/src/perspective_command.rs`
 
@@ -3227,7 +3242,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 191 commands from the runtime schema; scanned 674 .rs files for docs (0 parse failure(s) skipped).
+<!-- 192 commands from the runtime schema; scanned 674 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_core::{on_command, register_commands, Command};
 
 /// Opaque id for a queued modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +56,21 @@ pub enum ModalBody {
     Text(String),
     Custom(Arc<dyn Fn(&mut egui::Ui) + Send + Sync>),
 }
+
+/// Dismiss the currently displayed modal without closing the application.
+///
+/// This is intentionally separate from CloseWindow: external API/Rhai
+/// callers must be able to release a UI consent dialog while the simulation,
+/// network API, and download tasks continue running.
+#[Command(default)]
+pub struct CloseModal {}
+
+#[on_command(CloseModal)]
+fn on_close_modal(_trigger: On<CloseModal>, mut queue: ResMut<ModalQueue>) {
+    queue.dismiss_active();
+}
+
+register_commands!(on_close_modal,);
 
 /// One pending modal.
 pub struct ModalRequest {
@@ -98,6 +114,19 @@ impl ModalQueue {
     pub fn cancel(&mut self, id: ModalId) {
         self.pending.retain(|(qid, _)| *qid != id);
         self.results.remove(&id);
+    }
+
+    /// Resolve the displayed modal as cancelled, allowing its owner to finish
+    /// cleanup and advance the queue. This is the API/Rhai-safe close path;
+    /// removing the request without an outcome would strand the owner's state.
+    pub fn dismiss_active(&mut self) -> bool {
+        let Some((id, _)) = self.pending.first() else {
+            return false;
+        };
+        let id = *id;
+        self.pending.remove(0);
+        self.results.insert(id, ModalOutcome::Cancelled);
+        true
     }
 
     /// `true` if any modal is currently displayed or queued.
@@ -174,5 +203,15 @@ mod tests {
         let ids: Vec<_> = ["A", "B", "C"].iter().map(|t| q.request(req(t))).collect();
         let order: Vec<_> = q.pending.iter().map(|(id, _)| *id).collect();
         assert_eq!(order, ids);
+    }
+
+    #[test]
+    fn dismiss_active_resolves_the_head_for_its_owner() {
+        let mut q = ModalQueue::default();
+        let id = q.request(req("A"));
+        assert!(q.dismiss_active());
+        assert!(q.pending.is_empty());
+        assert_eq!(q.poll(id), Some(ModalOutcome::Cancelled));
+        assert!(!q.dismiss_active());
     }
 }

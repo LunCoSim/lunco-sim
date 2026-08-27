@@ -406,8 +406,11 @@ impl CatalogScan {
 /// An unreadable asset yields [`SpawnMeta::default`] — *not spawnable*. A file we
 /// cannot read has not told us it is a part, and guessing "yes" is how a broken
 /// asset would end up in the palette.
-pub async fn read_asset_meta(asset: &AssetFile) -> SpawnMeta {
-    match lunco_assets::asset_read::read_asset_text(asset).await {
+pub async fn read_asset_meta(
+    asset: &AssetFile,
+    settings: &lunco_settings::DownloadSettings,
+) -> SpawnMeta {
+    match lunco_assets::asset_read::read_asset_text(asset, settings).await {
         Ok(src) => {
             let mut meta = parse_spawn_meta(&src);
             #[cfg(not(target_arch = "wasm32"))]
@@ -449,6 +452,7 @@ pub fn dispatch_usd_scan(
     manifest: &lunco_assets::discovery::AssetManifest,
     roots: &lunco_assets::twin_source::TwinRoots,
     scan: &mut CatalogScan,
+    settings: &lunco_settings::DownloadSettings,
 ) -> usize {
     let mut started = 0;
     let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
@@ -458,13 +462,15 @@ pub fn dispatch_usd_scan(
             return 0;
         }
     };
+    let settings = settings.clone();
     for asset in assets {
         if !scan.dispatched.insert(asset.asset_path.clone()) {
             continue;
         }
         let tx = scan.tx.clone();
+        let settings = settings.clone();
         let fut = async move {
-            let meta = read_asset_meta(&asset).await;
+            let meta = read_asset_meta(&asset, &settings).await;
             // Receiver lives in a resource for the app's lifetime; a send error
             // just means shutdown raced us.
             let _ = tx.send(Scanned { asset, meta });
@@ -565,6 +571,7 @@ pub fn scan_usd_into_catalog_blocking(
     manifest: &lunco_assets::discovery::AssetManifest,
     roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut SpawnCatalog,
+    settings: &lunco_settings::DownloadSettings,
 ) -> usize {
     let mut added = 0;
     let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
@@ -575,7 +582,7 @@ pub fn scan_usd_into_catalog_blocking(
         }
     };
     for asset in assets {
-        let meta = futures_lite::future::block_on(read_asset_meta(&asset));
+        let meta = futures_lite::future::block_on(read_asset_meta(&asset, settings));
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;
         }
@@ -902,7 +909,10 @@ def Xform \"BrokenWheel\" (\n\
             abs_path: path,
             twin: None,
         };
-        let meta = futures_lite::future::block_on(read_asset_meta(&asset));
+        let meta = futures_lite::future::block_on(read_asset_meta(
+            &asset,
+            &lunco_settings::DownloadSettings::default(),
+        ));
 
         assert!(
             !meta.spawnable,

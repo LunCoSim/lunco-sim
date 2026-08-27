@@ -2,7 +2,7 @@
 
 Centralised user settings.
 
-One file on disk (`~/.lunco/settings.json`), one resource in the ECS, and a
+One file on disk in the OS config directory (`lunco/settings.json`), one resource in the ECS, and a
 typed-section API that domain crates use to register their own slice. The crate
 handles load-on-startup, persist-on-change, and atomic disk writes — call sites
 just read & mutate their `Res<MySection>` like any other resource.
@@ -22,7 +22,18 @@ state, not user prefs.)
 - `AppSettingsExt::register_settings_section::<S>()` — register a section.
 - `Settings` — the raw merged document (`raw(key)` / `iter()`).
 - `ProfileSettings` — built-in profile section.
+- `DownloadSettingsPlugin` / `ensure_download_settings` / `DownloadSettings` — the shared network policy
+  used by asset provisioning, browser fetches, scenario HTTP, MSL, and desktop
+  updates. `max_attempts` includes the first request; retry delays are
+  exponential and capped.
 - `settings_path()` / `load_section_from_disk::<S>()` — helpers.
+
+The download section is stored in the same `settings.json` as every other
+preference. Its defaults are 3 parallel downloads, 5 total attempts, a 1
+second initial delay, a multiplier of 2, and a 60 second delay cap. The
+configuration directory is resolved here (`LUNCOSIM_CONFIG`, then the OS
+configuration directory); `lunco-assets` owns only the separate regenerable
+cache directory.
 
 ## Registering a section
 

@@ -76,6 +76,13 @@ All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
 └── ephemeris/              (runtime-generated CSVs)
 ```
 
+The user configuration path is owned by `lunco-settings`; it is not another
+asset-cache path. `settings.json` contains the shared `DownloadSettings`
+section. The CLI and every runtime downloader use that section for the same
+bounded transport policy: `max_attempts` is the total request count, and
+retry delays grow exponentially from the configured initial delay up to the
+configured cap. The in-app Data & libraries panel is the settings editor.
+
 ## Workflow
 
 ```

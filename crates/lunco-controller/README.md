@@ -10,7 +10,7 @@ Flight Software (FSW) can consume.
 
 - **Input Mapping** — `assets/config/keybindings.json` supplies the bundled
   semantic defaults; user overrides live under `input_bindings` in
-  `~/.lunco/settings.json`. The resolved resource is projected into every live
+  `<OS config dir>/lunco/settings.json`. The resolved resource is projected into every live
   avatar input map when it changes.
 - **Intent Translation** — Maps semantic `UserIntent` actions into the shared
   `SetPorts` command surface and authored per-vessel `ControlBinding`s.

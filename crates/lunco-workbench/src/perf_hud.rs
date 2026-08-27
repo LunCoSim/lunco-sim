@@ -1,7 +1,7 @@
 //! Performance HUD for the status bar.
 //!
 //! Off by default. Persisted via `lunco-settings` (one shared
-//! `~/.lunco/settings.json`) so the user's choice survives restarts.
+//! shared LunCoSim settings file so the user's choice survives restarts.
 //! Three ways to flip it:
 //!
 //! - **Settings menu** — `Settings ▸ Performance HUD` checkbox.
@@ -147,7 +147,7 @@ fn register_settings_menu(world: &mut World) {
             .on_hover_text(
                 "Bottom-right of the status bar shows live FPS, frame \
                  time, and physics step time when an avian-aware crate \
-                 is loaded. Persisted to ~/.lunco/settings.json.",
+                 is loaded. Persisted to the shared LunCoSim settings file.",
             );
         if settings != original {
             ctx.set_resource(settings);

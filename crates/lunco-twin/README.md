@@ -108,7 +108,7 @@ match TwinMode::open(Path::new("./my_base"))? {
    answers membership questions.
 
 Project-owned presentation preferences belong in `twin.toml`, not the
-user-global `~/.lunco/settings.json`. The `[downloads]` section currently
+user-global `<OS config dir>/lunco/settings.json`. The `[downloads]` section currently
 contains `suppress_missing_prompt`; it defaults to `false`, so a project with
 missing declared datasets shows the consent window when opened. The Workbench
 Settings menu and the popup checkbox both update this same manifest field.

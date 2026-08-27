@@ -246,6 +246,23 @@ Native HTTP reads have connect, response, and per-read body deadlines. The body
 deadline is an inactivity bound, not a total transfer-duration limit, so a
 large healthy DEM can continue while a silent peer releases its worker.
 
+### One download policy and resumable recovery
+
+`lunco-settings::DownloadSettings` is the single application-wide transport
+policy. It is persisted in `<OS config dir>/lunco/settings.json` and is used by
+the CLI, interactive asset registry, scenario HTTP, MSL, terrain, browser
+Cache Storage fetches, and the desktop updater. `max_attempts` counts the first
+request; subsequent waits use exponential backoff with a configured multiplier
+and maximum delay. No downloader owns a second retry constant or settings file.
+
+Native file downloads and update ranges retain the received prefix in their
+staging file/vector. When the origin honors `Range`, the next attempt requests
+only the missing suffix. If an origin ignores the range and returns a complete
+`200`, the response is restarted safely; a partial `200` or an invalid
+`Content-Range` is rejected. Browser fetches apply the same policy and retain
+received chunks across `fetch()` attempts. Final cache publication remains
+atomic/content-verified, so partial bytes are never exposed as an asset.
+
 ### Domain metadata rides with the declaration
 
 A dataset's transport (`url`, `dest`, `sha256`) and its *meaning* belong in one

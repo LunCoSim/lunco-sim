@@ -88,5 +88,6 @@ impl Plugin for LuncoUiPlugin {
             bevy_egui::EguiPrimaryContextPass,
             modal::host::render_modal_host.in_set(lunco_workbench::ApplicationOverlayRenderSet),
         );
+        modal::register_all_commands(app);
     }
 }

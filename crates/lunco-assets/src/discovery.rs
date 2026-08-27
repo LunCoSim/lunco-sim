@@ -163,7 +163,7 @@ pub fn resolve_asset(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = roots;
-        None
+        Ok(None)
     }
 }
 
@@ -194,6 +194,7 @@ pub struct AssetDiscoveryPlugin;
 
 impl Plugin for AssetDiscoveryPlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         app.init_resource::<AssetManifest>();
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, load_manifest_native);
@@ -256,7 +257,7 @@ mod wasm_manifest {
     const MANIFEST_URL: &str = "assets/manifest.json";
 
     #[derive(Resource)]
-    pub struct ManifestFetch {
+    pub(super) struct ManifestFetch {
         tx: crossbeam_channel::Sender<Result<Vec<String>, String>>,
         rx: crossbeam_channel::Receiver<Result<Vec<String>, String>>,
     }
@@ -268,14 +269,18 @@ mod wasm_manifest {
         }
     }
 
-    pub fn start_fetch(fetch: Res<ManifestFetch>) {
+    pub(super) fn start_fetch(
+        fetch: Res<ManifestFetch>,
+        settings: Res<lunco_settings::DownloadSettings>,
+    ) {
         let tx = fetch.tx.clone();
+        let settings = settings.clone();
         wasm_bindgen_futures::spawn_local(async move {
             // Not cached: the manifest is the ONE mutable artifact here — it
             // describes the current bundle, and a stale copy would hide a
             // freshly-deployed asset. The files it names are immutable per
             // deployment and are cached individually (see `asset_read`).
-            let result = crate::web_fetch::network_fetch_uncached(MANIFEST_URL)
+            let result = crate::web_fetch::network_fetch_uncached(MANIFEST_URL, &settings)
                 .await
                 .and_then(|bytes| {
                     serde_json::from_slice::<Vec<String>>(&bytes)
@@ -285,7 +290,7 @@ mod wasm_manifest {
         });
     }
 
-    pub fn drain_fetch(fetch: Res<ManifestFetch>, mut manifest: ResMut<AssetManifest>) {
+    pub(super) fn drain_fetch(fetch: Res<ManifestFetch>, mut manifest: ResMut<AssetManifest>) {
         let Ok(result) = fetch.rx.try_recv() else {
             return;
         };

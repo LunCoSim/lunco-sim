@@ -19,7 +19,10 @@ Runtime templates currently rely on:
 HUI and Flair support additional features, but a feature outside this contract
 needs a real surface test before it becomes a shared interface convention.
 Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and
-browser-style event propagation are not supplied by this layer.
+browser-style event propagation are not supplied by this layer. It also does
+not provide the `lunco-ui::modal` queue/outcome contract, scrim, focus, or
+typed close dispatch; dialogs that need those semantics stay in the shared
+egui modal host.
 
 ## Data and actions
 

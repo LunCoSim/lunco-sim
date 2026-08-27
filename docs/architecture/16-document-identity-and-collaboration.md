@@ -282,8 +282,10 @@ So `OpenOutcome::KeptDirty` is *not* USD's behaviour. It is our policy layer, an
 that is the correct place for it. A kept-dirty (or kept-unparsable) re-open is a
 surprise the user must *see*, not a silent no-op: the USD open path raises a status
 badge in UI builds alongside the log line. A modal "Reload / Keep my edits?" prompt
-is the eventual form; the workbench has no modal infrastructure yet, so the badge is
-the honest interim.
+is still future policy work for this open path. The shared `lunco-ui::modal` host
+now provides the queue, scrim, focus, Esc dismissal, and typed close/outcome
+plumbing; until this policy is connected to it, the badge remains the honest
+interim.
 
 ## 10. Disk staleness: detection is generic; policy is "badge, never reload"
 

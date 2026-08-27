@@ -4,7 +4,8 @@
 //! one, window layout) in a global store keyed by a hash of the
 //! workspace path — **not** inside the project folder, so repos stay
 //! clean. We do the same: each Twin gets a
-//! `~/.lunco/workspace-state/<hash>.json` keyed off its root path.
+//! the shared LunCoSim config directory's `workspace-state/<hash>.json`, keyed
+//! off its root path.
 //!
 //! ## What's stored (and what isn't)
 //!
@@ -18,7 +19,7 @@
 //!   data is captured now so it's ready when it lands.
 //!
 //! Global, app-wide preferences (theme, perf HUD, **default window
-//! geometry**) stay in `~/.lunco/settings.json` via `lunco-settings` —
+//! geometry**) stay in the shared LunCoSim settings file via `lunco-settings` —
 //! see [`crate::window_persistence`]. This module owns only the
 //! per-project slice.
 //!
@@ -393,7 +394,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// Resolve the on-disk path for a Twin's state file:
 /// `<config>/workspace-state/<fnv1a-hex>.json`. Honours the
-/// `LUNCOSIM_CONFIG` override via `lunco_assets::user_config_dir`.
+/// `LUNCOSIM_CONFIG` override via `lunco_settings::user_config_dir`.
 ///
 /// The root is canonicalized first when possible so cwd-relative and
 /// absolute spellings of the same folder collapse to one key; falls back
@@ -403,7 +404,7 @@ pub fn workspace_state_path(twin_root: &Path) -> PathBuf {
     let canonical = lunco_storage::canonicalize_file_path(twin_root)
         .unwrap_or_else(|_| twin_root.to_path_buf());
     let key = fnv1a64(canonical.to_string_lossy().as_bytes());
-    lunco_assets::user_config_dir()
+    lunco_settings::user_config_dir()
         .join("workspace-state")
         .join(format!("{key:016x}.json"))
 }
@@ -865,7 +866,7 @@ mod tests {
     /// End-to-end: save round-trips through disk, and a state file whose
     /// stored `twin_root` doesn't match the lookup root is rejected
     /// (hash-collision guard). One test so the `LUNCOSIM_CONFIG` env
-    /// override (read by `user_config_dir`) isn't raced by siblings.
+    /// override (read by `lunco_settings::user_config_dir`) isn't raced by siblings.
     #[test]
     fn save_load_roundtrip_and_collision_guard() {
         let tmp = std::env::temp_dir().join(format!(

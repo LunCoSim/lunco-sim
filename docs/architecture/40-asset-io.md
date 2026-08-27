@@ -5,7 +5,9 @@
 **TL;DR.** Domain crates read shippable assets through
 `bevy::asset::AssetServer`; user-data bytes and mutations go through
 `lunco-storage`; asset identity, resolution, and cache policy belong to
-`lunco-assets`. `lunco-workbench` may own picker and command routing, but it
+`lunco-assets`. The shared retry/backoff policy is owned by
+`lunco-settings::DownloadSettings` and is passed to every network fetch path.
+`lunco-workbench` may own picker and command routing, but it
 must not perform backend I/O itself. Never use `std::fs::read*`,
 `std::thread::spawn`, `std::time::Instant`, or `tokio::fs` in a wasm-shipped
 path. These are denied by clippy **on the wasm target**, which is the only

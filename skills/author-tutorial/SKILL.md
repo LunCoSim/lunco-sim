@@ -164,7 +164,7 @@ label or `()` for an explicitly unbound intent. `input_hint(name)` is the copy
 helper that renders that state as `unbound`; it never selects a key or drives
 the simulation. Use these for labels, and gate progress on semantic commands
 or authoritative state rather than raw key names. The settings owner is the
-`input_bindings` section in `~/.lunco/settings.json`.
+`input_bindings` section in `<OS config dir>/lunco/settings.json`.
 
 **Advancing objectives — always on a real action, never a timer:**
 - `requires_event: "cmd:<Name>"` — any command dispatch lands on the bus as

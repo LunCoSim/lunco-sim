@@ -2,7 +2,7 @@
 //!
 //! VSCode reopens with the same window bounds it closed with. We do the
 //! same: the *global default* geometry rides in the one shared
-//! `~/.lunco/settings.json` under the `"window"` key, via
+//! the shared LunCoSim settings file under the `"window"` key, via
 //! [`lunco_settings`] — the canonical home for persisted user
 //! preferences (AGENTS.md §3). Per-Twin window bounds layer on top in
 //! [`crate::workspace_state`] (VSCode's `workspaceStorage`); this module

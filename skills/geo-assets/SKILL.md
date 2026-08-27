@@ -36,6 +36,12 @@ successful asset postcondition. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
+Downloads use the shared `download` section in the user settings file
+(`lunco-settings::DownloadSettings`): attempts include the first request,
+delays are exponential and capped, and a failed body read resumes from the
+received prefix with HTTP `Range` when the source supports it. The CLI and the
+interactive window therefore have one policy and one cache/path resolver.
+
 ## Where files live (cache resolution)
 
 - **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,

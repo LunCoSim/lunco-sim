@@ -333,8 +333,8 @@ pub(crate) fn persist_journal_periodic(
 /// `<twin>/history/journal.json` when a twin opens, and save it back on every
 /// explicit [`DocumentSaved`] **and** on a debounced periodic tick. Registered
 /// by both the GUI workspace and the headless server — the former per-crate
-/// global `lunco-doc-bevy` copy (which wrote to `~/.lunco/journal/`) is retired,
-/// so there is now one history location and one code path (DRY).
+/// global `lunco-doc-bevy` copy is retired, so there is now one history
+/// location and one code path (DRY).
 pub struct WorkspaceJournalPlugin;
 
 impl Plugin for WorkspaceJournalPlugin {

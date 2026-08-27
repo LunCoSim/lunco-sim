@@ -5,11 +5,10 @@
 //! as one unit: assets added by a release arrive, and files absent from the
 //! release are not retained as an accidental second asset tree.
 
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
@@ -20,7 +19,9 @@ use lunco_workbench::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 use lunco_workbench::WorkbenchLayout;
 use serde::{Deserialize, Serialize};
 use velopack::sources::UpdateSource;
-use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset, VelopackAssetFeed};
+use velopack::{
+    NetworkError, UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset, VelopackAssetFeed,
+};
 
 const UPDATE_STATUS_SOURCE: &str = "updates";
 /// Public machine-only repository containing immutable update releases.
@@ -30,9 +31,6 @@ pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-si
 /// than applying an unnecessarily short timeout to the complete 90 MB package.
 const UPDATE_HTTP_TIMEOUT: Duration = Duration::from_secs(45);
 const UPDATE_DOWNLOAD_CHUNK_BYTES: u64 = 1024 * 1024;
-const UPDATE_DOWNLOAD_ATTEMPTS: usize = 3;
-const UPDATE_RETRY_DELAYS: [Duration; UPDATE_DOWNLOAD_ATTEMPTS - 1] =
-    [Duration::from_secs(1), Duration::from_secs(4)];
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const UPDATE_CHANNEL: &str = "win-x64";
 #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
@@ -69,6 +67,7 @@ const UPDATE_PACKAGE_GUIDANCE: &str = "Run the official Velopack package from it
 struct TimeoutGithubSource {
     repository: &'static str,
     prerelease: bool,
+    settings: lunco_settings::DownloadSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,10 +86,15 @@ struct GithubReleaseAsset {
 }
 
 impl TimeoutGithubSource {
-    fn new(repository: &'static str, prerelease: bool) -> Self {
+    fn new(
+        repository: &'static str,
+        prerelease: bool,
+        settings: lunco_settings::DownloadSettings,
+    ) -> Self {
         Self {
             repository,
             prerelease,
+            settings,
         }
     }
 
@@ -115,8 +119,15 @@ impl TimeoutGithubSource {
 
     fn request_text(&self, url: &str, accept: &str) -> Result<String, velopack::Error> {
         let agent = update_http_agent();
-        let mut response = agent.get(url).header("Accept", accept).call()?;
-        Ok(response.body_mut().read_to_string()?)
+        lunco_assets::download::retry_with_backoff(
+            &self.settings,
+            || {
+                let mut response = agent.get(url).header("Accept", accept).call()?;
+                Ok(response.body_mut().read_to_string()?)
+            },
+            is_retryable_update_error,
+            || true,
+        )
     }
 
     fn asset_url(release: &GithubRelease, asset_name: &str) -> Result<String, velopack::Error> {
@@ -161,11 +172,27 @@ impl TimeoutGithubSource {
         }
 
         let agent = update_http_agent();
-        let mut file = File::create(local_file)?;
-        let mut offset = 0_u64;
+        // Velopack may call this source again with the same staging path after
+        // a failed download. Keep complete ranges already written there and
+        // resume at the next range instead of truncating the package back to
+        // byte zero. A partial range is discarded and fetched again below.
+        let existing_len = std::fs::metadata(local_file)
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
+        let mut offset = if existing_len <= size {
+            (existing_len / UPDATE_DOWNLOAD_CHUNK_BYTES) * UPDATE_DOWNLOAD_CHUNK_BYTES
+        } else {
+            0
+        };
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(local_file)?;
+        file.set_len(offset)?;
+        file.seek(SeekFrom::Start(offset))?;
         while offset < size {
             let end = (offset + UPDATE_DOWNLOAD_CHUNK_BYTES - 1).min(size - 1);
-            let bytes = download_range_with_retries(&agent, url, offset, end)?;
+            let bytes = download_range_with_policy(&agent, url, offset, end, &self.settings)?;
             let expected = end - offset + 1;
             if bytes.len() as u64 != expected {
                 return Err(velopack::Error::Other(format!(
@@ -251,34 +278,47 @@ fn update_http_agent() -> ureq::Agent {
         .into()
 }
 
-fn download_range_with_retries(
+fn download_range_with_policy(
     agent: &ureq::Agent,
     url: &str,
     start: u64,
     end: u64,
+    settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, velopack::Error> {
-    let mut last_error = None;
-    for attempt in 0..UPDATE_DOWNLOAD_ATTEMPTS {
-        match download_range(agent, url, start, end) {
-            Ok(bytes) => return Ok(bytes),
-            Err(error) => {
-                last_error = Some(error);
-                if let Some(delay) = UPDATE_RETRY_DELAYS.get(attempt) {
-                    thread::sleep(*delay);
-                }
+    let mut bytes = Vec::new();
+    lunco_assets::download::retry_with_backoff(
+        settings,
+        || {
+            let next_start = start.saturating_add(bytes.len() as u64);
+            if next_start > end {
+                return Ok(());
             }
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| velopack::Error::Other("The update range request failed.".to_owned())))
+            download_range_into(agent, url, next_start, end, &mut bytes)
+        },
+        is_retryable_update_error,
+        || true,
+    )?;
+    Ok(bytes)
 }
 
-fn download_range(
+fn is_retryable_update_error(error: &velopack::Error) -> bool {
+    match error {
+        velopack::Error::Network(network) => match network.as_ref() {
+            NetworkError::Http(error) => lunco_assets::download::is_retryable_download_error(error),
+            NetworkError::Url(_) => false,
+        },
+        velopack::Error::Io(_) => true,
+        _ => false,
+    }
+}
+
+fn download_range_into(
     agent: &ureq::Agent,
     url: &str,
     start: u64,
     end: u64,
-) -> Result<Vec<u8>, velopack::Error> {
+    bytes: &mut Vec<u8>,
+) -> Result<(), velopack::Error> {
     let range = format!("bytes={start}-{end}");
     let mut response = agent
         .get(url)
@@ -291,9 +331,20 @@ fn download_range(
             response.status().as_u16()
         )));
     }
-    let mut bytes = Vec::new();
-    response.body_mut().as_reader().read_to_end(&mut bytes)?;
-    Ok(bytes)
+    let valid_start = response
+        .headers()
+        .get("content-range")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes "))
+        .and_then(|value| value.split_once('-'))
+        .and_then(|(start, _)| start.parse::<u64>().ok());
+    if valid_start != Some(start) {
+        return Err(velopack::Error::Other(format!(
+            "The update server returned an invalid Content-Range for {range}."
+        )));
+    }
+    response.body_mut().as_reader().read_to_end(bytes)?;
+    Ok(())
 }
 
 /// Persisted preference for the native desktop updater.
@@ -404,6 +455,7 @@ pub(crate) struct UpdatePlugin;
 
 impl Plugin for UpdatePlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         app.register_settings_section::<UpdateSettings>()
             .init_resource::<UpdateState>()
             .init_resource::<UpdateActions>()
@@ -620,7 +672,9 @@ fn process_update_actions(
     mut actions: ResMut<UpdateActions>,
     mut state: ResMut<UpdateState>,
     mut tasks: ResMut<UpdateTasks>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
+    let settings = settings.clone();
     if actions.check_requested {
         actions.check_requested = false;
         let can_start_check = matches!(
@@ -638,7 +692,9 @@ fn process_update_actions(
             state.ready = None;
             state.error = None;
             state.download_progress = None;
-            tasks.check = Some(IoTaskPool::get().spawn(async { check_for_updates() }));
+            let retry_settings = settings.clone();
+            tasks.check =
+                Some(IoTaskPool::get().spawn(async move { check_for_updates(retry_settings) }));
         }
     }
 
@@ -654,9 +710,11 @@ fn process_update_actions(
                 // bounded range request is connecting.
                 state.download_progress = None;
                 tasks.download_progress = Some(Arc::new(Mutex::new(progress_receiver)));
-                tasks.download = Some(
-                    IoTaskPool::get().spawn(async move { download_update(info, progress_sender) }),
-                );
+                let retry_settings = settings.clone();
+                tasks.download =
+                    Some(IoTaskPool::get().spawn(async move {
+                        download_update(info, progress_sender, retry_settings)
+                    }));
             }
         }
     }
@@ -666,7 +724,7 @@ fn process_update_actions(
         let Some(info) = state.ready.clone() else {
             return;
         };
-        match create_update_manager() {
+        match create_update_manager(&settings) {
             Ok(manager) => {
                 if let Err(error) = manager.apply_updates_and_restart(&info) {
                     state.status = UpdateStatus::Error;
@@ -1018,8 +1076,8 @@ fn update_status_detail(state: &UpdateState) -> String {
     }
 }
 
-fn check_for_updates() -> UpdateCheckResult {
-    let manager = match create_update_manager() {
+fn check_for_updates(settings: lunco_settings::DownloadSettings) -> UpdateCheckResult {
+    let manager = match create_update_manager(&settings) {
         Ok(manager) => manager,
         Err(velopack::Error::NotInstalled(_)) => return UpdateCheckResult::NotInstalled,
         Err(error) => {
@@ -1037,8 +1095,12 @@ fn check_for_updates() -> UpdateCheckResult {
     }
 }
 
-fn download_update(info: UpdateInfo, progress: mpsc::Sender<i16>) -> UpdateDownloadResult {
-    let result = create_update_manager()
+fn download_update(
+    info: UpdateInfo,
+    progress: mpsc::Sender<i16>,
+    settings: lunco_settings::DownloadSettings,
+) -> UpdateDownloadResult {
+    let result = create_update_manager(&settings)
         .and_then(|manager| manager.download_updates(&info, Some(progress)))
         .map_err(|error| user_facing_update_error("download the update", error));
     UpdateDownloadResult { info, result }
@@ -1048,8 +1110,10 @@ fn clamp_download_progress(progress: i16) -> u8 {
     progress.clamp(0, 100) as u8
 }
 
-fn create_update_manager() -> Result<UpdateManager, velopack::Error> {
-    let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true);
+fn create_update_manager(
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<UpdateManager, velopack::Error> {
+    let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true, settings.clone());
     UpdateManager::new(
         source,
         Some(velopack::UpdateOptions {
@@ -1202,7 +1266,8 @@ mod tests {
 
     #[test]
     fn timeout_source_targets_machine_feed_with_bounded_range_downloads() {
-        let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true);
+        let settings = lunco_settings::DownloadSettings::default();
+        let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true, settings.clone());
 
         assert_eq!(
             source.releases_url(),
@@ -1210,7 +1275,7 @@ mod tests {
         );
         assert_eq!(UPDATE_DOWNLOAD_CHUNK_BYTES, 1024 * 1024);
         assert!(UPDATE_HTTP_TIMEOUT.as_secs() > 0);
-        assert_eq!(UPDATE_DOWNLOAD_ATTEMPTS, 3);
+        assert_eq!(source.settings.max_attempts, settings.max_attempts);
     }
 
     #[test]
@@ -1240,8 +1305,71 @@ mod tests {
             .expect("write range response");
         });
 
-        let bytes = download_range(&update_http_agent(), &format!("http://{address}"), 3, 6)
-            .expect("range request succeeds");
+        let bytes = download_range_with_policy(
+            &update_http_agent(),
+            &format!("http://{address}"),
+            3,
+            6,
+            &lunco_settings::DownloadSettings {
+                max_attempts: 1,
+                retry_initial_delay_secs: 0,
+                ..Default::default()
+            },
+        )
+        .expect("range request succeeds");
+        assert_eq!(bytes, b"3456");
+    }
+
+    #[test]
+    fn range_download_resumes_a_truncated_chunk() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read test server address");
+        let server = std::thread::spawn(move || {
+            for expected_range in ["bytes=3-6", "bytes=5-6"] {
+                let (mut stream, _) = listener.accept().expect("accept range request");
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0_u8; 256];
+                    let length = stream.read(&mut chunk).expect("read range request");
+                    request.extend_from_slice(&chunk[..length]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                assert!(request.contains(&format!("range: {expected_range}")));
+                if expected_range == "bytes=3-6" {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 3-6/10\r\n\r\n34",
+                        )
+                        .expect("write truncated range response");
+                } else {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\nContent-Range: bytes 5-6/10\r\n\r\n56",
+                        )
+                        .expect("write resumed range response");
+                }
+            }
+        });
+
+        let bytes = download_range_with_policy(
+            &update_http_agent(),
+            &format!("http://{address}"),
+            3,
+            6,
+            &lunco_settings::DownloadSettings {
+                max_attempts: 2,
+                retry_initial_delay_secs: 0,
+                ..Default::default()
+            },
+        )
+        .expect("truncated range resumes from its received prefix");
+        server.join().expect("resume server completed");
         assert_eq!(bytes, b"3456");
     }
 }

@@ -30,7 +30,7 @@
 //! ```bash
 //! cargo run -p lunco-assets --bin build_msl_assets -- \
 //!     --out dist/lunica/msl \
-//!     --extra-root ~/.cache/luncosim/thermofluidstream \
+//!     --extra-root ~/.cache/lunco/thermofluidstream \
 //!     --discover-extras
 //! ```
 //!

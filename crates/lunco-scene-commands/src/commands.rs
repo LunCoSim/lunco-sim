@@ -66,10 +66,11 @@ pub fn on_rescan_spawn_catalog(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut scan: ResMut<crate::catalog::CatalogScan>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
         scan.forget();
-        let n = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan);
+        let n = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan, &settings);
         info!("RESCAN_SPAWN_CATALOG: re-reading {n} USD asset(s)");
     }
 }
@@ -3226,6 +3227,7 @@ pub fn maintain_catalogs(
     mut scan: ResMut<crate::catalog::CatalogScan>,
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut last_twins: Local<Vec<String>>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     let Some(roots) = twin_roots.as_deref() else {
         return;
@@ -3244,7 +3246,7 @@ pub fn maintain_catalogs(
     }
     *last_twins = names;
 
-    let s = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan);
+    let s = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan, &settings);
     let w = scan_wgsl_into_catalog(&manifest, roots, &mut shaders);
     if s > 0 || w > 0 {
         info!("CATALOG_SCAN: reading {s} USD asset(s), +{w} shader(s)");
@@ -3390,6 +3392,10 @@ register_commands!(
 
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
+        // Catalog/source reads may fetch browser-served assets. Keep the
+        // settings resource available when this headless-safe plugin is used
+        // without the GUI dataset plugin.
+        lunco_settings::ensure_download_settings(app);
         // Every `#[Command]` this crate owns — type + observer in one call, so a
         // verb can't end up observable-but-unconstructible (the old split wired
         // the observer by hand and then patched the type registry separately, and

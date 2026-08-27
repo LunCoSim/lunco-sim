@@ -471,11 +471,12 @@ fn start_read(
     {
         editor.state.request = request;
     }
+    let settings = world.resource::<lunco_settings::DownloadSettings>().clone();
 
     #[cfg(not(target_arch = "wasm32"))]
     let task = AsyncComputeTaskPool::get().spawn(async move {
         if let Some(asset) = asset {
-            lunco_assets::asset_read::read_asset_text(&asset).await
+            lunco_assets::asset_read::read_asset_text(&asset, &settings).await
         } else {
             lunco_storage::read_file_sync(&path)
                 .map_err(|error| format!("failed to read {}: {error:?}", path.display()))
@@ -496,7 +497,7 @@ fn start_read(
         let (tx, result) = crossbeam_channel::bounded(1);
         wasm_bindgen_futures::spawn_local(async move {
             let read = if let Some(asset) = asset {
-                lunco_assets::asset_read::read_asset_text(&asset).await
+                lunco_assets::asset_read::read_asset_text(&asset, &settings).await
             } else {
                 lunco_storage::read_file_sync(&path)
                     .map_err(|error| format!("failed to read {}: {error:?}", path.display()))

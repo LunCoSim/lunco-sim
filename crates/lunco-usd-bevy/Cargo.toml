@@ -75,6 +75,7 @@ anyhow = { workspace = true }
 # native-read / web-fetch procedure).
 ab_glyph = "0.2"
 lunco-assets = { workspace = true }
+lunco-settings = { path = "../lunco-settings" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [dev-dependencies]

@@ -16,7 +16,7 @@ uses the small prelude surface exposed for those lesson-level concerns.
 ## Current input labels
 
 The controller owns the resolved user keymap in the persisted
-`input_bindings` section of `~/.lunco/settings.json`. Tutorial copy must read
+`input_bindings` section of `<OS config dir>/lunco/settings.json`. Tutorial copy must read
 semantic labels from that resource instead of spelling physical keys:
 
 ```rhai

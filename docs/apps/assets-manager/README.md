@@ -8,6 +8,7 @@ The **Assets Manager** (`lunco-assets`) is a command-line tool for managing exte
 - **Integrity Check**: Verifies downloads against SHA-256 hashes.
 - **Texture Processing**: Converts and resizes raw textures (JPEG, TIFF, SVG) into optimized PNGs for the engine.
 - **Cache Management**: Ensures all git worktrees share a single cache directory, avoiding redundant downloads.
+- **Shared retry policy**: Uses `download` in the one `settings.json` owned by `lunco-settings`; the same total-attempt and exponential-backoff policy is used by the app and updater.
 
 ## CLI Usage
 
@@ -33,7 +34,7 @@ cargo run -p lunco-assets -- <ACTION> [FLAGS]
 
 ## Cache Layout
 
-Assets are stored in a shared `.cache/` directory (typically at the workspace root or `~/.cache/lunco/` depending on configuration):
+Assets are stored in the OS-global cache returned by `lunco_assets::cache_dir()` (typically `~/.cache/lunco/` on Linux):
 
 ```
 .cache/
@@ -44,6 +45,11 @@ Assets are stored in a shared `.cache/` directory (typically at the workspace ro
 │   └── 4.1.0/             (Modelica Standard Library)
 └── models/                (External glTF/USD assets)
 ```
+
+Retry settings are stored separately from this regenerable cache in
+`lunco_settings::settings_path()` (`~/.config/lunco/settings.json` on Linux,
+unless `LUNCOSIM_CONFIG` is set). Edit them in Settings → Data & libraries or
+let the CLI read the same values; there is no second CLI-specific retry file.
 
 ## See also
 

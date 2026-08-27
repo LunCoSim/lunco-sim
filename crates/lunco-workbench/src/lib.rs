@@ -34,10 +34,11 @@
 //! ## What's persisted across restarts
 //!
 //! - **Window geometry** (size / position / maximized) — global default
-//!   in `~/.lunco/settings.json` via `lunco-settings`. See
+//!   in the OS config directory via `lunco-settings`. See
 //!   [`window_persistence`].
 //! - **Per-Twin UI state** (active perspective + open-document list) —
-//!   `~/.lunco/workspace-state/<hash>.json`, keyed by Twin path,
+//!   `workspace-state/<hash>.json` in the shared LunCoSim config directory,
+//!   keyed by Twin path,
 //!   VSCode-`workspaceStorage` style. See [`workspace_state`].
 //!
 //! ## What's deferred
@@ -784,6 +785,10 @@ pub struct OfflineRecordingPresentation {
 
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
+        // Source browsing can read browser-served assets, so the shared
+        // transport policy must exist even when the workbench is composed
+        // without the dataset or updater plugins.
+        lunco_settings::ensure_download_settings(app);
         // Survive transient GPU validation errors (e.g. the Windows
         // window-resize depth/color size mismatch) instead of panicking the
         // render thread. No-op when there's no RenderApp (headless/API-only).
@@ -3763,7 +3768,7 @@ fn render_layout(
                 // TODO(wasm): the browser has no folder picker that
                 // hands back a usable path (`webkitdirectory` only
                 // exposes loose files, not a writable Twin root), and
-                // recents are persisted to `~/.lunco/recents.json` —
+                // recents are persisted to the shared LunCoSim config directory —
                 // there is no home dir on wasm and recorded paths
                 // can't be re-read (no filesystem, picked content is
                 // consumed once). Wasm equivalents need a directory
@@ -3788,7 +3793,7 @@ fn render_layout(
                     // lists per VS Code precedent — recently-edited
                     // files within a Twin shouldn't crowd out the
                     // much-shorter list of recently-opened projects.
-                    // Persisted to `~/.lunco/recents.json`
+                    // Persisted to the shared LunCoSim config directory
                     // (cross-platform) by `WorkspacePlugin`.
                     let (recent_twins, recent_files) = {
                         let ws = world.resource::<WorkspaceResource>();
@@ -6002,7 +6007,7 @@ fn register_graphics_settings_menu(world: &mut World) {
         .on_hover_text(
             "Enable dynamic micro-relief normal mapping and albedo mottle. \
                  Turning this off improves WebAssembly/browser frame rate. \
-                 Persisted to ~/.lunco/settings.json.",
+                 Persisted to the shared LunCoSim settings file.",
         );
         ui.add(
             egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
@@ -6010,7 +6015,7 @@ fn register_graphics_settings_menu(world: &mut World) {
         )
         .on_hover_text(
             "Distance around each active terrain camera that requests the finest \
-             available terrain geometry. Persisted to ~/.lunco/settings.json.",
+             available terrain geometry. Persisted to the shared LunCoSim settings file.",
         );
         ui.add(
             egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
@@ -6019,7 +6024,7 @@ fn register_graphics_settings_menu(world: &mut World) {
         .on_hover_text(
             "Extra distance that keeps already-refined tiles resident while the \
              camera moves away, preventing fine-to-coarse-to-fine flicker. \
-             Persisted to ~/.lunco/settings.json.",
+             Persisted to the shared LunCoSim settings file.",
         );
         if settings != original {
             ctx.set_resource(settings);

@@ -989,6 +989,7 @@ pub struct ThemePlugin;
 
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
+        lunco_settings::ensure_download_settings(app);
         app.init_resource::<Theme>()
             .init_resource::<fonts::FontsInstalled>()
             .add_systems(
@@ -1039,6 +1040,7 @@ fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>
 fn install_fallback_fonts_once(
     mut contexts: bevy_egui::EguiContexts,
     mut done: ResMut<fonts::FontsInstalled>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if done.0 {
         return;
@@ -1057,10 +1059,15 @@ fn install_fallback_fonts_once(
         // page bundle. Fire-and-forget; the install happens on the
         // next frame after the bytes land. Until then egui uses the
         // default font and math/arrow glyphs tofu briefly.
-        fonts::spawn_wasm_font_fetch(ctx.clone(), "./fonts/DejaVuSans.ttf".to_string());
+        fonts::spawn_wasm_font_fetch(
+            ctx.clone(),
+            "./fonts/DejaVuSans.ttf".to_string(),
+            settings.clone(),
+        );
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = settings;
         fonts::install_fallback_fonts(ctx);
     }
     done.0 = true;

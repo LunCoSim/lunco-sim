@@ -140,6 +140,10 @@ struct CameraPathSet;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
+        // Failed-asset diagnostic labels load the shared fallback font on the
+        // browser, so this standalone scene plugin also installs the common
+        // network policy when no higher-level asset plugin is present.
+        lunco_settings::ensure_download_settings(app);
         // USD mesh and light projection consumes the authoritative graphics
         // settings. Initialise the documented default at this boundary so
         // projectors never invent a separate quality profile.
@@ -7033,8 +7037,11 @@ fn install_diagnostic_font(font: &mut DiagnosticLabelFont, bytes: Vec<u8>) {
 /// Startup: kick off the DejaVu Sans load via `lunco-assets` (which owns the
 /// native-read / web-fetch procedure) and stash the receiver for
 /// [`poll_diagnostic_label_font`] to drain.
-fn load_diagnostic_label_font(mut commands: Commands) {
-    let rx = lunco_assets::font::load_dejavu_sans_bytes();
+fn load_diagnostic_label_font(
+    mut commands: Commands,
+    settings: Res<lunco_settings::DownloadSettings>,
+) {
+    let rx = lunco_assets::font::load_dejavu_sans_bytes(&settings);
     commands.insert_resource(DiagnosticFontLoad(std::sync::Mutex::new(rx)));
 }
 

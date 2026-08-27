@@ -153,7 +153,7 @@ fn register_settings_menu(world: &mut World) {
         if ui.checkbox(&mut settings.enabled, "Transmit my cursor position")
             .on_hover_text(
                 "Share your mouse cursor position with other collaborators in real-time. \
-                 Persisted to ~/.lunco/settings.json.",
+                 Persisted to the shared LunCoSim settings file.",
             )
             .changed()
         {

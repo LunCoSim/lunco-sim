@@ -18,10 +18,12 @@
 //!
 //! The endpoint is untrusted: every fetched blob is re-hashed and must match the CID
 //! we asked for (`cid_for_content(&bytes) == cid`), so a hostile or misconfigured
-//! server can withhold bytes but never substitute them. A failed fetch (network,
-//! 404, hash mismatch) drops the CID from `requested` so it retries on the next
-//! manifest — and if HTTP is unavailable entirely, the caller falls back to the
-//! in-session chunk path.
+//! server can withhold bytes but never substitute them. The shared
+//! `DownloadSettings` policy retries transient transport/body failures while the
+//! received prefix is retained for an HTTP-Range resume. A terminal failure is
+//! reported visibly and remains claimed for this manifest revision, avoiding a
+//! per-frame retry hot loop. If HTTP is unavailable entirely, the caller falls
+//! back to the in-session chunk path.
 
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -43,12 +45,6 @@ pub(crate) struct FetchOutcome {
     pub bytes: Option<Vec<u8>>,
 }
 
-/// How many times to retry a single asset before giving up on it for this manifest
-/// revision. Covers a transient network blip; does NOT paper over a server that
-/// serves bytes which don't match their CID (e.g. a file the host is still writing)
-/// — that fails identically every time, and retrying it forever is a hot loop.
-const MAX_ATTEMPTS: u32 = 3;
-
 /// Client-side channel carrying HTTP fetch results (sibling of `AssetPersist`).
 #[derive(Resource)]
 pub struct AssetHttpFetch {
@@ -56,12 +52,6 @@ pub struct AssetHttpFetch {
     rx: Receiver<FetchOutcome>,
     /// Number of fetches currently in flight (bounded by `MAX_INFLIGHT_FETCHES`).
     inflight: usize,
-    /// Failed attempts per CID. A CID that exhausts `MAX_ATTEMPTS` is left in
-    /// `requested` — i.e. never re-issued — so the scenario simply never reaches
-    /// `all_cached` instead of spinning. Cleared when a new revision lands.
-    attempts: std::collections::HashMap<Vec<u8>, u32>,
-    /// The revision `attempts` refers to.
-    revision: Option<[u8; 32]>,
 }
 
 /// Result-queue capacity. BOUNDED for the same reason as lunco-api's HTTP
@@ -81,8 +71,6 @@ impl Default for AssetHttpFetch {
             tx,
             rx,
             inflight: 0,
-            attempts: Default::default(),
-            revision: None,
         }
     }
 }
@@ -100,6 +88,7 @@ pub fn fetch_missing_assets_http(
     mut downloads: ResMut<AssetDownloads>,
     mut fetch: ResMut<AssetHttpFetch>,
     persist: Res<AssetPersist>,
+    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if role.is_host() {
         return;
@@ -117,30 +106,17 @@ pub fn fetch_missing_assets_http(
     if !probe.settled_for(manifest.revision) {
         return;
     }
-    // A new scenario revision retires the old failure tally.
-    if fetch.revision != Some(manifest.revision) {
-        fetch.revision = Some(manifest.revision);
-        fetch.attempts.clear();
-    }
-
     // Drain finished fetches first, freeing slots for the issue loop below.
     while let Ok(outcome) = fetch.rx.try_recv() {
         fetch.inflight = fetch.inflight.saturating_sub(1);
         let Some(bytes) = outcome.bytes else {
-            // Retry a few times (transient network), then give up on this asset for
-            // this revision. Leaving the CID in `requested` is what stops the retry:
-            // the issue loop below skips it, so `all_cached` stays false and the
-            // scene simply doesn't load — loudly, once, instead of a hot loop.
-            let n = fetch.attempts.entry(outcome.cid.clone()).or_insert(0);
-            *n += 1;
-            if *n < MAX_ATTEMPTS {
-                downloads.forget_requested(&outcome.cid);
-            } else {
-                error!(
-                    "[net] giving up on scenario asset after {MAX_ATTEMPTS} attempts \
-                     (bytes never matched their CID) — scenario will not finish loading"
-                );
-            }
+            // The shared transport policy has already exhausted its configured
+            // attempts. Keep the request claimed so this frame cannot spin.
+            error!(
+                "[net] giving up on scenario asset after {} configured attempts \
+                 (bytes never matched their CID) — scenario will not finish loading",
+                settings.max_attempts
+            );
             continue;
         };
         // Fan out to EVERY manifest path carrying this CID (byte-identical files
@@ -181,23 +157,28 @@ pub fn fetch_missing_assets_http(
         downloads.mark_requested(asset.cid.clone());
         fetch.inflight += 1;
         let url = format!("{base}{cid}");
-        spawn_fetch(fetch.tx.clone(), asset.cid.clone(), url);
+        spawn_fetch(fetch.tx.clone(), asset.cid.clone(), url, settings.clone());
     }
 }
 
 /// Fetch `url`, verify the bytes hash back to `cid`, and report the outcome.
 /// Fail-closed: any error, or a hash that doesn't match, yields `bytes: None`.
-fn spawn_fetch(tx: Sender<FetchOutcome>, cid: Vec<u8>, url: String) {
+fn spawn_fetch(
+    tx: Sender<FetchOutcome>,
+    cid: Vec<u8>,
+    url: String,
+    settings: lunco_settings::DownloadSettings,
+) {
     #[cfg(not(target_arch = "wasm32"))]
     bevy::tasks::IoTaskPool::get()
         .spawn(async move {
-            let fetched = fetch_bytes_native(&url);
+            let fetched = fetch_bytes_native(&url, &settings);
             let _ = tx.send(verified(cid, url, fetched));
         })
         .detach();
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(async move {
-        let fetched = fetch_bytes_web(&url).await;
+        let fetched = fetch_bytes_web(&url, &settings).await;
         let _ = tx.send(verified(cid, url, fetched));
     });
 }
@@ -222,12 +203,11 @@ fn verified(cid: Vec<u8>, url: String, fetched: Result<Vec<u8>, String>) -> Fetc
 
 /// Native byte-GET. Blocking (`ureq`) — hence the `IoTaskPool`, not the compute pool.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, String> {
-    let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut resp.into_body().into_reader(), &mut bytes)
-        .map_err(|e| e.to_string())?;
-    Ok(bytes)
+fn fetch_bytes_native(
+    url: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
+    lunco_assets::download::download_bytes_with_resume(url, settings)
 }
 
 /// Web byte-GET, cache-first-forever in a Cache-Storage bucket: the blob is
@@ -240,8 +220,11 @@ fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, String> {
 /// `LUNCO_ASSET_BASE_URL=/scenario-assets/`. Not `/assets/` — that is bevy's web
 /// asset root, and proxying it away 404s the whole app.
 #[cfg(target_arch = "wasm32")]
-async fn fetch_bytes_web(url: &str) -> Result<Vec<u8>, String> {
-    lunco_assets::web_fetch::fetch_bytes_cached("lunco-scenario-assets-v1", url).await
+async fn fetch_bytes_web(
+    url: &str,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
+    lunco_assets::web_fetch::fetch_bytes_cached("lunco-scenario-assets-v1", url, settings).await
 }
 
 #[cfg(test)]

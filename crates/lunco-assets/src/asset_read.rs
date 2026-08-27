@@ -38,7 +38,10 @@ pub const ASSET_CACHE_BUCKET: &str = "lunco-assets-v1";
 /// `Err` on a missing file / failed fetch — callers decide what an unreadable
 /// asset means (the catalogue treats it as "not a part", never as a default).
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn read_asset_bytes(asset: &AssetFile) -> Result<Vec<u8>, String> {
+pub async fn read_asset_bytes(
+    asset: &AssetFile,
+    _settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     use lunco_storage::{FileStorage, Storage, StorageHandle};
     FileStorage::new()
         .read(&StorageHandle::File(asset.abs_path.clone()))
@@ -53,13 +56,19 @@ pub async fn read_asset_bytes(asset: &AssetFile) -> Result<Vec<u8>, String> {
 /// deployed build, and re-fetching it on every boot would be a needless round
 /// trip per asset.
 #[cfg(target_arch = "wasm32")]
-pub async fn read_asset_bytes(asset: &AssetFile) -> Result<Vec<u8>, String> {
+pub async fn read_asset_bytes(
+    asset: &AssetFile,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<Vec<u8>, String> {
     let url = crate::asset_path::web_url(&asset.rel);
-    crate::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url).await
+    crate::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url, settings).await
 }
 
 /// Read a discovered asset's bytes as UTF-8 text (`*.usda`, `*.wgsl`).
-pub async fn read_asset_text(asset: &AssetFile) -> Result<String, String> {
-    let bytes = read_asset_bytes(asset).await?;
+pub async fn read_asset_text(
+    asset: &AssetFile,
+    settings: &lunco_settings::DownloadSettings,
+) -> Result<String, String> {
+    let bytes = read_asset_bytes(asset, settings).await?;
     String::from_utf8(bytes).map_err(|e| format!("{}: not UTF-8: {e}", asset.rel))
 }
