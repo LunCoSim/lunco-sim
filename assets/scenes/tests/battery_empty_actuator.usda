@@ -63,6 +63,7 @@ def Xform "BatteryEmptyActuator" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/battery_empty_actuator.rhai@
         }
     }

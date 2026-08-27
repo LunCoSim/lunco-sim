@@ -96,6 +96,7 @@ def Xform "LanderRoverStack" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/lander_rover_stack.rhai@
         }
     }

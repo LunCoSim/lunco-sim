@@ -44,6 +44,7 @@ def Xform "DriveLaw" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverAckermannDrivetrain.mo@
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.

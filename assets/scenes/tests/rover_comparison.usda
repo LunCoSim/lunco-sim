@@ -440,6 +440,7 @@ def Xform "RoverComparison" (
         custom string lunco:scenario = "rover-comparison"
         def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rover_comparison.rhai@
         }
     }

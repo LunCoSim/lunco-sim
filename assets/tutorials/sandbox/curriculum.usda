@@ -46,6 +46,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/sandbox_intro.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
         string lunco:tutorial:title = "Sandbox Intro"
         string lunco:tutorial:blurb = "Learn the camera, selection, spawning, and control handoff."
@@ -58,6 +59,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
         string lunco:tutorial:title = "First Drive"
         string lunco:tutorial:blurb = "Take control of a rover and drive it to a lunar flag."
@@ -71,6 +73,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://scenes/luncosim/lander_ops.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/lander_mission.rhai@
         string lunco:tutorial:title = "Lander & Rover Mission"
         string lunco:tutorial:blurb = "Watch a powered landing, take the rover, and drive through the gates."
@@ -83,6 +86,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_scene.rhai@
         string lunco:tutorial:title = "Build a Scene"
         string lunco:tutorial:blurb = "Place an object, edit it, and save the USD-backed scene."
@@ -96,6 +100,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/build_base.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_base.rhai@
         string lunco:tutorial:title = "Build a Lunar Base"
         string lunco:tutorial:blurb = "Place power, habitat, comms, ISRU, and a landing pad."
@@ -109,6 +114,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/script_a_rover.rhai@
         string lunco:tutorial:title = "Script a Rover"
         string lunco:tutorial:blurb = "Attach a Rhai scenario, run it, and reload it without rebuilding."
@@ -122,6 +128,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rhai_repl.rhai@
         string lunco:tutorial:title = "Rhai Editor & REPL"
         string lunco:tutorial:blurb = "Edit a scenario and run typed commands in the live REPL."
@@ -135,6 +142,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/inspect_sim.rhai@
         string lunco:tutorial:title = "Inspect the Simulation"
         string lunco:tutorial:blurb = "Select an entity and read its state, ports, and Modelica links."
@@ -148,6 +156,7 @@ def Scope "Sandbox" (
         prepend payload = @lunco://scenes/luncosim/lander_ops.usda@
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/cosim.rhai@
         string lunco:tutorial:title = "Cosim — Model meets Physics"
         string lunco:tutorial:blurb = "Trace the Modelica-to-physics loop and verify its live connections."

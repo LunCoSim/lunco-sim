@@ -108,6 +108,7 @@ def Xform "SandboxScene" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/revolute_motor.rhai@
         }
     }

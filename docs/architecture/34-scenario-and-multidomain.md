@@ -19,7 +19,7 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 
 | Capability | Mechanism | Status |
 |---|---|---|
-| One program per prim | a `LunCoProgramAPI` prim (or `info:*` authored in place) + `info:sourceAsset` → `SimComponent`; the engine follows the extension | ✅ |
+| One program per prim | a `LunCoProgramAPI` prim with one selected `info:*` implementation arm → `SimComponent`; file-backed sources dispatch by extension | ✅ |
 | Wiring (SSP Connection) | a native USD connection on the consumer — `inputs:x.connect = </Other.outputs:y>` → `SimConnection`; same form within a prim and across prims | ✅ |
 | Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); the model connects `inputs:g` to it | ✅ |
 | Many scripts in one world | each owner may have one executable Rhai `LunCoProgramAPI`; different owners remain independent | ✅; duplicate executable programs on one owner are rejected visibly |
@@ -181,6 +181,7 @@ def Scope "Scenario" ( kind = "component" )
     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {                                     # orchestration
         uniform asset info:sourceAsset = @scenarios/rover_surface_ops.rhai@
         # …or author the state machine in place:
+        # uniform token info:implementationSource = "sourceCode"
         # uniform string info:sourceCode = """ … """
     }
     # objectives as child prims or typed attributes:

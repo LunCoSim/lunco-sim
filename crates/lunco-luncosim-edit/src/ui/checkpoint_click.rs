@@ -500,13 +500,11 @@ pub fn on_scene_click_checkpoint(
     let (mission, mission_ops) =
         ensure_mission_program_ops(host, &vessel_prim.path, mission_exists);
     ops.extend(mission_ops);
-    ops.push(UsdOp::SetAttribute {
-        edit_target: LayerId::root(),
-        path: mission.clone(),
-        name: "info:sourceCode".to_string(),
-        type_name: "string".to_string(),
-        value: xml,
-    });
+    ops.extend(lunco_usd::program::inline_program_source_ops(
+        LayerId::root(),
+        mission.clone(),
+        xml,
+    ));
     info!(
         "[waypoint] writing to doc {:?}, mission prim {:?}",
         doc, mission
@@ -668,15 +666,11 @@ pub fn on_scene_click_place_waypoint(
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            ops.push(UsdOp::SetAttribute {
-                edit_target: LayerId::root(),
-                // Editing an EXISTING tree, so the program prim is already there —
-                // the XML above was read back off it.
-                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
-                name: "info:sourceCode".to_string(),
-                type_name: "string".to_string(),
-                value: new_xml,
-            });
+            ops.extend(lunco_usd::program::inline_program_source_ops(
+                LayerId::root(),
+                join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
+                new_xml,
+            ));
             commands.trigger(ApplyUsdOps {
                 doc,
                 label: "Insert waypoint".to_string(),
@@ -869,15 +863,14 @@ pub fn draw_waypoint_context_menu(
     menu_state.dwell = dwell;
 
     if let Some(value) = edited {
-        commands.trigger(ApplyUsdOp {
+        commands.trigger(ApplyUsdOps {
             doc,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::root(),
-                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
-                name: "info:sourceCode".to_string(),
-                type_name: "string".to_string(),
+            label: "Update waypoint mission".to_string(),
+            ops: lunco_usd::program::inline_program_source_ops(
+                LayerId::root(),
+                join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
                 value,
-            },
+            ),
         });
     }
 
@@ -1338,13 +1331,14 @@ fn join_prim(parent: &str, name: &str) -> String {
 }
 
 /// The API-applied Scope that carries a vessel's mission tree, creating it if
-/// this is the first waypoint — returns the path to author `info:sourceCode` onto
+/// this is the first waypoint — returns the path to author the selected inline
+/// source onto
 /// and the operations needed to create it when absent.
 ///
 /// The tree is a PROGRAM, not an attribute on the vessel: a mission is bolted on,
 /// so it is a child prim that can be deleted to remove the behaviour, and the
-/// behaviour engine is chosen by the source's extension exactly as `.mo` and
-/// `.rhai` are. `process_usd_sim_prims` reads it back off this child and stamps
+/// selected implementation arm is `sourceCode` for these editor writes.
+/// `process_usd_sim_prims` reads it back off this child and stamps
 /// `BehaviorXml` on the vessel that owns it.
 ///
 /// `AddPrim` on an existing prim is a rejection rather than a merge, so it is only

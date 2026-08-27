@@ -38,6 +38,7 @@ def Xform "RuntimeWaypointTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/runtime_waypoint.rhai@
         }
     }

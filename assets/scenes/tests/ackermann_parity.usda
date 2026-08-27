@@ -167,6 +167,7 @@ def Xform "AckermannParity" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/ackermann_parity.rhai@
         }
     }

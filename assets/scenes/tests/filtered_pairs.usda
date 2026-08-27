@@ -82,6 +82,7 @@ def Xform "SandboxScene" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/filtered_pairs.rhai@
             # WHICH case this is, declared rather than sniffed: 1 = the pair is
             # authored and must not collide, 0 = the control.

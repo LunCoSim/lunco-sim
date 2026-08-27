@@ -3947,30 +3947,21 @@ pub fn get_attribute_as_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Attach the programs a prim carries — API-applied child scopes — to `entity`,
-/// the prim that OWNS them.
+/// Attach the generic script/driver programs a prim carries to `entity`.
 ///
-/// The program's `me` is its owner, because that is what a program is for: it acts on
-/// behalf of the vessel, reads the vessel's ports, moves the vessel's transform. The
-/// program prim exists to make the binding composable and to hold the program's own
-/// typed parameters, not to be the thing the program talks about.
-///
-/// Two of `implementationSource`'s three arms land here:
-///
-/// * **`info:id`** — a name the runtime already implements, resolved from
-///   `ProgramDriverRegistry`. There is no source, so the extension rule has nothing
-///   to dispatch on; this is `info:id` beside UsdShade's `info:sourceAsset`.
-/// * **`.rhai` source** (`sourceCode` or `sourceAsset`) — the script engine.
-///
-/// A program whose source this engine does not run — a `.mo`, an `.xml` — belongs to
-/// another engine and is skipped: the extension picks the engine.
+/// Program resolution happens before the one-program-per-owner check. Modelica
+/// facets in a `CollectionAPI:components` network and BehaviorTree programs are
+/// owned by their respective projections; they are not generic script siblings.
+/// This is the boundary that prevents a physical network's component count from
+/// becoming a false duplicate-program diagnostic.
 fn attach_programs(
     reader: &StageView<'_>,
     owner: &SdfPath,
     entity: Entity,
     commands: &mut Commands,
 ) {
-    let mut programs: Vec<_> = reader
+    let network_members = program::modelica_network_member_paths(reader);
+    let mut candidates: Vec<_> = reader
         .children(owner)
         .into_iter()
         .filter(|child| reader.is_active(child))
@@ -3982,74 +3973,43 @@ fn attach_programs(
     if reader.type_name(owner).as_deref() != Some("Scope")
         && reader.has_api_schema(owner, "LunCoProgramAPI")
     {
-        programs.push(owner.clone());
+        candidates.push(owner.clone());
     }
+
+    let mut programs = Vec::new();
+    for child in candidates {
+        // Collection membership is the explicit ownership transfer to the
+        // generated Modelica network. Its source is validated by the domain
+        // projector, so it must not enter this generic executor at all.
+        if network_members.contains(child.as_str()) {
+            continue;
+        }
+        let resolved = match program::resolve_program(reader, &child) {
+            Ok(resolved) => resolved,
+            Err(issue) => {
+                warn!(
+                    "[usd] program {} is unresolved at {}: {}",
+                    child.as_str(),
+                    issue.property,
+                    issue.message
+                );
+                continue;
+            }
+        };
+        if program::is_generic_program_backend(resolved.backend) {
+            programs.push((child, resolved));
+        }
+    }
+
     if programs.len() > 1 {
         warn!(
-            "[usd] {} has {} executable LunCoProgramAPI children; one program per owner is the current runtime contract, so none was attached",
+            "[usd] {} has {} generic executable LunCoProgramAPI children; one generic program per owner is the runtime contract, so none was attached",
             owner.as_str(),
             programs.len()
         );
         return;
     }
-    for child in programs {
-        // A program that NAMES its implementation rather than supplying it.
-        //
-        // `text()`, NOT `scalar::<String>()`. `info:id` is a `token` (as
-        // `info:id` is), and a token is a DISTINCT `sdf::Value` variant from a string
-        // — `scalar::<String>` silently returns `None` for one, which reads as "no id
-        // authored" and leaves the prim undriven with no error anywhere. `sourceCode`
-        // below is genuinely `uniform string`, which is what makes the wrong call
-        // look right here.
-        let driver_id = reader
-            .text(&child, "info:id")
-            .filter(|s| !s.trim().is_empty());
-
-        // Inline source wins over a file: `sourceCode` is the live-authoring path,
-        // and an author editing it in place means it.
-        let inline = reader
-            .scalar::<String>(&child, "info:sourceCode")
-            .filter(|s| !s.trim().is_empty());
-        let has_inline = inline.is_some();
-        // Read the ref UNFILTERED first, so the two reasons this loop skips a program
-        // stay distinguishable below: a `.mo`/`.xml` belongs to another engine (normal,
-        // silent), whereas NO recognised source name at all is an authoring mistake.
-        let source_asset = reader
-            .asset(&child, "info:sourceAsset")
-            .filter(|s| !s.trim().is_empty());
-        // A behaviour tree is a declarative program for `lunco-autopilot`, not
-        // an inline Rhai program. Source code has no extension to dispatch on, so
-        // its XML root is the unambiguous discriminator; file-backed trees use the
-        // centralized extension predicate. Keep this decision here, at the sole
-        // point that can attach a `ScriptedModel`, so no tree can reach Rhai.
-        let behavior_tree = inline
-            .as_ref()
-            .is_some_and(|source| source.trim_start().starts_with('<'))
-            || source_asset
-                .as_deref()
-                .is_some_and(lunco_core::programs::is_behavior_tree_asset);
-        let rhai_inline = (!behavior_tree).then_some(inline).flatten();
-        let file = source_asset.clone().filter(|s| s.ends_with(".rhai"));
-        if driver_id.is_none() && rhai_inline.is_none() && file.is_none() {
-            // A program prim that names its implementation NOWHERE the runtime looks is
-            // silently inert — the failure mode that cost two days on the episode-01
-            // recorder, which authored `lunco:program:sourceAsset` (a name nothing
-            // reads) and so never armed, with no line anywhere saying why. Only the
-            // genuinely-unauthored case warns: a program whose `sourceAsset` this
-            // engine does not run belongs to another one (`.mo` → co-sim) and is
-            // skipped without noise, exactly as before.
-            if source_asset.is_none() && !has_inline {
-                warn!(
-                    "[usd] program API on {} names no implementation — expected one of \
-                     `info:sourceAsset` (a file; the extension picks the engine), \
-                     `info:sourceCode` (inline), or `info:id` (a registered driver). \
-                     The prim is INERT. (`lunco:program:sourceAsset` is read by nothing.)",
-                    child.as_str()
-                );
-            }
-            continue;
-        }
-
+    for (child, resolved) in programs {
         // A program's parameters are typed attributes on its own program prim, one
         // per key — `float lunco:param:width = 1.05`. Read by `param(me, key,
         // default)`, which is how one reusable program drives many prims, each from
@@ -4083,28 +4043,23 @@ fn attach_programs(
             .entity(entity)
             .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
 
-        // A built-in: the registry resolves the name, there is no source to load. An
-        // id nothing implements is reported by `warn_unknown_program_drivers` and the
-        // prim simply is not driven — a scene authored against a newer runtime must
-        // still open.
-        if let Some(id) = driver_id {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::programs::ProgramDriverId(id));
-            continue;
-        }
-
-        if let Some(src) = rhai_inline {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioSource(src));
-        } else if let Some(path) = file {
-            // lunco-scripting loads it via the AssetServer (wasm-safe) and swaps in
-            // an `EmbeddedScenarioSource`. The two crates stay decoupled: neither
-            // depends on the other, and the marker is the whole contract.
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioPath(path));
+        match (resolved.backend, resolved.source) {
+            (program::ProgramBackend::Builtin, program::ProgramSource::Id(id)) => {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_core::programs::ProgramDriverId(id));
+            }
+            (program::ProgramBackend::Rhai, program::ProgramSource::Code(source)) => {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_core::EmbeddedScenarioSource(source));
+            }
+            (program::ProgramBackend::Rhai, program::ProgramSource::Asset(asset)) => {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_core::EmbeddedScenarioPath(asset));
+            }
+            _ => unreachable!("generic program resolution returned a foreign source"),
         }
     }
 }

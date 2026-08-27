@@ -26,6 +26,7 @@ def Xform "PythonBalloon" (
     float physics:mass = 4.5
 
     # ── The plant ────────────────────────────────────────────────────────────
+    uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/GreenBalloon.py@
 
     # It drives `force_y` every solver step on a body the client predicts, so it must

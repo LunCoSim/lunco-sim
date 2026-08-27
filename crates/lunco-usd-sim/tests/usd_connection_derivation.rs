@@ -567,6 +567,59 @@ fn battery_telemetry_target_is_a_modelica_network_member() {
 }
 
 #[test]
+fn solar_rover_programs_resolve_to_their_owned_projections() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/luncosim/solar_rover_demo.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose solar_rover_demo.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
+
+    assert!(
+        members.len() > 1,
+        "the composed solar rover must expose multiple physical program facets"
+    );
+    for member in &members {
+        let path = SdfPath::new(member).expect("network member path");
+        let resolved = lunco_usd_bevy::program::resolve_program(&view, &path)
+            .expect("network member source resolves");
+        assert_eq!(
+            resolved.backend,
+            lunco_usd_bevy::program::ProgramBackend::Modelica,
+            "network member {member} must be owned by the generated Modelica network"
+        );
+    }
+
+    let tracker =
+        SdfPath::new("/SolarRoverTest/SolarRover/SunTrackerController").expect("tracker path");
+    assert_eq!(
+        lunco_usd_bevy::program::resolve_program(&view, &tracker)
+            .expect("tracker source resolves")
+            .backend,
+        lunco_usd_bevy::program::ProgramBackend::Modelica,
+        "the standalone tracker remains a Modelica participant"
+    );
+    assert!(
+        !members.contains(tracker.as_str()),
+        "the standalone tracker must not be treated as a generated-network member"
+    );
+
+    let autopilot =
+        SdfPath::new("/SolarRoverTest/SolarRover/Autopilot").expect("autopilot path");
+    assert_eq!(
+        lunco_usd_bevy::program::resolve_program(&view, &autopilot)
+            .expect("autopilot source resolves")
+            .backend,
+        lunco_usd_bevy::program::ProgramBackend::BehaviorTree,
+        "the autopilot must belong to the BehaviorTree projection"
+    );
+    assert!(
+        !members.contains(autopilot.as_str()),
+        "the behavior program must not be counted as a Modelica network member"
+    );
+}
+
+#[test]
 fn network_root_distinguishes_commands_from_solver_outputs() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/electrical_network.usda");

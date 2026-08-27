@@ -55,6 +55,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/solar_rover_energy_cycle.rhai@
         }
     }

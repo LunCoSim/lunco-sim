@@ -452,10 +452,10 @@ radius. Ordered by leverage.
 
 ### A10 — Shape the Modelica binding to converge with AOUSD USD+FMI
 
-- `info:sourceAsset` is the behavior binding, and it is deliberately neutral — "*the program this
+- `info:implementationSource` selects the behavior binding, deliberately neutral — "*the program this
   prim runs*", not "*the Modelica model*". It can become an **FMI/FMU reference** when the AOUSD USD+FMI
   standard lands (our `compile_str → SimulationSession` is the local FMU-equivalent). No Modelica-only
-  assumption reaches the cosim projection: the engine follows the source's extension, exactly as USD picks a
+  assumption reaches the cosim projection: a selected file source follows its extension, exactly as USD picks a
   file-format plugin by `.usda`/`.usdc`/`.usdz`.
 
 ### What explicitly STAYS (don't churn)
@@ -789,7 +789,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | `LunCoPowerComponentAPI`, `LunCoActuatorAPI`, `LunCoMobilityComponentAPI`, `LunCoPowerDistributionAPI` (authored but **not dispatched** — dead-ish) | **make load-bearing** codeless applied schemas; keep the PascalCase+`API` convention | promote to real |
 | implicit model kind | author `kind = "component"` / `"assembly"` | USD `kind` | add |
 | rigid-body/collision/mass/drive/articulation/vehicle | `PhysicsRigidBodyAPI`, `PhysicsDriveAPI`, `PhysicsArticulationRootAPI`, `PhysxVehicle*` (already used) | USD/PhysX standard | keep |
-| the program binding: a `LunCoProgramAPI` prim (or `info:*` authored in place) carrying `info:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
+| the program binding: a `LunCoProgramAPI` prim with one selected `info:*` implementation arm — role is never declared, and a selected file follows its extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
 | `info:sourceAsset:subIdentifier` — which definition inside the source, when the file holds several (adopted verbatim from `UsdShadeShader`) | — | keep |
 
 ### 14.3 Domain params — fold into model parameters, adopt standard where it exists

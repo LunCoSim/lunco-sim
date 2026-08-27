@@ -1801,9 +1801,9 @@ const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 /// One authored `LunCoPolicy` prim, BEFORE its rhai source is resolved. The source is
 /// authored EITHER inline (`info:sourceCode`, a `string` that rides the USD journal
 /// plane — live-editable, per-op synced) OR by file reference (`info:sourceAsset`,
-/// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified). Inline
-/// wins over the file — the same rule every `LunCoProgramAPI` source follows, whatever
-/// engine its extension selects (`.rhai`, `.mo`, `.xml`).
+/// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified).
+/// The policy reader has its own inline-over-file rule; it is not a
+/// `LunCoProgramAPI` and is therefore outside the program source resolver.
 struct AuthoredPolicy {
     seam: String,
     entry: String,
@@ -1957,7 +1957,8 @@ fn project_usd_policies(
     let mut desired = Vec::with_capacity(authored.len());
     let mut unresolved = false;
     for a in &authored {
-        // Inline wins over the file (the script/behavior convention).
+        // This is the policy projection's inline-over-file rule; it is separate
+        // from the strict `LunCoProgramAPI` source selector.
         let source = if let Some(src) = &a.inline_source {
             src.clone()
         } else if let Some(path) = &a.source_path {
@@ -2303,12 +2304,9 @@ fn on_set_rhai_policy(
 /// Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
 /// prim it came from — the other half of scenario authoring.
 ///
-/// The source is authored onto that prim's `info:sourceCode`, which is what
-/// the loader prefers over a `sourceAsset`: text authored in place is an author saying
-/// they mean it. The write goes through [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
-/// (whose `string` type authors the value RAW — no hand-escaping), so the whole rhai
-/// source round-trips verbatim, journals like any edit, and reaches the `.usda` on
-/// `SaveDocument`.
+/// The shared USD lowering selects `info:sourceCode` and clears the old `info:id` and
+/// `info:sourceAsset` arms. The `string` value is authored RAW, so the whole rhai source
+/// round-trips verbatim, journals like any edit, and reaches the `.usda` on `SaveDocument`.
 ///
 /// It authors onto the PROGRAM, not onto the vessel running it
 /// ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a
@@ -2381,11 +2379,10 @@ fn on_save_scenario(
         return;
     };
 
-    // 3. Author the source onto the PROGRAM prim's `info:sourceCode` (root
-    //    layer → durable in the .usda on SaveDocument). A `string` value is authored
-    //    RAW — `SetAttribute` handles the escaping (writer-side), so the whole rhai
-    //    source round-trips verbatim with no hand-escaping here. Through `ApplyUsdOp`
-    //    so it journals like any edit.
+    // 3. Convert the PROGRAM prim to the selected inline `sourceCode` arm (root
+    //    layer → durable in the .usda on SaveDocument). The shared lowering clears
+    //    the previous id/asset arms before selecting the new source, so the final
+    //    composed program has one unambiguous implementation.
     let Ok(program) = q_program.get(target) else {
         warn!(
             "[save-scenario] entity {target} runs a scenario that came from no program prim \
@@ -2393,15 +2390,14 @@ fn on_save_scenario(
         );
         return;
     };
-    commands.trigger(lunco_usd::ApplyUsdOp {
+    commands.trigger(lunco_usd::ApplyUsdOps {
         doc: scene_doc,
-        op: lunco_usd::UsdOp::SetAttribute {
-            edit_target: lunco_usd::LayerId::root(),
-            path: program.0.clone(),
-            name: "info:sourceCode".into(),
-            type_name: "string".into(),
-            value: source,
-        },
+        label: "Save scenario source".into(),
+        ops: lunco_usd::program::inline_program_source_ops(
+            lunco_usd::LayerId::root(),
+            program.0.clone(),
+            source,
+        ),
     });
     info!(
         "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",

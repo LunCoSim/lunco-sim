@@ -33,6 +33,7 @@ def Xform "PositionPIDGuidance" (
         int lunco:ui:schemaColumn = 0
         int lunco:ui:schemaRow = 0
         string lunco:ui:schemaRole = "Sensors in · flight commands out"
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/GNC/PositionPID3D.mo@
         uniform bool lunco:program:realtimeSafe = true
 

@@ -2076,7 +2076,7 @@ fn on_engage_autopilot(
         // Engage, and it is indistinguishable from "the autopilot is broken": the
         // rover just leaves, ignoring the waypoints it doesn't have.
         // A vessel gets a route from the BT.CPP XML on its `LunCoProgramAPI`
-        // mission child — `info:sourceCode`, or a `.xml` `info:sourceAsset` (stamped
+        // mission child — the selected `info:sourceCode`, or a `.xml` `info:sourceAsset` (stamped
         // as `usd_tree::BehaviorXml` by the USD projection, then compiled into
         // `AutopilotBehaviorSpec` by `usd_tree::compile_behavior_xml`), which the editor
         // authors when you Alt+LMB the ground with the vessel possessed or selected.

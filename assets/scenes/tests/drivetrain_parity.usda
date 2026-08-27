@@ -166,6 +166,7 @@ def Xform "DrivetrainParity" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/drivetrain_parity.rhai@
         }
     }

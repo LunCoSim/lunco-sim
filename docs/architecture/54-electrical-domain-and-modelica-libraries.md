@@ -33,8 +33,8 @@ checkable claim. That is the whole reason the split exists — not tidiness.
 Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.
 Compiler-network members explicitly author
 `info:implementationSource = "sourceAsset"` and a `.mo` `info:sourceAsset`; built-in
-`info:id` programs and inline `info:sourceCode` programs are valid elsewhere, but are not
-Modelica compiler inputs.
+`info:id` programs and programs selecting inline `info:sourceCode` are valid elsewhere,
+but are not Modelica compiler inputs.
 Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector members use
 `connectors:`. Ordinary USD property connections author topology. There is no electrical
 USD schema and no exposed `Pin` prim. A network root applies the standard multiple-apply

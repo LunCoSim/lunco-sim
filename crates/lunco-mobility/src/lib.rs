@@ -34,7 +34,7 @@ use bevy::prelude::*;
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{safe_stop_control_surface, InputPorts, OutputPorts};
+use lunco_core::{safe_stop_control_surface, InputPorts, MobilityRoot, OutputPorts};
 use std::collections::HashSet;
 
 mod jointed_tire;
@@ -332,7 +332,7 @@ pub struct RaycastMassContribution {
 /// no vehicle-specific path spelling belongs here.
 fn actuator_root_and_local_transform(
     wheel: Entity,
-    roots: &Query<Entity, With<OutputPorts>>,
+    roots: &Query<Entity, With<MobilityRoot>>,
     parents: &Query<&ChildOf>,
     transforms: &Query<&Transform>,
 ) -> Option<(Entity, Transform)> {
@@ -368,11 +368,11 @@ fn publish_raycast_support_footprints(
     roots: Query<
         Entity,
         (
-            With<OutputPorts>,
+            With<MobilityRoot>,
             Without<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
-    actuator_roots: Query<Entity, With<OutputPorts>>,
+    actuator_roots: Query<Entity, With<MobilityRoot>>,
     wheels: Query<(Entity, &WheelRaycast, &Suspension)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
@@ -1132,7 +1132,7 @@ fn apply_wheel_suspension(
     mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
-    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<OutputPorts>)>,
+    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<MobilityRoot>)>,
 ) {
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
@@ -1989,6 +1989,7 @@ mod raycast_wheel_mass_tests {
         let chassis = app
             .world_mut()
             .spawn((
+                MobilityRoot,
                 OutputPorts::default(),
                 Mass(1000.0),
                 AngularInertia {
@@ -2126,7 +2127,7 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((OutputPorts::default(), Mass(1000.0)))
+            .spawn((MobilityRoot, OutputPorts::default(), Mass(1000.0)))
             .id();
         app.world_mut().spawn((
             WheelRaycast {
@@ -2154,7 +2155,7 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((OutputPorts::default(), Mass(1000.0)))
+            .spawn((MobilityRoot, OutputPorts::default(), Mass(1000.0)))
             .id();
         let rocker = app
             .world_mut()
@@ -2780,6 +2781,7 @@ mod suspension_visuals_tests {
                 ComputedCenterOfMass::default(),
                 VelocityIntegrationData::default(),
                 AccumulatedLocalAcceleration::default(),
+                MobilityRoot,
                 OutputPorts::default(),
             ))
             .id();

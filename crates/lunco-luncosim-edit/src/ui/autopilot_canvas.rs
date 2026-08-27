@@ -15,7 +15,7 @@ use lunco_canvas::{
     empty_node_data, Canvas, Edge, EdgeVisual, Node, NodeVisual, Port, PortId, PortRef, Pos, Rect,
     Scene, VisualRegistry,
 };
-use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
+use lunco_usd::commands::ApplyUsdOps;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
@@ -84,15 +84,15 @@ pub(crate) fn on_write_mission_requested(
             report_world_error(world, "Selected vessel has no USD prim path");
             return;
         };
-        world.trigger(ApplyUsdOp {
+        let mission = format!("{prim_path}/Mission");
+        world.trigger(ApplyUsdOps {
             doc,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::root(),
-                path: format!("{prim_path}/Mission"),
-                name: "info:sourceCode".to_string(),
-                type_name: "string".to_string(),
-                value: request.xml,
-            },
+            label: "Update autopilot mission".to_string(),
+            ops: lunco_usd::program::inline_program_source_ops(
+                LayerId::root(),
+                mission,
+                request.xml,
+            ),
         });
     });
 }
@@ -125,30 +125,29 @@ pub(crate) fn on_create_mission_requested(
             }
         };
         let mission = format!("{prim_path}/Mission");
+        let mut ops = vec![
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: prim_path,
+                name: "Mission".to_string(),
+                type_name: Some("Scope".to_string()),
+                reference: None,
+            },
+            UsdOp::SetApiSchemas {
+                edit_target: LayerId::root(),
+                path: mission.clone(),
+                schemas: vec!["LunCoProgramAPI".to_string()],
+            },
+        ];
+        ops.extend(lunco_usd::program::inline_program_source_ops(
+            LayerId::root(),
+            mission,
+            xml,
+        ));
         world.trigger(ApplyUsdOps {
             doc,
             label: "Create autopilot program".to_string(),
-            ops: vec![
-                UsdOp::AddPrim {
-                    edit_target: LayerId::root(),
-                    parent_path: prim_path,
-                    name: "Mission".to_string(),
-                    type_name: Some("Scope".to_string()),
-                    reference: None,
-                },
-                UsdOp::SetApiSchemas {
-                    edit_target: LayerId::root(),
-                    path: mission.clone(),
-                    schemas: vec!["LunCoProgramAPI".to_string()],
-                },
-                UsdOp::SetAttribute {
-                    edit_target: LayerId::root(),
-                    path: mission,
-                    name: "info:sourceCode".to_string(),
-                    type_name: "string".to_string(),
-                    value: xml,
-                },
-            ],
+            ops,
         });
     });
 }

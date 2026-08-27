@@ -8001,6 +8001,7 @@ dependencies = [
  "lunco-scripting",
  "lunco-settings",
  "lunco-theme",
+ "lunco-usd-bevy",
  "lunco-usd-compose",
  "lunco-workbench",
  "lunco-workspace",

@@ -16,6 +16,7 @@ def Xform "FirstDrive" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@
     }
 
@@ -25,6 +26,7 @@ def Xform "FirstDrive" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_authority_handoff.rhai@
         }
     }

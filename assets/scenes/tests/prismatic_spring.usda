@@ -283,6 +283,7 @@ def Xform "PrismaticSpringTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/prismatic_spring.rhai@
         }
     }

@@ -16,6 +16,7 @@ def Xform "BuildBase" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_base.rhai@
     }
 
@@ -25,6 +26,7 @@ def Xform "BuildBase" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_build_base.rhai@
         }
     }

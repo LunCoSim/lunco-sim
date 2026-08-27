@@ -325,10 +325,13 @@ duplicating the panel geometry.
 There is **one program contract, not a per-language schema**. `LunCoProgramAPI` is
 modelled on `UsdShade.Shader`: its implementation is selected with the standard
 `info:implementationSource` / `info:id` / `info:sourceAsset` / `info:sourceCode`
-vocabulary. The LunCo runtime dispatches file-backed programs by their source extension.
+vocabulary. `info:implementationSource` selects exactly one implementation arm;
+populating another arm is an authoring error. The LunCo runtime dispatches
+file-backed programs by their source extension.
 
 ```usda
 def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
+    uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
     uniform bool lunco:program:realtimeSafe = true
 
@@ -354,9 +357,10 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 - **`sourceAsset` must be typed `asset`, never `string`** — only an `asset` is
   visible to the resolver, the reference closure, and packaging.
 - Programs use standard `info:id` for a registered driver, `info:sourceAsset` for
-  authored source, or `info:sourceCode` for live, journalled editing. Production
-  programs normally use the asset form. An unknown id is a fail-safe no-op with a
-  warning so an older runtime can still open a newer scene.
+  authored source, or `info:sourceCode` for live, journalled editing, matching the
+  selected `info:implementationSource` arm. Production programs normally use the
+  asset form. An unknown id is a fail-safe no-op with a warning so an older runtime
+  can still open a newer scene.
 - Wiring is native USD `connectionPaths`; `SimConnection` is a derived cache, so
   hand-authoring it is pointless.
 

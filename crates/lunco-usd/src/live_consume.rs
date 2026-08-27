@@ -669,14 +669,14 @@ pub(crate) fn refresh_edited_prims_live(
                 continue;
             }
         }
-        // A mission tree is a `LunCoProgramAPI` child carrying `info:sourceCode` (inline
-        // XML) or `info:sourceAsset` (`@…btxml@`, with `.xml` accepted for
-        // upstream interop); the behaviour engine is picked by the
-        // extension, the same rule `.mo` and `.rhai` follow. A live edit to either
-        // re-reads the tree from the prim that owns it.
-        if (attr == "info:sourceCode" || attr == "info:sourceAsset")
-            && (is_behavior_program(world, id, prim)
-                || projected_behavior_owner(world, id, prim).is_some())
+        // A mission tree is a `LunCoProgramAPI` child. The shared resolver owns
+        // the selected source arm and backend; a live edit to either arm or to
+        // the selector re-reads the tree from the prim that owns it.
+        if matches!(
+            attr,
+            "info:implementationSource" | "info:sourceCode" | "info:sourceAsset"
+        ) && (is_behavior_program(world, id, prim)
+            || projected_behavior_owner(world, id, prim).is_some())
         {
             // Read the value under a short stage borrow, then resolve/mutate the
             // owner after that borrow is released. The owner may be an ancestor
@@ -687,12 +687,7 @@ pub(crate) fn refresh_edited_prims_live(
                 .and_then(|cs| {
                     let view = cs.view();
                     let sp = SdfPath::new(prim).ok()?;
-                    let val = view
-                        .scalar::<String>(&sp, "info:sourceCode")
-                        .filter(|s| s.trim_start().starts_with('<'));
-                    let path_val = lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
-                        .filter(|s| lunco_core::programs::is_behavior_tree_asset(s));
-                    Some((val, path_val))
+                    crate::program::selected_behavior_source_values(&view, &sp).ok()
                 });
             // The tree is authored on the `LunCoProgramAPI` child, but the
             // vehicle owns it — never stamp the XML onto the program prim.

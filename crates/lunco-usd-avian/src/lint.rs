@@ -678,10 +678,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 // the runtime projector. The class itself is resolved from the
                 // loaded source by lunco-usd-sim; lint must not invent one from
                 // the asset path.
-                if lunco_usd_bevy::program::modelica_source_ref(reader, member).is_err() {
+                let Ok(_) = lunco_usd_bevy::program::modelica_source_ref(reader, member) else {
                     invalid_program_sources.push(member_name.clone());
                     continue;
-                }
+                };
                 modelica_member_count += 1;
                 modelica_members.insert(member_name.clone());
                 for attr in reader.attr_names(member) {
@@ -840,12 +840,12 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             }
             if !connectors.is_empty() {
+                let source_asset = lunco_usd_bevy::program::modelica_source_ref(reader, p)
+                    .map(|source_ref| source_ref.asset)
+                    .unwrap_or_default();
                 connector_programs.push(H::map([
                     ("path", H::str(p.to_string())),
-                    (
-                        "source_asset",
-                        H::str(reader.asset(p, "info:sourceAsset").unwrap_or_default()),
-                    ),
+                    ("source_asset", H::str(source_asset)),
                     ("connectors", H::Array(connectors)),
                     ("connected", H::Array(connected)),
                 ]));

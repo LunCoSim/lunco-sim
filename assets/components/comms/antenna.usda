@@ -270,6 +270,7 @@ def Xform "CommsAntenna" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
         float inputs:earth_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
         float inputs:earth_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>

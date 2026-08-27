@@ -25,6 +25,8 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`InputPorts` / `OutputPorts`** — an imperative producer's authored command
   inputs and runtime outputs. `InputPorts` accepts writes; `OutputPorts` is
   read-only and exposes values written by a producer such as a drive kernel.
+  A mobility root is identified separately by `lunco_core::MobilityRoot`;
+  `OutputPorts` is never used as a vehicle marker.
   Generated Modelica outputs remain on `SimComponent` and are not copied into
   `OutputPorts`.
 - **Avian as a cosim participant** — Avian physics is wired in through a typed-port
@@ -394,6 +396,7 @@ registered by `UsdSimPlugin`) reads:
 
 | Property | What it does |
 |---|---|
+| `uniform token info:implementationSource` | Selects exactly one implementation arm. The selected source asset's extension dispatches to Modelica or Python; a populated non-selected arm is invalid. |
 | `uniform asset info:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, publishes `ModelicaModel` + `SimComponent` from the PARSE and dispatches `ModelicaCommand::Compile`; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
 | `uniform string info:sourceCode` | The same, for a program authored in place rather than in a file. |
 | `uniform bool lunco:program:realtimeSafe` | The author's promise that the program may drive a force on a client-predicted body (see [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md)). |
@@ -473,8 +476,9 @@ Python source.
 `AttachProgram` is the shared authoring command for Modelica, Python, Rhai, and
 behaviour-tree source assets. It validates one explicit `ProgramAttachSpec`,
 lowers it to one USD change set, journals it, and lets normal USD projection
-create the runtime participant. Its source extension selects the runtime
-adapter; its declared inputs and outputs remain USD facts.
+create the runtime participant. Its `info:implementationSource = "sourceAsset"`
+arm selects the runtime adapter by extension; its declared inputs and outputs
+remain USD facts.
 
 Rhai authors can use the prelude without constructing the map by hand:
 

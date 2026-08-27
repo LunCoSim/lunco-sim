@@ -54,6 +54,7 @@ def Xform "ModelicaBalloon" (
     # exposes only Avian facts and force sinks.
     def Scope "Plant" (prepend apiSchemas = ["LunCoProgramAPI"])
     {
+        uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
         float inputs:height.connect = </ModelicaBalloon.outputs:position_y>
         float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>

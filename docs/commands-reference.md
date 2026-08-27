@@ -3070,12 +3070,10 @@ actually call, with the fields the deserializer actually accepts. See the
  Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
  prim it came from — the other half of scenario authoring.
 
- The source is authored onto that prim's `info:sourceCode`, which is what
- the loader prefers over a `sourceAsset`: text authored in place is an author saying
- they mean it. The write goes through [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
- (whose `string` type authors the value RAW — no hand-escaping), so the whole rhai
- source round-trips verbatim, journals like any edit, and reaches the `.usda` on
- `SaveDocument`.
+ The write converts that prim to the selected inline `info:sourceCode` arm and clears
+ the old `info:id`/`info:sourceAsset` arms. The shared lowering authors the `string`
+ value RAW, so the whole rhai source round-trips verbatim, journals like any edit, and
+ reaches the `.usda` on `SaveDocument`.
 
  It authors onto the PROGRAM, not onto the vessel running it
  ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a

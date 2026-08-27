@@ -38,6 +38,218 @@ pub struct ModelicaSourceRef {
     pub sub_identifier: Option<String>,
 }
 
+/// The runtime backend selected by a program's composed source.
+///
+/// This is deliberately a small classification, not a registry of running
+/// programs. The USD program prim remains the identity; consumers use this
+/// result only to decide which executor owns the prim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramBackend {
+    /// A registered implementation named by `info:id`.
+    Builtin,
+    /// A Rhai source, inline or file-backed.
+    Rhai,
+    /// A BehaviorTree.CPP XML source, inline or file-backed.
+    BehaviorTree,
+    /// A Modelica source file.
+    Modelica,
+    /// A Python source file.
+    Python,
+}
+
+/// The one selected implementation arm of a program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProgramSource {
+    /// A registered implementation named by `info:id`.
+    Id(String),
+    /// Text authored directly on the program prim.
+    Code(String),
+    /// A resolver-visible external asset.
+    Asset(String),
+}
+
+/// The selected source form when the program is owned by the BehaviorTree.CPP
+/// projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BehaviorTreeSource {
+    /// XML authored directly on the program prim.
+    Code(String),
+    /// XML loaded from the selected asset.
+    Asset(String),
+}
+
+/// A source resolved far enough for a backend to claim it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedProgram {
+    /// The backend that owns execution of this source.
+    pub backend: ProgramBackend,
+    /// The selected source arm and its value.
+    pub source: ProgramSource,
+}
+
+fn asset_path_without_fragment(path: &str) -> &str {
+    path.split(['?', '#']).next().unwrap_or(path)
+}
+
+/// Classify a source asset by its canonical extension.
+fn program_asset_backend(path: &str) -> Option<ProgramBackend> {
+    let path = asset_path_without_fragment(path);
+    if lunco_core::programs::is_behavior_tree_asset(path) {
+        Some(ProgramBackend::BehaviorTree)
+    } else if path.ends_with(".rhai") {
+        Some(ProgramBackend::Rhai)
+    } else if path.ends_with(".mo") {
+        Some(ProgramBackend::Modelica)
+    } else if path.ends_with(".py") {
+        Some(ProgramBackend::Python)
+    } else {
+        None
+    }
+}
+
+fn source_issue(prim: &SdfPath, property: &str, message: impl Into<String>) -> ProgramSourceIssue {
+    ProgramSourceIssue {
+        property: format!("{prim}.{property}"),
+        message: message.into(),
+    }
+}
+
+/// Resolve the selected implementation arm for one composed
+/// `LunCoProgramAPI` prim.
+///
+/// The selector is authoritative. A populated non-selected source arm is an
+/// authoring conflict rather than an alternative to try. No host or collection
+/// traversal happens here; execution ownership is resolved separately.
+pub fn resolve_program(
+    view: &StageView<'_>,
+    prim: &SdfPath,
+) -> Result<ResolvedProgram, ProgramSourceIssue> {
+    let selector = view
+        .value_str(prim, "info:implementationSource")
+        .unwrap_or_default();
+    let id = view
+        .text(prim, "info:id")
+        .filter(|id| !id.trim().is_empty());
+    let code = view
+        .scalar::<String>(prim, "info:sourceCode")
+        .filter(|code| !code.trim().is_empty());
+    let asset = view
+        .asset(prim, "info:sourceAsset")
+        .filter(|asset| !asset.trim().is_empty());
+
+    match selector.as_str() {
+        "id" => {
+            let Some(id) = id else {
+                return Err(source_issue(
+                    prim,
+                    "info:id",
+                    "info:implementationSource selects id but info:id is empty",
+                ));
+            };
+            if code.is_some() || asset.is_some() {
+                return Err(source_issue(
+                    prim,
+                    "info:implementationSource",
+                    "id is selected but sourceCode or sourceAsset is also populated",
+                ));
+            }
+            Ok(ResolvedProgram {
+                backend: ProgramBackend::Builtin,
+                source: ProgramSource::Id(id),
+            })
+        }
+        "sourceCode" => {
+            let Some(code) = code else {
+                return Err(source_issue(
+                    prim,
+                    "info:sourceCode",
+                    "info:implementationSource selects sourceCode but info:sourceCode is empty",
+                ));
+            };
+            if id.is_some() || asset.is_some() {
+                return Err(source_issue(
+                    prim,
+                    "info:implementationSource",
+                    "sourceCode is selected but info:id or sourceAsset is also populated",
+                ));
+            }
+            Ok(ResolvedProgram {
+                backend: if code.trim_start().starts_with('<') {
+                    ProgramBackend::BehaviorTree
+                } else {
+                    ProgramBackend::Rhai
+                },
+                source: ProgramSource::Code(code),
+            })
+        }
+        "sourceAsset" => {
+            let Some(asset) = asset else {
+                return Err(source_issue(
+                    prim,
+                    "info:sourceAsset",
+                    "info:implementationSource selects sourceAsset but info:sourceAsset is empty",
+                ));
+            };
+            if id.is_some() || code.is_some() {
+                return Err(source_issue(
+                    prim,
+                    "info:implementationSource",
+                    "sourceAsset is selected but info:id or sourceCode is also populated",
+                ));
+            }
+            let Some(backend) = program_asset_backend(&asset) else {
+                return Err(source_issue(
+                    prim,
+                    "info:sourceAsset",
+                    format!("unsupported program source asset `{asset}`"),
+                ));
+            };
+            Ok(ResolvedProgram {
+                backend,
+                source: ProgramSource::Asset(asset),
+            })
+        }
+        other if other.is_empty() => Err(source_issue(
+            prim,
+            "info:implementationSource",
+            "info:implementationSource is empty",
+        )),
+        other => Err(source_issue(
+            prim,
+            "info:implementationSource",
+            format!("unsupported info:implementationSource `{other}`"),
+        )),
+    }
+}
+
+/// Resolve a program only when its selected source belongs to the
+/// BehaviorTree.CPP projection. This keeps source selection and backend
+/// classification in one place; consumers only translate the result into
+/// their own runtime marker.
+pub fn resolve_behavior_tree_source(
+    view: &StageView<'_>,
+    prim: &SdfPath,
+) -> Result<Option<BehaviorTreeSource>, ProgramSourceIssue> {
+    match resolve_program(view, prim)? {
+        ResolvedProgram {
+            backend: ProgramBackend::BehaviorTree,
+            source: ProgramSource::Code(source),
+        } => Ok(Some(BehaviorTreeSource::Code(source))),
+        ResolvedProgram {
+            backend: ProgramBackend::BehaviorTree,
+            source: ProgramSource::Asset(asset),
+        } => Ok(Some(BehaviorTreeSource::Asset(asset))),
+        ResolvedProgram { .. } => Ok(None),
+    }
+}
+
+/// Whether the source is owned by the generic script/driver projection in
+/// `lunco-usd-bevy`. Modelica and BehaviorTree sources are deliberately not
+/// included: their own projections own those execution paths.
+pub fn is_generic_program_backend(backend: ProgramBackend) -> bool {
+    matches!(backend, ProgramBackend::Builtin | ProgramBackend::Rhai)
+}
+
 /// Why a prim that claims to be a Modelica program facet cannot enter source
 /// resolution.
 ///
@@ -48,21 +260,20 @@ pub fn modelica_source_ref(
     view: &StageView<'_>,
     prim: &SdfPath,
 ) -> Result<ModelicaSourceRef, ProgramSourceIssue> {
-    let implementation = view
-        .value_str(prim, "info:implementationSource")
-        .unwrap_or_default();
-    if implementation != "sourceAsset" {
-        return Err(ProgramSourceIssue {
-            property: format!("{prim}.info:implementationSource"),
-            message: "a Modelica program facet must use info:implementationSource = sourceAsset"
-                .into(),
-        });
+    let resolved = resolve_program(view, prim)?;
+    if resolved.backend != ProgramBackend::Modelica {
+        return Err(source_issue(
+            prim,
+            "info:sourceAsset",
+            "a Modelica program facet must select a .mo sourceAsset",
+        ));
     }
-    let Some(asset) = view.asset(prim, "info:sourceAsset") else {
-        return Err(ProgramSourceIssue {
-            property: format!("{prim}.info:sourceAsset"),
-            message: "a Modelica program facet must author a .mo info:sourceAsset".into(),
-        });
+    let ProgramSource::Asset(asset) = resolved.source else {
+        return Err(source_issue(
+            prim,
+            "info:sourceAsset",
+            "a Modelica program facet must select a .mo sourceAsset",
+        ));
     };
     let sub_identifier = view
         .value_str(prim, "info:sourceAsset:subIdentifier")
@@ -365,6 +576,14 @@ pub fn modelica_path_identifier(raw: &str) -> String {
 mod tests {
     use super::*;
 
+    fn program_stage(source: &str) -> crate::CanonicalStage {
+        crate::CanonicalStage::from_recipe(&crate::StageRecipe::from_source(
+            "programs.usda",
+            source,
+        ))
+        .expect("build program stage")
+    }
+
     #[test]
     fn generated_identifiers_are_injective_and_avoid_keywords() {
         assert_ne!(
@@ -374,6 +593,69 @@ mod tests {
         assert_eq!(modelica_identifier("model"), "usd_model");
         assert_eq!(modelica_identifier("3phase"), "usd_3phase");
         assert!(is_modelica_identifier(&modelica_identifier("left/right")));
+    }
+
+    #[test]
+    fn selected_program_arm_is_the_single_backend_resolution() {
+        let stage = program_stage(
+            "#usda 1.0\n\
+             def Scope \"InlineTree\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             {\n\
+                 uniform token info:implementationSource = \"sourceCode\"\n\
+                 uniform string info:sourceCode = \"<root/>\"\n\
+             }\n\
+             def Scope \"Rhai\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             {\n\
+                 uniform token info:implementationSource = \"sourceAsset\"\n\
+                 uniform asset info:sourceAsset = @lunco://scenarios/test.rhai@\n\
+             }\n\
+             def Scope \"Modelica\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             {\n\
+                 uniform token info:implementationSource = \"sourceAsset\"\n\
+                 uniform asset info:sourceAsset = @lunco://models/Test.mo@\n\
+             }\n\
+             def Scope \"Conflict\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             {\n\
+                 uniform token info:implementationSource = \"sourceAsset\"\n\
+                 uniform asset info:sourceAsset = @lunco://scenarios/test.rhai@\n\
+                 uniform string info:sourceCode = \"fn drive(ctx) { 1 }\"\n\
+             }\n\
+             def Scope \"MissingSelector\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             {\n\
+                 uniform asset info:sourceAsset = @lunco://scenarios/test.rhai@\n\
+             }\n",
+        );
+        let view = stage.view();
+
+        let inline = SdfPath::new("/InlineTree").unwrap();
+        assert_eq!(
+            resolve_behavior_tree_source(&view, &inline),
+            Ok(Some(BehaviorTreeSource::Code("<root/>".into())))
+        );
+
+        let rhai = SdfPath::new("/Rhai").unwrap();
+        assert_eq!(
+            resolve_program(&view, &rhai),
+            Ok(ResolvedProgram {
+                backend: ProgramBackend::Rhai,
+                source: ProgramSource::Asset("lunco://scenarios/test.rhai".into()),
+            })
+        );
+        assert_eq!(resolve_behavior_tree_source(&view, &rhai), Ok(None));
+
+        let modelica = SdfPath::new("/Modelica").unwrap();
+        assert_eq!(
+            modelica_source_ref(&view, &modelica).unwrap().asset,
+            "lunco://models/Test.mo"
+        );
+
+        let conflict = SdfPath::new("/Conflict").unwrap();
+        let issue = resolve_program(&view, &conflict).expect_err("conflicting arms are invalid");
+        assert!(issue.property.ends_with(".info:implementationSource"));
+
+        let missing = SdfPath::new("/MissingSelector").unwrap();
+        let issue = resolve_program(&view, &missing).expect_err("selection is mandatory");
+        assert!(issue.message.contains("info:implementationSource is empty"));
     }
 
     #[test]

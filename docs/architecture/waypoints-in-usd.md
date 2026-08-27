@@ -66,8 +66,9 @@ def Scope "Route" {
 }
 ```
 
-A behaviour tree is a program like any other: a `LunCoProgramAPI` child prim naming the
-XML through `info:sourceAsset` (or carrying it in `info:sourceCode`).
+A behaviour tree is a program like any other: a `LunCoProgramAPI` child prim selecting
+the XML through `info:implementationSource = "sourceAsset"` (or selecting inline
+`info:sourceCode`).
 The engine that runs it comes from the source's extension, so nothing about the tree
 needs a binding of its own — and deleting the prim deletes the mission, which is exactly
 what a patrol should be.

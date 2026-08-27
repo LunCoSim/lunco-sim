@@ -55,8 +55,9 @@ Vessel
 ```
 
 The names are examples, not reserved paths. The runtime discovers a child by
-`LunCoProgramAPI` and its source (`info:sourceAsset`, `info:sourceCode`, or
-`info:id`); it never asks whether the child is called `Mission`. A simple rover
+`LunCoProgramAPI`; `info:implementationSource` selects its one source arm
+(`info:sourceAsset`, `info:sourceCode`, or `info:id`). It never asks whether the child
+is called `Mission`. A simple rover
 may use one BT program that writes `throttle`, `steer`, and `brake`. A more
 complete rover may have a BT write a mode/goal into Guidance, with Guidance
 producing the final actuator ports. A lander uses the same pattern with

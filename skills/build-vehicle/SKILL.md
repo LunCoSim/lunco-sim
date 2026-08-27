@@ -81,7 +81,9 @@ def Xform "MyRover" (
 }
 ```
 
-- `PhysxVehicleContextAPI` on the root ⇒ OutputPorts + authored ports
+- `PhysxVehicleContextAPI` on the root ⇒ `MobilityRoot` + `OutputPorts` + authored ports;
+  `MobilityRoot` identifies the vehicle and `OutputPorts` only indexes its
+  produced actuator values
   (`throttle`/`steer`/`brake` intake; `drive_left`/`drive_right`/`steering`).
 - `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
   `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels

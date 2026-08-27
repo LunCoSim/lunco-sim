@@ -8,7 +8,7 @@
 //!
 //! | USD Schema | LunCoSim Components | Description |
 //! |---|---|---|
-//! | `PhysxVehicleContextAPI` | `OutputPorts` | Runtime output surface for the vehicle root (kind is topology-derived, no `RoverVessel` marker) |
+//! | `PhysxVehicleContextAPI` | `MobilityRoot` + `OutputPorts` | Topology-derived mobility owner plus its runtime actuator output surface |
 //! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
 //! | `DriveMix` child scope | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix — one prim per sink port, `lunco:factor:<source>` per command source |
@@ -537,6 +537,7 @@ mod wheel_wiring_tests {
                 stage_handle: stage.clone(),
                 path: "/World/Rover".into(),
             },
+            lunco_core::MobilityRoot,
             lunco_core::OutputPorts::new(actuators),
         ));
         world
@@ -843,8 +844,9 @@ pub struct PendingDifferential {
 ///
 /// # What It Does
 ///
-/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `OutputPorts` from the
-///    vehicle root's authored numeric `outputs:*` attributes, plus `Vessel`.
+/// 1. **Detects `PhysxVehicleContextAPI`** → Creates a `MobilityRoot` and an
+///    `OutputPorts` surface from the vehicle root's authored numeric `outputs:*`
+///    attributes.
 /// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
 /// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
 ///    (A `lunco:driveKernel` attribute overrides both → `DriveMix { kernel: <hook_id> }`,
@@ -1181,23 +1183,34 @@ fn collect_joint_scan_read(
 /// Collect behavior-tree program children below a vehicle, including a
 /// namespace such as `OBC`. Program discovery is capability-based and recursive;
 /// the namespace's spelling and depth are authoring choices, not runtime rules.
+/// The source arm and backend come from the shared USD program resolver.
 fn collect_behavior_sources(
     reader: &lunco_usd_bevy::StageView<'_>,
     parent: &SdfPath,
     out: &mut Vec<(String, Option<String>, Option<String>)>,
 ) {
+    if !reader.is_active(parent) {
+        return;
+    }
     for child in reader.children(parent) {
+        if !reader.is_active(&child) {
+            continue;
+        }
         if reader.has_api_schema(&child, "LunCoProgramAPI") {
-            if let Some(xml) = reader
-                .scalar::<String>(&child, "info:sourceCode")
-                .filter(|s| s.trim_start().starts_with('<'))
-            {
-                out.push((child.as_str().to_string(), Some(xml), None));
-            } else if let Some(path) = reader
-                .asset(&child, "info:sourceAsset")
-                .filter(|s| lunco_core::programs::is_behavior_tree_asset(s))
-            {
-                out.push((child.as_str().to_string(), None, Some(path)));
+            match lunco_usd_bevy::program::resolve_behavior_tree_source(reader, &child) {
+                Ok(Some(lunco_usd_bevy::program::BehaviorTreeSource::Code(xml))) => {
+                    out.push((child.as_str().to_string(), Some(xml), None))
+                }
+                Ok(Some(lunco_usd_bevy::program::BehaviorTreeSource::Asset(path))) => {
+                    out.push((child.as_str().to_string(), None, Some(path)))
+                }
+                Ok(_) => {}
+                Err(issue) => warn!(
+                    "[usd-sim] behavior program {} is unresolved at {}: {}",
+                    child.as_str(),
+                    issue.property,
+                    issue.message
+                ),
             }
         }
         collect_behavior_sources(reader, &child, out);
@@ -2102,8 +2115,8 @@ fn process_usd_sim_prim_read(
         commands.entity(entity).try_insert(ChildOf(grid_entity));
     }
 
-    // 1. Detect PhysxVehicleContextAPI (The Rover Root)
-    // Stamps `OutputPorts` from numeric `outputs:` attributes authored on the
+    // 1. Detect PhysxVehicleContextAPI (the mobility root)
+    // Stamps `MobilityRoot` and `OutputPorts` from numeric `outputs:` attributes authored on the
     // vehicle root. Outputs owned by a generated Modelica network remain on its
     // `SimComponent`; duplicating them into child `Port`s would create a second,
     // unwritten producer and make a cross-domain connection read zero.
@@ -2181,7 +2194,7 @@ fn process_usd_sim_prim_read(
         // refused. That is how you author a wreck or an un-crewed chassis — by
         // composition, not a check.
         //
-        // Only `OutputPorts` is stamped here. The `InputPorts` surface is
+        // `MobilityRoot` and `OutputPorts` are stamped here. The `InputPorts` surface is
         // stamped beside the `ControlBinding` (lunco-usd-bevy, the `Controls`
         // branch) — ONE site, because `try_insert` OVERWRITES: stamping a fresh
         // empty surface from two different systems would let a live re-run of
@@ -2194,7 +2207,10 @@ fn process_usd_sim_prim_read(
         // they are not the same value (analog command vs discretized gate).
         commands
             .entity(entity)
-            .try_insert(lunco_core::OutputPorts::new(port_map));
+            .try_insert((
+                lunco_core::MobilityRoot,
+                lunco_core::OutputPorts::new(port_map),
+            ));
     }
 
     // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
@@ -3838,7 +3854,7 @@ fn reconstruct_proxy_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<lunco_core::OutputPorts>, Without<PhysicalWheel>),
+        (With<lunco_core::MobilityRoot>, Without<PhysicalWheel>),
     >,
     q_bodies: Query<(&RigidBody, &Position, &Rotation), Without<PhysicalWheel>>,
     mut q_wheels: Query<
@@ -3934,7 +3950,7 @@ fn animate_proxy_physical_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<lunco_core::OutputPorts>, Without<PhysicalWheel>),
+        (With<lunco_core::MobilityRoot>, Without<PhysicalWheel>),
     >,
     q_bodies: Query<(&RigidBody, &Position, &Rotation), Without<PhysicalWheel>>,
     q_parents: Query<&ChildOf>,
@@ -4228,8 +4244,8 @@ fn on_add_usd_sim_prim(
 
 /// System that wires wheel drive/steer ports to FSW digital ports.
 ///
-/// Runs every frame, checking for `PendingWheelWiring` markers. Once the FSW root entity
-/// exists (has `OutputPorts`), it creates [`SimConnection`] entities connecting the
+/// Runs every frame, checking for `PendingWheelWiring` markers. Once the mobility root
+/// entity exists (has `MobilityRoot` and `OutputPorts`), it creates [`SimConnection`] entities connecting the
 /// wheel's physical ports to the appropriate digital ports. Each end addresses a bare
 /// [`Port`] entity through the cosim port backend's `value` connector.
 ///
@@ -4248,9 +4264,14 @@ fn on_add_usd_sim_prim(
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_endpoints: Query<&PortSurface>,
-    // `OutputPorts` does double duty here: it LOCATES the vehicle root (only a rover
-    // root carries one) and it is the actuator index the wiring below looks ports up in.
-    q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::OutputPorts)>,
+    // `MobilityRoot` locates the vehicle; `OutputPorts` is only the actuator
+    // index used to resolve the authored connection.
+    q_fsw: Query<(
+        Entity,
+        &UsdPrimPath,
+        &lunco_core::MobilityRoot,
+        &lunco_core::OutputPorts,
+    )>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -4259,13 +4280,13 @@ fn try_wire_wheel(
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
         let wheel_root = instance_key(ent, &q_provenance, &q_gid, &q_instance_root);
-        let vehicle_root = q_fsw.iter().find(|(root_ent, path, _)| {
+        let vehicle_root = q_fsw.iter().find(|(root_ent, path, _, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
                 && instance_key(*root_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
         });
 
-        if let Some((_, _, actuators)) = vehicle_root {
+        if let Some((_, _, _, actuators)) = vehicle_root {
             // Resolve every authored endpoint before creating any edge. A
             // partially wired vehicle is unsafe: one wheel receiving drive while
             // another authored endpoint is absent must be a terminal scene fault,
@@ -5046,6 +5067,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
+                lunco_core::MobilityRoot,
                 lunco_core::OutputPorts::default(),
             ))
             .id();
@@ -5135,6 +5157,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
+                lunco_core::MobilityRoot,
                 lunco_core::OutputPorts::default(),
             ))
             .id();
@@ -5215,6 +5238,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::ZERO,
                     ang,
                 },
+                lunco_core::MobilityRoot,
                 lunco_core::OutputPorts::default(),
             ))
             .id();
