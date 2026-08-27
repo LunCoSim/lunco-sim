@@ -313,6 +313,17 @@ def Xform \"Visual\" (\n\
         let recipe = crate::StageRecipe::from_source("scene.usda", source);
         let stage = CanonicalStage::from_recipe(&recipe).expect("compose live binary-arc fixture");
         let visual = SdfPath::new("/Visual").unwrap();
+        let referenced_asset = "#usda 1.0\n(defaultPrim = \"Model\")\ndef Xform \"Model\" {}\n";
+        assert!(stage.add_layer_bytes(HashMap::from([
+            (
+                stage.canonical_reference_id("first.glb"),
+                referenced_asset.as_bytes().to_vec(),
+            ),
+            (
+                stage.canonical_reference_id("second.glb"),
+                referenced_asset.as_bytes().to_vec(),
+            ),
+        ])));
 
         assert!(stage.view().binary_asset_uri(&visual).is_none());
         stage

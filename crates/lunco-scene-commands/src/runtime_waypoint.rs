@@ -104,7 +104,10 @@ pub fn append_runtime_patrol(
         None => Ok(lunco_autopilot::BehaviorSpec::Patrol {
             waypoints: vec![lunco_autopilot::PatrolWaypoint::at(point.map(f64::from))],
             speed: 0.6,
-            radius: 3.0,
+            // The shared USD marker's overlap sensor is 2.5 m in radius. Keep
+            // geometric patrol completion inside that authoritative event
+            // volume, so route progression cannot outrun waypoint.reached.
+            radius: 2.0,
             dwell: 0.0,
         }),
     }
@@ -301,7 +304,12 @@ impl ApiQueryProvider for RuntimeWaypointStatusProvider {
 /// Read Avian's shared Sensor overlap and turn it into live route state.
 pub fn mark_reached_waypoints_on_enter(
     mut starts: MessageReader<CollisionStart>,
-    q_zones: Query<(&TriggerZone, &UsdPrimPath), With<Sensor>>,
+    q_zones: Query<(
+        Option<&TriggerZone>,
+        Has<Sensor>,
+        Option<&UsdPrimPath>,
+        Option<&Name>,
+    )>,
     q_runtime_bindings: Query<&RuntimeWaypointBinding>,
     // A physics body can expose generic input/output ports without being a
     // controllable vessel (the authored ground body does exactly that).  The
@@ -309,6 +317,10 @@ pub fn mark_reached_waypoints_on_enter(
     // waypoint trigger's normal contact with the ground from becoming a rover
     // arrival event.
     q_vessel_roots: Query<(), (With<UsdPrimPath>, With<ControlBinding>)>,
+    // Runtime waypoints are explicitly bound to the command surface by
+    // `AddRuntimeWaypoint`; an unpossessed spawned rover has `InputPorts` but
+    // intentionally has no `ControlBinding` until a controller possesses it.
+    q_runtime_vessels: Query<(), (With<UsdPrimPath>, With<InputPorts>)>,
     q_parents: Query<&ChildOf>,
     q_vessels: Query<(Entity, Option<&BehaviorXml>)>,
     q_reached: Query<&ReachedWaypoints>,
@@ -334,9 +346,15 @@ pub fn mark_reached_waypoints_on_enter(
             (ev.collider1, ev.collider2, ev.body2),
             (ev.collider2, ev.collider1, ev.body1),
         ] {
-            let Ok((zone, zone_prim)) = q_zones.get(zone_ent) else {
+            let Ok((zone, is_sensor, _, _)) = q_zones.get(zone_ent) else {
                 continue;
             };
+            let Some(zone) = zone else {
+                continue;
+            };
+            if !is_sensor {
+                continue;
+            }
             if zone.0 != "waypoint" {
                 continue;
             }
@@ -355,37 +373,68 @@ pub fn mark_reached_waypoints_on_enter(
                 }
                 binding
             };
-            let Some((marker_path, _)) = zone_prim.path.rsplit_once('/') else {
-                continue;
+            // The physics event names the collider/body entity. Usually the
+            // collider is also the USD prim, but compound/body projection can
+            // put the `Sensor` on a physics child while the prim identity is on
+            // its USD parent. Resolve the authored marker path from the same
+            // ancestry that owns the runtime binding instead of requiring both
+            // components on one ECS entity.
+            let marker_path = if runtime_binding.is_none() {
+                let mut curr = zone_ent;
+                let mut path = None;
+                for _ in 0..16 {
+                    if let Ok((_, _, Some(prim), _)) = q_zones.get(curr) {
+                        path = prim
+                            .path
+                            .rsplit_once('/')
+                            .map(|(parent, _)| parent.to_string());
+                        if path.is_some() {
+                            break;
+                        }
+                    }
+                    let Ok(parent) = q_parents.get(curr) else {
+                        break;
+                    };
+                    curr = parent.parent();
+                }
+                let Some(path) = path else {
+                    continue;
+                };
+                Some(path)
+            } else {
+                None
             };
             let mut resolved = false;
             for candidate in [other_ent, other_body.unwrap_or(other_ent)] {
                 let mut curr = candidate;
                 for _ in 0..16 {
-                    if q_vessel_roots.get(curr).is_ok() {
-                        if let Some(binding) = runtime_binding {
-                            if binding.vessel == curr {
-                                arrivals.push(Arrival::Runtime {
-                                    vessel: binding.vessel,
-                                    index: binding.index,
-                                });
-                            }
-                        } else {
-                            let Ok((_, Some(xml))) = q_vessels.get(curr) else {
-                                continue;
-                            };
-                            let Ok(metadata) = authored_route_metadata(&xml.0) else {
-                                continue;
-                            };
-                            if !metadata.targets.iter().any(|target| target == marker_path) {
-                                continue;
-                            }
-                            arrivals.push(Arrival::Authored {
-                                marker_path: marker_path.to_string(),
-                                vessel: curr,
-                                targets: metadata.targets,
+                    if let Some(binding) = runtime_binding {
+                        if q_runtime_vessels.get(curr).is_ok() && binding.vessel == curr {
+                            arrivals.push(Arrival::Runtime {
+                                vessel: binding.vessel,
+                                index: binding.index,
                             });
+                            resolved = true;
+                            break;
                         }
+                    } else if q_vessel_roots.get(curr).is_ok() {
+                        let Some(marker_path) = marker_path.as_deref() else {
+                            break;
+                        };
+                        let Ok((_, Some(xml))) = q_vessels.get(curr) else {
+                            break;
+                        };
+                        let Ok(metadata) = authored_route_metadata(&xml.0) else {
+                            break;
+                        };
+                        if !metadata.targets.iter().any(|target| target == marker_path) {
+                            break;
+                        }
+                        arrivals.push(Arrival::Authored {
+                            marker_path: marker_path.to_string(),
+                            vessel: curr,
+                            targets: metadata.targets,
+                        });
                         resolved = true;
                         break;
                     }

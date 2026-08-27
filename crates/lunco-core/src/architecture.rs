@@ -71,6 +71,13 @@ pub enum UserIntent {
     /// Downward vertical movement.
     MoveDown,
 
+    /// Multiplies free-flight translation speed while held.
+    ///
+    /// This is a presentation-control intent, not a vessel port. It remains
+    /// in the shared input vocabulary so the avatar reads the same configured
+    /// binding as the help overlay and input simulation tools.
+    SpeedBoost,
+
     /// Camera look/orientation adjustment.
     #[actionlike(DualAxis)]
     Look,
@@ -123,6 +130,7 @@ impl std::fmt::Display for UserIntent {
             Self::MoveRight => "Move right",
             Self::MoveUp => "Move up",
             Self::MoveDown => "Move down",
+            Self::SpeedBoost => "Speed boost",
             Self::Look => "Look",
             Self::Zoom => "Zoom",
             Self::Action => "Primary action",
@@ -203,6 +211,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "right" => Some(UserIntent::MoveRight),
         "yaw_right" => Some(UserIntent::MoveUp),
         "yaw_left" => Some(UserIntent::MoveDown),
+        "speed_boost" => Some(UserIntent::SpeedBoost),
         "action" => Some(UserIntent::Action),
         "thrust" => Some(UserIntent::Thrust),
         "brake" => Some(UserIntent::Brake),
@@ -756,6 +765,7 @@ mod tests {
             ("right", UserIntent::MoveRight),
             ("yaw_right", UserIntent::MoveUp),
             ("yaw_left", UserIntent::MoveDown),
+            ("speed_boost", UserIntent::SpeedBoost),
             ("action", UserIntent::Action),
             ("thrust", UserIntent::Thrust),
             ("brake", UserIntent::Brake),

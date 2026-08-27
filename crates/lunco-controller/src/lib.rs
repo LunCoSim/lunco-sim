@@ -646,11 +646,13 @@ fn default_look_button() -> String {
 /// The resolved semantic input map shared by avatar control, UI help, and
 /// tutorials.
 ///
-/// The bundled keymap is the default value. A user may replace this typed
-/// settings section in settings.json; no consumer gets a separate copy of
-/// the bindings. The bundled JSON contains only settings data; explanatory
-/// text belongs in the asset and crate documentation rather than in the map.
-#[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
+/// The bundled keymap is the default value. A user may override this typed
+/// settings section in settings.json; omitted semantic bindings inherit the
+/// current bundled values while an explicit empty array remains unbound. No
+/// consumer gets a separate copy of the bindings. The bundled JSON contains
+/// only settings data; explanatory text belongs in the asset and crate
+/// documentation rather than in the map.
+#[derive(Resource, Reflect, Serialize, Clone, PartialEq, Debug)]
 #[reflect(Resource)]
 pub struct InputBindingsSettings {
     /// Semantic intent name → key names understood by Bevy.
@@ -661,10 +663,52 @@ pub struct InputBindingsSettings {
     pub look_button: String,
 }
 
+#[derive(Deserialize)]
+struct InputBindingsFile {
+    #[serde(flatten)]
+    bindings: BTreeMap<String, Vec<KeyCode>>,
+    #[serde(default = "default_look_button")]
+    look_button: String,
+}
+
+fn bundled_input_bindings() -> InputBindingsFile {
+    serde_json::from_str(KEYBINDINGS_JSON)
+        .expect("assets/config/keybindings.json must be valid input settings")
+}
+
 impl Default for InputBindingsSettings {
     fn default() -> Self {
-        serde_json::from_str(KEYBINDINGS_JSON)
-            .expect("assets/config/keybindings.json must be valid input settings")
+        let bundled = bundled_input_bindings();
+        Self {
+            bindings: bundled.bindings,
+            look_button: bundled.look_button,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InputBindingsSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct StoredInputBindings {
+            #[serde(flatten)]
+            bindings: BTreeMap<String, Vec<KeyCode>>,
+            #[serde(default = "default_look_button")]
+            look_button: String,
+        }
+
+        let stored = StoredInputBindings::deserialize(deserializer)?;
+        let mut bindings = bundled_input_bindings().bindings;
+        // A settings file is an override layer, not a second copy of the
+        // bundled schema. Missing semantic inputs inherit the current authored
+        // defaults; an explicit empty array still means "unbound".
+        bindings.extend(stored.bindings);
+        Ok(Self {
+            bindings,
+            look_button: stored.look_button,
+        })
     }
 }
 
@@ -1141,7 +1185,23 @@ mod tests {
         assert_eq!(thrust, Some(vec![KeyCode::Space]));
         assert_eq!(brake, Some(vec![KeyCode::Space]));
 
+        let boost = bindings
+            .iter()
+            .find(|(intent, _)| *intent == UserIntent::SpeedBoost)
+            .map(|(_, keys)| keys.clone());
+        assert_eq!(
+            boost,
+            Some(vec![KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            "free-flight boost must come from the shared semantic keymap"
+        );
+
         let input_map = InputBindingsSettings::default().input_map().unwrap();
+        assert_eq!(
+            input_map
+                .get_buttonlike(&UserIntent::SpeedBoost)
+                .map(Vec::len),
+            Some(2)
+        );
         assert_eq!(
             input_map.get_buttonlike(&UserIntent::Thrust).map(Vec::len),
             Some(1),
@@ -1183,6 +1243,17 @@ mod tests {
         // Builder runs end-to-end (also adds the mouse axes) without panicking.
         let _ = InputBindingsSettings::default().input_map().unwrap();
         let _ = UserIntent::MoveForward;
+    }
+
+    #[test]
+    fn persisted_keymap_inherits_new_defaults_without_overwriting_intentional_empty() {
+        let settings: InputBindingsSettings =
+            serde_json::from_str(r#"{"forward":["KeyI"],"speed_boost":[]}"#).unwrap();
+
+        assert_eq!(settings.key_code("KeyI").unwrap(), Some(KeyCode::KeyI));
+        assert_eq!(settings.key_code("KeyW").unwrap(), None);
+        assert_eq!(settings.key_code("ShiftLeft").unwrap(), None);
+        assert_eq!(settings.key_code("KeyS").unwrap(), Some(KeyCode::KeyS));
     }
 
     /// Opposing movement axes must be independent when held together.  In

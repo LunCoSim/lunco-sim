@@ -25,7 +25,7 @@ use lunco_render::PbrLook;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset};
 
 const SCENE: &str = r#"#usda 1.0
-( defaultPrim = "World" )
+( defaultPrim = "World", metersPerUnit = 1 )
 def Xform "World"
 {
     def Material "Mat"

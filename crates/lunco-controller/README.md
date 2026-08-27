@@ -47,6 +47,14 @@ Tutorials use `input_binding("forward")` / `input_hint("forward")` through the
 Rhai bridge, so their labels follow the same resolved settings resource rather
 than copying physical key names.
 
+The bundled `speed_boost` intent (`ShiftLeft`/`ShiftRight`) is consumed by the
+free-flight avatar. It is part of the shared map, so rebinding and
+`SimulateIntent` use the same semantic path as movement.
+
+The settings section is an override layer over the bundled map: omitted semantic
+bindings inherit the current defaults, while an explicit empty array means
+unbound. This keeps a saved keymap from silently losing a newly added intent.
+
 ## See Also
 
 - `lunco-mobility` — Consumes the bound `SetPorts` inputs and projects them onto the authored actuator ports.

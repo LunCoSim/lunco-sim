@@ -92,6 +92,18 @@ def Xform "CommsRadio" (
                     # ── Traffic: what the vehicle generates, and what it can hold ─
                     float inputs:data_in_bps = 500000
                     float inputs:buffer_capacity_bits = 80000000
+                    # Public Modelica output surface. These declarations are
+                    # the USD contract available during async source loading;
+                    # the solver later supplies their live values. Keeping the
+                    # complete surface here lets telemetry and wires bind to a
+                    # real port from the first lifecycle phase.
+                    float outputs:rate_bps
+                    float outputs:snr_db
+                    float outputs:margin_db
+                    float outputs:buffer_bits
+                    float outputs:buffer_frac
+                    float outputs:lost_bits
+                    float outputs:up
                     float outputs:tx_active
                 }
             }

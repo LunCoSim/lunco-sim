@@ -1499,10 +1499,10 @@ impl AutopilotBehaviorSpec {
 
 /// Steering math (Rust): from the vessel's world pose and a goal, return
 /// `(throttle, steer, brake, arrived)` in `[-1, 1]`. Steer toward the goal on the
-/// yaw plane; hard-turn when it's behind; ease the throttle down while poorly
-/// aligned so it pivots onto the goal instead of arcing past; brake + `arrived`
-/// within `radius`. COMPUTATION, so it lives in Rust — rhai is glue-only. Steering
-/// is a *relative* direction, so it's invariant to the floating-origin offset.
+/// yaw plane; reverse when the goal is behind so an Ackermann rover can reach a
+/// point inside its forward turning circle; brake + `arrived` within `radius`.
+/// COMPUTATION, so it lives in Rust — rhai is glue-only. Steering is a *relative*
+/// direction, so it's invariant to the floating-origin offset.
 pub fn nav_setpoint(
     pos: GridPos,
     fwd: Vec3,
@@ -1524,17 +1524,18 @@ pub fn nav_setpoint(
     // toward the goal (matches the prelude `steer_to` sign convention).
     let cy = fwd.z * to.x - fwd.x * to.z;
     let dot = fwd.dot(to);
-    let steer: f32 = if dot < 0.0 {
-        if cy >= 0.0 {
-            -1.0
-        } else {
-            1.0
-        } // goal behind → hard turn toward its side
-    } else {
-        (-cy * 2.5).clamp(-1.0, 1.0)
-    };
+    if dot < 0.0 {
+        // A front-steered vehicle cannot turn inside its minimum forward arc. A
+        // hard forward throttle makes it orbit a nearby goal forever. Reverse is
+        // the physically available recovery maneuver; reversing also flips the
+        // steering response, hence `+cy` rather than the forward `-cy`.
+        let reverse_throttle = -speed * (-dot as f64).clamp(0.25, 1.0);
+        let reverse_steer = (cy * 2.5).clamp(-1.0, 1.0) as f64;
+        return (reverse_throttle, reverse_steer, 0.0, false);
+    }
+    let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
     let throttle = speed * (0.25 + 0.75 * dot as f64).clamp(0.25, 1.0);
-    (throttle, steer as f64, 0.0, false)
+    (throttle, steer, 0.0, false)
 }
 
 // ── Systems ──────────────────────────────────────────────────────────────────
@@ -1747,6 +1748,7 @@ pub fn drive_autopilots(
         let self_pose = pose.pose(ap.vessel);
         let (throttle, steer, brake, mut fired) = match (behavior.as_deref_mut(), self_pose) {
             (Some(tree), Some((self_pos, self_rotation))) => {
+                let fwd = VehicleFrame::yaw_forward(self_rotation).as_vec3();
                 let clearance = clearances
                     .as_ref()
                     .and_then(|c| c.0.get(&ap.vessel).copied())
@@ -1756,7 +1758,7 @@ pub fn drive_autopilots(
                     // Active physics frame, matching `targets` above and the
                     // authored coordinates the leaves compare against.
                     pos: self_pos,
-                    fwd: VehicleFrame::yaw_forward(self_rotation).as_vec3(),
+                    fwd,
                     now,
                     // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
                     // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
@@ -1811,7 +1813,6 @@ pub fn drive_autopilots(
             seq: 0,
             tick: 0,
         });
-
         // Re-emit any tool calls queued by `RunTool` leaves this tick. Leaves
         // can't reach ECS, so they push into `DriveCtx::fired`; this is the one
         // place with `Commands` access to fan them out as `ToolFired` events.

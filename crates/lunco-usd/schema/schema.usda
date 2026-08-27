@@ -511,7 +511,7 @@ class "LunCoWifiAPI" (
     This graph is deliberately separate from `LunCoLinkAPI`: the generic link
     kernel publishes geometry, while the Wi-Fi projection applies this endpoint
     range and exposes its own `WifiLinks` snapshot. It does not alter the
-    Earth-only direct-link policy."""
+    authored direct-link policy for Earth stations, lunar bases, or relays."""
 )
 {
     uniform bool lunco:wifiNode = false (

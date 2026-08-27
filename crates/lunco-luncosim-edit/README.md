@@ -93,6 +93,6 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 | `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
 | `inspector.rs` | EGUI parameter panel |
 | `entity_list.rs` | Clickable list of scene entities |
-| `palette.rs` | Spawn palette UI |
+| `ui/spawn_palette.rs` | Spawn palette UI |
 | `commands.rs` | `SPAWN_ENTITY` command message handling |
 | `undo.rs` | Undo stack system |

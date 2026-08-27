@@ -115,8 +115,8 @@ the compositor and the unfocused power-save throttle, not the renderer.
 The active controls are user-configurable through the `input_bindings` section
 of `~/.lunco/settings.json`. The controller translates those bindings into
 semantic intents, and the in-app help/input overlay displays the resolved labels.
-Tutorials therefore describe actions such as forward, brake, thrust, cancel, or
-release rather than embedding physical keys. Editing or rebinding a setting is
+Tutorials therefore describe actions such as forward, brake, thrust, cancel,
+release, or speed boost rather than embedding physical keys. Editing or rebinding a setting is
 reflected by the live input map and by tutorial copy that uses
 `input_binding(...)`/`input_hint(...)`.
 

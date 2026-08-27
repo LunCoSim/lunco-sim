@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "FreeFlightSpeedBoost"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production acceptance fixture for the avatar's semantic speed-boost path.
+# The observer drives the avatar through SimulateIntent, so this covers the
+# same intent -> binding -> InputPorts -> free-flight consumer path used by the
+# API and by the keyboard without depending on a physical key name.
+def Xform "FreeFlightSpeedBoost" (
+    kind = "assembly"
+)
+{
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (0.0, 10.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "free-flight-speed-boost"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/free_flight_speed_boost.rhai@
+        }
+    }
+}

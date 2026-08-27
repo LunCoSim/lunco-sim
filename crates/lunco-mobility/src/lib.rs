@@ -587,6 +587,24 @@ pub fn strut_offset(rest_length: f64, wheel_radius: f64) -> f64 {
     rest_length - wheel_radius
 }
 
+/// Return the query length for a suspension ray whose physical travel is
+/// `rest_length`.
+///
+/// Avian accepts a ray hit only when `distance < max_distance`. A freshly
+/// settled wheel is intentionally placed at exactly its authored rest length,
+/// so using `rest_length` as the query bound makes that valid contact
+/// disappear because of a strict boundary comparison (and because authored
+/// USD values have already crossed the f32/f64 boundary once). The added
+/// micrometre-scale margin is numerical query tolerance only: suspension
+/// compression and force still use the authored `rest_length`, so it cannot
+/// create physical travel or load.
+pub fn suspension_ray_max_distance(rest_length: f64) -> f64 {
+    if !rest_length.is_finite() || rest_length <= 0.0 {
+        return rest_length;
+    }
+    rest_length + 1.0e-6 * rest_length.max(1.0)
+}
+
 /// Resolve the authored ray's ground contact in the same physics frame as the
 /// wheel hub.
 ///
@@ -2213,6 +2231,17 @@ mod force_law_tests {
         let contact = ray_contact_point(hub, rotation, 1.2, 0.4, 0.25);
 
         assert!((contact - DVec3::new(1.45, 3.0, 4.0)).length() < 1.0e-12);
+    }
+
+    #[test]
+    fn suspension_query_includes_the_authored_rest_endpoint() {
+        let rest = 0.7;
+        let query = suspension_ray_max_distance(rest);
+
+        assert!(query > rest);
+        assert!((query - rest - 1.0e-6).abs() < 1.0e-12);
+        assert_eq!(suspension_ray_max_distance(0.0), 0.0);
+        assert!(suspension_ray_max_distance(f64::NAN).is_nan());
     }
 
     #[test]

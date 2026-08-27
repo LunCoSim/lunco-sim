@@ -247,24 +247,32 @@ fn group_member_layout(net, members) {
     // Explicit source/load roles form opposite banks of the bus. This is a
     // semantic layout policy, not an electrical direction assumption: the
     // generated equations remain the authored acausal connect graph.
+    // Keep neutral members on one selected bank. Alternating them between
+    // banks would make a repeated component grid grow in two directions and
+    // make its total height proportional to the number of members.
     let left_count = 0;
-    let left_total = classified.sources.len + classified.neutral.len;
+    let right_count = 0;
+    let neutral_on_left = classified.sources.len <= classified.loads.len;
+    let left_total = classified.sources.len;
+    let right_total = classified.loads.len;
+    if neutral_on_left {
+        left_total += classified.neutral.len;
+    } else {
+        right_total += classified.neutral.len;
+    }
     for path in classified.sources {
         placements.push(branch_placement(path, "left", left_count, left_total));
         left_count += 1;
     }
-    let right_count = 0;
-    let right_total = classified.loads.len + classified.neutral.len;
     for path in classified.loads {
         placements.push(branch_placement(path, "right", right_count, right_total));
         right_count += 1;
     }
-    // Components without a side preference remain fully supported. Pack them
-    // onto the shorter bank, with a deterministic left tie, so a new Modelica
-    // domain does not need a Rust layout branch merely because it has neutral
-    // components.
+    // Components without a side preference remain fully supported. Pack the
+    // complete neutral bank onto the shorter explicit bank, with a
+    // deterministic left tie, so repeated components form one compact grid.
     for path in classified.neutral {
-        if left_count <= right_count {
+        if neutral_on_left {
             placements.push(branch_placement(path, "left", left_count, left_total));
             left_count += 1;
         } else {

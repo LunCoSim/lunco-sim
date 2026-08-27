@@ -340,7 +340,7 @@ FLAGS:
         --no-ui          Run headless (no window). Also via LUNCO_NO_UI=1.
         --api [PORT]     Serve the HTTP command API (default {api}). NOT implied
                          by --no-ui: without this flag there is no API port.
-                         POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
+                         POST /api/commands  {{\"type\":\"ExecuteCommand\",\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup. PATH may be relative to
                          assets/, relative to the current directory, or absolute.
                          Without --scene, start with an empty persistent world

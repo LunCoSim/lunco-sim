@@ -524,6 +524,8 @@ fn commit_staged_output(
 /// `process_normalmap` / `resolve_roi` / `resample_roi_bilinear` and did not bump
 /// this, your fix does not exist for anyone with a warm cache — including CI.
 ///
+/// v5 (2026-08-27): every `map` output writes a normaliser sidecar; RGB maps use
+/// the identity value `1.0`, while grayscale maps retain their measured mean.
 /// v4 (2026-07-27): normalmap fills voids before differencing and encodes a
 /// neutral up-normal for any non-finite sample (was RGB(0,0,0) = inward normal).
 /// v3 (2026-07-27): `resample_roi_bilinear` renormalises over finite neighbours
@@ -532,7 +534,7 @@ fn commit_staged_output(
 /// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
 /// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
 #[cfg(not(target_arch = "wasm32"))]
-const PIPELINE_VERSION: u32 = 4;
+const PIPELINE_VERSION: u32 = 5;
 
 /// Where the bake stamp lives: inside the output folder for folder outputs
 /// (`dem`), beside the file for file outputs. Both land under the twin's
@@ -1411,7 +1413,11 @@ fn process_map(
         let probe = GraySource {
             w,
             h,
-            samples: Vec::new(),
+            // `resolve_roi` validates the requested crop against finite source
+            // data. RGB maps have no grayscale plane, but every decoded RGB
+            // texel is still valid source coverage; use one channel as the
+            // coverage plane instead of passing an empty sample vector.
+            samples: planes[0].clone(),
             extent: None,
             scale_m: None,
             projection: None,
@@ -1433,6 +1439,11 @@ fn process_map(
         }
         png.save(output_path)
             .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
+        // RGB source maps preserve their authored channels. They do not use the
+        // grayscale percentile stretch, so their multiplicative normaliser is
+        // the identity. Write the same completion sidecar as the grayscale path
+        // so every `map` artifact has one unambiguous installed-state contract.
+        std::fs::write(output_path.with_extension("mean"), "1.000000\n")?;
         return Ok(());
     }
 
@@ -1649,6 +1660,44 @@ mod tests {
 
     fn control() -> ProcessControl {
         ProcessControl::unrestricted()
+    }
+
+    #[test]
+    fn rgb_map_bake_writes_identity_normaliser_and_is_installed() {
+        let tmp = tempfile::tempdir().expect("temporary map processing directory");
+        let source = tmp.path().join("source.tif");
+        let mut image = image::RgbImage::new(4, 4);
+        for (index, pixel) in image.pixels_mut().enumerate() {
+            *pixel = image::Rgb([index as u8, 80, 160]);
+        }
+        image.save(&source).expect("RGB source raster");
+
+        let process = ProcessConfig {
+            kind: "map".into(),
+            output: "terrain/test-map.png".into(),
+            output_root: "cache".into(),
+            target_resolution: Some([2, 2]),
+            center_lat: Some(0.5),
+            center_lon: Some(0.5),
+            window_m: Some(2.0),
+            pixel_scale_m: 1.0,
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
+            src_min_lat: Some(0.0),
+            src_max_lat: Some(1.0),
+            src_min_lon: Some(0.0),
+            src_max_lon: Some(1.0),
+            site_id: None,
+            frame: None,
+        };
+        process_asset(&source, &process, tmp.path(), None, &control()).expect("RGB map processing");
+
+        let output = tmp.path().join("terrain/test-map.png");
+        assert_eq!(
+            std::fs::read_to_string(output.with_extension("mean")).unwrap(),
+            "1.000000\n"
+        );
+        assert!(processed_output_present(&output, &process, Some(&source)));
     }
 
     /// The resampler propagates NaN now, so a void reaches the normal-map gradient.

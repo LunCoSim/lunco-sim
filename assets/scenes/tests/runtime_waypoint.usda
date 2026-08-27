@@ -7,8 +7,9 @@
 
 # Production/headless acceptance fixture for the runtime-only waypoint path.
 # The scenario spawns a rover through the public SpawnEntity command, appends a
-# live waypoint through AddRuntimeWaypoint, and waits for the shared USD marker's
-# Avian Sensor to report arrival. No authored rover or authored waypoint is used.
+# live ordered waypoints through AddRuntimeWaypoint, and waits for the shared USD
+# markers' Avian Sensors to report arrival in order. No authored rover or authored
+# waypoint is used.
 def Xform "RuntimeWaypointTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"

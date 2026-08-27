@@ -81,6 +81,25 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
 }
 
 #[test]
+fn nav_setpoint_reverses_when_goal_is_behind_the_vehicle() {
+    let (throttle, steer, brake, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        Vec3::NEG_Z,
+        GridPos(DVec3::new(0.0, 0.0, 8.0)),
+        0.6,
+        2.0,
+    );
+
+    assert!(
+        throttle < 0.0,
+        "a goal behind an Ackermann rover needs reverse"
+    );
+    assert!(steer.abs() < 1e-6, "straight-behind goal should not steer");
+    assert_eq!(brake, 0.0);
+    assert!(!arrived);
+}
+
+#[test]
 fn waypoint_navigation_uses_shared_vehicle_frame_on_the_yaw_plane() {
     // The shared vehicle-frame contract transforms the authored -Z axis by the
     // body's physics yaw before a waypoint becomes a differential-drive command.

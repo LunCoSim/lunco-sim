@@ -23,7 +23,7 @@ use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_controller::{ControllerLink, InputBindingsSettings};
+use lunco_controller::{ControllerLink, InputBindingsSettings, SimulatedIntents};
 use lunco_core::{
     on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
     SessionProfiles, Spacecraft,
@@ -2612,6 +2612,25 @@ fn surface_camera_system(
 /// Q/E elevation follows world up in free flight and gravity up in surface mode.
 /// Runs in PostUpdate at render rate on wall-clock time, so the ghost camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
+fn free_flight_speed_multiplier(
+    entity: Entity,
+    intents: &IntentState,
+    simulated_intents: Option<&SimulatedIntents>,
+) -> f64 {
+    let held = intents.pressed(&UserIntent::SpeedBoost)
+        || simulated_intents.is_some_and(|simulated| {
+            simulated
+                .0
+                .get(&entity)
+                .is_some_and(|set| set.contains(&UserIntent::SpeedBoost))
+        });
+    if held {
+        10.0
+    } else {
+        1.0
+    }
+}
+
 fn apply_fly(
     mut q_avatar: Query<
         (
@@ -2623,6 +2642,7 @@ fn apply_fly(
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
             Option<&SurfaceRelativeMode>,
+            &IntentState,
         ),
         (
             With<Avatar>,
@@ -2635,6 +2655,7 @@ fn apply_fly(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     gravity: Res<LocalGravityField>,
     keys: Res<ButtonInput<KeyCode>>,
+    simulated_intents: Option<Res<SimulatedIntents>>,
     // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
     // paused, because pausing the simulation is not supposed to paralyse the user. Runs
     // at render rate in `PostUpdate` — no lockstep needed, free-flight follows nothing.
@@ -2642,12 +2663,6 @@ fn apply_fly(
     mut commands: Commands,
 ) {
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-        10.0
-    } else {
-        1.0
-    };
-
     for (
         entity,
         mut tf,
@@ -2657,6 +2672,7 @@ fn apply_fly(
         has_freeflight,
         has_surface_camera,
         surface_mode,
+        intents,
     ) in q_avatar.iter_mut()
     {
         let Ok(grid) = q_grids.get(child_of.0) else {
@@ -2670,12 +2686,13 @@ fn apply_fly(
         }
 
         // Input values (each −1..=1 from the
-        // `ControlBinding`), then boosted. When free (no ControllerLink)
+        // `ControlBinding`). When free (no ControllerLink)
         // `drive_from_bindings` writes these; while possessing they stay 0 (control is
         // redirected to the vessel).
-        let forward = (inputs.cmd("forward") * boost) as f32;
-        let side = (inputs.cmd("side") * boost) as f32;
-        let elevation = (inputs.cmd("up") * boost) as f32;
+        let boost = free_flight_speed_multiplier(entity, intents, simulated_intents.as_deref());
+        let forward = inputs.cmd("forward") as f32;
+        let side = inputs.cmd("side") as f32;
+        let elevation = inputs.cmd("up") as f32;
         if forward.abs() < 0.01 && side.abs() < 0.01 && elevation.abs() < 0.01 {
             continue;
         }
@@ -2695,7 +2712,9 @@ fn apply_fly(
         let move_vec = fly_move_direction(&tf, forward, side, elevation, up_dir);
 
         // 23.1 m/s base fly speed × the real frame delta.
-        let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * time.delta_secs_f64();
+        // Normalize the combined direction BEFORE applying the speed. Scaling
+        // the inputs first would make the unit-vector cap erase the boost.
+        let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * boost * time.delta_secs_f64();
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
@@ -5082,6 +5101,28 @@ mod tests {
         assert!((forward.length() - 1.0).abs() < 1e-6);
         assert!((diagonal.length() - 1.0).abs() < 1e-6);
         assert!(diagonal.x > 0.0 && diagonal.z < 0.0);
+    }
+
+    #[test]
+    fn speed_boost_uses_the_semantic_intent_and_is_tenfold() {
+        let entity = Entity::from_bits(42);
+        let mut intents = IntentState::default();
+        assert_eq!(free_flight_speed_multiplier(entity, &intents, None), 1.0);
+
+        intents.press(&UserIntent::SpeedBoost);
+        assert_eq!(free_flight_speed_multiplier(entity, &intents, None), 10.0);
+
+        intents.release(&UserIntent::SpeedBoost);
+        let mut simulated = SimulatedIntents::default();
+        simulated
+            .0
+            .entry(entity)
+            .or_default()
+            .insert(UserIntent::SpeedBoost);
+        assert_eq!(
+            free_flight_speed_multiplier(entity, &intents, Some(&simulated)),
+            10.0
+        );
     }
 
     #[test]

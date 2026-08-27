@@ -53,10 +53,11 @@ fn visible_entries<'a>(
         .entries()
         .iter()
         .filter(|entry| &entry.scope == scope)
-        .filter(|entry| match scope {
-            DatasetScope::Engine => entry.recommended,
-            DatasetScope::Twin { .. } => true,
-        })
+        // Startup consent is onboarding, not an inventory of every optional
+        // resource a Twin may declare. The manifest's `recommended` bit is the
+        // authoritative dependency boundary for this prompt; the resource
+        // manager remains the place to request non-recommended candidates.
+        .filter(|entry| entry.recommended)
         .collect()
 }
 

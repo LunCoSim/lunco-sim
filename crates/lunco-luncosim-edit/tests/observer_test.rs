@@ -195,7 +195,6 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
         .world_mut()
         .spawn((
             lunco_core::InputPorts::new(&["throttle", "steer", "brake"]),
-            lunco_core::ControlBinding { binds: Vec::new() },
             lunco_usd_bevy::UsdPrimPath {
                 stage_handle: Default::default(),
                 path: "/Runtime/Rover".to_string(),

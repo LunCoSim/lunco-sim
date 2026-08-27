@@ -346,10 +346,13 @@ own colour (ocean blue, regolith grey) while the status surface remains honest.
 A derived dataset is only ready when its **completed process output** exists,
 not its download. The processor's `.bakekey` completion stamp is part of that
 contract, including for directory products such as DEM sites; a partial output
-directory is still missing. An in-app fetch therefore runs the `[*.process]`
-step before reporting installed. Otherwise the UI says "installed" while every
-consumer still finds nothing — the CLI's two-command flow (`download` then
-`process`) has no equivalent second command in the app.
+directory is still missing. File-based `map` products also require their
+normaliser sidecar (`<output>.mean`); RGB maps write the explicit identity value
+`1.0`, while measured grayscale maps retain their sampled mean. An in-app fetch
+therefore runs the `[*.process]` step before reporting installed. Otherwise the
+UI says "installed" while every consumer still finds nothing — the CLI's
+two-command flow (`download` then `process`) has no equivalent second command in
+the app.
 
 `lunco:body:albedoMap` is not a new mechanism — it is what terrain already does
 (`demSource = @terrain/apollo15@`), what materials do (`lunco:material:shader`),

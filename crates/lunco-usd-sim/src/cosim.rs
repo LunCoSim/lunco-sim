@@ -4792,6 +4792,11 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<SceneTransitionCoordinator>();
     app.add_observer(request_binding_epoch::<UsdPrimPath>)
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+        // Link port names are derived from the classes of the other authored
+        // LinkNodes. A node arriving after its wire must therefore reopen the
+        // same binding transaction as any other projected endpoint.
+        .add_observer(request_binding_epoch::<lunco_celestial::link::LinkNode>)
+        .add_observer(request_binding_epoch_on_remove::<lunco_celestial::link::LinkNode>)
         .add_observer(request_binding_epoch::<ModelicaModel>)
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
         .add_observer(crate::domain_projection::on_remove_generated_source)

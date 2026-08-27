@@ -6,6 +6,7 @@
   "right":      ["KeyD"],
   "yaw_right":  ["KeyE"],
   "yaw_left":   ["KeyQ"],
+  "speed_boost": ["ShiftLeft", "ShiftRight"],
   "action":     ["KeyF"],
   "thrust":     ["Space"],
   "brake":      ["Space"],

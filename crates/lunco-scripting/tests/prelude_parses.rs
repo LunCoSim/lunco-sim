@@ -167,11 +167,11 @@ fn policy_files_all_parse() {
 }
 
 /// The direct-link policy is intentionally narrower than the generic geometry
-/// kernel: rover endpoints may use Earth or relay peers, rover-to-rover remains
-/// on the separate Wi-Fi graph, and a failed geometry verdict must never be
-/// reopened by the role rule.
+/// kernel: rover endpoints may use Earth, base, or relay peers, rover-to-rover
+/// remains on the separate Wi-Fi graph, and a failed geometry verdict must never
+/// be reopened by the role rule.
 #[test]
-fn link_policy_allows_rover_earth_or_relay() {
+fn link_policy_allows_rover_station_or_relay() {
     let (_, src) = lunco_assets::scripting::policy_files()
         .expect("active policy source")
         .into_iter()
@@ -187,6 +187,8 @@ fn link_policy_allows_rover_earth_or_relay() {
         ("rover", "earth", false, false),
         ("rover", "relay", true, true),
         ("relay", "rover", true, true),
+        ("rover", "base", true, true),
+        ("base", "rover", true, true),
         ("relay", "earth", true, true),
     ];
     for (class_a, class_b, builtin, expected) in cases {

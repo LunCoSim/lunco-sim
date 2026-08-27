@@ -171,9 +171,11 @@ physics frame, not the camera-path preview's screen-space presentation.
 `AuthoredRouteMetadata` read derives target identity, loop policy, and smoothness
 from the mission XML once; the editor then uses the exact `TargetBindings` map
 (runtime patrols use their explicit `RuntimeWaypointBinding` marker roots), resolves
-positions in the active physics grid, and publishes one atomic snapshot.
-Malformed or empty authored XML is an explicit unresolved route; it never falls
-back to an older derived runtime spec.
+positions in the active physics grid, and publishes one atomic snapshot. A valid
+authored route owns the view; the empty `Mission/Sequence` placeholder carried by
+runtime-spawned vessels explicitly transfers ownership to the live runtime patrol.
+Malformed authored XML remains an unresolved route and never selects a stale
+derived runtime spec.
 `project_waypoint_markers_to_surface` is a separate change-gated owner for the
 runtime marker root, so the dome and arrival sensor remain on the same surface
 without coupling marker transforms to mesh reconciliation. Meshes and marker looks

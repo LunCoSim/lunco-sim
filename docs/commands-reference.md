@@ -6,7 +6,7 @@
 # Command Reference
 
 Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one
-bus, reachable from the **HTTP API** (`POST /api/commands`, `{"command":"…","params":{…}}`),
+bus, reachable from the **HTTP API** (`POST /api/commands`, `{"type":"ExecuteCommand","command":"…","params":{…}}`),
 **MCP**, and **rhai** (`cmd("CommandName", #{ … })`). This page is generated from the
 **runtime schema** the app itself advertises, so every command below is one you can
 actually call, with the fields the deserializer actually accepts. See the
@@ -248,7 +248,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `AddRuntimeWaypoint`
 
- A runtime waypoint appended to a spawned vessel's patrol.
+ A runtime waypoint appended to a spawned vessel's patrol. A new runtime patrol
+ uses a 2 m geometric arrival radius; the shared USD marker has a 2.5 m overlap
+ sensor, so the behavior-tree leg completes inside the collision-backed
+ `waypoint.reached` volume.
 
  The target is an [`Entity`] deliberately: the API/Rhai command dispatcher
  resolves the stable `GlobalEntityId` supplied by callers before this handler
@@ -1659,14 +1662,15 @@ actually call, with the fields the deserializer actually accepts. See the
  `held = true` is "stuck" (the key is down and stays down); `held = false` is
  "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
  The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
- …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
- `Controls` profile binds.
+ `speed_boost`, …), parsed by [`lunco_core::parse_user_intent`]. `speed_boost` is
+ consumed by the local free-flight avatar; movement intents still match whatever
+ a vessel's `Controls` profile binds.
 
 - *defined in:* `crates/lunco-controller/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
+| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`, `speed_boost`, `action`, `release`, …). |
 | `held` | `bool` |  `true` = hold it down, `false` = release it. |
 | `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command  surface). An intent is meaningless without its target: two spawns of one  asset are two distinct entities, and a targetless intent is rejected. Over  the API this takes the target's `api_id` — the `GlobalEntityId` reported by  `ListEntities` — and is resolved to the live entity. |
 
@@ -2994,7 +2998,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SpawnEntity`
 
- Spawn an entity from the catalog at a given world position.
+ Spawn an independent entity from the catalog at a given world position. Route
+ markers are not independent entities and are rejected here; use
+ `AddRuntimeWaypoint` with an explicit vessel for a runtime route member.
 
  **Why the type lives in `lunco-core` and the handler does not.** `SpawnEntity`
  is a *wire* command: `lunco-networking` declares its channel
@@ -3015,7 +3021,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `entry_id` | `String` |  The catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
+| `entry_id` | `String` |  The independent catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
 | `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
 | `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
 

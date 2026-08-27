@@ -452,7 +452,7 @@ fn main() {
     md.push_str("# Command Reference\n\n");
     md.push_str(
         "Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one\n\
-         bus, reachable from the **HTTP API** (`POST /api/commands`, `{\"command\":\"…\",\"params\":{…}}`),\n\
+         bus, reachable from the **HTTP API** (`POST /api/commands`, `{\"type\":\"ExecuteCommand\",\"command\":\"…\",\"params\":{…}}`),\n\
          **MCP**, and **rhai** (`cmd(\"CommandName\", #{ … })`). This page is generated from the\n\
          **runtime schema** the app itself advertises, so every command below is one you can\n\
          actually call, with the fields the deserializer actually accepts. See the\n\

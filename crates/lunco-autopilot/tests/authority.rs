@@ -5,7 +5,7 @@
 
 use bevy::math::DQuat;
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::CellCoord;
 use lunco_autopilot::{
     autopilot_session, drive_autopilots, setup_autopilot_session, Autopilot, AutopilotBehavior,
 };

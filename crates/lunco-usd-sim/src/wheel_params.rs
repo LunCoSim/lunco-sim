@@ -1029,7 +1029,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                     lunco_mobility::strut_offset(susp.rest_length, u.params.radius),
                     0.0,
                 );
-                ray.max_distance = susp.rest_length;
+                ray.max_distance = lunco_mobility::suspension_ray_max_distance(susp.rest_length);
             }
             if let (Some(lock), Some(mut steer)) = (
                 u.max_steer_angle,

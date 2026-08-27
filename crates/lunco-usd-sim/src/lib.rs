@@ -1187,6 +1187,13 @@ fn collect_behavior_sources(
     out: &mut Vec<(String, Option<String>, Option<String>)>,
 ) {
     for child in reader.children(parent) {
+        // Inactive composed prims are not part of the scene contract. Do not
+        // recurse through them: an inactive vessel may still carry a mission
+        // program in a referenced layer, but that program must not be
+        // projected onto an active assembly or vessel.
+        if !reader.is_active(&child) {
+            continue;
+        }
         if reader.has_api_schema(&child, "LunCoProgramAPI") {
             if let Some(xml) = reader
                 .scalar::<String>(&child, "info:sourceCode")
@@ -3310,7 +3317,9 @@ fn setup_raycast_wheel(
     // traverse the entire collider tree every physics tick. The suspension
     // solver consumes only the nearest contact, so one bounded hit is the
     // complete physical query and keeps its cost independent of world extent.
-    .with_max_distance(susp.rest_length)
+    .with_max_distance(lunco_mobility::suspension_ray_max_distance(
+        susp.rest_length,
+    ))
     .with_max_hits(1);
     // Mask out the non-physical layers so suspension rays ignore trigger-zone
     // sensors (else the wheels ride up on an invisible waypoint sphere) and
@@ -4688,10 +4697,6 @@ fn activate_dynamic_bodies(
                     .entity(entity)
                     .try_insert(lunco_core::NeedsGroundSettle);
             }
-            debug!(
-                "Activated RigidBody::Dynamic for stage: {:?}",
-                path.stage_handle
-            );
             promoted = true;
         }
     }

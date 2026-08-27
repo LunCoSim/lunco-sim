@@ -3,7 +3,8 @@
 // The Rust kernel computes link GEOMETRY at the LinkConfig cadence (range,
 // elevation, body + terrain + occluder blocking) and publishes the live graph +
 // AOS/LOS events. Routing is POLICY, so it lives here — composed ON DEMAND (when a
-// rover decides whether it can talk to Earth), never in a per-tick loop. Rust
+// rover decides whether it can talk to a base, relay, or Earth station), never
+// in a per-tick loop. Rust
 // exposes a single data primitive, `query("Links")`; everything below is authored
 // over it with no core rebuild. Tune or replace freely.
 //
@@ -92,7 +93,7 @@ fn linked(g, a, b) {
 }
 
 /// True if `to` is reachable from `from` over currently-up links — directly or
-/// multi-hop through relays. Either end may be a GID or a class ("earth").
+/// multi-hop through relays. Either end may be a GID or a class ("earth" or "base").
 /// Breadth-first over the `links()` snapshot; call it at decision time (e.g. in
 /// `on_event` on `link.los`), not every tick.
 fn reachable(from, to) {
@@ -170,7 +171,7 @@ fn walk_back(prev, to) {
 }
 
 /// Convenience for the common autonomy check "can this rover talk home?" — pass the
-/// rover's GID and the station's GID, or its authored class (e.g. `"earth"`).
+/// rover's GID and the station's GID, or its authored class (e.g. `"earth"` or `"base"`).
 fn can_reach(from, station) { reachable(from, station) }
 
 /// The labels of a `link_path`, for a message a human reads

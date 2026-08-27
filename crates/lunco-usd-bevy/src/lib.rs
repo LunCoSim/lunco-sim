@@ -1884,16 +1884,30 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
             let _ = world.despawn(child);
             return;
         }
+        // A composed authored stage has one entity for each absolute prim path,
+        // but a runtime spawn deliberately composes the same stage-relative paths
+        // once per instance. Deduplication must therefore be scoped to the
+        // instance root when this parent belongs to a runtime instance.
+        let instance_root = world
+            .get::<UsdInstanceMember>(parent)
+            .map(|member| member.root)
+            .or_else(|| world.get::<UsdInstanceRoot>(parent).map(|_| parent));
         let duplicate = {
-            let mut q = world.query::<&UsdPrimPath>();
-            q.iter(world)
-                .any(|prim| prim.stage_handle.id() == stage_handle.id() && prim.path == path)
+            let mut q = world.query::<(&UsdPrimPath, Option<&UsdInstanceMember>)>();
+            q.iter(world).any(|(prim, member)| {
+                if prim.stage_handle.id() != stage_handle.id() || prim.path != path {
+                    return false;
+                }
+                match instance_root {
+                    Some(root) => member.is_some_and(|member| member.root == root),
+                    None => member.is_none(),
+                }
+            })
         };
         if duplicate {
-            // A composed prim has one live ECS projection.  This is an
-            // identity invariant at the shared projection seam, not a
-            // vehicle or prim-name rule; duplicate arc traversal must not
-            // create a second body, joint, or visual for the same USD path.
+            // A composed authored prim has one live ECS projection. Within a
+            // runtime instance the same invariant applies to the instance-local
+            // path, while a second instance is a distinct projection.
             let _ = world.despawn(child);
             return;
         }
@@ -3966,7 +3980,7 @@ fn attach_programs(
     entity: Entity,
     commands: &mut Commands,
 ) {
-    let mut programs: Vec<_> = reader
+    let mut candidate_programs: Vec<_> = reader
         .children(owner)
         .into_iter()
         .filter(|child| reader.is_active(child))
@@ -3978,8 +3992,58 @@ fn attach_programs(
     if reader.type_name(owner).as_deref() != Some("Scope")
         && reader.has_api_schema(owner, "LunCoProgramAPI")
     {
-        programs.push(owner.clone());
+        candidate_programs.push(owner.clone());
     }
+
+    // Classify once before enforcing the one-local-program contract. Modelica
+    // facets and behaviour trees are executable, but they belong to
+    // lunco-usd-sim and lunco-autopilot respectively; counting them here made
+    // a rover with one Rhai/BT program look ambiguous and disabled its local
+    // program. The source extension is the dispatch contract, so foreign
+    // programs are not candidates for this reader.
+    let programs: Vec<_> = candidate_programs
+        .into_iter()
+        .filter_map(|child| {
+            // A program that NAMES its implementation rather than supplying it.
+            // `text()` is required for `info:id`, which is a USD token.
+            let driver_id = reader
+                .text(&child, "info:id")
+                .filter(|s| !s.trim().is_empty());
+            let inline = reader
+                .scalar::<String>(&child, "info:sourceCode")
+                .filter(|s| !s.trim().is_empty());
+            let has_inline = inline.is_some();
+            let source_asset = reader
+                .asset(&child, "info:sourceAsset")
+                .filter(|s| !s.trim().is_empty());
+            let behavior_tree = inline
+                .as_ref()
+                .is_some_and(|source| source.trim_start().starts_with('<'))
+                || source_asset
+                    .as_deref()
+                    .is_some_and(lunco_core::programs::is_behavior_tree_asset);
+            let rhai_inline = (!behavior_tree).then_some(inline).flatten();
+            let file = source_asset.clone().filter(|s| s.ends_with(".rhai"));
+
+            if driver_id.is_none() && rhai_inline.is_none() && file.is_none() {
+                // A source for another engine is normal and intentionally does
+                // not enter this engine's cardinality check. A program with no
+                // recognized implementation is still an authoring error.
+                if source_asset.is_none() && !has_inline {
+                    warn!(
+                        "[usd] program API on {} names no implementation — expected one of \
+                         `info:sourceAsset` (a file; the extension picks the engine), \
+                         `info:sourceCode` (inline), or `info:id` (a registered driver). \
+                         The prim is INERT. (`lunco:program:sourceAsset` is read by nothing.)",
+                        child.as_str()
+                    );
+                }
+                return None;
+            }
+
+            Some((child, driver_id, rhai_inline, file))
+        })
+        .collect();
     if programs.len() > 1 {
         warn!(
             "[usd] {} has {} executable LunCoProgramAPI children; one program per owner is the current runtime contract, so none was attached",
@@ -3988,64 +4052,7 @@ fn attach_programs(
         );
         return;
     }
-    for child in programs {
-        // A program that NAMES its implementation rather than supplying it.
-        //
-        // `text()`, NOT `scalar::<String>()`. `info:id` is a `token` (as
-        // `info:id` is), and a token is a DISTINCT `sdf::Value` variant from a string
-        // — `scalar::<String>` silently returns `None` for one, which reads as "no id
-        // authored" and leaves the prim undriven with no error anywhere. `sourceCode`
-        // below is genuinely `uniform string`, which is what makes the wrong call
-        // look right here.
-        let driver_id = reader
-            .text(&child, "info:id")
-            .filter(|s| !s.trim().is_empty());
-
-        // Inline source wins over a file: `sourceCode` is the live-authoring path,
-        // and an author editing it in place means it.
-        let inline = reader
-            .scalar::<String>(&child, "info:sourceCode")
-            .filter(|s| !s.trim().is_empty());
-        let has_inline = inline.is_some();
-        // Read the ref UNFILTERED first, so the two reasons this loop skips a program
-        // stay distinguishable below: a `.mo`/`.xml` belongs to another engine (normal,
-        // silent), whereas NO recognised source name at all is an authoring mistake.
-        let source_asset = reader
-            .asset(&child, "info:sourceAsset")
-            .filter(|s| !s.trim().is_empty());
-        // A behaviour tree is a declarative program for `lunco-autopilot`, not
-        // an inline Rhai program. Source code has no extension to dispatch on, so
-        // its XML root is the unambiguous discriminator; file-backed trees use the
-        // centralized extension predicate. Keep this decision here, at the sole
-        // point that can attach a `ScriptedModel`, so no tree can reach Rhai.
-        let behavior_tree = inline
-            .as_ref()
-            .is_some_and(|source| source.trim_start().starts_with('<'))
-            || source_asset
-                .as_deref()
-                .is_some_and(lunco_core::programs::is_behavior_tree_asset);
-        let rhai_inline = (!behavior_tree).then_some(inline).flatten();
-        let file = source_asset.clone().filter(|s| s.ends_with(".rhai"));
-        if driver_id.is_none() && rhai_inline.is_none() && file.is_none() {
-            // A program prim that names its implementation NOWHERE the runtime looks is
-            // silently inert — the failure mode that cost two days on the episode-01
-            // recorder, which authored `lunco:program:sourceAsset` (a name nothing
-            // reads) and so never armed, with no line anywhere saying why. Only the
-            // genuinely-unauthored case warns: a program whose `sourceAsset` this
-            // engine does not run belongs to another one (`.mo` → co-sim) and is
-            // skipped without noise, exactly as before.
-            if source_asset.is_none() && !has_inline {
-                warn!(
-                    "[usd] program API on {} names no implementation — expected one of \
-                     `info:sourceAsset` (a file; the extension picks the engine), \
-                     `info:sourceCode` (inline), or `info:id` (a registered driver). \
-                     The prim is INERT. (`lunco:program:sourceAsset` is read by nothing.)",
-                    child.as_str()
-                );
-            }
-            continue;
-        }
-
+    for (child, driver_id, rhai_inline, file) in programs {
         // A program's parameters are typed attributes on its own program prim, one
         // per key — `float lunco:param:width = 1.05`. Read by `param(me, key,
         // default)`, which is how one reusable program drives many prims, each from

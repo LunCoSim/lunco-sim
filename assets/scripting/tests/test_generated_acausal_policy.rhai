@@ -164,14 +164,26 @@ fn test_topology_roles_put_sources_opposite_loads() {
 fn test_many_power_components() {
     let components = [];
     let members = [];
-    components.push(#{ path: "/Rover/Battery", class: "LunCo.Electrical.Battery" });
+    components.push(#{
+        path: "/Rover/Battery",
+        class: "LunCo.Electrical.Battery",
+        topology_role: "storage"
+    });
     members.push(#{ path: "/Rover/Battery", x: 0, y: 0 });
-    components.push(#{ path: "/Rover/SolarPanel", class: "LunCo.Electrical.SolarPanel" });
+    components.push(#{
+        path: "/Rover/SolarPanel",
+        class: "LunCo.Electrical.SolarPanel",
+        topology_role: "source"
+    });
     members.push(#{ path: "/Rover/SolarPanel", x: 0, y: 0 });
     let connections = [];
     for index in 0..8 {
         let path = "/Rover/Motor_" + index.to_string();
-        components.push(#{ path: path, class: "LunCo.Electrical.DCMotor" });
+        components.push(#{
+            path: path,
+            class: "LunCo.Electrical.DCMotor",
+            topology_role: "load"
+        });
         members.push(#{ path: path, x: 0, y: 0 });
         connections.push(#{ left_path: "/Rover/Battery", right_path: path });
     }

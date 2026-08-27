@@ -369,6 +369,7 @@ pub(crate) fn register_collision_event_bridge(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LunCoMobilityPlugin;
     use bevy::time::TimeUpdateStrategy;
     use core::time::Duration;
     use lunco_core::GlobalEntityId;
@@ -390,6 +391,7 @@ mod tests {
             AssetPlugin::default(),
             TransformPlugin,
             PhysicsPlugins::default(),
+            LunCoMobilityPlugin,
         ));
         app.init_asset::<Mesh>()
             .init_resource::<ApiEntityRegistry>()

@@ -1433,7 +1433,8 @@ const SETTLE_CLEARANCE: f64 = 0.05;
 // A raycast contact is the *wheel axle*, not a rigid tyre volume. At the
 // authored suspension rest length the strut top is exactly one cast length
 // above the DEM, so placement must put the tyre tangent to the surface: zero
-// spring compression and zero startup impulse. The ray's endpoint is inclusive;
+// spring compression and zero startup impulse. The mobility ray uses a
+// micrometre query tolerance because Avian's endpoint comparison is strict;
 // forcing an artificial compression here makes every freshly placed rover hop.
 /// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
 /// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).

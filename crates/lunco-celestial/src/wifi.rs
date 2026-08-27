@@ -1,7 +1,7 @@
 //! Rover radio graph projected over the generic link geometry substrate.
 //!
 //! `LinkState` is the direct connectivity graph and remains subject to the
-//! authored `link.connected` policy (currently rover↔Earth only). Wi-Fi is a
+//! authored `link.connected` policy. Wi-Fi is a
 //! separate domain graph: it consumes [`link::LinkGeometryState`] and applies
 //! only radio endpoint/range eligibility, so adding rover-to-rover radio does
 //! not reopen a direct Earth link or alter its policy.

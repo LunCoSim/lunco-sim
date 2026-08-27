@@ -171,6 +171,15 @@ read-only runtime geometry: it is visible and drives the same behaviour-tree
 autopilot, but has no authored marker to drag or persist until the user mounts or
 authors it in a document.
 
+The Spawn palette's Waypoint entry is the UI affordance for this same route
+operation: it arms a ground placement and appends to the currently possessed or
+selected vessel. It does not create a free-standing marker, because a marker
+without a vessel and an ordered mission leg cannot follow or be followed by
+anything. API/Rhai callers use `AddRuntimeWaypoint` with an explicit vessel.
+That command creates the shared USD marker instance and uses a 2 m geometric
+arrival radius inside its authored 2.5 m sensor radius, keeping route progression
+and collision-backed `waypoint.reached` events on the same physical target.
+
 Everything else about a waypoint is *already implemented*, by code that knows nothing
 about waypoints:
 

@@ -791,7 +791,7 @@ pub fn insert_celestial_comms_components(
     // --- Separate rover radio endpoint ---
     // A Wi-Fi endpoint shares the generic link geometry observation but is
     // intentionally not part of `LinkState`: the latter remains governed by
-    // the authored Earth-only direct-link policy.
+    // the authored direct-link policy.
     let wifi_node = match read_authored_bool(reader, sdf_path, "lunco:wifiNode") {
         Ok(Some(value)) => value,
         Ok(None) => false,

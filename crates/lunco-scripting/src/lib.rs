@@ -252,8 +252,9 @@ pub fn register_builtin_policies() -> Result<(), String> {
             "synth.actuator-wrench",
             "synthesize",
         ),
-        // Direct rover links are Earth-only. Rover-to-rover connectivity belongs
-        // to a separate authored radio system, not the generic direct-link graph.
+        // Direct rover links may use Earth stations, lunar bases, or relays.
+        // Rover-to-rover connectivity belongs to a separate authored radio
+        // system, not the generic direct-link graph.
         ("link", lunco_celestial::link::LINK_HOOK, "link_connected"),
         // LINT policies — one per DOMAIN, because a USD rule, a script rule and a
         // Modelica rule share no vocabulary and no audience. The domain crate

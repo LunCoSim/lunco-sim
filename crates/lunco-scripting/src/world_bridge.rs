@@ -58,7 +58,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
+use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
@@ -584,33 +584,43 @@ fn build_hoisted_ast(
     Ok(Some(merged))
 }
 
-/// The only script executed for a native task leaf. Passing the [`FnPtr`] into
-/// a tiny Rhai function is deliberate: a direct `FnPtr::call` creates its own
-/// runtime state and has no `eval_ast` option, so top-level imports are absent
-/// while a closure body runs. Calling the pointer from this function keeps it in
-/// the same evaluation whose task AST loaded the scenario's imports.
+/// Native task leaves call their closure through the current Rhai evaluation so
+/// imports and the scenario's compiled function set remain available. The
+/// bound state is an explicit round-trip value because `FnPtr` owns its closure
+/// captures; passing the lifecycle map as `this` gives closures a persistent
+/// mutation target without sharing per-entity state through the compiled AST.
 const TASK_INVOKER_FN: &str = "__luncosim_invoke_task";
-const TASK_INVOKER_SOURCE: &str = "fn __luncosim_invoke_task(f, me) { f.call(me) }";
+
+fn invoke_task(
+    context: NativeCallContext,
+    f: FnPtr,
+    me: i64,
+    mut this: Dynamic,
+) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+    let result = f.call_as_method_within_context::<Dynamic>(&context, &mut this, (me,))?;
+    let mut out = Map::new();
+    out.insert("result".into(), result);
+    out.insert("this".into(), this);
+    Ok(Dynamic::from_map(out))
+}
 
 /// Build the AST used by native task leaves. It contains the same callable
 /// functions as the scenario, the authored imports/consts when there are any,
-/// and the small invoker above. It has no world-touching top-level statements
-/// other than the imports/consts intentionally hoisted for this call.
+/// It has no world-touching top-level statements other than the imports/consts
+/// intentionally hoisted for this call. The task invoker is a native engine
+/// function so it can call the closure with a bound `this` pointer.
 fn build_task_ast(
-    engine: &Engine,
     full: &AST,
     imports: Option<&AST>,
     asset_id: Option<&str>,
 ) -> Result<AST, rhai::ParseError> {
-    let invoker = engine.compile(TASK_INVOKER_SOURCE)?;
-    let base = imports
+    let mut base = imports
         .cloned()
         .unwrap_or_else(|| full.clone_functions_only());
-    let mut merged = base.merge(&invoker);
     if let Some(id) = asset_id {
-        merged.set_source(id);
+        base.set_source(id);
     }
-    Ok(merged)
+    Ok(base)
 }
 
 fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<AST, String> {
@@ -642,6 +652,8 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
+
+    engine.register_fn(TASK_INVOKER_FN, invoke_task);
 
     // Replace rhai's default file-reading resolver before anything can import.
     engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(sources));
@@ -1840,12 +1852,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                                     return CompileOutcome::Failed(d);
                                 }
                             };
-                        let task_ast = match build_task_ast(
-                            &self.engine,
-                            &ast,
-                            imports_ast.as_ref(),
-                            asset_id,
-                        ) {
+                        let task_ast = match build_task_ast(&ast, imports_ast.as_ref(), asset_id) {
                             Ok(ast) => ast,
                             Err(e) => {
                                 error!("[rhai] entity {entity:?} generated task scope failed: {e}");
@@ -2196,6 +2203,9 @@ struct RhaiTaskCtx {
     /// closures observe the same top-level globals as lifecycle hooks without
     /// borrowing the state through the `'static` task-tree context.
     scope: rhai::Scope<'static>,
+    /// Persistent lifecycle `this` map for the scenario entity. Task leaves
+    /// are invoked with this binding so state mutations survive each tick.
+    this: Dynamic,
     /// Host gid, passed to every leaf closure (the `|m| …` argument).
     me: i64,
     now: f64,
@@ -2218,14 +2228,26 @@ impl RhaiTaskCtx {
         let (ast, eval_ast) = self.program.task_target();
         let options = rhai::CallFnOptions::new()
             .eval_ast(eval_ast)
-            .rewind_scope(false);
-        self.engine.call_fn_with_options(
+            .rewind_scope(false)
+            .in_all_namespaces(true);
+        let envelope: Dynamic = self.engine.call_fn_with_options(
             options,
             &mut self.scope,
             ast,
             TASK_INVOKER_FN,
-            [Dynamic::from(f.clone()), Dynamic::from_int(self.me)],
-        )
+            [
+                Dynamic::from(f.clone()),
+                Dynamic::from_int(self.me),
+                self.this.clone(),
+            ],
+        )?;
+        let mut envelope = envelope.cast::<Map>();
+        self.this = envelope
+            .remove("this")
+            .expect("native task invoker must return the bound state");
+        Ok(envelope
+            .remove("result")
+            .expect("native task invoker must return the callback result"))
     }
 }
 
@@ -2346,10 +2368,12 @@ fn tick_native_task(
         return None;
     }
     let scope = std::mem::take(&mut st.scope);
+    let this = std::mem::take(&mut st.this);
     let mut ctx = RhaiTaskCtx {
         engine: engine.clone(),
         program,
         scope,
+        this,
         me: self_gid,
         now: bridge_core::elapsed_seconds(),
         events,
@@ -2358,6 +2382,7 @@ fn tick_native_task(
     let status = ct.tree.tick(&mut ctx);
     let task_error = ctx.error;
     st.scope = ctx.scope;
+    st.this = ctx.this;
     match status {
         lunco_behavior::Status::Running => {}
         lunco_behavior::Status::Success => {
@@ -2795,9 +2820,8 @@ mod tests {
         let imports = super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
             .expect("hoisted imports must parse")
             .expect("the scenario has a top-level import");
-        let task_ast =
-            super::build_task_ast(&engine, &full, Some(&imports), Some("twin://ep1/main.rhai"))
-                .expect("task invoker must compile");
+        let task_ast = super::build_task_ast(&full, Some(&imports), Some("twin://ep1/main.rhai"))
+            .expect("task scope must compile");
 
         let action: rhai::FnPtr = engine
             .call_fn_with_options(
@@ -2808,16 +2832,73 @@ mod tests {
                 (),
             )
             .expect("closure factory must run");
-        let result: i64 = engine
+        let result: rhai::Dynamic = engine
             .call_fn_with_options(
-                rhai::CallFnOptions::new().eval_ast(true),
+                rhai::CallFnOptions::new()
+                    .eval_ast(true)
+                    .in_all_namespaces(true),
                 &mut rhai::Scope::new(),
                 &task_ast,
                 super::TASK_INVOKER_FN,
-                [rhai::Dynamic::from(action), rhai::Dynamic::from_int(3)],
+                [
+                    rhai::Dynamic::from(action),
+                    rhai::Dynamic::from_int(3),
+                    rhai::Dynamic::from_map(rhai::Map::new()),
+                ],
             )
             .expect("native task invoker must preserve imports");
-        assert_eq!(result, 10);
+        let result = result.cast::<rhai::Map>();
+        assert_eq!(result["result"].as_int().unwrap(), 10);
+    }
+
+    #[test]
+    fn native_task_callback_preserves_bound_this() {
+        let engine = super::build_world_engine(Default::default());
+        let src = r#"
+            fn make_action() { |me| { this.count += me; this.count } }
+        "#;
+        let full = super::compile_with_script_consts(&engine, src).unwrap();
+        let task_ast = super::build_task_ast(&full, None, Some("twin://state/main.rhai"))
+            .expect("task scope must compile");
+        let action: rhai::FnPtr = engine
+            .call_fn_with_options(
+                rhai::CallFnOptions::new().eval_ast(true),
+                &mut rhai::Scope::new(),
+                &full,
+                "make_action",
+                (),
+            )
+            .expect("closure factory must run");
+
+        let mut state = rhai::Dynamic::from_map(rhai::Map::from([(
+            "count".into(),
+            rhai::Dynamic::from_int(0),
+        )]));
+        for expected in [2_i64, 5_i64] {
+            let envelope: rhai::Dynamic = engine
+                .call_fn_with_options(
+                    rhai::CallFnOptions::new()
+                        .eval_ast(false)
+                        .in_all_namespaces(true),
+                    &mut rhai::Scope::new(),
+                    &task_ast,
+                    super::TASK_INVOKER_FN,
+                    [
+                        rhai::Dynamic::from(action.clone()),
+                        rhai::Dynamic::from_int(expected - if expected == 2 { 0 } else { 2 }),
+                        state,
+                    ],
+                )
+                .expect("native task callback must run");
+            let mut envelope = envelope.cast::<rhai::Map>();
+            state = envelope.remove("this").expect("bound state returned");
+            assert_eq!(
+                state.read_lock::<rhai::Map>().unwrap()["count"]
+                    .as_int()
+                    .unwrap(),
+                expected
+            );
+        }
     }
 
     /// No top-level imports ⇒ no second AST ⇒ hook calls keep using the full

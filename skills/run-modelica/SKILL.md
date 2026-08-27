@@ -253,7 +253,7 @@ Sweep = loop the same call with different overrides + labels (one run each):
 
 ```bash
 for isp in 280 300 320 340; do
-  post "{\"command\":\"RunExperiment\",\"params\":{\"doc\":0,\"class\":\"RocketStage\",
+  post "{\"type\":\"ExecuteCommand\",\"command\":\"RunExperiment\",\"params\":{\"doc\":0,\"class\":\"RocketStage\",
     \"overrides\":[{\"name\":\"Isp\",\"value\":\"$isp\"}],
     \"t_end\":120,\"n_intervals\":600,\"label\":\"Isp=$isp\"}}"
 done

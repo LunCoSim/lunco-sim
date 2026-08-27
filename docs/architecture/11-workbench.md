@@ -536,8 +536,11 @@ preferences. Project-owned configuration lives in the Twin manifest, where
 the project can enforce behavior that should travel with the project. The
 missing-declared-assets prompt is the first implemented example:
 `twin.toml [downloads] suppress_missing_prompt = true` hides the startup
-consent window for that project. Omitted/false preserves the default of
-showing it. The popup checkbox and Settings ▸ Data & libraries edit this same
+consent window for that project. When the prompt is shown, only manifest entries
+with `recommended = true` participate in startup consent; other declared
+resources remain available from Settings ▸ Data & libraries without blocking a
+scene. Omitted/false preserves the default of showing consent for recommended
+entries. The popup checkbox and Settings ▸ Data & libraries edit this same
 manifest-owned value.
 
 Additional per-Twin overrides may later use a layered project settings file.

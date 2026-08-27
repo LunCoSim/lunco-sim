@@ -7,7 +7,7 @@
 //! checkpoint domain.
 
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::CellCoord;
 use lunco_autopilot::usd_tree::{compile_behavior_xml, BehaviorXml, TargetBindings};
 use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec};
 

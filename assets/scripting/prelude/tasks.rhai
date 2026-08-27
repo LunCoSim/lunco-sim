@@ -1,8 +1,9 @@
 // ── Tasks: the canonical auto-advanced mission policy ───────────────────────
 //
 // A task is pure Rhai data. The native `lunco-behavior` kernel owns the cursor,
-// dwell timing, event delivery, and fixed-step progression. Return the tree
-// from `task(me)`; do not implement a second cursor in `on_tick`.
+// dwell timing, event delivery, and fixed-step progression. Return stateless
+// trees from `task(me)`, or assign a state-capturing tree in `on_start`; do not
+// implement a second cursor in `on_tick`.
 
 // The constructors below are the only script-side spellings of the task
 // schema discriminators. They are data tags at the Rhai-to-Rust boundary, not
@@ -78,7 +79,7 @@ fn __task_composite(kind, items) { #{ kind: kind, items: items } }
 fn __task_decorator(kind, body) { #{ kind: kind, body: body } }
 
 /// Node constructors (return the root from `task(me)`, or assign it once in
-/// `on_start` when setup needs to happen first).
+/// `on_start` when setup or explicit state capture is needed).
 fn seq(items)      { __task_composite("seq", items) }
 fn par_all(items)  { __task_composite("all", items) }
 fn par_race(items) { __task_composite("race", items) }

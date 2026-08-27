@@ -67,17 +67,33 @@ fn spawn_palette_content(
         .resource::<SpawnState>()
         .map(|s| matches!(*s, SpawnState::Selecting { .. }))
         .unwrap_or(false);
+    let is_placing_waypoint = ctx
+        .resource::<crate::ui::checkpoint_click::WaypointPlacement>()
+        .is_some_and(|placement| {
+            matches!(
+                placement.0.as_ref(),
+                Some(crate::ui::checkpoint_click::PendingPlacement::Append)
+            )
+        });
     let selecting_id = ctx.resource::<SpawnState>().and_then(|s| match s {
         SpawnState::Selecting { entry_id } => Some(entry_id.clone()),
         _ => None,
     });
 
-    if is_selecting {
+    if is_selecting || is_placing_waypoint {
         if let Some(id) = &selecting_id {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("Placing: {id}")).color(tokens.success));
                 if ui.button("Cancel").clicked() {
                     ctx.trigger(SpawnStateRequested(SpawnState::Idle));
+                }
+            });
+            ui.separator();
+        } else if is_placing_waypoint {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Placing: waypoint").color(tokens.success));
+                if ui.button("Cancel").clicked() {
+                    ctx.trigger(crate::ui::checkpoint_click::CancelWaypointEdit {});
                 }
             });
             ui.separator();
@@ -104,9 +120,11 @@ fn spawn_palette_content(
     for (category, entries) in categories {
         ui.collapsing(category.to_string(), |ui| {
                 for entry in &entries {
+                    let route_waypoint = entry.is_route_marker();
                     let selected = ctx.resource::<SpawnState>()
                         .map(|s| matches!(s, SpawnState::Selecting { entry_id } if *entry_id == entry.id))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        || (route_waypoint && is_placing_waypoint);
 
                     let btn_text = if selected {
                         entry.display_name.clone()
@@ -139,24 +157,36 @@ fn spawn_palette_content(
                     };
 
                     if response.clicked() {
-                        let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(if selected {
-                            SpawnState::Idle
+                        if route_waypoint {
+                            ctx.trigger(
+                                crate::ui::checkpoint_click::AppendWaypointPlacementRequested,
+                            );
                         } else {
-                            SpawnState::Selecting { entry_id }
-                        }));
+                            let entry_id = entry.id.clone();
+                            ctx.trigger(SpawnStateRequested(if selected {
+                                SpawnState::Idle
+                            } else {
+                                SpawnState::Selecting { entry_id }
+                            }));
+                        }
                     }
 
                     if response.drag_started() {
-                        let entry_id = entry.id.clone();
-                        ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        if route_waypoint {
+                            ctx.trigger(
+                                crate::ui::checkpoint_click::AppendWaypointPlacementRequested,
+                            );
+                        } else {
+                            let entry_id = entry.id.clone();
+                            ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        }
                     }
                 }
             });
     }
 
     ui.separator();
-    ui.small("Click to select, then click in scene to place.");
+    ui.small("Click an item, then click in scene to place.");
     ui.small("Or drag an item from here, then click in scene to place.");
     ui.small("Use Cancel to back out (Escape / Backspace by default).");
 }

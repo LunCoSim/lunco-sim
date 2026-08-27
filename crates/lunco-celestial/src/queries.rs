@@ -322,7 +322,7 @@ impl ApiQueryProvider for LinksProvider {
 }
 
 /// `WifiLinks` — the separate short-range radio graph. It is projected from
-/// raw link geometry and never reads the Earth-only `Links` policy state.
+/// raw link geometry and never reads the direct-link `Links` policy state.
 pub struct WifiLinksProvider;
 
 impl ApiQueryProvider for WifiLinksProvider {

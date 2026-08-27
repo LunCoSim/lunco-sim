@@ -355,6 +355,14 @@ pub fn on_spawn_entity_command(
         }
     };
 
+    if entry.is_route_marker() {
+        warn!(
+            "SPAWN_ENTITY: '{}' is a route marker and cannot be spawned independently; use AddRuntimeWaypoint with an explicit vessel",
+            cmd.entry_id
+        );
+        return;
+    }
+
     if q_grids.get(active_frame.0).is_err() {
         warn!(
             active_frame = ?active_frame.0,

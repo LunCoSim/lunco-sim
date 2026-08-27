@@ -85,7 +85,7 @@ pub struct TelemetrySettings {
     /// silently shortens that window instead of costing memory, which is the
     /// failure mode that looks like "the plot keeps eating my history".
     ///
-    /// Costs 16 B per sample: 24 KB per channel, ~48 MB at the 2048-channel cap.
+    /// Costs 16 B per sample: 24 KB per channel, ~96 MB at the 4096-channel cap.
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
@@ -102,10 +102,11 @@ impl Default for TelemetrySettings {
             // channel. Model state uses this policy through the Modelica runtime
             // projection; authored channels use it when they omit their own rate.
             default_rate_hz: 5.0,
-            // The Traverse scene currently publishes roughly 1200 channels.
-            // Keep a full scene plus headroom in the default so ordinary
-            // telemetry is not silently truncated by enumeration order.
-            max_channels: 2048,
+            // The Traverse scene publishes more than 2048 physics and Modelica
+            // channels once its remote stations and antenna mechanisms are live.
+            // Keep the complete scene plus headroom so ordinary telemetry is not
+            // silently truncated by enumeration order.
+            max_channels: 4096,
             default_retention: 1500,
             enabled: true,
             default_deadband: TelemetryDeadband::default(),
@@ -1209,7 +1210,7 @@ mod tests {
     #[test]
     fn default_channel_cap_covers_the_current_scene_budget() {
         assert!(
-            TelemetrySettings::default().max_channels >= 2048,
+            TelemetrySettings::default().max_channels >= 4096,
             "the default must retain a full multi-rover scene with headroom"
         );
     }
@@ -1222,7 +1223,7 @@ mod tests {
 
         let missing_current_deadband = serde_json::json!({
             "default_rate_hz": 5.0,
-            "max_channels": 2048,
+            "max_channels": 4096,
             "default_retention": 1500,
             "enabled": true
         });

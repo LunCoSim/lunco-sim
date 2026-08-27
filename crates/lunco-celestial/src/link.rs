@@ -855,6 +855,28 @@ fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
     .flatten()
 }
 
+/// Classes that can be addressed from this endpoint before the first geometry
+/// sweep has published `LinkState`.  A USD connection names the peer class, so
+/// the port identity is already known from the authored `LinkNode`s; the first
+/// sweep only supplies its value.  Keeping declaration and sample availability
+/// separate prevents a valid first-load wire from being sealed as dangling.
+fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
+    let mut classes = HashSet::new();
+    for candidate in world.iter_entities() {
+        if candidate.id() == entity {
+            continue;
+        }
+        if let Some(class) = candidate
+            .get::<LinkNode>()
+            .and_then(|node| node.class.as_deref())
+            .filter(|class| !class.is_empty())
+        {
+            classes.insert(sanitize_class(class));
+        }
+    }
+    classes
+}
+
 /// Link state as first-class **ports**, read on demand.
 ///
 /// This used to be a system that wrote `link_<class>_*` keys into every link node's
@@ -868,7 +890,8 @@ fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
 ///    time, so there is no tick to publish into wrongly and no ordering to keep.
 /// 2. **A Modelica model as a prerequisite.** The old query was
 ///    `(&LinkState, &mut SimComponent)`, so a link node without an authored model
-///    published nothing at all. Ports now exist wherever `LinkState` does.
+///    published nothing at all. Port identity now exists wherever `LinkNode` does;
+///    a first geometry sample arrives through `LinkState`.
 /// 3. **Silent clobbering.** A model whose own variable was named
 ///    `link_earth_range_m` had it overwritten every tick. Registration order is
 ///    precedence and Modelica registers first, so now the model wins its own name.
@@ -878,16 +901,32 @@ fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
 /// what lets a scalar Modelica port see an N-peer graph.
 pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
     list: |world, entity, out| {
-        let Some(state) = world.get::<LinkState>(entity) else {
-            return;
-        };
-        for (class, p) in best_per_class(state) {
-            for (suffix, value) in class_ports(p) {
-                out.push(lunco_core::ports::PortRef {
-                    name: format!("link_{class}_{suffix}"),
-                    direction: lunco_core::ports::PortDirection::Out,
-                    value,
-                });
+        let state = world.get::<LinkState>(entity);
+        let live = state.map(best_per_class);
+        let mut classes = authored_peer_classes(world, entity);
+        if let Some(live) = &live {
+            classes.extend(live.keys().cloned());
+        }
+        for class in classes {
+            if let Some(peer) = live.as_ref().and_then(|peers| peers.get(&class)) {
+                for (suffix, value) in class_ports(peer) {
+                    out.push(lunco_core::ports::PortRef {
+                        name: format!("link_{class}_{suffix}"),
+                        direction: lunco_core::ports::PortDirection::Out,
+                        value,
+                    });
+                }
+            } else {
+                // The class is declared, but the first sweep has not produced a
+                // sample. Identity is valid now; the value is intentionally just
+                // an introspection placeholder and is never read as a sample.
+                for suffix in ["range_m", "connected"] {
+                    out.push(lunco_core::ports::PortRef {
+                        name: format!("link_{class}_{suffix}"),
+                        direction: lunco_core::ports::PortDirection::Out,
+                        value: 0.0,
+                    });
+                }
             }
         }
     },
@@ -1011,6 +1050,28 @@ mod tests {
         assert!(listed
             .iter()
             .all(|p| p.direction == lunco_core::ports::PortDirection::Out));
+    }
+
+    #[test]
+    fn class_ports_are_declared_before_the_first_geometry_sample() {
+        let mut world = World::new();
+        let rover = world
+            .spawn(LinkNode {
+                class: Some("rover".into()),
+                ..default()
+            })
+            .id();
+        world.spawn(LinkNode {
+            class: Some("base".into()),
+            ..default()
+        });
+
+        let mut listed = Vec::new();
+        (LINK_PORT_BACKEND.list)(&world, rover, &mut listed);
+
+        assert!(listed.iter().any(|port| port.name == "link_base_range_m"));
+        assert!(listed.iter().any(|port| port.name == "link_base_connected"));
+        assert_eq!(port(&world, rover, "link_base_range_m"), None);
     }
 
     /// A peer whose node authored no class has no port name, and must not be

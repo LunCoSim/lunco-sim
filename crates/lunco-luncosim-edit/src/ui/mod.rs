@@ -605,6 +605,7 @@ impl Plugin for SandboxEditUiPlugin {
             )
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
+            .add_observer(checkpoint_click::on_append_waypoint_placement_requested)
             // Consumes the ground click that follows a Move / Insert-after.
             .add_observer(checkpoint_click::on_scene_click_place_waypoint)
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
