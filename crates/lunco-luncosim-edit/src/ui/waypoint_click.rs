@@ -55,7 +55,9 @@ use lunco_usd::document::{
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 
 use super::authoring_paths::{join_prim, prim_exists};
-use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
+use crate::surface_pick::{
+    cursor_surface_hit, SurfacePickPolicy, EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
+};
 
 fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
@@ -374,7 +376,7 @@ fn pick_ground_world(
         raycaster,
         origin,
         direction,
-        1.0e6,
+        EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
         SurfacePickPolicy::Nearest,
         |entity| !frame.terrain_colliders.contains(entity),
     )

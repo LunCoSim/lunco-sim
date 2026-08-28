@@ -9,7 +9,9 @@ use lunco_render::SceneCamera;
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
-use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
+use crate::surface_pick::{
+    cursor_surface_hit, SurfacePickPolicy, EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
+};
 use crate::SpawnState;
 use lunco_scene_commands::catalog::{SpawnCatalog, SpawnSource};
 
@@ -404,7 +406,7 @@ pub fn update_spawn_ghost(
         &raycaster,
         origin_grid,
         direction_grid,
-        f64::INFINITY,
+        EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
         SurfacePickPolicy::Nearest,
         |_| true,
     );
@@ -643,7 +645,7 @@ pub fn on_scene_click_spawn(
         &raycaster,
         origin_grid,
         direction_grid,
-        f64::INFINITY,
+        EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
         SurfacePickPolicy::Nearest,
         |_| true,
     ) else {

@@ -9,6 +9,10 @@ use bevy::math::{DVec3, Dir3};
 use bevy::prelude::Entity;
 use lunco_core::coords::GridPos;
 
+/// Finite ray bound shared by placement tools. `GridSpatialQuery` requires a
+/// finite distance, and this span covers the authored editor scene range.
+pub(crate) const EDITOR_PLACEMENT_RAY_MAX_DISTANCE: f64 = 1.0e6;
+
 /// Which surface wins when both the DEM and a physics collider answer the ray.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfacePickPolicy {
