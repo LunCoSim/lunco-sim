@@ -5178,7 +5178,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             );
                             ui.add_sized(
                                 [ui.available_width(), 0.0],
-                                egui::Label::new(egui::RichText::new(&ev.message).small()).wrap(),
+                                egui::Label::new(egui::RichText::new(&ev.message).small())
+                                    .wrap()
+                                    // `add_sized` uses a centered child layout;
+                                    // keep every wrapped explanation anchored to
+                                    // the start of its message column.
+                                    .halign(egui::Align::LEFT),
                             );
                         });
                     }
