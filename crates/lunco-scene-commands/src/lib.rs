@@ -11,7 +11,7 @@
 //! save/journal/undo/network.
 //!
 //! - [`commands`] — the command set itself (`SpawnEntity`, `MoveEntity`,
-//!   `DeleteEntity`, `SetObjectProperty`, `SetShaderSource`, …) plus
+//!   `TransformEntity`, `DeleteEntity`, `SetObjectProperty`, `SetShaderSource`, …) plus
 //!   [`commands::SpawnCommandPlugin`], the one plugin a headless server adds.
 //! - [`catalog`] — the spawn catalog (what can be spawned) and the shader catalog,
 //!   scanned from the engine's `*.usda` library.
@@ -44,7 +44,7 @@ pub mod commands;
 /// reached into `crate::ui` for it).
 pub mod doc_resolve;
 /// `QueryEntity` — the READ side of the scene verbs, reporting the same semantic
-/// active physics frame [`commands::MoveEntity`] accepts.
+/// active physics frame [`commands::TransformEntity`] accepts.
 pub mod entity_query;
 /// `RunLint` — lint the loaded scene on demand, through the authored rules.
 pub mod lint_command;

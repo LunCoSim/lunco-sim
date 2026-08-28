@@ -12,7 +12,7 @@
 //!
 //! The frame contract belongs to the crate that owns the scene verbs, so the read
 //! side now sits beside the write side: `QueryEntity` reports exactly the active
-//! physics frame `MoveEntity` accepts. Query a position, hand it straight back,
+//! physics frame `TransformEntity` accepts. Query a pose, hand it straight back,
 //! and the object does not move. The concrete BigSpace grid remains an internal
 //! implementation detail owned by `ActivePhysicsFrame`.
 //!
@@ -115,7 +115,20 @@ impl ApiQueryProvider for QueryEntityProvider {
 /// scene verbs also answers `QueryEntity` — including the headless server.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
-    app.world_mut()
+    let world = app.world_mut();
+    // `QueryState::try_new` needs every component in the query to be present
+    // in the world's component registry, including optional metadata. The
+    // provider owns this vocabulary; relying on a particular USD scene or
+    // another plugin to have spawned one of these components makes an absent
+    // optional field turn the entire query into an internal error.
+    world.register_component::<Name>();
+    world.register_component::<lunco_core::ControlBinding>();
+    world.register_component::<lunco_core::CelestialBody>();
+    world.register_component::<Transform>();
+    world.register_component::<CatalogEntryId>();
+    world.register_component::<UsdPrimKind>();
+    world.register_component::<UsdPrimPath>();
+    world
         .resource_mut::<ApiQueryRegistry>()
         .register(QueryEntityProvider);
 }

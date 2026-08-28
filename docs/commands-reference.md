@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**192 commands** across **27** crates. All documented.
+**194 commands** across **27** crates. 1 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit`](#lunco-luncosim-edit) (10 commands)
-- [`lunco-scene-commands`](#lunco-scene-commands) (20 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (21 commands)
 
 **USD / scenes**
 
@@ -97,7 +97,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-luncosim`](#lunco-luncosim) (2 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workspace`](#lunco-workspace) (5 commands)
+- [`lunco-workspace`](#lunco-workspace) (6 commands)
 
 ---
 
@@ -249,10 +249,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `AddRuntimeWaypoint`
 
- A runtime waypoint appended to a spawned vessel's patrol. A new runtime patrol
- uses a 2 m geometric arrival radius; the shared USD marker has a 2.5 m overlap
- sensor, so the behavior-tree leg completes inside the collision-backed
- `waypoint.reached` volume.
+ A runtime waypoint appended to a spawned vessel's patrol.
 
  The target is an [`Entity`] deliberately: the API/Rhai command dispatcher
  resolves the stable `GlobalEntityId` supplied by callers before this handler
@@ -621,6 +618,23 @@ actually call, with the fields the deserializer actually accepts. See the
 | `hold` | `Option < bool >` |  Raise (`Some(true)`) / release (`Some(false)`) the cinematic hold; `None`  leaves it as-is so a step can be sent on its own. |
 | `steps` | `Option < u32 >` |  Frames of physics to let through the hold. `None` = 0. |
 
+#### `TransformEntity`
+
+ Set an entity's complete active-frame pose as one scene edit.
+
+ This is the compound counterpart to [`MoveEntity`] and [`RotateEntity`].
+ Interactive editors use it when translation and rotation are produced by
+ one gesture, so live seating and document persistence share one semantic
+ command and one undo/change-set boundary.
+
+- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | `u64` |  API-stable global entity ID. |
+| `translation` | `[f64 ; 3]` |  Target translation in the explicit active physics frame. |
+| `rotation` | `[f64 ; 4]` |  Target orientation in the explicit active physics frame, `[x,y,z,w]`. |
+
 ## USD / scenes
 
 ### `lunco-usd` <a id="lunco-usd"></a>
@@ -660,22 +674,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `AttachComponent`
 
- Attach a component asset to a host body as a jointed child, deriving the
- joint anchor from the placement so it is authored once, not twice. Lowers to
- the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`].
-
- The whole lowering is applied inside **one journal change set**
- ([`apply_ops_as_change_set`]), so the attach is **one undo unit** — undo removes
- the part, its placement, its joint and the joint's anchors together. (It used to
- journal one entry per op: an undo peeled off a single op and left the object
- half-attached.)
-
- The complete lowered sequence is validated against a document clone before
- the live document is touched. If any op is rejected (for example because the
- host prim does not exist), no op is authored and the command logs the
- rejection. A valid sequence is then committed as one journal change set and
- undone as one unit. Socket-specific validation also rejects stale or
- incompatible requests before lowering.
+*(no description — add a `///` doc on the struct)*
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 
@@ -843,8 +842,8 @@ actually call, with the fields the deserializer actually accepts. See the
  - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
  - `root_prim`: optional override for the SDF path of the prim to
    spawn. Empty (default) reads the stage's `defaultPrim` metadata;
-   if absent, the scene load fails visibly; the runtime never mounts the whole
-   stage at `/`.
+   if absent, the scene load fails visibly; a whole-stage `/` mount is not a
+   valid scene root.
 
  Despawns every existing entity carrying `UsdPrimPath` plus every
  `SimConnection` (cosim wires are scene-derived in current code), then
@@ -868,7 +867,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). Filesystem paths  are opened through `OpenFile`, not this scene-mount command. |
-| `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads `defaultPrim` from the stage's metadata header; a missing `defaultPrim` is a visible scene-load error. |
+| `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header. A missing `defaultPrim`  is a visible scene-load error; the runtime never mounts `/`. |
 
 #### `RestartScene`
 
@@ -1551,8 +1550,8 @@ actually call, with the fields the deserializer actually accepts. See the
  [`AutopilotBehaviorSpec`] mirror from the vessel, so the route projection /
  Command Deck stop showing waypoints. The single canonical "stop & clear"
  verb — replaces the hand-built `SetAutopilotBehavior` + `Brake`-JSON dance
- that was duplicated in the Command Deck and the waypoint context actions
- (§4.2 — one input shape, every surface).
+ that was duplicated in the Command Deck, the right-click menu, and the
+ waypoint context actions (§4.2 — one input shape, every surface).
 
 - *defined in:* `crates/lunco-autopilot/src/lib.rs`
 
@@ -1667,15 +1666,14 @@ actually call, with the fields the deserializer actually accepts. See the
  `held = true` is "stuck" (the key is down and stays down); `held = false` is
  "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
  The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
- `speed_boost`, …), parsed by [`lunco_core::parse_user_intent`]. `speed_boost` is
- consumed by the local free-flight avatar; movement intents still match whatever
- a vessel's `Controls` profile binds.
+ …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
+ `Controls` profile binds.
 
 - *defined in:* `crates/lunco-controller/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`, `speed_boost`, `action`, `release`, …). |
+| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
 | `held` | `bool` |  `true` = hold it down, `false` = release it. |
 | `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command  surface). An intent is meaningless without its target: two spawns of one  asset are two distinct entities, and a targetless intent is rejected. Over  the API this takes the target's `api_id` — the `GlobalEntityId` reported by  `ListEntities` — and is resolved to the live entity. |
 
@@ -1738,7 +1736,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `avatar` | `Option < Entity >` |  The avatar entity taking possession — this process's *local* embodiment  in the world, used only to bind the chase camera. `None` for headless or  direct API control with no camera binding. |
-| `target` | `Entity` |  The non-`Avatar` entity exposing the writable `InputPorts` surface to possess (becomes the controlled vessel). |
+| `target` | `Entity` |  The non-`Avatar` entity exposing the writable `InputPorts` surface to  possess (becomes the controlled vessel). |
 | `bind_camera` | `bool` |  Whether possession also rebinds the avatar's camera to the chase rig —  the default, interactive behaviour. `false` claims control authority  only: what a recording scenario wants, where the script drives the  vessel through ports while an authored camera path owns the view.  A camera bind with no explicit avatar resolves only the authoritative  `TheLocalAvatar` slot. It fails visibly when that slot is empty; it never  selects an arbitrary `Avatar` entity. |
 
 #### `ReleaseVessel`
@@ -3016,9 +3014,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SpawnEntity`
 
- Spawn an independent entity from the catalog at a given world position. Route
- markers are not independent entities and are rejected here; use
- `AddRuntimeWaypoint` with an explicit vessel for a runtime route member.
+ Spawn an independent entity from the catalog at a given world position.
+
+ Route markers are intentionally excluded from this command: they have no
+ meaning without a vessel and ordered mission leg. Use `AddRuntimeWaypoint`
+ for a runtime route member, or author a marker and mission leg in USD.
 
  **Why the type lives in `lunco-core` and the handler does not.** `SpawnEntity`
  is a *wire* command: `lunco-networking` declares its channel
@@ -3079,10 +3079,9 @@ actually call, with the fields the deserializer actually accepts. See the
  Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
  prim it came from — the other half of scenario authoring.
 
- The write converts that prim to the selected inline `info:sourceCode` arm and clears
- the old `info:id`/`info:sourceAsset` arms. The shared lowering authors the `string`
- value RAW, so the whole rhai source round-trips verbatim, journals like any edit, and
- reaches the `.usda` on `SaveDocument`.
+ The shared USD lowering selects `info:sourceCode` and clears the old `info:id` and
+ `info:sourceAsset` arms. The `string` value is authored RAW, so the whole rhai source
+ round-trips verbatim, journals like any edit, and reaches the `.usda` on `SaveDocument`.
 
  It authors onto the PROGRAM, not onto the vessel running it
  ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a
@@ -3247,9 +3246,20 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `path` | `String` |  Filesystem path of the Twin root (must contain `twin.toml`).  Empty asks a windowed host to show a folder picker. |
 
+#### `SetTwinSetting`
+
+ Persist one generic project-owned setting on the active Twin.
+
+- *defined in:* `crates/lunco-workspace/src/open.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | `String` |  Namespaced setting key, for example `ui.camera_status`. |
+| `value` | `TwinSettingInput` |  Scalar value to persist in the Twin manifest. |
+
 ---
 
-<!-- 192 commands from the runtime schema; scanned 674 .rs files for docs (0 parse failure(s) skipped).
+<!-- 194 commands from the runtime schema; scanned 677 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->
