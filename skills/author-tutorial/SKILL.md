@@ -75,9 +75,10 @@ An applied epoch API without its authored epoch is rejected by the USD rule
 `LoadScene` before running the script. The launcher owns this boundary, which
 means a lesson that HAS no world is intentionally UI-only, not a second scene
 loader. When a UI-only lesson follows a world-owning lesson, the launcher clears
-the outgoing scene before starting the UI-only host; the workbench then shows its
-normal empty-viewport presentation. Omitting the payload is a statement that
-the lesson itself has no visual world to mount.
+the outgoing scene before starting the UI-only host; the workbench keeps its
+normal empty-viewport presentation visible while the tutorial card is shown.
+Omitting the payload is a statement that the lesson itself has no visual world
+to mount.
 
 **A new TRACK** is a new `curriculum.usda` with a `LunCoTutorialTrackAPI` prim
 (`string lunco:track:label = "…"`) — and it appears in an app only when that
@@ -182,6 +183,15 @@ spotlight. Unattended gates omit this presentation-only command. lunica ids incl
 `modelica_diagnostics`, `modelica_component_palette`,
 `model_view.compile_buttons` (needs a model open); instance panel
 `panel.modelica_plot` — spotlight but don't `focus`. Full list: `assets/tutorials/lunica/README.md`.
+
+For luncosim, use `panel.center`, `panel.side_browser`,
+`panel.right_inspector`, and `panel.bottom` for workbench docks. The title-bar
+menus and transport expose `menu.time`, `menu.network`, `menu.help`, and
+`toolbar.run`; perspective tabs use
+`menu.perspective.<registered-perspective-id>`, such as
+`menu.perspective.rover_build`. An empty viewport keeps its normal presentation
+visible while a tour card is shown, so UI-only lessons do not need an opaque
+scene scrim. Do not invent panel-instance anchors.
 
 ## Test a tutorial in Rhai
 

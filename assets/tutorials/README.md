@@ -55,9 +55,8 @@ The current corpus follows this split: `sandbox/first_drive.usda`,
 worlds; the luncosim Welcome/Controls lessons reuse `first_drive.usda`;
 `basic/driving_basics.usda` and `basic/slope_test.usda` author an explicit
 epoch and solar system; `basic/rover_variants.usda` reuses the former; the
-lander/cosim lessons reuse `scenes/luncosim/lander_ops.usda`; the Object Builder
-lesson reuses `scenes/luncosim/sandbox_scene.usda` and its explicit epoch; and
-the lunica lessons are UI/workbench lessons without a 3D payload.
+lander/cosim lessons reuse `scenes/luncosim/lander_ops.usda`; and the lunica
+lessons are UI/workbench lessons without a 3D payload.
 
 ## Layout
 
@@ -191,12 +190,15 @@ instance panel — spotlight its anchor, but don't `focus` it. See `lunica/READM
 
 For luncosim, use the current generic dock anchors: `panel.center`,
 `panel.side_browser`, `panel.right_inspector`, and `panel.bottom`; use the real
-panel id with `focus` when a lesson needs to open a tab. The menu bar and
-toolbar are outside the coach card's content rectangle, so a step that teaches
-`Time`, `Network`, `Help`, or the pause button must use `anchor: ""` and name
-the exact menu/action in its body. Do not invent `panel.<instance>` anchors.
+panel id with `focus` when a lesson needs to open a tab. Menu and toolbar
+controls can use their published anchors: `menu.time`, `menu.network`,
+`menu.help`, and `toolbar.run`. Perspective tabs use
+`menu.perspective.<registered-perspective-id>`, for example
+`menu.perspective.rover_build`. Do not invent `panel.<instance>` anchors.
 
-An authored non-empty anchor is required to resolve to a visible widget. While
+An authored non-empty anchor is required to resolve to a visible widget. The
+overlay keeps an empty viewport's normal presentation visible instead of
+covering it with a scrim; named anchors are still ringed. While
 a lesson is active, its track's authored perspective is temporarily required,
 so switching to another perspective automatically returns to the lesson's
 presentation before the next card is painted. A missing anchor still fails

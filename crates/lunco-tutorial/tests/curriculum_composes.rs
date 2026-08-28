@@ -91,6 +91,26 @@ fn the_app_layer_composes_the_tracks_it_offers() {
     }
 }
 
+/// The retired Object Builder curriculum must not reappear through an app
+/// layer. Its source assets may remain available for lower-level authoring
+/// work, but no shipped app may compose its track or lesson.
+#[test]
+fn app_curricula_do_not_offer_object_builder_lessons() {
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
+        assert!(
+            c.tracks.iter().all(|track| track.label != "Object Builder"),
+            "{app} still offers the Object Builder track"
+        );
+        assert!(
+            c.lessons
+                .iter()
+                .all(|lesson| !lesson.path.starts_with("/ObjectBuilder/")),
+            "{app} still offers an Object Builder lesson"
+        );
+    }
+}
+
 /// Every lesson names a script that exists. A lesson whose program is missing is
 /// worse than absent: it appears in the menu and fails when a student picks it.
 #[test]

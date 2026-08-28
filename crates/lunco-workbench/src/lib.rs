@@ -243,7 +243,7 @@ pub struct TabLocation {
 /// hand-drawn picture.
 ///
 /// Convention: short stable keys like `"menu.file"`, `"menu.help"`,
-/// `"toolbar.run"`. A missing key just means the widget wasn't
+/// `"menu.perspective.rover_build"`, and `"toolbar.run"`. A missing key just means the widget wasn't
 /// painted this frame (panel closed, perspective inactive); the
 /// overlay falls back to a centred callout.
 #[derive(Resource, Default, Debug, Clone)]
@@ -3706,8 +3706,8 @@ fn render_layout(
             // controls. Published to `HelpAnchors` after this layout
             // closure finishes so we don't double-borrow `world`
             // while the menu_button closures already hold it.
-            let mut anchor_rects: Vec<(&'static str, egui::Rect)> = Vec::new();
-            anchor_rects.push(("menu.bar", ui.max_rect()));
+            let mut anchor_rects: Vec<(String, egui::Rect)> = Vec::new();
+            anchor_rects.push(("menu.bar".to_owned(), ui.max_rect()));
 
             // macOS: leave room for the native traffic lights that
             // float over our content because of `fullsize_content_view`.
@@ -3922,7 +3922,7 @@ fn render_layout(
                     ui.close();
                 }
             });
-            anchor_rects.push(("menu.file", r_file.response.rect));
+            anchor_rects.push(("menu.file".to_owned(), r_file.response.rect));
             let r_edit = ui.menu_button("Edit", |ui| {
                 let has_active = world
                     .resource::<WorkspaceResource>()
@@ -3974,7 +3974,7 @@ fn render_layout(
                 }
                 layout.edit_menu = callbacks;
             });
-            anchor_rects.push(("menu.edit", r_edit.response.rect));
+            anchor_rects.push(("menu.edit".to_owned(), r_edit.response.rect));
             let r_view = ui.menu_button("View", |ui| {
                 if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
@@ -4152,7 +4152,7 @@ fn render_layout(
                     }
                 }
             });
-            anchor_rects.push(("menu.view", r_view.response.rect));
+            anchor_rects.push(("menu.view".to_owned(), r_view.response.rect));
 
             // Custom top-level menus
             let custom_menus = std::mem::take(&mut layout.custom_menus);
@@ -4162,7 +4162,7 @@ fn render_layout(
                     run_menu_callback(ui, world, cb.as_ref());
                 });
 
-                anchor_rects.push((*name, r_custom.response.rect));
+                anchor_rects.push(((*name).to_owned(), r_custom.response.rect));
             }
             layout.custom_menus = custom_menus;
 
@@ -4221,7 +4221,7 @@ fn render_layout(
                 }
                 layout.settings_submenus = submenus;
             });
-            anchor_rects.push(("menu.settings", r_settings.response.rect));
+            anchor_rects.push(("menu.settings".to_owned(), r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
                 if let Some(identity) = world.get_resource::<BuildIdentity>() {
                     ui.label(format!(
@@ -4248,7 +4248,7 @@ fn render_layout(
                 }
                 layout.help_menu = callbacks;
             });
-            anchor_rects.push(("menu.help", r_help.response.rect));
+            anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
 
             // Network — Connect / Disconnect. Reads the always-on
             // `lunco_core::NetStatus` and fires the `NetConnectRequest` /
@@ -4413,7 +4413,7 @@ fn render_layout(
                     }
                 }
             });
-            anchor_rects.push(("menu.network", r_network.response.rect));
+            anchor_rects.push(("menu.network".to_owned(), r_network.response.rect));
 
             // Time — every clock control that is not pause/resume.
             //
@@ -4488,7 +4488,7 @@ fn render_layout(
                 }
                 layout.time_menu = callbacks;
             });
-            anchor_rects.push(("menu.time", r_time.response.rect));
+            anchor_rects.push(("menu.time".to_owned(), r_time.response.rect));
 
             // Pause/Resume simulation via the single transport authority
             // (`TimeTransport.mode`, doc 19). The spine maps `Paused` onto
@@ -4506,7 +4506,7 @@ fn render_layout(
                     (UiIcon::Pause, "Pause simulation")
                 };
                 let btn_resp = icon_button(ui, icon, hover);
-                anchor_rects.push(("toolbar.run", btn_resp.rect));
+                anchor_rects.push(("toolbar.run".to_owned(), btn_resp.rect));
                 if btn_resp.clicked() {
                     world.trigger(lunco_time::SetTimeTransport {
                         playing: Some(paused),
@@ -4553,7 +4553,9 @@ fn render_layout(
                 if tabs.len() > 1 {
                     for (id, title, is_active) in tabs {
                         let button = egui::Button::new(title.as_str()).selected(is_active);
-                        if ui.add(button).clicked() && !is_active {
+                        let response = ui.add(button);
+                        anchor_rects.push((perspective_help_anchor(id), response.rect));
+                        if response.clicked() && !is_active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
                                 .0
@@ -4901,6 +4903,11 @@ fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<(PerspectiveId, St
         // registration order from left to right.
         .rev()
         .collect()
+}
+
+/// Stable help-anchor key for a perspective tab in the title bar.
+fn perspective_help_anchor(id: PerspectiveId) -> String {
+    format!("menu.perspective.{}", id.as_str())
 }
 
 /// Render a single panel inside its own egui container (side-panel mode).
@@ -6306,6 +6313,14 @@ mod tests {
         // Hiding navigation chrome must not remove the activation/API path.
         layout.activate_perspective(PerspectiveId("hidden"));
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("hidden")));
+    }
+
+    #[test]
+    fn perspective_help_anchor_uses_the_registered_id() {
+        assert_eq!(
+            perspective_help_anchor(PerspectiveId("sandbox_view")),
+            "menu.perspective.sandbox_view"
+        );
     }
 
     #[test]

@@ -492,7 +492,17 @@ fn tutorial_anchor_rect(
 ) -> Option<egui::Rect> {
     anchors
         .get(key)
-        .map(|rect| rect.expand(6.0).intersect(content))
+        .map(|rect| {
+            let rect = rect.expand(6.0);
+            // Title-bar/menu anchors are deliberately outside the workbench
+            // content region. All other anchors must belong to the visible
+            // content so a stale panel rect cannot become a false target.
+            if key.starts_with("menu.") {
+                rect
+            } else {
+                rect.intersect(content)
+            }
+        })
         .filter(|rect| rect.width() > 4.0 && rect.height() > 4.0)
 }
 
@@ -541,6 +551,11 @@ fn draw_spotlight(
         return;
     }
 
+    let target_in_content = target.and_then(|rect| {
+        let clipped = rect.intersect(screen);
+        (clipped.width() > 4.0 && clipped.height() > 4.0).then_some(clipped)
+    });
+
     if target.is_some() {
         egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
             .order(egui::Order::Background)
@@ -551,11 +566,18 @@ fn draw_spotlight(
                     ui.painter(),
                     ctx,
                     screen,
-                    target,
+                    target_in_content,
                     theme.tokens.scrim,
                     theme.tokens.accent,
                 )
             });
+        if let (Some(target), None) = (target, target_in_content) {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("lunco_spotlight_menu_anchor_ring"),
+            ));
+            paint_ring(&painter, ctx, target, theme.tokens.accent);
+        }
     }
 
     if caption.is_empty() {
@@ -641,6 +663,18 @@ fn paint_scrim(
         0.0,
         scrim,
     );
+    paint_ring(painter, ctx, t, accent);
+}
+
+/// Paint an anchor ring without requiring the target to be inside the scene
+/// content rectangle. This is used for title-bar buttons, which remain visible
+/// above the content while the coach card is positioned below them.
+fn paint_ring(
+    painter: &egui::Painter,
+    ctx: &egui::Context,
+    target: egui::Rect,
+    accent: egui::Color32,
+) {
     let phase = (ctx.input(|i| i.time).sin() as f32 * 0.5 + 0.5) * 0.55 + 0.45;
     let ring = egui::Color32::from_rgba_unmultiplied(
         accent.r(),
@@ -649,7 +683,7 @@ fn paint_scrim(
         (255.0 * phase) as u8,
     );
     painter.rect_stroke(
-        t,
+        target,
         8.0,
         egui::Stroke::new(2.5, ring),
         egui::StrokeKind::Outside,
@@ -694,6 +728,8 @@ fn draw_tour(
     mut hud: ResMut<TutorialHud>,
     anchors: Res<crate::HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
+    placeholder: Option<Res<crate::viewport::ViewportPlaceholder>>,
+    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     mut commands: Commands,
 ) {
     let Some(step) = hud.tour.clone() else { return };
@@ -723,6 +759,21 @@ fn draw_tour(
         report_missing_anchor(&mut hud, &mut commands, &step.anchor);
         return;
     }
+
+    // A UI-only lesson must retain the ordinary empty-workbench presentation.
+    // There is no scene to spotlight in this state, so a full scrim would turn
+    // the readable empty-viewport message into an apparent black screen.
+    let empty_viewport = placeholder
+        .as_ref()
+        .is_some_and(|viewport| viewport.message.is_some())
+        || scene_viewport
+            .as_ref()
+            .is_some_and(|viewport| viewport.active_camera.is_none());
+    let show_scrim = !empty_viewport;
+    let target_in_content = target.and_then(|rect| {
+        let clipped = rect.intersect(screen);
+        (clipped.width() > 4.0 && clipped.height() > 4.0).then_some(clipped)
+    });
 
     // ── Card placement — pick the side that fits around the target, matching
     // the lunica tour's Right/Below/Above/Left/Over/Centred logic.
@@ -801,8 +852,9 @@ fn draw_tour(
     };
 
     // ── Scrim + ring + speech-bubble tail (behind the card) ──────────────────
-    // An empty anchor is an intentional modal step and dims the scene. Named
-    // anchors have already been validated above.
+    // An empty anchor is an intentional modal step when a scene is present.
+    // With no scene, retain the normal empty-viewport presentation and draw
+    // only the authored target/card.
     if target.is_some() || step.anchor.is_empty() {
         egui::Area::new(egui::Id::new("lunco_tour_scrim"))
             .order(egui::Order::Background)
@@ -810,7 +862,18 @@ fn draw_tour(
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let painter = ui.painter();
-                paint_scrim(painter, ctx, screen, target, theme.tokens.scrim, accent);
+                if show_scrim {
+                    paint_scrim(
+                        painter,
+                        ctx,
+                        screen,
+                        target_in_content,
+                        theme.tokens.scrim,
+                        accent,
+                    );
+                } else if let Some(t) = target_in_content {
+                    paint_ring(painter, ctx, t, accent);
+                }
                 if let Some(t) = target {
                     let card_rect =
                         egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
@@ -824,6 +887,17 @@ fn draw_tour(
                     }
                 }
             });
+    }
+
+    // Menu targets sit above `screen`, so they cannot be ringed by the content
+    // scrim. Paint their ring in a foreground layer while leaving the title bar
+    // itself interactive.
+    if let (Some(target), None) = (target, target_in_content) {
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("lunco_tour_menu_anchor_ring"),
+        ));
+        paint_ring(&painter, ctx, target, accent);
     }
 
     // ── Card ─────────────────────────────────────────────────────────────────

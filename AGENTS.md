@@ -95,6 +95,12 @@ it with this one.
   tests and visual validation. Do not use an old `sandbox` executable or hide a
   rebuild behind `cargo run`. `--validate` proves preflight only, not runtime
   behavior. Capture real exit codes and inspect authored verdicts.
+- Targeted checks are the default for a focused change: format only touched Rust
+  files with the repository toolchain (or the directly affected package when a
+  package-level check is required), and run the narrowest relevant
+  `cargo check`/`cargo test` target. Do not run `cargo fmt --all`, a workspace
+  format, or a full suite unless the change spans the workspace or that broader
+  scope is explicitly requested.
 - Establish a behavior baseline before physics/vehicle changes and rerun it.
   Use focused tests first, then production luncosim. Use `-j 4`, the repository
   `target/`, and regular `sccache`; never use managed temporary build directories

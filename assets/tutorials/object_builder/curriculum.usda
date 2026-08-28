@@ -1,9 +1,9 @@
 #usda 1.0
 (
     """
-    The reusable Object Builder track. It is offered by the Sandbox and the
-    unified LunCoSim app through composition, just like the other tutorial
-    tracks; it is not selected by Rust code or by the folder name.
+    Retained Object Builder authoring fixture for the USD socket/plug workflow.
+    It is not composed by any shipped app curriculum; app availability is
+    determined only by the app root layers that sublayer a track.
     """
     defaultPrim = "ObjectBuilder"
     metersPerUnit = 1

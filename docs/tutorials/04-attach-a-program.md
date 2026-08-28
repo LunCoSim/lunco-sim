@@ -1,6 +1,6 @@
 # 04 — Attach a simulation program
 
-> **Pair with:** the Object Builder / Models palette in the luncosim app.
+> **Pair with:** the Build perspective / Models palette in the luncosim app.
 > **Reference:** [USD Domain](../architecture/21-domain-usd.md) ·
 > [Co-Simulation Domain](../architecture/22-domain-cosim.md) ·
 > [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md)
@@ -20,7 +20,7 @@ authoring change has a USD layer to journal and save.
 
 ## 2. Attach from the palette
 
-1. Open the **Object Builder** perspective and show the **Models** panel.
+1. Open the **Build** perspective and show the **Models** panel.
 2. Choose a discovered `.mo` or `.py` source.
 3. Click the USD body that should own the program.
 4. Inspect the scene tree. The program is a child `Scope` with

@@ -92,7 +92,6 @@ def Scope "Sandbox" (
         string lunco:tutorial:blurb = "Place an object, edit it, and save the USD-backed scene."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
-        rel lunco:tutorial:next = </ObjectBuilder/MountComponents>
     }
 
     def Scope "BuildBase" (
