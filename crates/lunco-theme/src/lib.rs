@@ -777,6 +777,12 @@ pub struct SpacingScale {
     pub window_padding: f32,
     pub item_spacing: f32,
     pub button_padding: Vec2,
+    /// Height of the merged workbench title bar. Every title-bar control is
+    /// laid out inside this same full-height row so text and painted icons
+    /// share one vertical centre.
+    pub titlebar_height: f32,
+    /// Interactive size of the icon-only controls in the merged title bar.
+    pub titlebar_control_size: Vec2,
 }
 
 impl Default for SpacingScale {
@@ -785,6 +791,8 @@ impl Default for SpacingScale {
             window_padding: 8.0,
             item_spacing: 4.0,
             button_padding: Vec2::new(6.0, 2.0),
+            titlebar_height: 32.0,
+            titlebar_control_size: Vec2::new(28.0, 28.0),
         }
     }
 }

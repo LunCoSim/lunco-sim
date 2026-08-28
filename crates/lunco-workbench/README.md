@@ -8,9 +8,7 @@ documented in [`docs/architecture/11-workbench.md`](../../docs/architecture/11-w
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ menu bar  ·  command palette                                │
-├─────────────────────────────────────────────────────────────┤
-│ perspective tabs  ·  transport controls                     │
+│ menu · command palette · title · transport · perspective tabs│
 ├───┬─────────────────────┬──────────────┬────────────────────┤
 │ A │                     │              │                    │
 │ c │  Twin Browser       │   VIEWPORT   │   Inspector        │
