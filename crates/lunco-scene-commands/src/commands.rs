@@ -10,7 +10,7 @@
 //!   the gizmo.
 
 use avian3d::physics_transform::Position;
-use avian3d::prelude::{LinearVelocity, RigidBody};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -574,6 +574,21 @@ pub struct MoveEntity {
 /// scene bounds and this local continuity guard.
 pub const MAX_MOVE_ENTITY_DISPLACEMENT: f64 = 500.0;
 
+/// Return the shortest angular displacement from `previous` to `target`.
+///
+/// Kinematic bodies expose angular velocity to Avian in the same active physics
+/// frame as their rotation. A complete pose edit therefore needs the rotational
+/// counterpart to the linear one-tick pulse used by [`MoveEntity`].
+fn shortest_angular_delta(previous: DQuat, target: DQuat) -> DVec3 {
+    let mut delta = target.normalize() * previous.normalize().inverse();
+    // `q` and `-q` represent the same orientation. Keep the pulse on the
+    // shortest arc so a sign-only wire difference cannot request a full turn.
+    if delta.w < 0.0 {
+        delta = -delta;
+    }
+    delta.to_scaled_axis()
+}
+
 /// Observer for `MoveEntity`.
 #[on_command(MoveEntity)]
 pub fn on_move_entity_command(
@@ -752,9 +767,10 @@ pub fn on_move_entity_command(
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
-    commands
-        .entity(target)
-        .try_insert(JustMovedKinematic { restore });
+    commands.entity(target).try_insert(JustMovedKinematic {
+        restore,
+        angular_pulse: false,
+    });
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -783,7 +799,9 @@ pub fn on_move_entity_command(
 /// jointed descendants); a hand-written `Rotation` is a second, wronger opinion
 /// that the bridge's writeback then undoes. The body is pinned Kinematic for the
 /// move, as `MoveEntity` does, so the solver treats the new pose as
-/// authoritative rather than fighting it.
+/// authoritative rather than fighting it. When `AngularVelocity` is present,
+/// the live handler also publishes a bounded one-tick angular pulse so jointed
+/// bodies receive the rotation; cleanup clears it after the physics step.
 #[Command(default)]
 pub struct RotateEntity {
     /// API-stable global entity ID from `ListEntities`, resolved to the live
@@ -802,12 +820,13 @@ pub struct RotateEntity {
 #[on_command(RotateEntity)]
 pub fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
+    time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
-        Query<&mut Transform>,
+        Query<(&mut Transform, Option<&mut AngularVelocity>)>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -829,11 +848,11 @@ pub fn on_rotate_entity_command(
         );
         return;
     }
-    let local_rotation = {
+    let q_in = q_in.normalize();
+    let (previous_rotation, local_rotation) = {
         let q_spatial = spatial.p0();
-        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        let Some((_, previous_rotation)) = lunco_core::coords::pose_in_grid(
             target,
-            q_in.normalize(),
             active_frame.0,
             &q_parents,
             &q_grids,
@@ -846,10 +865,25 @@ pub fn on_rotate_entity_command(
             );
             return;
         };
-        local_rotation
+        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+            target,
+            q_in,
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "ROTATE_ENTITY: entity is not connected to the active physics frame"
+            );
+            return;
+        };
+        (previous_rotation, local_rotation)
     };
     let mut writable = spatial.p1();
-    let Ok(mut tf) = writable.get_mut(target) else {
+    let Ok((mut tf, angular_velocity)) = writable.get_mut(target) else {
         warn!(
             "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
             target, cmd.entity_id
@@ -857,6 +891,11 @@ pub fn on_rotate_entity_command(
         return;
     };
     tf.rotation = local_rotation.as_quat();
+    if let Some(mut angular_velocity) = angular_velocity {
+        let dt = time.delta_secs().max(1.0 / 240.0) as f64;
+        angular_velocity.0 = (shortest_angular_delta(previous_rotation, q_in) / dt)
+            .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+    }
 
     // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
     // otherwise just an initial condition the solver immediately argues with.
@@ -872,9 +911,10 @@ pub fn on_rotate_entity_command(
     };
     if q_rb.get(target).is_ok() {
         commands.entity(target).try_insert(RigidBody::Kinematic);
-        commands
-            .entity(target)
-            .try_insert(JustMovedKinematic { restore });
+        commands.entity(target).try_insert(JustMovedKinematic {
+            restore,
+            angular_pulse: true,
+        });
     }
 
     info!(
@@ -889,6 +929,9 @@ pub fn on_rotate_entity_command(
 /// Interactive editors use it when translation and rotation are produced by
 /// one gesture, so live seating and document persistence share one semantic
 /// command and one undo/change-set boundary.
+/// For physics bodies, the live handler publishes bounded one-tick linear and
+/// angular pulses when the corresponding Avian components are present, allowing
+/// joint constraints to consume the complete pose edit before cleanup.
 #[Command(default)]
 pub struct TransformEntity {
     /// API-stable global entity ID from `ListEntities`, resolved to the live
@@ -910,7 +953,11 @@ pub fn on_transform_entity_command(
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
-        Query<(&mut Transform, Option<&mut LinearVelocity>)>,
+        Query<(
+            &mut Transform,
+            Option<&mut LinearVelocity>,
+            Option<&mut AngularVelocity>,
+        )>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -948,13 +995,13 @@ pub fn on_transform_entity_command(
         return;
     }
 
-    let (previous_position, old_cell, new_cell, new_translation, new_rotation) = {
+    let (previous_position, previous_rotation, old_cell, new_cell, new_translation, new_rotation) = {
         let q_spatial = spatial.p0();
         let Ok((old_cell, _)) = q_spatial.get(target) else {
             warn!("TRANSFORM_ENTITY: entity {:?} has no Transform", target);
             return;
         };
-        let Some((previous_position, _)) = lunco_core::coords::pose_in_grid(
+        let Some((previous_position, previous_rotation)) = lunco_core::coords::pose_in_grid(
             target,
             active_frame.0,
             &q_parents,
@@ -1002,6 +1049,7 @@ pub fn on_transform_entity_command(
         };
         (
             previous_position,
+            previous_rotation,
             old_cell.copied(),
             new_cell,
             new_translation,
@@ -1037,7 +1085,7 @@ pub fn on_transform_entity_command(
 
     {
         let mut writable = spatial.p1();
-        let Ok((mut tf, lin_vel_opt)) = writable.get_mut(target) else {
+        let Ok((mut tf, lin_vel_opt, angular_vel_opt)) = writable.get_mut(target) else {
             warn!(
                 "TRANSFORM_ENTITY: entity {:?} disappeared during move",
                 target
@@ -1049,6 +1097,11 @@ pub fn on_transform_entity_command(
         if let Some(mut lin_vel) = lin_vel_opt {
             let dt = time.delta_secs().max(1.0 / 240.0) as f64;
             lin_vel.0 = delta / dt;
+        }
+        if let Some(mut angular_vel) = angular_vel_opt {
+            let dt = time.delta_secs().max(1.0 / 240.0) as f64;
+            angular_vel.0 = (shortest_angular_delta(previous_rotation, rotation.normalize()) / dt)
+                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
         }
     }
     match (new_cell, old_cell) {
@@ -1071,9 +1124,10 @@ pub fn on_transform_entity_command(
     };
     if q_rb.get(target).is_ok() {
         commands.entity(target).try_insert(RigidBody::Kinematic);
-        commands
-            .entity(target)
-            .try_insert(JustMovedKinematic { restore });
+        commands.entity(target).try_insert(JustMovedKinematic {
+            restore,
+            angular_pulse: true,
+        });
     }
 
     // The transform write above is the storage authority. The BigSpace bridge
@@ -2192,9 +2246,11 @@ pub fn persist_environment_light_to_runtime_layer(
 }
 
 /// Marker inserted on a kinematic body that just received a
-/// `MoveEntity` (or analogous teleport) with a one-tick velocity
-/// pulse. [`clear_kinematic_pulse_velocity`] zeros that velocity
-/// the frame after the pulse so the body doesn't drift.
+/// `MoveEntity` (or analogous teleport) with a one-tick velocity pulse.
+/// Complete pose/rotation edits also set `angular_pulse`, so the cleanup clears
+/// the matching angular velocity after the solver consumes it.
+/// [`clear_kinematic_pulse_velocity`] performs that cleanup the frame after the
+/// pulse so the body doesn't drift.
 #[derive(Component)]
 pub struct JustMovedKinematic {
     /// The body kind to put back after the pulse tick — the Kinematic
@@ -2202,11 +2258,13 @@ pub struct JustMovedKinematic {
     /// the move". `None` = the body was already Kinematic (or has no
     /// RigidBody): restore nothing.
     pub restore: Option<RigidBody>,
+    /// Whether the command also published a one-tick angular velocity pulse.
+    pub angular_pulse: bool,
 }
 
-/// Zeros the `LinearVelocity` of bodies marked with
-/// [`JustMovedKinematic`], **after one physics tick has consumed
-/// the velocity** for joint propagation.
+/// Zeros the `LinearVelocity` and, when requested, `AngularVelocity` of bodies
+/// marked with [`JustMovedKinematic`], **after one physics tick has consumed the
+/// velocity** for joint propagation.
 ///
 /// Schedule: `FixedPostUpdate`. Bevy's main schedule order is
 /// `RunFixedMainLoop` (FixedUpdate cycle) → `Update`. So when a
@@ -2216,7 +2274,7 @@ pub struct JustMovedKinematic {
 /// being zeroed. Running this in `FixedPostUpdate` (which fires
 /// after every `FixedUpdate` step) does exactly that:
 ///
-/// - Frame N `Update`: `MoveEntity` sets velocity + inserts marker.
+/// - Frame N `Update`: a scene pose command sets velocity + inserts marker.
 /// - Frame N+1 `FixedUpdate`: physics runs WITH the velocity;
 ///   Avian's joint solver sees the kinematic body moving and
 ///   propagates the motion through joints to coupled dynamic bodies.
@@ -2226,10 +2284,22 @@ pub struct JustMovedKinematic {
 ///   settled at its new position, no drift.
 pub fn clear_kinematic_pulse_velocity(
     mut commands: Commands,
-    mut q: Query<(Entity, &mut LinearVelocity, &JustMovedKinematic)>,
+    mut q: Query<(
+        Entity,
+        Option<&mut LinearVelocity>,
+        Option<&mut AngularVelocity>,
+        &JustMovedKinematic,
+    )>,
 ) {
-    for (e, mut vel, marker) in q.iter_mut() {
-        vel.0 = DVec3::ZERO;
+    for (e, linear, angular, marker) in q.iter_mut() {
+        if let Some(mut linear) = linear {
+            linear.0 = DVec3::ZERO;
+        }
+        if marker.angular_pulse {
+            if let Some(mut angular) = angular {
+                angular.0 = DVec3::ZERO;
+            }
+        }
         // Put the pre-move body kind back ("for the duration of the move").
         // Re-inserting RigidBody goes through avian's replace hook, which
         // wakes the island — a body released in mid-air falls.
@@ -4251,6 +4321,90 @@ mod tests {
             lunco_core::coords::pose_in_grid(body, active, &parents, &grids, &spatial)
                 .expect("body remains connected to active frame");
         assert!(round_trip.as_quat().dot(desired.as_quat()).abs() > 1.0 - 1.0e-6);
+    }
+
+    #[test]
+    fn rotate_entity_publishes_a_shortest_angular_pulse() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_rotate_entity_command);
+
+        let active = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active));
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Transform::default(),
+                GlobalTransform::default(),
+                AngularVelocity::default(),
+                ChildOf(active),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, lunco_core::GlobalEntityId::from_raw(13));
+
+        // The negative quaternion names the same quarter-turn as the positive
+        // one. The pulse must follow the short +Y arc, not a nearly full turn.
+        let desired = -DQuat::from_rotation_y(0.25);
+        app.world_mut().trigger(RotateEntity {
+            entity_id: 13,
+            rotation: desired.to_array(),
+        });
+        app.update();
+
+        let angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+        assert!(
+            (angular.y - 60.0).abs() < 1.0e-5,
+            "angular pulse={angular:?}"
+        );
+        assert!(angular.x.abs() < 1.0e-9 && angular.z.abs() < 1.0e-9);
+        assert!(app
+            .world()
+            .get::<JustMovedKinematic>(body)
+            .is_some_and(|marker| marker.angular_pulse));
+    }
+
+    #[test]
+    fn angular_pulse_cleanup_restores_bodies_without_linear_velocity() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, clear_kinematic_pulse_velocity);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                AngularVelocity(DVec3::new(1.0, 2.0, 3.0)),
+                JustMovedKinematic {
+                    restore: Some(RigidBody::Dynamic),
+                    angular_pulse: true,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<RigidBody>(body).copied(),
+            Some(RigidBody::Dynamic)
+        );
+        assert_eq!(
+            app.world().get::<AngularVelocity>(body).unwrap().0,
+            DVec3::ZERO
+        );
+        assert!(app.world().get::<JustMovedKinematic>(body).is_none());
     }
 
     /// Build a headless app with the runtime-move producer wired and an active

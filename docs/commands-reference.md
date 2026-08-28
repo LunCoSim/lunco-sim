@@ -463,7 +463,9 @@ actually call, with the fields the deserializer actually accepts. See the
  jointed descendants); a hand-written `Rotation` is a second, wronger opinion
  that the bridge's writeback then undoes. The body is pinned Kinematic for the
  move, as `MoveEntity` does, so the solver treats the new pose as
- authoritative rather than fighting it.
+ authoritative rather than fighting it. When `AngularVelocity` is present,
+ the live handler also publishes a bounded one-tick angular pulse so jointed
+ bodies receive the rotation; cleanup clears it after the physics step.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
@@ -626,6 +628,9 @@ actually call, with the fields the deserializer actually accepts. See the
  Interactive editors use it when translation and rotation are produced by
  one gesture, so live seating and document persistence share one semantic
  command and one undo/change-set boundary.
+ For physics bodies, the live handler publishes bounded one-tick linear and
+ angular pulses when the corresponding Avian components are present, allowing
+ joint constraints to consume the complete pose edit before cleanup.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 

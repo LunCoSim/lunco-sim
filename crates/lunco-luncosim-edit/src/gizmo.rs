@@ -449,7 +449,7 @@ pub fn restore_gizmo_dynamic(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
-    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
+    mut q_vel: Query<(Option<&mut LinearVelocity>, Option<&mut AngularVelocity>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut spatial: ParamSet<(
         Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
@@ -549,9 +549,13 @@ pub fn restore_gizmo_dynamic(
             commands.entity(entity).try_insert(RotationInterpolation);
         }
 
-        if let Ok((mut linear, mut angular)) = q_vel.get_mut(entity) {
-            linear.0 = DVec3::ZERO;
-            angular.0 = DVec3::ZERO;
+        if let Ok((linear, angular)) = q_vel.get_mut(entity) {
+            if let Some(mut linear) = linear {
+                linear.0 = DVec3::ZERO;
+            }
+            if let Some(mut angular) = angular {
+                angular.0 = DVec3::ZERO;
+            }
         }
 
         // Hand the pre-drag body kind back. An entity that had NO `RigidBody`
@@ -754,7 +758,7 @@ mod tests {
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
                 },
-                LinearVelocity::default(),
+                LinearVelocity(DVec3::new(4.0, 5.0, 6.0)),
             ))
             .id();
         app.world_mut()
@@ -781,6 +785,10 @@ mod tests {
             .world()
             .get::<lunco_physics::KinematicDrive>(vessel)
             .is_none());
+        assert_eq!(
+            app.world().get::<LinearVelocity>(vessel).unwrap().0,
+            DVec3::ZERO
+        );
         assert!(app
             .world()
             .get::<CustomPositionIntegration>(vessel)
