@@ -90,6 +90,7 @@ fn on_start(me) {
         "/PartsAttached/SkidPhysical",
         "/PartsAttached/AckermannRaycast",
         "/PartsAttached/AckermannPhysical",
+        "/PartsAttached/SixWheelRaycast",
     ];
     this.roots = [];
     for p in this.paths {
