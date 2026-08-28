@@ -321,6 +321,31 @@ fn every_derived_terrain_normal_uses_the_instance_frame_boundary() {
     }
 }
 
+/// Procedural terrain detail must be registered to the DEM, not evaluated from
+/// the transient BigSpace render position. The latter changes when the active
+/// render origin is rebased and makes close terrain shimmer even when its
+/// authored surface is unchanged.
+#[test]
+fn procedural_terrain_detail_is_anchored_to_dem_coordinates() {
+    for file in [
+        "terrain_geomorph.wgsl",
+        "terrain_layered.wgsl",
+        "regolith.wgsl",
+    ] {
+        let code = code_only(&read(file));
+        assert!(
+            code.contains("terrain_detail_position(in.uv")
+                && code.contains("terrain_detail_normal_to_local")
+                && code.contains("terrain_detail_normal_to_world"),
+            "{file} must sample procedural detail in the DEM frame and transform its normal once"
+        );
+        assert!(
+            !code.contains("surface_fbm(p ") && !code.contains("bump_layer(n, p"),
+            "{file} still evaluates procedural detail from transient render-world position"
+        );
+    }
+}
+
 /// Physical terrain appearance must not encode CDLOD topology. Parent/child
 /// substitution changes mesh depth, so feeding depth or the morph band into map
 /// weights creates square AO/tone/normal changes even when geometry is seamless.

@@ -109,6 +109,47 @@ fn parse_ephemeris_csv(text: &str) -> Vec<CsvDataPoint> {
     points
 }
 
+/// Return the exact angular-rate bound of the provider's piecewise-linear CSV
+/// interpolation. The position is clamped outside the first/last sample, so
+/// only adjacent samples can contribute motion. An invalid segment or one
+/// passing through the origin cannot provide a finite direction bound and
+/// therefore keeps the cadence gate exact.
+fn maximum_piecewise_linear_angular_rate(points: &[CsvDataPoint]) -> f64 {
+    let mut maximum_rate = 0.0_f64;
+    for pair in points.windows(2) {
+        let p0 = pair[0].pos_au.raw();
+        let p1 = pair[1].pos_au.raw();
+        let dt = pair[1].jd - pair[0].jd;
+        if !dt.is_finite() || dt <= 0.0 || !p0.is_finite() || !p1.is_finite() {
+            return f64::INFINITY;
+        }
+
+        let velocity = (p1 - p0) / dt;
+        let velocity_squared = velocity.length_squared();
+        if velocity_squared == 0.0 {
+            continue;
+        }
+
+        // The interpolated point is p(t) = p0 + velocity * (t * dt),
+        // equivalently p0 + velocity * tau for tau in [0, dt]. Find the
+        // closest point on that segment to the origin; angular speed is
+        // |p × v| / |p|² and is maximized at the smallest radius here.
+        let tau = (-p0.dot(velocity) / velocity_squared).clamp(0.0, dt);
+        let closest = p0 + velocity * tau;
+        let radius_squared = closest.length_squared();
+        if !radius_squared.is_finite() || radius_squared <= f64::MIN_POSITIVE {
+            return f64::INFINITY;
+        }
+
+        let rate = p0.cross(velocity).length() / radius_squared;
+        if !rate.is_finite() {
+            return f64::INFINITY;
+        }
+        maximum_rate = maximum_rate.max(rate);
+    }
+    maximum_rate
+}
+
 /// The `[<key>.ephemeris]` sub-table of a declared dataset: what the bytes are.
 ///
 /// Transport (`url`, `dest`, `sha256`) is `lunco-assets`' half of the same
@@ -376,19 +417,19 @@ impl EphemerisProvider for CelestialEphemerisProvider {
 
     fn maximum_angular_rate_rad_per_day(&self) -> f64 {
         // The analytic provider's fastest parent-relative vector is the
-        // Moon's sidereal orbit. Mission CSVs have no certified derivative
-        // contract, so the exact cadence is required as soon as one is
-        // adopted instead of pretending the built-in rate still bounds it.
-        let has_custom_data = self
+        // Moon's sidereal orbit. CSV positions are linearly interpolated by
+        // `position`, so their bound is derived from the same authoritative
+        // samples rather than forcing every render frame to solve exactly.
+        let custom_rate = self
             .custom_data
             .read()
-            .map(|data| !data.is_empty())
-            .unwrap_or(true);
-        if has_custom_data {
-            f64::INFINITY
-        } else {
-            std::f64::consts::TAU / 27.321_661
-        }
+            .map(|data| {
+                data.values()
+                    .map(|points| maximum_piecewise_linear_angular_rate(points))
+                    .fold(0.0, f64::max)
+            })
+            .unwrap_or(f64::INFINITY);
+        (std::f64::consts::TAU / 27.321_661).max(custom_rate)
     }
 
     fn motion_revision(&self) -> u64 {
@@ -400,6 +441,33 @@ impl EphemerisProvider for CelestialEphemerisProvider {
 mod frame_tests {
     use super::*;
     use lunco_celestial::{solar_tangent_frame, CelestialBodyRegistry, Geodetic};
+
+    fn csv_point(jd: f64, x: f64, y: f64, z: f64) -> CsvDataPoint {
+        CsvDataPoint {
+            jd,
+            pos_au: EclipticAu::new(DVec3::new(x, y, z)),
+        }
+    }
+
+    #[test]
+    fn csv_motion_bound_matches_piecewise_linear_interpolation() {
+        let points = [csv_point(0.0, 1.0, 0.0, 0.0), csv_point(2.0, 1.0, 1.0, 0.0)];
+
+        // p(t) = (1, t / 2, 0), so the maximum angular rate is 1/2 rad/day
+        // at the first sample and decreases as the radius grows.
+        let rate = maximum_piecewise_linear_angular_rate(&points);
+        assert!((rate - 0.5).abs() < 1.0e-12, "unexpected rate: {rate}");
+    }
+
+    #[test]
+    fn csv_motion_bound_rejects_segments_through_origin() {
+        let points = [
+            csv_point(0.0, 1.0, 0.0, 0.0),
+            csv_point(1.0, -1.0, 0.0, 0.0),
+        ];
+
+        assert!(maximum_piecewise_linear_angular_rate(&points).is_infinite());
+    }
 
     /// The REAL conversion, not a copy of it.
     ///

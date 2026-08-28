@@ -38,9 +38,10 @@ use serde::{Deserialize, Serialize};
 /// other view preference.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct CelestialCadenceSettings {
-    /// Allowed angular error in **degrees**. `0.0` means "solve every frame"
-    /// (exact) — what a deterministic scene test wants; see
-    /// [`CelestialCadenceSettings::EXACT`].
+    /// Allowed angular error in **degrees**. A positive value is required for
+    /// persisted preferences; deterministic scene tests use the in-memory
+    /// [`CelestialCadenceSettings::EXACT`] override when they need every-frame
+    /// solving.
     pub tolerance_deg: f64,
 }
 
@@ -76,6 +77,14 @@ impl Default for CelestialCadenceSettings {
 
 impl SettingsSection for CelestialCadenceSettings {
     const KEY: &'static str = "celestial_cadence";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if self.tolerance_deg.is_finite() && self.tolerance_deg > 0.0 {
+            Ok(())
+        } else {
+            Err("tolerance_deg must be finite and greater than zero".to_string())
+        }
+    }
 }
 
 /// Motion bound used by the shared celestial solve gate.
@@ -451,6 +460,19 @@ mod tests {
             CelestialCadenceSettings::default().max_epoch_step_jd(f64::INFINITY),
             0.0
         );
+    }
+
+    #[test]
+    fn exact_override_is_not_accepted_as_a_persisted_preference() {
+        assert!(CelestialCadenceSettings::EXACT.validate_section().is_err());
+        assert!(CelestialCadenceSettings {
+            tolerance_deg: f64::NAN
+        }
+        .validate_section()
+        .is_err());
+        assert!(CelestialCadenceSettings::default()
+            .validate_section()
+            .is_ok());
     }
 
     #[test]

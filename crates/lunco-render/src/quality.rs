@@ -231,17 +231,21 @@ impl RenderingQuality {
                 terrain_rock_mesh_cube_count: 8,
                 terrain_rock_lod_start_distance: 4_000.0,
                 terrain_rock_lod_fade_distance: 800.0,
-                terrain_lod_tile_resolution: 65,
+                // Keep High on the proven interactive terrain envelope. High still
+                // raises lighting, derived-map, rock, and mesh budgets, but doubling
+                // the CDLOD cover made terrain geometry dominate the frame and did
+                // not improve the authored surface contract.
+                terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
-                terrain_lod_pixel_error: 1.0,
-                terrain_lod_max_depth: 10,
-                terrain_lod_probe_resolution: 13,
-                terrain_lod_bakes_per_frame: 48,
-                terrain_lod_max_inflight_bakes: 128,
-                terrain_lod_tile_budget: 1536,
-                terrain_lod_cover_edits_per_frame: 128,
-                terrain_lod_hysteresis_ratio: 1.40,
-                terrain_lod_morph_start_ratio: 0.65,
+                terrain_lod_pixel_error: 2.0,
+                terrain_lod_max_depth: 8,
+                terrain_lod_probe_resolution: 9,
+                terrain_lod_bakes_per_frame: 24,
+                terrain_lod_max_inflight_bakes: 64,
+                terrain_lod_tile_budget: 768,
+                terrain_lod_cover_edits_per_frame: 64,
+                terrain_lod_hysteresis_ratio: 1.30,
+                terrain_lod_morph_start_ratio: 0.55,
                 nurbs_surface_samples_per_control_span: 10,
                 nurbs_surface_minimum_subdivisions: 12,
                 nurbs_surface_maximum_subdivisions: 256,
@@ -1709,6 +1713,49 @@ mod tests {
         assert_eq!(settings.profile().terrain_lod_cover_edits_per_frame, 64);
         assert_eq!(settings.profile().terrain_lod_hysteresis_ratio, 1.30);
         assert_eq!(settings.profile().terrain_lod_morph_start_ratio, 0.55);
+        let high = RenderingQuality::High.profile();
+        let balanced = RenderingQuality::Balanced.profile();
+        assert_eq!(
+            high.terrain_lod_tile_resolution,
+            balanced.terrain_lod_tile_resolution
+        );
+        assert_eq!(
+            high.terrain_lod_cinematic_resolution,
+            balanced.terrain_lod_cinematic_resolution
+        );
+        assert_eq!(
+            high.terrain_lod_pixel_error,
+            balanced.terrain_lod_pixel_error
+        );
+        assert_eq!(high.terrain_lod_max_depth, balanced.terrain_lod_max_depth);
+        assert_eq!(
+            high.terrain_lod_probe_resolution,
+            balanced.terrain_lod_probe_resolution
+        );
+        assert_eq!(
+            high.terrain_lod_bakes_per_frame,
+            balanced.terrain_lod_bakes_per_frame
+        );
+        assert_eq!(
+            high.terrain_lod_max_inflight_bakes,
+            balanced.terrain_lod_max_inflight_bakes
+        );
+        assert_eq!(
+            high.terrain_lod_tile_budget,
+            balanced.terrain_lod_tile_budget
+        );
+        assert_eq!(
+            high.terrain_lod_cover_edits_per_frame,
+            balanced.terrain_lod_cover_edits_per_frame
+        );
+        assert_eq!(
+            high.terrain_lod_hysteresis_ratio,
+            balanced.terrain_lod_hysteresis_ratio
+        );
+        assert_eq!(
+            high.terrain_lod_morph_start_ratio,
+            balanced.terrain_lod_morph_start_ratio
+        );
 
         settings.terrain_lod_tile_resolution = 2;
         assert_eq!(

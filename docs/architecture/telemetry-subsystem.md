@@ -202,6 +202,11 @@ The model inspector answers "what is the model doing now?"; the telemetry browse
 channels and history are available?". Both use the shared deadband to suppress numerical jitter,
 with non-finite values excluded from scalar history and solver time resets handled explicitly.
 
+The physics producer treats metadata as catalog state: it publishes metadata on first channel
+discovery or when an entity's USD owner path changes, then only records samples on later fixed
+steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
+registry remains the single metadata owner.
+
 ---
 
 ## 6. Recording → experiments

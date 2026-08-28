@@ -84,8 +84,7 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 | 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (luncosim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
 | 04 — Attach a simulation program | No paired in-app lesson | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [use-asset-library](../../skills/use-asset-library/SKILL.md) · [test-via-api](../../skills/test-via-api/SKILL.md) |
 
-Walkthrough 04 remains a data/API authoring reference. The app curriculum does
-not offer an Object Builder lesson.
+Walkthrough 04 remains a data/API authoring reference.
 
 Looking for a reference rather than a walkthrough? The full script verb list is
 in [`../scripting-guide.md`](../scripting-guide.md), the design behind scenarios is

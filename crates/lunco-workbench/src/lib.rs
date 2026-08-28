@@ -4705,7 +4705,7 @@ fn render_layout(
         // washed out and active tabs lose contrast against the bar.
         // Bind every interaction state to the theme so tabs read
         // consistently in both modes.
-        // The selected tab is a raised, accented surface; inactive tabs stay
+        // The selected tab is a raised, high-contrast surface; inactive tabs stay
         // quiet until hovered. egui_dock uses `focused` for the active tab in
         // the focused leaf, so the active treatment must be applied to both
         // states or the selection disappears as soon as the pane is focused.
@@ -4716,7 +4716,11 @@ fn render_layout(
             palette.mantle
         };
         let active_fill = theme.tokens.surface_raised;
-        let active_outline = theme.tokens.accent;
+        // The selected tab is already distinguished by its raised fill and
+        // text. Keep the persistent keyline on the neutral raised-surface
+        // border; the accent outline is reserved for transient tutorial
+        // spotlights and should not remain around a tab after completion.
+        let active_outline = theme.tokens.surface_raised_border;
         let active_corner_radius = theme.rounding.button;
         for tab in [
             &mut style.tab.active,

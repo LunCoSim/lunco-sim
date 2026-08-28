@@ -106,7 +106,18 @@ pub enum PhysicsBridgeSystems {
 /// `Position` ↔ (cell, `Transform`) sync.
 pub struct BigSpacePhysicsBridgePlugin;
 
-fn physics_frame_contract_ready(
+/// Cached result of the active physics-frame validation for the current fixed
+/// frame. Run conditions are evaluated independently by Bevy, so putting the
+/// full hierarchy walk directly on each bridge/Avian condition multiplied an
+/// O(physical entities × hierarchy depth) check several times per physics
+/// frame. The cache is refreshed once before the bridge read pass and every
+/// consumer reads this one result.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+struct PhysicsFrameContractStatus {
+    ready: bool,
+}
+
+fn physics_frame_contract_is_valid(
     active: Option<Res<lunco_core::ActivePhysicsFrame>>,
     diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
     q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
@@ -129,6 +140,43 @@ fn physics_frame_contract_ready(
         })
 }
 
+fn physics_frame_contract_ready(status: Option<Res<PhysicsFrameContractStatus>>) -> bool {
+    status.is_some_and(|status| status.ready)
+}
+
+/// Return whether a topology or frame-boundary input changed since the last
+/// validation. Pose values do not belong here: moving a body is ordinary
+/// physics state and cannot invalidate its hierarchy connection to the active
+/// frame. The full walk remains authoritative, but it only runs when an input
+/// that can change that answer was actually admitted.
+fn physics_frame_contract_inputs_changed(
+    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    q_changed: Query<
+        (),
+        Or<(
+            Added<RigidBody>,
+            Added<Collider>,
+            Added<ChildOf>,
+            Added<CellCoord>,
+            Added<Grid>,
+            Changed<ChildOf>,
+        )>,
+    >,
+    mut removed_bodies: RemovedComponents<RigidBody>,
+    mut removed_colliders: RemovedComponents<Collider>,
+    mut removed_children: RemovedComponents<ChildOf>,
+    mut removed_cells: RemovedComponents<CellCoord>,
+    mut removed_grids: RemovedComponents<Grid>,
+) -> bool {
+    active.is_some_and(|active| active.is_changed())
+        || !q_changed.is_empty()
+        || removed_bodies.read().next().is_some()
+        || removed_colliders.read().next().is_some()
+        || removed_children.read().next().is_some()
+        || removed_cells.read().next().is_some()
+        || removed_grids.read().next().is_some()
+}
+
 /// Validate the frame before Avian's nested schedule reads it. The bridge must
 /// stop at this boundary when a physical entity is not connected to the one
 /// explicitly bound frame; selecting another grid would create load-order
@@ -141,10 +189,12 @@ fn validate_physics_frame_contract(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut status: ResMut<PhysicsFrameContractStatus>,
 ) {
     let mut findings = Vec::new();
     if !q_physical.is_empty() {
-        let Some(active) = active else {
+        let Some(active) = active.as_deref() else {
+            status.ready = false;
             findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-frame".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
@@ -194,6 +244,8 @@ fn validate_physics_frame_contract(
         }
     }
     let frame_contract_invalid = !findings.is_empty();
+    status.ready =
+        active.is_some_and(|active| q_grids.get(active.0).is_ok() && !frame_contract_invalid);
     if let Some(mut diagnostics) = diagnostics {
         diagnostics.replace_producer("usd-avian", findings);
     }
@@ -203,6 +255,30 @@ fn validate_physics_frame_contract(
             frame_contract_invalid,
         );
     }
+}
+
+/// Re-evaluate the contract after `Update` has admitted scene entities and
+/// before any fixed-frame bridge or Avian condition is evaluated. The
+/// diagnostic pass runs earlier so it can publish findings and apply the
+/// physics hold; this pass only refreshes the shared gate for the entities now
+/// present in the fixed schedule.
+fn refresh_physics_frame_contract(
+    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
+    q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut status: ResMut<PhysicsFrameContractStatus>,
+) {
+    status.ready = physics_frame_contract_is_valid(
+        active,
+        diagnostics,
+        q_physical,
+        q_parents,
+        q_grids,
+        q_spatial,
+    );
 }
 
 impl Plugin for BigSpacePhysicsBridgePlugin {
@@ -220,9 +296,18 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         });
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<PhysicsFrameContractStatus>();
         app.add_systems(
             PreUpdate,
-            validate_physics_frame_contract.before(lunco_physics::apply_physics_holds),
+            validate_physics_frame_contract
+                .run_if(physics_frame_contract_inputs_changed)
+                .before(lunco_physics::apply_physics_holds),
+        );
+        app.add_systems(
+            FixedPostUpdate,
+            refresh_physics_frame_contract
+                .run_if(physics_frame_contract_inputs_changed)
+                .before(PhysicsBridgeSystems::Read),
         );
         app.configure_sets(
             FixedPostUpdate,
@@ -1260,6 +1345,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<lunco_core::RuntimeDiagnostics>();
         world.init_resource::<lunco_physics::PhysicsHolds>();
+        world.init_resource::<PhysicsFrameContractStatus>();
         world.spawn((RigidBody::Dynamic, Transform::default()));
 
         world
@@ -1274,6 +1360,7 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "physics-frame"));
+        assert!(!world.resource::<PhysicsFrameContractStatus>().ready);
     }
 
     #[test]

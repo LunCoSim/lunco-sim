@@ -482,7 +482,10 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
 
 1. ~~Kill the two-surface crater path~~ — **done**: craters are an analytic
    `Craters` modifier on the `SurfaceOracle`, sampled by the tile baker and the
-   collider ring at their own resolutions.
+   collider ring at their own resolutions. The collider ring's depth and tile
+   resolution are authored on the DEM layer and are never selected from the
+   graphics-quality profile; rendered tile count and physics contact density
+   therefore remain independent in both windowed and headless execution.
 2. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
 3. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto

@@ -999,9 +999,7 @@ fn on_mission_complete(
     // lesson or leak its interpreter state into the next one.
     commands.queue(|world: &mut World| {
         #[cfg(feature = "ui")]
-        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
-            layout.set_required_perspective(None);
-        }
+        clear_tutorial_presentation(world);
         stop_tutorial_host(world);
     });
     if !progress.is_completed(&id) {
@@ -2778,6 +2776,66 @@ mod tests {
             app.world().resource::<TutorialProgress>().completed,
             vec!["/Test/First"]
         );
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn mission_completion_clears_tutorial_presentation() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.insert_resource(lunco_api::ApiEntityRegistry::default());
+        app.init_resource::<TutorialHud>();
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/ClearPresentation".into(),
+            title: "Clear presentation".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/ClearPresentation".into(),
+        });
+        app.update();
+        {
+            let mut hud = app.world_mut().resource_mut::<TutorialHud>();
+            hud.title = "Clear presentation".into();
+            hud.hint = "A stale hint".into();
+            hud.objectives = "A stale objective".into();
+            hud.spotlight = Some(("panel.right_inspector".into(), "Stale ring".into()));
+            hud.tour = Some(lunco_workbench::tutorial_overlay::TourStep {
+                index: 0,
+                total: 1,
+                anchor: "panel.right_inspector".into(),
+                title: "Stale tour".into(),
+                body: "Stale card".into(),
+            });
+        }
+
+        app.world_mut().trigger(TelemetryEvent {
+            name: "MISSION_COMPLETE".into(),
+            source: 0,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(0.0),
+            timestamp: 0.0,
+        });
+        app.update();
+
+        let hud = app.world().resource::<TutorialHud>();
+        assert!(hud.title.is_empty());
+        assert!(hud.hint.is_empty());
+        assert!(hud.objectives.is_empty());
+        assert!(hud.spotlight.is_none());
+        assert!(hud.tour.is_none());
     }
 
     /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the

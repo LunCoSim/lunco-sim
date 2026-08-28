@@ -74,8 +74,9 @@ impl Plugin for TerrainSurfacePlugin {
         // (gated on render assets existing). See `crate::derived_layers`.
         crate::derived_layers::register(app);
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
-        // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
-        // static heightfield collider. See `crate::stream_viz`.
+        // LODs. Inert unless a DEM is built with `lod_viz`. Physics uses the
+        // separately authored collider-ring contract when `collider_ring` is
+        // enabled. See `crate::stream_viz`.
         //
         // NO material store is initialised here any more. A tile states its
         // appearance as a `ShaderLook` and this crate never touches

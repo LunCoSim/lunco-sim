@@ -783,7 +783,9 @@ fn apply_render_quality(
         light.shadow_normal_bias = profile.shadow_normal_bias;
 
         let Some(current_maximum_distance) = config.bounds.last().copied() else {
-            warn!("directional light has no cascade bounds; preserving its invalid shadow configuration");
+            warn!(
+                "directional light has no cascade bounds; preserving its invalid shadow configuration"
+            );
             continue;
         };
         let current_first_cascade_far_bound = config
@@ -809,9 +811,7 @@ fn apply_render_quality(
         {
             warn!(
                 "graphics shadow defaults cannot be applied to directional light: minimum={}, first={}, maximum={}; preserving its current cascade configuration",
-                profile.shadow_minimum_distance,
-                first_cascade_far_bound,
-                maximum_distance,
+                profile.shadow_minimum_distance, first_cascade_far_bound, maximum_distance,
             );
             continue;
         }
