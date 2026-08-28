@@ -488,8 +488,11 @@ pub enum UsdOp {
     /// could switch one at runtime. This is the op behind "reconfigure the rover".
     ///
     /// Read-modify-write: selections for *other* variant sets on the same prim are
-    /// preserved. Changing a selection re-composes the prim's subtree, so the
-    /// projector rebuilds rather than replaying it incrementally.
+    /// preserved. A prim that arrives through a reference or payload may be absent
+    /// from this document's authored layer; the edit is still authored at its
+    /// composed path as a standard local over. Changing a selection re-composes
+    /// the prim's subtree, so the projector rebuilds rather than replaying it
+    /// incrementally.
     SetVariantSelection {
         /// Layer to write to.
         edit_target: LayerId,
@@ -1938,7 +1941,16 @@ impl Document for UsdDocument {
                 variant,
                 ..
             } => {
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => prim,
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc(&prim) {
+                            return Err(error);
+                        }
+                        prim
+                    }
+                };
                 // Typed inverse: restore the prior selection of THIS variant set
                 // (the forward op is read-modify-write, so sibling sets are
                 // untouched either way). No prior selection for the set → the
@@ -1964,7 +1976,7 @@ impl Document for UsdDocument {
                 // Read-modify-write the selection map so selecting `drivetrain`
                 // doesn't silently drop a sibling variant set's selection.
                 stage
-                    .prim(path.as_str())
+                    .prim(prim_sdf.clone())
                     .update_metadata(sdf::FieldKey::VariantSelection.as_str(), |current| {
                         let mut map = match current {
                             Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
@@ -4211,6 +4223,55 @@ def Xform \"Traverse\" (\n\
         assert!(
             reparses_cleanly(&doc),
             "authored variant selection must reparse cleanly: {s}"
+        );
+    }
+
+    #[test]
+    fn set_variant_selection_authors_over_a_referenced_prim() {
+        // The Inspector addresses the composed instance path. The wrapper owns
+        // only /Scene; /Scene/Rover arrives through its reference and therefore
+        // has no authored spec in this document before the edit.
+        let scene = "#usda 1.0\n\
+def Xform \"Scene\" (\n\
+    prepend references = @./rover.usda@</Rover>\n\
+)\n\
+{\n\
+}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(44),
+            scene,
+            DocumentOrigin::writable_file("/tmp/variant_wrapper.usda"),
+        );
+        doc.apply(UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/Scene/Rover".into(),
+            variant_set: "generation".into(),
+            variant: "solar".into(),
+        })
+        .expect("a composed referenced prim is a valid variant edit target");
+
+        let path = SdfPath::new("/Scene/Rover").unwrap();
+        let selection = doc
+            .data()
+            .field(&path, sdf::FieldKey::VariantSelection.as_str())
+            .expect("the local over carries the selection");
+        assert!(matches!(
+            selection,
+            sdf::Value::VariantSelectionMap(map)
+                if map.get("generation").is_some_and(|value| value == "solar")
+        ));
+        let authored = doc.source();
+        assert!(
+            authored.contains("over \"Rover\""),
+            "the composed target must be authored as an over, not flattened:\n{authored}"
+        );
+        assert!(
+            authored.contains("references"),
+            "authoring the selection must preserve the wrapper reference:\n{authored}"
+        );
+        assert!(
+            reparses_cleanly(&doc),
+            "the composed-path variant opinion must serialize as valid USDA:\n{authored}"
         );
     }
 

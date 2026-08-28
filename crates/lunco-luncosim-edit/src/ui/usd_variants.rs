@@ -103,14 +103,7 @@ pub fn produce_usd_variant_view(
 
     let options_by_set = lunco_usd_bevy::variants::variant_options_in_stage(stage);
     for (name, selection) in selections {
-        let mut options = options_by_set.get(&name).cloned().unwrap_or_default();
-        // The composed selection is selectable even if no layer spelled it out
-        // (a fallback, or a variant whose block authors nothing) — otherwise
-        // the picker could show a state it cannot return to.
-        if !selection.is_empty() && !options.contains(&selection) {
-            options.push(selection.clone());
-            options.sort();
-        }
+        let options = options_by_set.get(&name).cloned().unwrap_or_default();
         view.sets.push(UsdVariantSet {
             name,
             selection: (!selection.is_empty()).then_some(selection),

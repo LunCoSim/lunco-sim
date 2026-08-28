@@ -1607,12 +1607,6 @@ fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                         }
                     }
                 });
-                // A set whose selection does not resolve composes its fallback
-                // (or nothing) — say so rather than showing an empty row that
-                // looks like a rendering bug.
-                if set.selection.is_none() {
-                    ui.weak("no selection composed — fallback in use");
-                }
             }
             for (set, variant) in picked {
                 ctx.trigger(UsdVariantEditRequested {
