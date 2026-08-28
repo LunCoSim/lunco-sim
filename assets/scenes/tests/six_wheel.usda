@@ -49,10 +49,12 @@ def Xform "SixWheelTest" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        # Close freeflight presentation for the six-wheel attachment acceptance
+        # capture; the rover's separate onboard camera remains in its component.
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
-        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
-        double3 xformOp:translate = (8.0, 6.0, 10.0)
+        double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
+        double3 xformOp:translate = (-5.0, 3.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
