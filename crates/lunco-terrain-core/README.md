@@ -19,9 +19,11 @@ share one selection algorithm instead of duplicating it.
 ## The height oracle
 
 A `HeightSource` is the atom of the terrain model: features (a crater, a DEM, a
-whole planet) compose by wrapping the source below them, and the composed source
-is the **single truth** both the visual tile baker and the avian collider ring
-sample — so visuals and physics stay in lockstep. See the design narrative:
+whole planet) compose by wrapping the source below them. The composed source is
+the **single terrain truth** sampled by visual and physics products, while each
+product owns its own sampling lattice and scheduling. Visual quality cannot
+change physics work or contact geometry, and physics does not require render
+assets. See the design narrative:
 [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 
 ## Built on by

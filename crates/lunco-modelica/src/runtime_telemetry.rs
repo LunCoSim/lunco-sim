@@ -135,6 +135,12 @@ impl ModelicaSignalLayout {
 struct RuntimeTelemetrySession {
     session_id: u64,
     signals: HashSet<SignalRef>,
+    document_id: Option<lunco_doc::DocumentId>,
+    document_generation: Option<u64>,
+    /// Metadata is catalog state, not a per-sample value. Cache it by solver
+    /// variable and refresh only when the authored layout or document index
+    /// changes, or when a variable is first observed.
+    metadata: HashMap<String, SignalMeta>,
 }
 
 /// Retain the current variables of every live Modelica solver.
@@ -150,7 +156,7 @@ pub fn retain_modelica_runtime_state(
     mut signals: Option<ResMut<SignalRegistry>>,
     documents: Option<Res<ModelicaDocumentRegistry>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
-    models: Query<(Entity, &ModelicaModel, Option<&ModelicaSignalLayout>)>,
+    models: Query<(Entity, &ModelicaModel, Option<Ref<ModelicaSignalLayout>>)>,
 ) {
     let Some(settings) = settings else {
         return;
@@ -171,13 +177,34 @@ pub fn retain_modelica_runtime_state(
         return;
     };
 
+    // The registry owns the channel catalog. Snapshot its size once per pass;
+    // recounting it inside the variable loop made a model with N variables
+    // perform N full catalog walks every frame.
+    let mut channel_count = signals.iter_scalar().count();
+
     for (entity, model, layout) in &models {
+        let document = documents.as_ref().and_then(|documents| {
+            documents
+                .host(model.document)
+                .map(|host| (model.document, host.generation()))
+        });
         let session = sessions.sessions.entry(entity).or_default();
         if session.session_id != model.session_id {
             for signal in session.signals.drain() {
                 signals.clear_history(&signal);
             }
             session.session_id = model.session_id;
+            session.document_id = None;
+            session.document_generation = None;
+            session.metadata.clear();
+        }
+
+        let metadata_dirty = session.document_id != document.map(|(id, _)| id)
+            || session.document_generation != document.map(|(_, generation)| generation)
+            || layout.as_ref().is_some_and(|layout| layout.is_changed());
+        if metadata_dirty {
+            session.document_id = document.map(|(id, _)| id);
+            session.document_generation = document.map(|(_, generation)| generation);
         }
 
         let mut retained_any = false;
@@ -187,22 +214,26 @@ pub fn retain_modelica_runtime_state(
             }
 
             let signal = SignalRef::new(entity, name.clone());
-            // Generated-document metadata can become available after the
-            // first solver response when its asynchronous index build lands.
-            // Refresh metadata independently of sampling so a channel does
-            // not remain permanently unitless just because it was not due on
-            // that first pass.
-            signals.update_meta(
-                signal.clone(),
-                model_signal_meta(documents.as_deref(), model, layout, name),
-            );
             let known = signals.scalar_history(&signal).is_some();
-            if !known && signals.iter_scalar().count() >= settings.max_channels {
+            if !known && channel_count >= settings.max_channels {
                 warn_once!(
                     "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                     settings.max_channels
                 );
                 continue;
+            }
+
+            // Generated-document metadata can become available after the
+            // first solver response when its asynchronous index build lands.
+            // Refresh metadata independently of sampling, but only when the
+            // authoritative document/layout inputs changed or this variable
+            // has not been described in this session yet.
+            if metadata_dirty || !session.metadata.contains_key(name) {
+                let meta = model_signal_meta(documents.as_deref(), model, layout.as_deref(), name);
+                if session.metadata.get(name) != Some(&meta) {
+                    signals.update_meta(signal.clone(), meta.clone());
+                }
+                session.metadata.insert(name.clone(), meta);
             }
 
             // The shared signal registry owns due-time and time-reversal for
@@ -218,6 +249,9 @@ pub fn retain_modelica_runtime_state(
             ) {
                 session.signals.insert(signal);
                 retained_any = true;
+                if !known {
+                    channel_count += 1;
+                }
             }
         }
 

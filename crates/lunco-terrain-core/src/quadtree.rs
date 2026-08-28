@@ -289,14 +289,13 @@ impl Quadtree {
     /// `focus_xz` plus its 8 neighbours, splitting whatever coarser ancestors
     /// currently cover them. The cover stays exact and disjoint.
     ///
-    /// Why: the visual selection is CAMERA-driven while the physics collider
-    /// ring is fixed-resolution — a rover far from the camera (or under a
-    /// budget-coarsened selection) stands on collider features its coarse
-    /// visual tile doesn't draw, visibly hovering above the rendered ground.
-    /// Feeding each dynamic body through this after selection guarantees the
-    /// ground UNDER bodies is drawn at the same finest detail the collider
-    /// samples. Split-off siblings inherit geomorph windows from the same
-    /// `node_error` metric the walk used, so bands stay consistent.
+    /// Why: visual selection is CAMERA-driven. A dynamic body may be far from
+    /// the camera, so its support area must be visually refined independently
+    /// of the camera cover to avoid an avoidable presentation gap. This changes
+    /// only the visual cover; the physics collider ring has its own authored
+    /// lattice and never reads this selection. Split-off siblings inherit
+    /// geomorph windows from the same `node_error` metric the visual walk used,
+    /// so visual bands stay consistent.
     pub fn refine_selection_at(
         &self,
         sel: &mut Vec<Selected>,
@@ -312,17 +311,13 @@ impl Quadtree {
     /// lattice, so the ground a rover stands on renders at full detail from
     /// **any** camera distance, not just when the camera is near.
     ///
-    /// This is the fix for the wheel-sinking artifact's dominant cause: the
-    /// geomorph shader (`terrain_geomorph.wgsl`) morphs purely on camera
-    /// distance, so a force-refined leaf under a far chase cam fully collapses
-    /// onto its coarse parent lattice while the collider keeps the real relief —
-    /// the rover drops into a dip the eye can't see. Pinning the morph window
-    /// to ∞ makes the shader's `smoothstep(start, end, dist)` return 0 for
-    /// those tiles regardless of `dist` (the same no-morph convention root tiles
-    /// use). The whole 3×3 footprint (centre + 8 neighbours) is pinned, since
-    /// all nine are body-coverage tiles; the LOD seam therefore lands at the
-    /// footprint BOUNDARY — where these max-depth leaves meet the coarser cover
-    /// outside — one ring away from the rover's wheels, not under them.
+    /// Pinning the morph window to ∞ makes the shader's
+    /// `smoothstep(start, end, dist)` return 0 for those tiles regardless of
+    /// `dist` (the same no-morph convention root tiles use). The whole 3×3
+    /// footprint (centre + 8 neighbours) is pinned, since all nine are
+    /// body-coverage tiles; the LOD seam therefore lands at the footprint
+    /// BOUNDARY — where these max-depth leaves meet the coarser cover outside —
+    /// one ring away from the rover's wheels, not under them.
     ///
     /// The shader is untouched: this is a CPU-side window assignment, not a
     /// per-tile morph factor (which `terrain_geomorph.wgsl`'s header warns would

@@ -7,8 +7,8 @@
 //! [`LayerId`](super::LayerId), and contributes them as ONE **analytic** height
 //! modifier on the terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle). The
 //! visual tiles and the heightfield collider both sample the one composed surface,
-//! so the edit the rover drives is exactly the edit you see — at whatever
-//! resolution each consumer samples. Edits are addressable — remove one by its id
+//! so the edit the rover drives is the same authored terrain fact you see — at
+//! each product's independent resolution. Edits are addressable — remove one by its id
 //! (undo a specific stroke); the layer re-composes via `Changed<TerrainLayerStack>`.
 //!
 //! The granular history (which edit, in what order, how to invert) is designed to

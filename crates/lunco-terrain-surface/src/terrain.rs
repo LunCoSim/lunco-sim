@@ -236,6 +236,9 @@ pub struct DemTerrainRequest {
     /// the static collider is **suppressed** (the ring replaces it — overlapping
     /// heightfields would double up contacts). `false` = the single static collider.
     pub collider_ring: bool,
+    /// Physics-only collider-ring lattice. This value is authored by the
+    /// terrain generator and is independent of every visual-quality setting.
+    pub collider: crate::collider_ring::TerrainColliderSettings,
     /// Apply a plain `StandardMaterial` when the bake finishes. `true` for the
     /// standalone command path; `false` for the USD path, where the prim's
     /// `materialType` authors the material (don't clobber it).
@@ -246,7 +249,7 @@ pub struct DemTerrainRequest {
 /// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the
 /// cropped native grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
 /// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
-/// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
+/// craters, and swaps the result into [`crate::oracle::DemHeightField`].
 #[derive(Component, Clone)]
 pub struct DemBaseGrid(
     pub std::sync::Arc<HeightGrid>,
@@ -628,6 +631,9 @@ pub struct SpawnDemTerrain {
     /// footprints instead of one static full-DEM collider (replaces it — physics
     /// rides the streamed tiles).
     pub collider_ring: bool,
+    /// Physics-only collider-ring lattice. Omitted command fields use the
+    /// documented terrain-physics defaults and never read graphics quality.
+    pub collider: crate::collider_ring::TerrainColliderSettings,
     /// Convenience: add a crater layer at this density (craters per hectare). `0`
     /// (default) = no craters. The USD path instead composes layers as child prims
     /// (see [`crate::terrain_layers`]); this is for the quick command path.
@@ -665,6 +671,13 @@ fn on_spawn_dem_terrain(
                 return;
             }
         };
+    if let Err(reason) = ev.collider.validate() {
+        warn!(
+            "[dem-terrain] rejected SpawnDemTerrain for '{}': {reason}",
+            ev.uri
+        );
+        return;
+    }
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
@@ -677,6 +690,7 @@ fn on_spawn_dem_terrain(
             target_res,
             lod_viz: ev.lod_viz,
             collider_ring: ev.collider_ring,
+            collider: ev.collider,
             with_default_material: true,
         },
         stack,
@@ -1040,6 +1054,7 @@ struct DemBuildTask(Task<Result<DemBuild, String>>);
 pub struct DemWorkerJob {
     id: u32,
     collider_ring: bool,
+    collider: crate::collider_ring::TerrainColliderSettings,
     lod_viz: bool,
     with_default_material: bool,
     target_res: usize,
@@ -1286,6 +1301,8 @@ fn start_dem_builds(
             .unwrap_or("site")
             .to_string();
         let collider_ring = req.collider_ring;
+        #[cfg(target_arch = "wasm32")]
+        let collider = req.collider;
         let lod_viz = req.lod_viz;
         // Captured by-value into the 'static async build task (the query item `req`
         // can't cross the task boundary).
@@ -1324,6 +1341,7 @@ fn start_dem_builds(
             commands.entity(entity).insert(DemWorkerJob {
                 id,
                 collider_ring,
+                collider,
                 lod_viz,
                 with_default_material: req.with_default_material,
                 target_res: req.target_res,
@@ -1551,19 +1569,10 @@ fn finish_dem_builds(
     // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
     // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
-    quality: Res<lunco_render::RenderingQualitySettings>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     use bevy::tasks::futures_lite::future;
-
-    let profile = match quality.validated_profile() {
-        Ok(profile) => profile,
-        Err(reason) => {
-            warn!("[dem-terrain] invalid Graphics quality; retaining pending DEM builds: {reason}");
-            return;
-        }
-    };
 
     for (entity, mut task, req) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
@@ -1599,11 +1608,11 @@ fn finish_dem_builds(
             &mut commands,
             entity,
             req.collider_ring,
+            req.collider,
             req.lod_viz,
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
-            profile,
         );
     }
 }
@@ -1617,11 +1626,11 @@ fn assemble_dem_build(
     commands: &mut Commands,
     entity: Entity,
     collider_ring: bool,
+    collider: crate::collider_ring::TerrainColliderSettings,
     lod_viz: bool,
     with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
-    profile: lunco_render::RenderQualityProfile,
 ) {
     if built.res > HEAVY_TILE_RES {
         warn!(
@@ -1650,9 +1659,9 @@ fn assemble_dem_build(
         // (static collider suppressed above). Both sample the retained `DemHeightField`.
         if let Some(oracle) = built.oracle {
             // Read the half-extent before the Arc moves into `DemHeightField` —
-            // the collider ring's contact band is derived from it + the viz config.
+            // the collider ring derives its contact lattice from the physics owner.
             let half_extent = oracle.half_extent() as f64;
-            e.try_insert(crate::stream_viz::DemHeightField(oracle));
+            e.try_insert(crate::oracle::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
                     crate::stream_viz::TerrainLodViz,
@@ -1672,13 +1681,10 @@ fn assemble_dem_build(
                 // failure). Remove that competing collider before the ring tiles
                 // become live.
                 e.try_remove::<Collider>();
-                // Construct the ring's contact band from the same authoritative
-                // Graphics profile the visual tiles use, so the collider's
-                // gate is floored at the visual leaf's gate — what the rover
-                // touches is what the eye sees. See `WHEEL_SINKING_ANALYSIS_v3`
-                // §4.1/§5(2) and `SurfaceBand::contact`.
+                // Construct the ring from the authored physics lattice. Visual
+                // quality has no read path into this contract.
                 let ring =
-                    crate::collider_ring::TerrainColliderRing::for_profile(profile, half_extent);
+                    crate::collider_ring::TerrainColliderRing::from_settings(half_extent, collider);
                 e.try_insert((
                     ring,
                     crate::collider_ring::ColliderTiles::default(),
@@ -1766,7 +1772,7 @@ fn finish_dem_worker(
     mut commands: Commands,
     jobs: Query<(Entity, &DemWorkerJob)>,
     mut swap_q: Query<(
-        &mut crate::stream_viz::DemHeightField,
+        &mut crate::oracle::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
@@ -1784,19 +1790,9 @@ fn finish_dem_worker(
     // does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
     // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
-    quality: Res<lunco_render::RenderingQualitySettings>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
-    let profile = match quality.validated_profile() {
-        Ok(profile) => profile,
-        Err(reason) => {
-            bevy::log::error!(
-                "[dem-terrain] invalid Graphics quality; retaining pending worker builds: {reason}"
-            );
-            return;
-        }
-    };
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
@@ -1883,11 +1879,11 @@ fn finish_dem_worker(
                     &mut commands,
                     entity,
                     job.collider_ring,
+                    job.collider,
                     job.lod_viz,
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
-                    profile,
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
@@ -1981,11 +1977,11 @@ fn finish_dem_worker(
                         &mut commands,
                         entity,
                         job.collider_ring,
+                        job.collider,
                         job.lod_viz,
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
-                        profile,
                     );
                     any_full = true;
                     full_terrain_entities.push(entity);
@@ -2060,7 +2056,7 @@ fn swap_terrain_grid(
     entity: Entity,
     oracle: std::sync::Arc<crate::oracle::SurfaceOracle>,
     collider_ring: bool,
-    hf: &mut crate::stream_viz::DemHeightField,
+    hf: &mut crate::oracle::DemHeightField,
     tiles: Option<Mut<crate::stream_viz::LodTiles>>,
     pending: Option<Mut<crate::stream_viz::PendingTileBakes>>,
     has_static_mesh: bool,
@@ -2095,7 +2091,7 @@ fn swap_terrain_grid(
             commands.entity(entity).insert(Mesh3d(handle));
         }
     }
-    *hf = crate::stream_viz::DemHeightField(oracle);
+    *hf = crate::oracle::DemHeightField(oracle);
     // Progressive refresh: reap any already-stale tiles (keep ≤1 generation of
     // cover), bump the generation so live tiles re-bake near-first, drop in-flight
     // bakes from the OLD heights.
@@ -2252,7 +2248,7 @@ pub(crate) fn start_dem_restamp(
         Option<&mut DemRestampDebounce>,
         Has<Mesh3d>,
         Option<&DemVisualTargetRes>,
-        &crate::stream_viz::DemHeightField,
+        &crate::oracle::DemHeightField,
         Option<&crate::terrain_layers::ScatteredContent>,
         Has<TerrainRescatter>,
     )>,
@@ -2405,7 +2401,7 @@ pub(crate) fn finish_dem_restamp(
         Entity,
         &mut DemRestampTask,
         &DemTerrainSource,
-        &mut crate::stream_viz::DemHeightField,
+        &mut crate::oracle::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<DemRestampPending>,
@@ -2571,7 +2567,7 @@ pub(crate) fn finish_dem_restamp(
             refresh_scatter_heights(&mut scattered, entity, &hf.0, &oracle, dirty_bounds);
         }
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
-        *hf = crate::stream_viz::DemHeightField(oracle);
+        *hf = crate::oracle::DemHeightField(oracle);
 
         // Progressive refresh: bump the generation so live tiles go stale + re-bake
         // near-first (still covering the surface), and drop in-flight bakes from the
@@ -2642,7 +2638,7 @@ fn start_dem_collider(
     mut commands: Commands,
     mut q: Query<(
         Entity,
-        &crate::stream_viz::DemHeightField,
+        &crate::oracle::DemHeightField,
         Has<DemColliderTask>,
         &mut DemColliderDirty,
     )>,
@@ -2909,7 +2905,7 @@ fn on_obstacle_spec_dirty(
 /// and therefore leaves live tiles untouched.
 fn restamp_on_curvature(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
-    new_dems: Query<(), Added<crate::stream_viz::DemHeightField>>,
+    new_dems: Query<(), Added<crate::oracle::DemHeightField>>,
     mut regen: MessageWriter<RegenerateTerrainLayers>,
     mut had: Local<bool>,
 ) {
@@ -3009,6 +3005,16 @@ mod visual_product_tests {
     }
 
     #[test]
+    fn spawn_dem_command_defaults_keep_physics_parameters_explicit() {
+        let command: SpawnDemTerrain = serde_json::from_str(r#"{"uri":"terrain/site"}"#)
+            .expect("command defaults deserialize");
+        assert_eq!(
+            command.collider,
+            crate::collider_ring::TerrainColliderSettings::default()
+        );
+    }
+
+    #[test]
     fn target_resolution_changes_only_the_static_visual_product() {
         let native = HeightGrid {
             res: 9,
@@ -3037,6 +3043,7 @@ mod visual_product_tests {
             target_res: 0,
             lod_viz: false,
             collider_ring: false,
+            collider: crate::collider_ring::TerrainColliderSettings::default(),
             with_default_material: false,
         });
 
@@ -3076,6 +3083,7 @@ mod visual_product_tests {
                 target_res: 0,
                 lod_viz: false,
                 collider_ring: false,
+                collider: crate::collider_ring::TerrainColliderSettings::default(),
                 with_default_material: false,
             })
             .id();

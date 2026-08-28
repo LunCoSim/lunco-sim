@@ -7934,6 +7934,7 @@ dependencies = [
  "lunco-terrain-bake",
  "lunco-terrain-core",
  "lunco-time",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",

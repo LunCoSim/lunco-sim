@@ -21,7 +21,10 @@ pipeline into the slim web / Modelica binaries.
   `RenderingQuality::{Low, Balanced, High}` presets. `High` is the highest
   shipped renderer budget: it covers shadow maps and casters, the horizon-shadow
   cache, camera MSAA/bloom, sky cubemap resolution, lunar terrain caches/LOD,
-  rock density, and geometric tessellation. The settings are consumed by the
+  rock density, and geometric tessellation. Its interactive CDLOD terrain
+  envelope is intentionally the same bounded envelope as `Balanced`; the extra
+  High budget is spent on lighting, derived maps, rocks, and tessellation so
+  terrain geometry cannot consume the frame. The settings are consumed by the
   render-capable crates; they do not select or replace USD-authored shader
   sources.
 

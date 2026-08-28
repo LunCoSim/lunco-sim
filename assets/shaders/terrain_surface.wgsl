@@ -122,7 +122,7 @@ fn dem_normal_to_world(encoded: vec3<f32>, instance_index: u32) -> vec3<f32> {
         decode_dem_normal(encoded), instance_index);
 }
 
-/// Raw FBM at a world position, platform-correct. Use this for the un-ramped
+/// Raw FBM at a terrain-stable position, platform-correct. Use this for the un-ramped
 /// tonal layers (dust wash, metre-scale grain) so they pick up the same noise
 /// family and octave budget as the bump layers instead of calling `fbm`/`fbm2d`
 /// directly — that direct call is how the native shaders ended up on unrotated
@@ -135,7 +135,33 @@ fn surface_fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
 #endif
 }
 
-/// One ramped FBM layer sampled at world position `p`.
+// Procedural terrain detail is anchored to the authored DEM frame, not to the
+// transient render-world frame. BigSpace rebases world positions as the camera
+// and body move; sampling FBM from `VertexOutput.world_position` therefore makes
+// the material slide and re-evaluate at different noise coordinates every frame.
+// UVs are the existing DEM-global coordinate carried by both terrain meshes, so
+// this stays batched and needs no per-tile material or new vertex attribute.
+fn terrain_detail_position(uv: vec2<f32>, half_extent: f32) -> vec3<f32> {
+    return vec3(
+        (uv.x * 2.0 - 1.0) * half_extent,
+        0.0,
+        (uv.y * 2.0 - 1.0) * half_extent,
+    );
+}
+
+// The procedural detail coordinate is DEM-local. Transform the interpolated
+// render normal through the same mesh instance before bumping it, then cross the
+// one boundary back to render-world once the local perturbation is complete.
+fn terrain_detail_normal_to_local(world_normal: vec3<f32>, instance_index: u32) -> vec3<f32> {
+    return normalize((mesh_functions::get_local_from_world(instance_index)
+        * vec4<f32>(world_normal, 0.0)).xyz);
+}
+
+fn terrain_detail_normal_to_world(local_normal: vec3<f32>, instance_index: u32) -> vec3<f32> {
+    return mesh_functions::mesh_normal_local_to_world(local_normal, instance_index);
+}
+
+/// One ramped FBM layer sampled at terrain-stable position `p`.
 fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
 #ifdef LUNCO_NOISE_2D
     return ramp(fbm2d(p.xz * scale, oct(octaves), gain), lo, hi);

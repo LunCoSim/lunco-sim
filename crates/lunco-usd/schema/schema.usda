@@ -218,6 +218,12 @@ class "LunCoTerrainLayerAPI" (
     int lunco:layer:targetRes = 0 (
         doc = "Target visual heightfield resolution per side; zero keeps native resolution."
     )
+    int lunco:layer:colliderDepth (
+        doc = "Physics-only collider-ring quadtree depth. Omitted uses the terrain physics default; authored values must be in the supported positive range. Independent of visual LOD."
+    )
+    int lunco:layer:colliderResolution (
+        doc = "Physics-only collider-ring heightfield samples per tile side. Omitted uses the terrain physics default; authored values must be in the supported range. Independent of visual LOD."
+    )
     bool lunco:layer:lodViz = true (
         doc = "Whether to build the visual CDLOD mesh."
     )
@@ -1518,17 +1524,32 @@ class "LunCoMissionSpacecraftAPI" (
 
 # --- Mount sockets and plugs -------------------------------------------------
 #
-# The Object Builder's attach flow: a HOST advertises SOCKETS (child prims of its
-# `Mounts` group), a PART advertises the PLUG frame it hangs by. Snapping
-# re-derives the part's placement so its plug coincides with the socket — move
-# the socket and the part follows. Two prim roles, two APIs, per the rule above.
+# The Object Builder's attach flow: a HOST explicitly advertises SOCKET prims
+# through `LunCoMountHostAPI`, while a PART advertises the PLUG frame it hangs by.
+# Socket and joint paths are relationship targets, not name-derived conventions.
+# Snapping re-derives the part's placement so its plug coincides with the socket —
+# move the socket and the part follows. Three prim roles, three APIs, per the rule
+# above.
+
+class "LunCoMountHostAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "A host body explicitly enumerates the socket prims it owns. The socket prims may live anywhere below the host; their paths are relationship data and no child or group name is special."
+)
+{
+    rel lunco:mount:sockets (
+        doc = "The socket prims advertised by this host. Every target must apply LunCoMountSocketAPI and be under the host body."
+    )
+}
 
 class "LunCoMountSocketAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """ONE socket — a child prim of a host's mount group where a part can
+    doc = """ONE socket — a prim explicitly advertised by a host where a part can
     attach. The socket prim's own transform IS the socket frame, composed
     relative to the host's body root."""
 )
@@ -1537,12 +1558,15 @@ class "LunCoMountSocketAPI" (
         doc = """What plug kind this socket accepts (`"wheel"`, `"arm"`).
         Non-empty IS what makes the child a socket."""
     )
-    uniform token lunco:mount:joint = "fixed" (
+    uniform token lunco:mount:joint (
         doc = """Joint kind created on attach. `fixed` carries no axis; other
-        kinds read `lunco:mount:axis`."""
+        kinds read `lunco:mount:axis`. The value is required; no Rust-side
+        default is permitted."""
+        allowedTokens = ["fixed", "revolute", "prismatic"]
     )
     token lunco:mount:axis = "" (
         doc = "Joint axis for non-fixed joints, socket-local (`\"X\"`, `\"Y\"`, `\"Z\"`)."
+        allowedTokens = ["", "X", "Y", "Z"]
     )
     rel lunco:mount:part (
         doc = """The part currently seated in this socket. A relationship, so
@@ -1553,6 +1577,19 @@ class "LunCoMountSocketAPI" (
         doc = """The component asset an empty socket offers to reference in and
         snap. `asset`, not `string` — it names a USD file, and only an `asset`
         travels in the reference closure."""
+    )
+}
+
+class "LunCoMountAttachmentAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "The authored ownership edge for a component attachment. It records the exact generated joint prim so detach never derives a joint path from a component name."
+)
+{
+    rel lunco:mount:attachmentJoint (
+        doc = "The one joint prim generated for this attached component. The target must carry a UsdPhysics joint schema and relate body0 to the host and body1 to this component."
     )
 }
 

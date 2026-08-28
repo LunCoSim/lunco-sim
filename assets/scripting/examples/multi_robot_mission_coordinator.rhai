@@ -68,7 +68,7 @@ fn on_event(me, evt) {
         this.completed += 1;
         emit("SITE_COMPLETE", this.completed);
         if this.completed >= SITES.len() {
-            mission_checkpoint(me, mission_document(me), "phase", "complete");
+            mission_checkpoint(me, mission_document(me), "@root@", "phase", "complete");
             emit("MISSION_COMPLETE", true);
             print("coordinator: mission complete");
         }

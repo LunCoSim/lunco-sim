@@ -228,7 +228,7 @@ impl DocumentSaved {
 // domain-specific behavior (how to undo a text op vs. a USD scene op
 // vs. a SysML diagram op) live in each domain crate.
 
-/// Request to undo one op on the document, syncing any dependent UI
+/// Request to undo the most recent history group on the document, syncing any dependent UI
 /// state (editor buffer, diagram canvas) to match the reverted source.
 ///
 /// Handled per-domain: the registry that owns `doc` runs its
@@ -238,16 +238,16 @@ impl DocumentSaved {
 /// that don't own `doc` ignore the trigger.
 #[Command(default)]
 pub struct UndoDocument {
-    /// The document whose most recent op should be undone.
+    /// The document whose most recent history group should be undone.
     pub doc: DocumentId,
 }
 
-/// Request to redo the last undone op on the document.
+/// Request to redo the last undone history group on the document.
 ///
 /// Counterpart of [`UndoDocument`]. Same per-domain dispatch rules.
 #[Command(default)]
 pub struct RedoDocument {
-    /// The document whose most recent undone op should be re-applied.
+    /// The document whose most recent undone history group should be re-applied.
     pub doc: DocumentId,
 }
 
@@ -376,9 +376,9 @@ pub struct OpenFile {
 /// into one or more concrete commands by domain-specific observers.
 #[derive(Event, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EditorIntent {
-    /// Revert the most recent op on the active document.
+    /// Revert the most recent history group on the active document.
     Undo,
-    /// Re-apply the most recently undone op on the active document.
+    /// Re-apply the most recently undone history group on the active document.
     Redo,
     /// Persist the active document to disk.
     Save,
@@ -755,8 +755,8 @@ impl JournalResource {
     /// undoes as a whole.
     ///
     /// This is the seam a multi-op command handler wraps itself in.
-    /// `AttachComponent` lowers to seven base `UsdOp`s plus optional socket,
-    /// rotation, and axis ops; without this, each journal entry would be its
+    /// `AttachComponent` and `DetachComponent` lower to multiple `UsdOp`s plus
+    /// optional socket, rotation, and axis ops; without this, each journal entry would be its
     /// own undo unit and one undo could leave the object half-attached. With
     /// it, the complete lowering is one unit.
     ///
@@ -1068,6 +1068,26 @@ where
             .get_mut(&doc)
             .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
         let ack = host.apply(lunco_doc::Mutation::local(op))?;
+        self.pending_changes.push(doc);
+        Ok(ack)
+    }
+
+    /// Apply several local ops as one document undo/redo group and queue one
+    /// Changed notification. The document type must be cloneable because the
+    /// host validates the complete group before committing it.
+    pub fn apply_group(
+        &mut self,
+        doc: DocumentId,
+        ops: Vec<D::Op>,
+    ) -> Result<lunco_doc::Ack, lunco_doc::Reject>
+    where
+        D: Clone,
+    {
+        let host = self
+            .hosts
+            .get_mut(&doc)
+            .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
+        let ack = host.apply_group(ops)?;
         self.pending_changes.push(doc);
         Ok(ack)
     }

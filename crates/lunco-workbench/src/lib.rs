@@ -4585,11 +4585,13 @@ fn render_layout(
                         }
                         let mut button = egui::Button::new(label)
                             .corner_radius(theme.rounding.button)
-                            .selected(is_active);
+                            .selected(is_active)
+                            // Selection is communicated by the raised fill and
+                            // stronger label; the accent keyline is too loud in
+                            // the compact title bar.
+                            .stroke(egui::Stroke::NONE);
                         if is_active {
-                            button = button
-                                .fill(theme.tokens.surface_raised)
-                                .stroke(egui::Stroke::new(1.0, theme.tokens.accent));
+                            button = button.fill(theme.tokens.surface_raised);
                         }
                         let response = ui.add(button);
                         anchor_rects.push((perspective_help_anchor(id), response.rect));
@@ -4705,7 +4707,7 @@ fn render_layout(
         // washed out and active tabs lose contrast against the bar.
         // Bind every interaction state to the theme so tabs read
         // consistently in both modes.
-        // The selected tab is a raised, accented surface; inactive tabs stay
+        // The selected tab is a raised, high-contrast surface; inactive tabs stay
         // quiet until hovered. egui_dock uses `focused` for the active tab in
         // the focused leaf, so the active treatment must be applied to both
         // states or the selection disappears as soon as the pane is focused.
@@ -4716,7 +4718,10 @@ fn render_layout(
             palette.mantle
         };
         let active_fill = theme.tokens.surface_raised;
-        let active_outline = theme.tokens.accent;
+        // The selected tab is already distinguished by its raised fill and
+        // text. Keep the tab name area quiet: outlines make the tab strip look
+        // like a row of nested controls, especially when the accent colour is
+        // active elsewhere in the workbench.
         let active_corner_radius = theme.rounding.button;
         for tab in [
             &mut style.tab.active,
@@ -4726,7 +4731,7 @@ fn render_layout(
         ] {
             tab.bg_fill = active_fill;
             tab.text_color = palette.text;
-            tab.outline_color = active_outline;
+            tab.outline_color = egui::Color32::TRANSPARENT;
             tab.corner_radius = active_corner_radius.into();
         }
         style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
@@ -4735,11 +4740,11 @@ fn render_layout(
         style.tab.inactive.corner_radius = active_corner_radius.into();
         style.tab.hovered.bg_fill = palette.surface1;
         style.tab.hovered.text_color = palette.text;
-        style.tab.hovered.outline_color = palette.surface2;
+        style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
         style.tab.hovered.corner_radius = active_corner_radius.into();
         style.tab.inactive_with_kb_focus.bg_fill = palette.surface1;
         style.tab.inactive_with_kb_focus.text_color = palette.text;
-        style.tab.inactive_with_kb_focus.outline_color = active_outline.linear_multiply(0.6);
+        style.tab.inactive_with_kb_focus.outline_color = egui::Color32::TRANSPARENT;
         style.tab.inactive_with_kb_focus.corner_radius = active_corner_radius.into();
         // TODO(egui_dock 0.18 bug — remove when fixed/updated upstream):
         // egui_dock writes a NaN split fraction into the tree from inside its

@@ -53,11 +53,15 @@ pub mod terrain_layers;
 pub mod tile_cache;
 pub mod tile_mesh;
 
-/// The shared filter policy for band-limited surface products — the DRY seam
-/// between what a wheel touches and what an eye sees. See [`band`] and
-/// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1.
+/// The shared Nyquist filter policy for independent visual and physics surface
+/// products. The products share the analytic oracle, but neither product's
+/// quality or selection controls the other. See [`band`].
 pub use band::SurfaceBand;
-pub use collider_ring::{ColliderTileOf, ColliderTiles, TerrainColliderRing};
+pub use collider_ring::{
+    resolve_collider_settings, ColliderTileOf, ColliderTiles, TerrainColliderRing,
+    TerrainColliderSettings, MAX_COLLIDER_DEPTH, MAX_COLLIDER_RESOLUTION, MIN_COLLIDER_DEPTH,
+    MIN_COLLIDER_RESOLUTION,
+};
 pub use derived_layers::{
     DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus,
 };
@@ -74,13 +78,15 @@ pub use lunco_terrain_core::{
     hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
     Selected, Square, TileCoord, TileGrid, TransferFn,
 };
-pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
+pub use oracle::{
+    raycast_surface, DemHeightField, HeightContribution, SurfaceOracle, TerrainBodyCurvature,
+};
 pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
-    DemHeightField, LodFrozen, LodTiles, SetTerrainRenderingQuality, TerrainLodViz,
-    TerrainNodeErrors, TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus,
-    TerrainVisualFocus, TileShadowCache,
+    LodFrozen, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
+    TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus,
+    TileShadowCache,
 };
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{

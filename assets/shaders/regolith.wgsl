@@ -3,7 +3,7 @@
 //! WGSL port of the procedural Blender node graph in the moonbase Twin's
 //! `shackleton_connecting_ridge_render_readyframing.blend` (material
 //! `Shackleton_Realistic_Regolith`) — the look that could not survive glTF
-//! export. Two world-space FBM noise layers drive bump-style normal
+//! export. Two DEM-anchored FBM noise layers drive bump-style normal
 //! perturbation and roughness variation over a flat albedo:
 //!
 //!   * macro clumps: noise(scale 8) → ramp 0.40..0.62 → bump 0.12 + roughness
@@ -41,12 +41,13 @@
     forward_io::VertexOutput,
     pbr_types,
     pbr_functions,
+    mesh_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm}
+#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -157,11 +158,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let mottle      = mat.mottle;
     var albedo = mat.albedo;
 
-    let p = in.world_position.xyz;
-    let dist = distance(view.world_position, p);
+    let world_p = in.world_position.xyz;
+    let dist = distance(view.world_position, world_p);
+    var detail_p = world_p;
+    var detail_n = normalize(in.world_normal);
+#ifdef VERTEX_UVS_A
+    detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
+    detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
+#endif
     // Pixel footprint in world metres (computed BEFORE any branch — fwidth
     // needs uniform control flow). Drives per-layer anti-alias fades.
-    let pw = length(fwidth(p));
+    let pw = length(fwidth(detail_p));
     let fine_fade  = aa_fade(fine_scale, pw);
     let macro_fade = aa_fade(macro_scale, pw);
     let mid_fade   = aa_fade(mid_scale, pw);
@@ -169,28 +176,32 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Three chained bump layers, coarse to fine — each perturbed normal
     // feeds the next, as in the Blender graph; each layer only runs where
     // its features are actually resolvable.
-    var n = normalize(in.world_normal);
     var mid_h = 0.5;
     var macro_h = 0.5;
     var fine_h = 0.5;
     if (mid_fade > 0.0) {
-        n = bump_layer(n, p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
+        detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
     }
     if (macro_fade > 0.0) {
         // Ramp widened from the authored 0.40..0.62 — the tight ramp made
         // every clump near-binary black/white at grazing sun angles.
-        n = bump_layer(n, p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump * macro_fade, &macro_h);
+        detail_n = bump_layer(detail_n, detail_p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump * macro_fade, &macro_h);
     }
     if (fine_fade > 0.0) {
-        n = bump_layer(n, p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump * fine_fade, &fine_h);
+        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump * fine_fade, &fine_h);
     }
+
+    var n = detail_n;
+#ifdef VERTEX_UVS_A
+    n = terrain_detail_normal_to_world(detail_n, in.instance_index);
+#endif
 
     // Albedo variation — the Moon is low-contrast, but perfectly uniform
     // grey reads as plastic. Metre-scale mottle from the mid layer plus
     // hectometre dust patches (own AA fade for orbital views).
     let dust_fade = aa_fade(0.008, pw);
     if (dust_fade > 0.0) {
-        let dust = surface_fbm(p * 0.008, 3, 0.5);
+        let dust = surface_fbm(detail_p * 0.008, 3, 0.5);
         albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade;
     }
     albedo *= 1.0 + (mix(0.5, mid_h, mid_fade) - 0.5) * mottle;

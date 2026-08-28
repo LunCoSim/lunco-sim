@@ -131,6 +131,22 @@ def Scope "Looks"
 }
 ```
 
+### Physics parameters for a DEM generator
+
+The `dem` child layer also owns the physics collider-ring lattice. Author these
+beside `windowM`, `targetRes`, `lodViz`, and `colliderRing` when a Twin needs a
+non-default contract:
+
+```usda
+int lunco:layer:colliderDepth = 8
+int lunco:layer:colliderResolution = 49
+```
+
+These values are copied into the typed terrain-generation request and used by
+native, worker, GUI, and headless physics. They are deliberately independent
+of `RenderingQualitySettings`, camera-driven visual LOD, and `targetRes`; a
+graphics preset must never change collider tile count or resolution.
+
 Asset paths are **scene-root-relative** and resolve through `twin://`, so they
 travel with the twin. Read by `read_material_network_layer_maps`
 (`lunco-luncosim`), which walks `material:binding` → Material →

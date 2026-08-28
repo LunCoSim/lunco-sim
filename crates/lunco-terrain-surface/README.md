@@ -14,7 +14,7 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 |--------|------|
 | `lunco-terrain-bake` | The pure bevy/avian-free bake pipeline (GeoTIFF decode, crop/resample, crater stamp) is owned by [`lunco-terrain-bake`](../lunco-terrain-bake/README.md) so the wasm DEM Web Worker runs the same code. |
 | `tile_mesh` | per-tile mesh baking (`bake_tile_mesh`, `TileMesh`) |
-| `collider_ring` | resident avian heightfield collider ring around the focus (`TerrainColliderRing`, `ColliderTiles`) |
+| `collider_ring` | resident avian heightfield collider ring around the focus (`TerrainColliderRing`, `TerrainColliderSettings`, `ColliderTiles`) |
 | `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`, `TerrainShaderMode`) |
 | `terrain_layers` | composable USD-prim layer stack (`TerrainLayerStack`, `TerrainLayer`, parser registry) — craters / rocks / shader |
 | `derived_layers` | off-thread surface/normal map bake from the DEM |
@@ -35,5 +35,6 @@ Inert until a DEM terrain is spawned (via `SpawnDemTerrain` or a USD
 `lunco:assetMode="layered"` terrain prim). Streaming visuals, the collider ring,
 and the composable layer stack are all wired. The design narrative — the
 height-oracle model, the three-channel layer taxonomy (height / carve / geometry),
-error-driven detail, and orbit→surface scaling — is in
+independent visual/physics sampling, authored collider parameters, error-driven
+visual detail, and orbit→surface scaling — is in
 [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).

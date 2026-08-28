@@ -48,22 +48,29 @@ graph library, a special rover builder, or direct ECS mutation for convenience.
 
 ## Mount and attach contract
 
-A reusable component declares a plug frame. A host declares socket frames under
-its `Mounts` group. Detection is by the applied LunCo mount schemas, not by loose
-attribute names.
+A reusable component declares a plug frame. A host applies
+`LunCoMountHostAPI` and explicitly lists its socket prims in
+`lunco:mount:sockets`; socket paths and attachment-joint paths are relationship
+data, not naming conventions. Detection is by the applied LunCo mount schemas,
+not by loose attribute names or a required grouping prim.
 
 ```usda
-def Xform "Mounts"
+def Xform "Base" (
+    prepend apiSchemas = ["LunCoMountHostAPI"]
+)
 {
-    def Xform "wheel_fl" (
-        prepend apiSchemas = ["LunCoMountSocketAPI"]
-    )
-    {
-        uniform token lunco:mount:socket = "wheel"
-        uniform token lunco:mount:joint  = "revolute"
-        token lunco:mount:axis = "X"
-        double3 xformOp:translate = (1.2, -0.3, 0.9)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+    rel lunco:mount:sockets = [</Base/Interfaces/wheel_fl>]
+    def Xform "Interfaces" {
+        def Xform "wheel_fl" (
+            prepend apiSchemas = ["LunCoMountSocketAPI"]
+        )
+        {
+            uniform token lunco:mount:socket = "wheel"
+            uniform token lunco:mount:joint  = "revolute"
+            token lunco:mount:axis = "X"
+            double3 xformOp:translate = (1.2, -0.3, 0.9)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
     }
 }
 
@@ -72,7 +79,7 @@ def Xform "Wheel" (
 )
 {
     uniform token lunco:mount:plug = "wheel"
-    rel lunco:mount:frame = </Wheel/Mounts/hub>
+    rel lunco:mount:frame = </Wheel/Interfaces/hub>
 }
 ```
 
@@ -81,7 +88,9 @@ The attach flow is:
 1. Read the composed socket or the component asset's `defaultPrim` plug.
 2. Resolve the plug-to-socket placement and rotation in the host's local frame.
 3. Lower `AttachComponent` to `AddPrim`/reference, transforms, the typed joint,
-   and authored joint relationships.
+   and authored joint relationships. The author supplies an explicit joint leaf;
+   the lowering records it on the child through
+   `lunco:mount:attachmentJoint`.
 4. Apply the complete operation set through the USD command's one journal change
    set (`apply_ops_as_change_set`).
 
@@ -103,9 +112,17 @@ The same frame contract supports retrofit snap for an already referenced part:
 the inspector re-authors its transform and joint anchor without re-referencing
 the asset. The command owner validates the host body, socket schema, accepted
 kind, joint/axis contract, relationship, asset plug, and occupancy; invalid
-frames fail closed in the frame resolver and are reported to the author. Socket occupancy is authored as
-`lunco:mount:part` in the same attach change set, and a stale request is rejected
-before any child is lowered.
+frames fail closed in the frame resolver and are reported to the author. Socket
+occupancy is authored as `lunco:mount:part` in the same attach change set, and a
+stale request is rejected before any child is lowered.
+
+`DetachComponent` is the inverse assembly action. Rhai or the editor submits an
+explicit `component_path`, `joint_path`, and, for socket attachments,
+`socket_path`. Rust verifies the recorded relationships, layer ownership, and
+incoming relationship blockers, then lowers socket clearing plus joint and
+component-subtree removal through the same one-change-set boundary. It never
+guesses a joint from a component name and never silently deletes external
+Modelica/electrical/data links. Undo restores the complete topology.
 
 ## Physics invariants
 

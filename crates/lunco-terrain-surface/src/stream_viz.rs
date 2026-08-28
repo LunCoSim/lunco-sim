@@ -33,9 +33,6 @@
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 #[cfg(test)]
 use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
@@ -49,9 +46,10 @@ use lunco_materials::{
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_terrain_core::{measure_node_error, HeightSource};
+use std::collections::{HashMap, HashSet};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
-use crate::oracle::SurfaceOracle;
+use crate::oracle::{DemHeightField, SurfaceOracle};
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
 /// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
@@ -262,13 +260,6 @@ fn camera_pose_in_terrain(
         grid_to_terrain * (camera_rotation * DVec3::NEG_Z),
     ))
 }
-
-/// The composed surface oracle retained on a terrain entity — the ONE height
-/// truth every consumer samples (LOD tile baker, collider ring, derived-layer
-/// texture bakes, rock scatter, `TerrainHeight` query). `Arc` so off-thread bakes
-/// share it without a copy.
-#[derive(Component)]
-pub struct DemHeightField(pub Arc<SurfaceOracle>);
 
 /// Which shader the streamed LOD tiles draw with — switchable live in the
 /// Inspector (per terrain). Default [`Lit`](TerrainShaderMode::Lit).
@@ -1021,6 +1012,10 @@ pub struct LodTiles {
     /// on the component because the idle fast path skips selection — a
     /// starved-but-idle terrain must keep reporting, not read as healthy.
     budget_refused: usize,
+    /// Whether every resident tile has crossed the render-material readiness
+    /// boundary. New slots clear this once; settled terrains must not scan the
+    /// entire resident map on every frame just to rediscover that fact.
+    materials_ready: bool,
     /// The first camera cover is immutable until its full near-camera patch is ready.
     /// Camera rigs often settle over several startup frames; re-selecting in that
     /// interval cancelled and replaced the same near tiles repeatedly, producing
@@ -1037,6 +1032,11 @@ pub struct LodTiles {
 }
 
 impl LodTiles {
+    fn insert_slot(&mut self, coord: QuadCoord, slot: TileSlot) -> Option<TileSlot> {
+        self.materials_ready = false;
+        self.tiles.insert(coord, slot)
+    }
+
     /// The shader mode the resident tiles were built with — the D8 gate: only `Lit`
     /// tiles carry the map/overlay params, so only they are re-stated when those
     /// change.
@@ -1557,6 +1557,7 @@ fn tile_look(
     morph_start: f32,
     morph_end: f32,
     maps: Option<&TerrainDerivedMaps>,
+    terrain_half_extent: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
@@ -1583,6 +1584,11 @@ fn tile_look(
             // Explicit analysis data, intentionally separate from physical
             // appearance. The shader reads this only when the LOD overlay is on.
             set_param(&mut look, "lod_depth", ParamValue::F32(depth as f32));
+            set_param(
+                &mut look,
+                "terrain_half_extent",
+                ParamValue::F32(terrain_half_extent),
+            );
             if let Some(maps) = maps {
                 apply_maps_to_look(&mut look, maps);
             }
@@ -1618,6 +1624,7 @@ fn spawn_tile(
     morph_ratio: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
+    terrain_half_extent: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
@@ -1642,7 +1649,17 @@ fn spawn_tile(
     let (ms, me, _bucket) = snap_band(morph_end, morph_ratio);
     let mut tile = commands.spawn((
         Mesh3d(mesh),
-        tile_look(mode, depth, ms, me, maps, authored, shadow, overlay),
+        tile_look(
+            mode,
+            depth,
+            ms,
+            me,
+            maps,
+            terrain_half_extent,
+            authored,
+            shadow,
+            overlay,
+        ),
         cell,
         Transform::from_translation(local).with_rotation(local_rotation),
         // The render binder reacts to `ShaderLook` after this deferred spawn.
@@ -2025,11 +2042,19 @@ pub fn update_lod_tiles(
         // merely because one ECS turn happened to elapse; deferred command order
         // is not a material-readiness contract.
         let mut promoted_tiles = false;
-        for slot in tiles.tiles.values_mut() {
-            if !slot.ready && material_bound.get(slot.entity).is_ok() {
-                slot.ready = true;
-                promoted_tiles = true;
+        if !tiles.materials_ready {
+            let mut all_ready = true;
+            for slot in tiles.tiles.values_mut() {
+                if !slot.ready {
+                    if material_bound.get(slot.entity).is_ok() {
+                        slot.ready = true;
+                        promoted_tiles = true;
+                    } else {
+                        all_ready = false;
+                    }
+                }
             }
+            tiles.materials_ready = all_ready;
         }
 
         // Frozen and already covered ⇒ the drawn set is final. Report it as fully
@@ -2092,7 +2117,17 @@ pub fn update_lod_tiles(
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
                 let (ms, me, _) = snap_band(morph_end, morph_ratio);
-                let look = tile_look(mode, depth, ms, me, maps, authored, shadow, overlay);
+                let look = tile_look(
+                    mode,
+                    depth,
+                    ms,
+                    me,
+                    maps,
+                    hf.0.half_extent(),
+                    authored,
+                    shadow,
+                    overlay,
+                );
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
@@ -2593,6 +2628,7 @@ pub fn update_lod_tiles(
                 morph_ratio,
                 mode,
                 maps,
+                h as f32,
                 authored,
                 shadow,
                 overlay,
@@ -2601,7 +2637,7 @@ pub fn update_lod_tiles(
                 terrain_grid_rotation,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
-            if let Some(old) = tiles.tiles.insert(
+            if let Some(old) = tiles.insert_slot(
                 coord,
                 TileSlot {
                     entity: ent,
@@ -2676,6 +2712,7 @@ pub fn update_lod_tiles(
                     morph_ratio,
                     mode,
                     maps,
+                    h as f32,
                     authored,
                     shadow,
                     overlay,
@@ -2683,7 +2720,7 @@ pub fn update_lod_tiles(
                     terrain_grid_position,
                     terrain_grid_rotation,
                 );
-                if let Some(old) = tiles.tiles.insert(
+                if let Some(old) = tiles.insert_slot(
                     s.coord,
                     TileSlot {
                         entity: ent,
@@ -3063,6 +3100,7 @@ mod draw_partition_tests {
             100.0,
             200.0,
             Some(&maps),
+            512.0,
             None,
             None,
             crate::overlay::OverlayUniforms::OFF,
@@ -3073,6 +3111,7 @@ mod draw_partition_tests {
             100.0,
             200.0,
             Some(&maps),
+            512.0,
             None,
             None,
             crate::overlay::OverlayUniforms::OFF,

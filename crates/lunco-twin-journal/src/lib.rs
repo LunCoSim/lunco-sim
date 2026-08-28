@@ -1238,7 +1238,8 @@ impl Journal {
     /// joins it until [`end_change_set`](Self::end_change_set).
     ///
     /// This is the transaction seam for multi-op commands. A command that
-    /// lowers to N `UsdOp`s (`AttachComponent` is 7 base ops) wraps itself in one change
+    /// lowers to N `UsdOp`s (`AttachComponent` and `DetachComponent` are
+    /// examples) wraps itself in one change
     /// set, so the N entries form ONE undo unit instead of N — otherwise a
     /// single undo peels off one op and leaves the object half-attached.
     ///

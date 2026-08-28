@@ -557,20 +557,22 @@ fn draw_spotlight(
     });
 
     if target.is_some() {
-        egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
-            .order(egui::Order::Background)
-            .interactable(false)
-            .fixed_pos(screen.min)
-            .show(ctx, |ui| {
-                paint_scrim(
-                    ui.painter(),
-                    ctx,
-                    screen,
-                    target_in_content,
-                    theme.tokens.scrim,
-                    theme.tokens.accent,
-                )
-            });
+        // Paint the scrim directly. A non-interactable Area still creates an
+        // egui layer and can win layer ordering against dock chrome. A
+        // painter-only layer has no widget, rect, or Sense, so it can never
+        // intercept menu, tab, or window-control input.
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("lunco_spotlight_scrim"),
+        ));
+        paint_scrim(
+            &painter,
+            ctx,
+            screen,
+            target_in_content,
+            theme.tokens.scrim,
+            theme.tokens.accent,
+        );
         if let (Some(target), None) = (target, target_in_content) {
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
@@ -856,37 +858,36 @@ fn draw_tour(
     // With no scene, retain the normal empty-viewport presentation and draw
     // only the authored target/card.
     if target.is_some() || step.anchor.is_empty() {
-        egui::Area::new(egui::Id::new("lunco_tour_scrim"))
-            .order(egui::Order::Background)
-            .interactable(false)
-            .fixed_pos(screen.min)
-            .show(ctx, |ui| {
-                let painter = ui.painter();
-                if show_scrim {
-                    paint_scrim(
-                        painter,
-                        ctx,
-                        screen,
-                        target_in_content,
-                        theme.tokens.scrim,
-                        accent,
-                    );
-                } else if let Some(t) = target_in_content {
-                    paint_ring(painter, ctx, t, accent);
-                }
-                if let Some(t) = target {
-                    let card_rect =
-                        egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
-                    if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
-                        painter.add(egui::Shape::Path(egui::epaint::PathShape {
-                            points: vec![apex, b1, b2],
-                            closed: true,
-                            fill: card_fill,
-                            stroke: egui::Stroke::new(1.0, accent.linear_multiply(0.55)).into(),
-                        }));
-                    }
-                }
-            });
+        // The scrim is deliberately painter-only. It must change pixels
+        // without becoming an input surface: the title bar and dock chrome
+        // remain usable while the coach card owns its own buttons.
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("lunco_tour_scrim"),
+        ));
+        if show_scrim {
+            paint_scrim(
+                &painter,
+                ctx,
+                screen,
+                target_in_content,
+                theme.tokens.scrim,
+                accent,
+            );
+        } else if let Some(t) = target_in_content {
+            paint_ring(&painter, ctx, t, accent);
+        }
+        if let Some(t) = target {
+            let card_rect = egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
+            if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
+                painter.add(egui::Shape::Path(egui::epaint::PathShape {
+                    points: vec![apex, b1, b2],
+                    closed: true,
+                    fill: card_fill,
+                    stroke: egui::Stroke::new(1.0, accent.linear_multiply(0.55)).into(),
+                }));
+            }
+        }
     }
 
     // Menu targets sit above `screen`, so they cannot be ringed by the content

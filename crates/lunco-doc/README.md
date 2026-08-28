@@ -31,7 +31,7 @@ tracked by the Twin and edited externally. See
 | [`DocumentId`] | Stable `u64` identifier for a Document (derives `Reflect`) |
 | [`DocumentOp`] | Marker trait — every Op type implements it |
 | [`Document`] | Per-domain trait: `id`, `generation`, `apply(op) -> inverse` |
-| [`DocumentHost<D>`] | Wraps a Document + undo/redo stacks, op-id dedup, recorder |
+| [`DocumentHost<D>`] | Wraps a Document + grouped undo/redo history, op-id dedup, recorder |
 | [`DocumentError`] | Fallible-apply error type (`ValidationFailed` / `ReadOnly` / `Internal`) |
 | [`DocumentOrigin`] | Where a doc came from (`Untitled` / `Bundled` / `File`); drives save + read-only |
 | `Mutation` / `Ack` / `Reject` | Re-exported from `lunco-core` — the apply envelope (op-id, parent-gen, origin) |
@@ -97,8 +97,9 @@ assert_eq!(host.document().value, 5);
    triggered by undo/redo. Views that key on generation get a fresh
    signal every time state changes.
 4. **Keep ops small and composable.** Batched edits can be modeled as
-   separate ops that apply sequentially. Large ops are harder to
-   invert correctly.
+   separate ops that apply sequentially; [`DocumentHost::apply_group`] makes a
+   validated sequence one undo/redo unit. Large ops are harder to invert
+   correctly.
 5. **Validate eagerly.** Reject bad ops at `apply` entry; don't partially
    mutate then rollback.
 
@@ -167,8 +168,8 @@ CRDT-backed text editing; those are separate from typed document operations.
 cargo test -p lunco-doc
 ```
 
-14 unit tests + 1 doctest cover: apply, undo, redo, generation,
-error-on-invalid-op, multi-step round-trip, new-op-clears-redo.
+6 unit tests + 1 doctest cover: apply, grouped undo/redo, generation,
+error-on-invalid-op, op-id deduplication, and document identity.
 
 ## Crate graph
 

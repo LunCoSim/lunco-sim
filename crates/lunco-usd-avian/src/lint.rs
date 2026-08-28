@@ -1031,7 +1031,7 @@ mod tests {
             def Cube \"Chassis\" ( prepend apiSchemas = [\"PhysicsCollisionAPI\"] ) {}\n\
             def Xform \"Motor_FL\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] ) {}\n\
             def Cylinder \"Wheel_FL\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsCollisionAPI\"] ) {}\n\
-            def PhysicsRevoluteJoint \"Wheel_FL_Joint\"\n\
+            def PhysicsRevoluteJoint \"constraint_wheel_fl\"\n\
             {\n\
                 rel physics:body0 = </Rover>\n\
                 rel physics:body1 = </Rover/Wheel_FL>\n\

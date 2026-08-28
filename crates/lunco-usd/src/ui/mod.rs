@@ -151,6 +151,7 @@ fn sync_workspace_on_doc_opened(
         title: origin.display_name(),
         origin,
         context_twin,
+        dirty: host.document().is_dirty(),
     });
     workspace.active_document = Some(doc);
 }

@@ -19,8 +19,17 @@
 
 use std::sync::Arc;
 
+use bevy::prelude::Component;
 use lunco_obstacle_field::field::HeightGrid;
 use lunco_terrain_core::{HeightModifier, HeightSource};
+
+/// The composed surface oracle retained on a terrain entity.
+///
+/// This is the domain product shared by visual and physics consumers: it is not
+/// owned by visual streaming, and it carries no render state. `Arc` lets native
+/// and worker bakes sample the same immutable oracle without copying it.
+#[derive(Component)]
+pub struct DemHeightField(pub Arc<SurfaceOracle>);
 
 /// One layer's analytic contribution to the composed surface: the modifier to
 /// fold, plus a content hash of the parameters that produced it (folds into

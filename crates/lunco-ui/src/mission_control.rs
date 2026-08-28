@@ -131,7 +131,7 @@ impl Panel for MissionControl {
 
         // ── Intents collected during paint, emitted after the read pass. ──
         let mut focus: Option<Entity> = None;
-        let mut teleport_body_bits: Option<u64> = None;
+        let mut teleport_body: Option<Entity> = None;
         let mut possess: Option<Entity> = None;
         let mut release = false;
         let mut leave_surface = false;
@@ -221,7 +221,7 @@ impl Panel for MissionControl {
                             focus = Some(*entity);
                         }
                         if ui.small_button("Surface").clicked() {
-                            teleport_body_bits = Some(entity.to_bits());
+                            teleport_body = Some(*entity);
                         }
                     });
                 }
@@ -346,7 +346,7 @@ impl Panel for MissionControl {
                     target,
                 });
             }
-            if let Some(body_entity) = teleport_body_bits {
+            if let Some(body_entity) = teleport_body {
                 ctx.trigger(TeleportToSurface {
                     target: av,
                     body_entity,

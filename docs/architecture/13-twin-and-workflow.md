@@ -482,10 +482,10 @@ range?}`).
 
 - **Not the AST history.** The current AST lives in the Document file.
   The journal records the deltas; replay reconstructs them.
-- **Not the undo stack.** Undo is bounded ring-buffer state in the
-  open Document. The journal logs the original op AND its undo / redo
-  as separate entries (with `source = undo|redo`) so a reviewer can
-  audit *why* state moved backward.
+- **Not the undo stack.** The open Document owns bounded local history groups.
+  The journal receives the forward/inverse pair for every resulting state
+  transition; compound commands and their undo/redo replays retain their
+  change-set boundaries so the journal can audit and replicate the same unit.
 - **Not session state.** Tab switches, panel resizes, scroll
   positions belong in `session.toml`.
 - **Not telemetry to a vendor.** All journal data stays in the Twin.

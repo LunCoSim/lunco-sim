@@ -309,7 +309,7 @@ renaming a folder mid-session doesn't invalidate references.
 
 ### DocumentEntry
 Workspace-level metadata for one open Document: `{ id, kind, origin,
-context_twin, title }`. Does NOT hold the parsed source + ops + undo
+context_twin, title, dirty }`. Does NOT hold the parsed source + ops + undo
 stack — those live in domain registries (e.g.
 `ModelicaDocumentRegistry`).
 

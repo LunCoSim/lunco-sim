@@ -156,6 +156,12 @@ authority for the scene's `ShaderLook` and authored WGSL source. A Summer Space
 School scene can therefore keep its authored lunar terrain and starfield shaders
 while the high preset supplies the largest renderer budgets around them.
 
+The High preset keeps the interactive terrain CDLOD envelope at the proven
+Balanced bound (49-vertex tiles, depth 8, 768-tile cover, and the corresponding
+sampling and bake cadence). High increases the surrounding lighting, derived-map,
+rock, and tessellation budgets; it does not double terrain cover merely to spend
+the frame budget on duplicate terrain geometry.
+
 ---
 
 ## When six slots really are not enough

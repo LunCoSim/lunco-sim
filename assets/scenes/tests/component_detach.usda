@@ -1,0 +1,71 @@
+#usda 1.0
+(
+    defaultPrim = "ComponentDetachTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Positive producer-to-consumer test for the explicit component-detach plan.
+# The socket and generated joint identities are deliberately unrelated to the
+# component leaf; the scenario must observe the relationships, not a spelling
+# convention.
+def Xform "ComponentDetachTest"
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Chassis" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountHostAPI"]
+    )
+    {
+        float physics:mass = 1.0
+        rel lunco:mount:sockets = [</ComponentDetachTest/Chassis/Interfaces/side_mount>]
+
+        # A real command input makes the test connection participate in the
+        # normal binding gate while its source still points into the component
+        # being detached.
+        def Scope "Controls"
+        {
+            def Scope "thrust"
+            {
+                string lunco:port = "throttle"
+                double lunco:factor = 1.0
+            }
+        }
+
+        def Cube "Body" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.5
+            bool physics:collisionEnabled = true
+        }
+
+        def Xform "Interfaces"
+        {
+            def Xform "side_mount" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "probe"
+                uniform token lunco:mount:joint = "fixed"
+                uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "component-detach"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/component_detach.rhai@
+        }
+    }
+}

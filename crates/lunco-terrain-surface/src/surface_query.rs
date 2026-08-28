@@ -39,7 +39,7 @@ use bevy::prelude::*;
 use lunco_core::coords::{GridPos, RenderPos};
 use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
-use crate::stream_viz::DemHeightField;
+use crate::oracle::DemHeightField;
 
 /// A terrain surface hit: the point ON the surface, in the grid frame.
 #[derive(Clone, Copy, Debug, PartialEq)]

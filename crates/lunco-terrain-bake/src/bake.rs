@@ -8,7 +8,9 @@
 //!   (every sample preserved, exact 5 m fidelity). This is the default path: a
 //!   single full-detail mesh of the whole 16 km would be ~10 M verts / ~560 MB,
 //!   so M3 realizes a *region* at full res; tiled streaming (M7) covers the rest
-//!   at full res too. The physics collider always uses native resolution.
+//!   at full res too. The static physics collider uses the native materialized
+//!   product; streamed physics rings use their authored collider lattice and
+//!   never inherit the visual target resolution.
 //! - [`resample`] — downsample to a coarser square grid. **Lossy** — reserved
 //!   for *far* visual LOD where 5 m detail is sub-pixel, never for physics or the
 //!   near field.

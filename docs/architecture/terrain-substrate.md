@@ -3,8 +3,10 @@
 > Status: Active · Audience: contributors working on terrain, LOD, or surface physics
 
 How LunCoSim represents planetary surfaces from orbit down to a rover wheel,
-with one abstraction that keeps **visuals and physics in lockstep**, composes
-under **USD layering**, and **scales to a whole solar system**.
+with one analytic source that composes under **USD layering** and **scales to a
+whole solar system**. Visual rendering and physics are independent products:
+they may sample the same source, but neither product's quality or scheduling
+controls the other.
 
 This doc is the design narrative. Per-crate quick-starts live in
 [`lunco-terrain-core`](../../crates/lunco-terrain-core/README.md),
@@ -39,9 +41,12 @@ The composed source is the **single source of truth**. Both consumers sample it:
   receiving invented dimensions or a lift. The API path uses the explicit
   position supplied by the caller.
 
-Because they all call one function, they **converge** — near a rover the mesh,
-collider, and spawn height agree, so there is no visual/physics mismatch. Crater
-crispness is no longer bounded by a DEM mip; it's bounded by how deep you sample.
+Because they all call one function, they **converge on terrain facts** while
+remaining independent products. The visual product chooses its camera-driven
+sampling; the physics product chooses its authored collider lattice. A graphics
+quality change cannot add physics work or change contact geometry. Crater
+crispness is no longer bounded by a DEM mip; it is bounded by each product's
+own sampling contract.
 
 ### Why (the bug this replaces)
 
@@ -113,7 +118,7 @@ Net comparison:
 | Sub-DEM resolution | yes (floated) | **yes (coincident)** |
 | Dense-rim tessellation | yes | **yes** (feature remesh, honest) |
 | Follows ground relief | no (smooth base + `lift`) | **yes** (sampled on the real surface) |
-| Collider matches visual | **no** (visual-only) | **yes** (ring samples same source) |
+| Collider uses the visual-quality contract | **no** (independent product) | **no** (ring samples the same source through authored physics settings) |
 
 The only casualties are `lift` and the smooth-base sampling — precisely the two
 things that caused *elevated / doesn't-follow-ground / colliders-suck*. The
@@ -211,11 +216,13 @@ rounds off. The oracle makes the fix cheap. Four levers, in priority order:
    DEM), the oracle **synthesizes** deterministic fractal micro-relief — a
    high-frequency height modifier gated by LOD depth (Outerra-style 5 m → 2.5 cm).
    Infinite zoom, nothing stored, `seed`-deterministic so visual, collider, and
-   all peers agree.
+   all peers agree on the source function while retaining independent product
+   sampling contracts.
 
-4. **Collider parity.** Drive the collider ring's per-tile resolution by the *same*
-   per-tile error metric, so a crater/peak under a wheel gets a finer collider tile
-   matching the visual. Visual and contact refine together.
+4. **Physics parameters are explicit.** The DEM generator authors
+   `colliderDepth` and `colliderResolution` on the `dem` layer. They are copied
+   into `DemTerrainRequest` and are the only quality inputs to the collider ring;
+   visual LOD and `RenderingQualitySettings` are not read by physics.
 
 **Constraint that shapes all of it:** detail generation stays **CPU-side /
 bakeable**, never GPU tessellation or mesh shaders. It must be wasm-safe (locked
@@ -427,9 +434,8 @@ decay), all band-limited per consumer; **error-driven CDLOD** —
 (`pixel_error` knob) with **budget fitting by metric coarsening** (tile budget
 exceeded → raise `pixel_error`, so morph bands move with the detail radius),
 morph bands snapped to log-lattice buckets so batching survives per-parent
-bands, and **dynamic bodies as forced refinement foci** (the ground under a
-rover always draws at max depth, matching the collider ring's fixed
-resolution); **streaming** — off-thread tile bakes (budgeted per frame,
+bands, and **dynamic bodies as forced visual refinement foci** (the ground under
+a rover always draws at max visual depth); **streaming** — off-thread tile bakes (budgeted per frame,
 bounded in flight) ordered coarse-carpet-first (whole view covered in a few
 frames, never a black screen) then by screen-space benefit weighted toward the
 camera heading, a reveal morph settling each child onto its parent's lattice,
@@ -442,11 +448,12 @@ size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `lunco:layer = "overzoom"` prim is the sole source of synthetic detail; streamed CDLOD visual
 tiles (`stream_viz`) with vertex-morph geomorph via `ShaderMaterial`, tiles
 `NotShadowCaster` (rim self-shadow rides the horizon ray-march, not the
-cascades); **the collider ring** (`collider_ring`) — 3×3 depth-7 tiles of 129²
-heightfields around each focus, `FIX_INTERNAL_EDGES`, baked off-thread with
-stale-swap on regen (old collider lives until the replacement lands on the
-same entity), following the visual LOD by default; rock colliders are spheres
-at 0.6× the bucket-visual radius so physical contact matches the drawn rock;
+cascades); **the collider ring** (`collider_ring`) — 3×3 independently selected
+physics tiles around each focus, with authored `colliderDepth` and
+`colliderResolution`, `FIX_INTERNAL_EDGES`, baked off-thread with stale-swap on
+regen (old collider lives until the replacement lands on the same entity);
+rock colliders are spheres at 0.6× the bucket-visual radius so physical contact
+matches the drawn rock;
 big_space per-tile anchoring; `TerrainLayerStack` composed from USD
 `lunco:layer` child prims; `CompositeHeightSource` (core, pure);
 `TerrainGeoref` parsed from `lunco:anchor:*`; derived surface/normal layers
@@ -475,19 +482,17 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
 
 1. ~~Kill the two-surface crater path~~ — **done**: craters are an analytic
    `Craters` modifier on the `SurfaceOracle`, sampled by the tile baker and the
-   collider ring at their own resolutions.
-2. ~~Per-tile geometric error → error-driven CDLOD~~ — **done** for the visual
-   tiles (`select_with_error` + memoized `measure_node_error`), and the ring's
-   heightfield builds are off the main thread (async bake + stale-swap). Still
-   open: collider-ring resolution driven by the same error metric (the ring is
-   fixed canonical-depth/res today).
-3. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
+   collider ring at their own resolutions. The collider ring's depth and tile
+   resolution are authored on the DEM layer and are never selected from the
+   graphics-quality profile; rendered tile count and physics contact density
+   therefore remain independent in both windowed and headless execution.
+2. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
-4. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto
+3. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto
    `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
-5. **Orbit→surface bridge app-wiring** — **landed**: `lunco-celestial` builds the
+4. **Orbit→surface bridge app-wiring** — **landed**: `lunco-celestial` builds the
    live `CompositeHeightSource` from the retained DEM oracle and authored site
    tangent frame. Globe triangles are clipped only inside the exact DEM square;
    boundary triangles sample the DEM through a collar whose width is derived from

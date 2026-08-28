@@ -762,21 +762,37 @@ fn build_sim_app_with_profile(
     // snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
     let mut plugins = default_plugins_with_profile(headless, offscreen, render_profile);
-    if let Some(threads) = compute_threads {
+    let compute_policy = if let Some(threads) = compute_threads {
         assert!(threads > 0, "compute_threads must be positive");
-        plugins = plugins.set(bevy::app::TaskPoolPlugin {
-            task_pool_options: bevy::app::TaskPoolOptions {
-                compute: bevy::app::TaskPoolThreadAssignmentPolicy {
-                    min_threads: threads,
-                    max_threads: threads,
-                    percent: 1.0,
-                    on_thread_spawn: None,
-                    on_thread_destroy: None,
-                },
-                ..default()
-            },
-        });
-    }
+        bevy::app::TaskPoolThreadAssignmentPolicy {
+            min_threads: threads,
+            max_threads: threads,
+            percent: 1.0,
+            on_thread_spawn: None,
+            on_thread_destroy: None,
+        }
+    } else {
+        // BigSpace's high-precision propagation creates a worker/channel scope
+        // on every frame. The default Bevy policy leaves all remaining logical
+        // cores to that scope (24 workers on this 32-thread host), which makes
+        // a settled world pay the task fan-out cost continuously and competes
+        // with the render and async terrain pools. Keep one shared production
+        // envelope for GUI and headless hosts; scene tests still pass their
+        // explicit deterministic thread count above.
+        bevy::app::TaskPoolThreadAssignmentPolicy {
+            min_threads: 1,
+            max_threads: 8,
+            percent: 1.0,
+            on_thread_spawn: None,
+            on_thread_destroy: None,
+        }
+    };
+    plugins = plugins.set(bevy::app::TaskPoolPlugin {
+        task_pool_options: bevy::app::TaskPoolOptions {
+            compute: compute_policy,
+            ..default()
+        },
+    });
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
@@ -3237,6 +3253,7 @@ mod ground_collider_gate_tests {
                 target_res: 0,
                 lod_viz: false,
                 collider_ring: false,
+                collider: lunco_terrain_surface::TerrainColliderSettings::default(),
                 with_default_material: false,
             })
             .id();

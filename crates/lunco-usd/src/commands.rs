@@ -31,8 +31,10 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_core::{on_command, register_commands, Command};
-use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_core::{
+    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
+};
+use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
     SaveAsDocument, SaveDocument, UndoDocument,
@@ -163,8 +165,27 @@ fn sync_workspace_on_doc_opened(
         title: origin.display_name(),
         origin,
         context_twin,
+        dirty: host.document().is_dirty(),
     });
     workspace.active_document = Some(doc);
+}
+
+/// Reflect USD edits into the shared Workspace dirty mirror.
+fn sync_workspace_on_doc_changed(
+    trigger: On<DocumentChanged>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let doc = trigger.event().doc;
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    if let Some(entry) = workspace.document_mut(doc) {
+        entry.dirty = host.document().is_dirty();
+    }
 }
 
 /// Reflect USD Save and Save-As origin changes into the shared Workspace.
@@ -187,6 +208,7 @@ fn sync_workspace_on_doc_saved(
     if let Some(entry) = workspace.document_mut(doc) {
         entry.title = origin.display_name();
         entry.origin = origin;
+        entry.dirty = host.document().is_dirty();
     }
 }
 
@@ -276,6 +298,7 @@ impl Plugin for UsdCommandsPlugin {
 
         app.add_systems(Update, drain_usd_pending_events);
         app.add_observer(sync_workspace_on_doc_opened);
+        app.add_observer(sync_workspace_on_doc_changed);
         app.add_observer(sync_workspace_on_doc_saved);
         app.add_observer(sync_workspace_on_doc_closed);
         // A3 auto-bridge: when the journal appears, hand it to the registry
@@ -763,6 +786,7 @@ register_commands!(
     on_undo_usd_document,
     on_redo_usd_document,
     on_attach_component,
+    on_detach_component,
     on_attach_program,
     on_set_dome_light,
     on_new_document,
@@ -1418,13 +1442,13 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 // with a byte-for-byte identical body, which would have advertised four undo verbs on the
 // API and silently done nothing on a Modelica document.
 
-/// Per-domain [`UndoDocument`] handler for **USD** documents: pop the document's last op
-/// and apply its typed inverse.
+/// Per-domain [`UndoDocument`] handler for **USD** documents: undo the document's last
+/// history group by applying its typed inverses.
 ///
 /// This is the **only** undo. Every authored edit — spawn, move, delete, terrain stroke,
 /// waypoint, property — reaches the world as a [`UsdOp`] through [`ApplyUsdOp`], and
 /// `UsdDocument::apply` hands back a typed inverse for each. So undo is a document
-/// concern, not an editor one: pop the inverse, apply it, and the projection re-derives
+/// concern, not an editor one: apply the inverse group, and the projection re-derives
 /// the ECS ([`crate::live_consume`]). It journals (undo/redo record through the same
 /// `OpRecorder` seam) and replicates like any other op.
 ///
@@ -1440,13 +1464,18 @@ pub fn on_undo_usd_document(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
     mut commands: Commands,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     let doc = trigger.event().doc;
-    let outcome = {
-        let Some(host) = registry.host_mut(doc) else {
-            return;
-        };
-        host.undo()
+    if registry.host(doc).is_none() {
+        return;
+    }
+    let mut apply = || registry.host_mut(doc).map_or(Ok(false), |host| host.undo());
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Undo document {doc}"), apply),
+        None => apply(),
     };
     match outcome {
         Ok(true) => {
@@ -1472,13 +1501,18 @@ pub fn on_redo_usd_document(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
     mut commands: Commands,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     let doc = trigger.event().doc;
-    let outcome = {
-        let Some(host) = registry.host_mut(doc) else {
-            return;
-        };
-        host.redo()
+    if registry.host(doc).is_none() {
+        return;
+    }
+    let mut apply = || registry.host_mut(doc).map_or(Ok(false), |host| host.redo());
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Redo document {doc}"), apply),
+        None => apply(),
     };
     match outcome {
         Ok(true) => {
@@ -1497,10 +1531,10 @@ pub fn on_redo_usd_document(
 // AttachComponent — build-from-parts (doc 48 §3.1)
 // ─────────────────────────────────────────────────────────────────────
 
-/// Apply a lowered [`UsdOp`] sequence to `doc` as **one journal change set** —
-/// i.e. one undo unit (H10).
+/// Apply a lowered [`UsdOp`] sequence to `doc` as **one document history group**
+/// and one journal change set (H10).
 ///
-/// A command that lowers to many primitive ops (`AttachComponent` → 7 base ops,
+/// A command that lowers to many primitive ops (`AttachComponent` → multiple base ops,
 /// plus optional socket/rotation/axis ops; `realign_component_ops` → 4) must not
 /// journal them as N independent entries:
 /// one undo would then peel off ONE op and leave the object half-attached. The
@@ -1513,11 +1547,9 @@ pub fn on_redo_usd_document(
 /// **Every multi-op USD handler should route through this** — including the
 /// `realign_component_ops` call sites in `lunco-luncosim-edit`.
 ///
-/// The complete sequence is validated against a clone of the current USD document
-/// before the live host is touched. A malformed multi-op intent therefore applies
-/// zero operations; a valid intent is then committed as one journal change set.
-/// Headless builds with no `JournalResource` still get the same all-or-nothing
-/// validation, just without undo grouping.
+/// The generic document host validates the complete sequence against a clone before
+/// committing it. A malformed multi-op intent therefore applies zero operations;
+/// a valid intent is committed as one history group even without a journal.
 ///
 /// Returns `(applied, total)`.
 pub fn apply_ops_as_change_set(
@@ -1527,40 +1559,7 @@ pub fn apply_ops_as_change_set(
     ops: Vec<UsdOp>,
 ) -> (usize, usize) {
     let total = ops.len();
-    // `UsdDocument` is cloneable and its `Document::apply` path is the authoritative
-    // validator. Run the whole intent against a private candidate first so a bad
-    // attribute, missing prim, or read-only document cannot leave a half-authored
-    // terrain/component assembly in the live host.
-    let validation = {
-        let registry = world.resource::<DocumentRegistry<UsdDocument>>();
-        match registry.host(doc) {
-            None => Err(lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}"))),
-            Some(host) => {
-                let mut candidate = host.document().clone();
-                let mut result = Ok(());
-                for op in &ops {
-                    if let Err(error) = candidate.apply(op.clone()) {
-                        result = Err(match error {
-                            lunco_doc::DocumentError::ReadOnly => lunco_doc::Reject::ReadOnly,
-                            lunco_doc::DocumentError::ValidationFailed(message)
-                            | lunco_doc::DocumentError::Internal(message) => {
-                                lunco_doc::Reject::InvalidOp(message)
-                            }
-                            _ => lunco_doc::Reject::InvalidOp(format!("{error:?}")),
-                        });
-                        break;
-                    }
-                }
-                result
-            }
-        }
-    };
-    if let Err(reject) = validation {
-        bevy::log::warn!("[usd] {doc} compound operation rejected before apply: {reject:?}");
-        return (0, total);
-    }
-
-    // Clone the handle FIRST: `registry.apply` takes `&mut World`'s registry, so
+    // Clone the handle FIRST: the registry takes a mutable borrow, so
     // the journal resource can't stay borrowed across it.
     let journal = world
         .get_resource::<lunco_doc_bevy::JournalResource>()
@@ -1568,16 +1567,13 @@ pub fn apply_ops_as_change_set(
 
     let apply_all = |world: &mut World| {
         let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-        let mut applied = 0usize;
-        for op in ops {
-            match registry.apply(doc, op) {
-                Ok(_) => applied += 1,
-                Err(reject) => bevy::log::warn!(
-                    "[usd] {doc} op rejected ({applied}/{total} applied): {reject:?}"
-                ),
+        match registry.apply_group(doc, ops) {
+            Ok(_) => total,
+            Err(reject) => {
+                bevy::log::warn!("[usd] {doc} compound operation rejected: {reject:?}");
+                0
             }
         }
-        applied
     };
 
     let applied = match journal {
@@ -1607,7 +1603,233 @@ fn authored_text(
     prim: &openusd::sdf::Path,
     name: &str,
 ) -> Option<String> {
-    data.prim_attribute_value::<String>(prim, name)
+    data.field(
+        &prim.append_property(name).ok()?,
+        openusd::sdf::FieldKey::Default.as_str(),
+    )?
+    .as_str()
+    .map(str::to_owned)
+}
+
+fn relationship_targets(
+    data: &openusd::sdf::Data,
+    prim: &openusd::sdf::Path,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    let property = prim
+        .append_property(name)
+        .map_err(|error| format!("invalid relationship {prim}.{name}: {error}"))?;
+    path_list_targets(data, &property, "targetPaths", "relationship")
+}
+
+fn path_list_targets(
+    data: &openusd::sdf::Data,
+    property: &openusd::sdf::Path,
+    field_name: &str,
+    property_kind: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = data.field(property, field_name) else {
+        return Ok(Vec::new());
+    };
+    let openusd::sdf::Value::PathListOp(op) = value else {
+        return Err(format!(
+            "{property_kind} {property} has a non-path {field_name} list"
+        ));
+    };
+    Ok(op.iter().map(|path| path.as_str().to_string()).collect())
+}
+
+fn target_layer_authors_prim(
+    document: &UsdDocument,
+    edit_target: &LayerId,
+    path: &openusd::sdf::Path,
+) -> bool {
+    let data = if edit_target.is_root() {
+        document.data()
+    } else if edit_target.is_runtime() {
+        document.runtime_data()
+    } else {
+        return false;
+    };
+    data.spec(path)
+        .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
+}
+
+fn validate_detach_component(
+    world: &World,
+    doc: DocumentId,
+    spec: &crate::attach::DetachSpec,
+) -> Result<(), String> {
+    let component = openusd::sdf::Path::new(&spec.component_path)
+        .map_err(|error| format!("invalid component path {}: {error}", spec.component_path))?;
+    let joint = openusd::sdf::Path::new(&spec.joint_path)
+        .map_err(|error| format!("invalid joint path {}: {error}", spec.joint_path))?;
+    if component.is_property_path() || joint.is_property_path() {
+        return Err("detach paths must name prims, not properties".into());
+    }
+    if component == joint || lunco_usd_bevy::is_descendant_or_self(&joint, &spec.component_path) {
+        return Err(format!(
+            "joint {} must be separate from component subtree {}",
+            spec.joint_path, spec.component_path
+        ));
+    }
+
+    let registry = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .ok_or_else(|| "USD document registry is unavailable".to_string())?;
+    let host = registry
+        .host(doc)
+        .ok_or_else(|| format!("unknown USD document {doc}"))?;
+    if !spec.edit_target.is_root() && !spec.edit_target.is_runtime() {
+        return Err(format!("unknown edit target {}", spec.edit_target.as_str()));
+    }
+    if !target_layer_authors_prim(host.document(), &spec.edit_target, &component)
+        || !target_layer_authors_prim(host.document(), &spec.edit_target, &joint)
+    {
+        return Err(format!(
+            "component {} and joint {} must both be authored in edit target {}",
+            spec.component_path,
+            spec.joint_path,
+            spec.edit_target.as_str()
+        ));
+    }
+
+    let composed = host.document().composed();
+    if composed.spec(&component).is_none() {
+        return Err(format!("component {} does not exist", spec.component_path));
+    }
+    if composed.spec(&joint).is_none() {
+        return Err(format!("joint {} does not exist", spec.joint_path));
+    }
+    if !lunco_usd_bevy::has_api_schema(&composed, &component, "LunCoMountAttachmentAPI") {
+        return Err(format!(
+            "component {} does not apply LunCoMountAttachmentAPI",
+            spec.component_path
+        ));
+    }
+    let attachment_joints =
+        relationship_targets(&composed, &component, "lunco:mount:attachmentJoint")?;
+    if attachment_joints != [spec.joint_path.clone()] {
+        return Err(format!(
+            "component {} records attachment joint {:?}, request supplied {}",
+            spec.component_path, attachment_joints, spec.joint_path
+        ));
+    }
+    let host_path = component
+        .parent()
+        .ok_or_else(|| format!("component {} has no host parent", spec.component_path))?;
+    if joint.parent().as_ref() != Some(&host_path) {
+        return Err(format!(
+            "joint {} is not a sibling of component {} under host {}",
+            spec.joint_path,
+            spec.component_path,
+            host_path.as_str()
+        ));
+    }
+    if !lunco_usd_bevy::has_api_schema(&composed, &host_path, "PhysicsRigidBodyAPI") {
+        return Err(format!(
+            "host {} does not apply PhysicsRigidBodyAPI",
+            host_path
+        ));
+    }
+    let body0 = relationship_targets(&composed, &joint, "physics:body0")?;
+    let body1 = relationship_targets(&composed, &joint, "physics:body1")?;
+    if body0 != [host_path.as_str().to_string()] || body1 != [spec.component_path.clone()] {
+        return Err(format!(
+            "joint {} must relate body0={} and body1={}, got body0={body0:?}, body1={body1:?}",
+            spec.joint_path, host_path, spec.component_path
+        ));
+    }
+
+    let advertised_sockets = relationship_targets(&composed, &host_path, "lunco:mount:sockets")?;
+    let mut occupied_by_component = Vec::new();
+    for socket_target in &advertised_sockets {
+        let socket = openusd::sdf::Path::new(socket_target).map_err(|error| {
+            format!(
+                "host {} advertises invalid socket {}: {error}",
+                host_path, socket_target
+            )
+        })?;
+        if !lunco_usd_bevy::has_api_schema(&composed, &socket, "LunCoMountSocketAPI") {
+            continue;
+        }
+        let parts = relationship_targets(&composed, &socket, "lunco:mount:part")?;
+        if parts.iter().any(|path| path == &spec.component_path) {
+            occupied_by_component.push(socket_target.clone());
+        }
+    }
+    match spec.socket_path.as_deref() {
+        Some(socket_path) => {
+            let socket = openusd::sdf::Path::new(socket_path)
+                .map_err(|error| format!("invalid socket path {socket_path}: {error}"))?;
+            if !advertised_sockets.iter().any(|path| path == socket_path) {
+                return Err(format!(
+                    "socket {socket_path} is not advertised by host {}",
+                    host_path
+                ));
+            }
+            let parts = relationship_targets(&composed, &socket, "lunco:mount:part")?;
+            if parts != [spec.component_path.clone()] {
+                return Err(format!(
+                    "socket {socket_path} does not contain component {}",
+                    spec.component_path
+                ));
+            }
+            if occupied_by_component != [socket_path.to_string()] {
+                return Err(format!(
+                    "component {} has inconsistent socket occupancy {:?}",
+                    spec.component_path, occupied_by_component
+                ));
+            }
+        }
+        None if !occupied_by_component.is_empty() => {
+            return Err(format!(
+                "component {} is occupied by socket(s) {:?}; detach requires the exact socket path",
+                spec.component_path, occupied_by_component
+            ));
+        }
+        None => {}
+    }
+
+    // Do not silently delete or rewrite external electrical/data/Modelica
+    // relationships. Internal edges and the three known attachment edges are
+    // safe; every other incoming edge is a caller-visible blocker.
+    for (property_path, property) in composed.iter() {
+        let (field_name, property_kind) = match property.ty {
+            openusd::sdf::SpecType::Relationship => ("targetPaths", "relationship"),
+            openusd::sdf::SpecType::Attribute => ("connectionPaths", "connection"),
+            _ => continue,
+        };
+        let Some((owner, property_name)) = property_path.split_property() else {
+            continue;
+        };
+        let targets = path_list_targets(&composed, property_path, field_name, property_kind)?;
+        for target_raw in targets {
+            let target = openusd::sdf::Path::new(&target_raw)
+                .map_err(|error| format!("invalid {property_kind} target {target_raw}: {error}"))?;
+            let target_prim = target.prim_path();
+            let targets_removed = target_prim == joint
+                || lunco_usd_bevy::is_descendant_or_self(&target_prim, &spec.component_path);
+            if !targets_removed {
+                continue;
+            }
+            let internal = lunco_usd_bevy::is_descendant_or_self(&owner, &spec.component_path)
+                || (owner == joint && property_name == "physics:body1" && target == component)
+                || (owner == component
+                    && property_name == "lunco:mount:attachmentJoint"
+                    && target == joint)
+                || (spec.socket_path.as_deref() == Some(owner.as_str())
+                    && property_name == "lunco:mount:part"
+                    && target == component);
+            if !internal {
+                return Err(format!(
+                    "{property_kind} {property_path} points into detached component {}; remove that link first",
+                    target_raw,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_attach_component(
@@ -1627,6 +1849,9 @@ fn validate_attach_component(
     let host = registry
         .host(doc)
         .ok_or_else(|| format!("unknown USD document {doc}"))?;
+    if !spec.edit_target.is_root() && !spec.edit_target.is_runtime() {
+        return Err(format!("unknown edit target {}", spec.edit_target.as_str()));
+    }
     let composed = host.document().composed();
 
     let host_path = openusd::sdf::Path::new(host_root)
@@ -1641,22 +1866,46 @@ fn validate_attach_component(
         ));
     }
 
+    if spec.name.is_empty()
+        || spec.joint_name.is_empty()
+        || spec.name.contains('/')
+        || spec.joint_name.contains('/')
+        || spec.name.contains('.')
+        || spec.joint_name.contains('.')
+    {
+        return Err("component and joint names must be non-empty USD leaf identifiers".into());
+    }
+    let child = format!("{host_root}/{}", spec.name);
+    let child_path = openusd::sdf::Path::new(&child)
+        .map_err(|error| format!("invalid attached child path {child}: {error}"))?;
+    if composed.spec(&child_path).is_some() {
+        return Err(format!("attached child {child} already exists"));
+    }
+    let joint = format!("{host_root}/{}", spec.joint_name);
+    let joint_path = openusd::sdf::Path::new(&joint)
+        .map_err(|error| format!("invalid generated joint path {joint}: {error}"))?;
+    if composed.spec(&joint_path).is_some() {
+        return Err(format!("generated joint {joint} already exists"));
+    }
+
     let Some(socket_path) = spec.socket_path.as_deref() else {
         return Ok(());
     };
-    let mount_prefix = format!("{host_root}/Mounts/");
-    let Some(socket_name) = socket_path.strip_prefix(&mount_prefix) else {
+    if !lunco_usd_bevy::has_api_schema(&composed, &host_path, "LunCoMountHostAPI") {
         return Err(format!(
-            "socket {socket_path} is not under host mount group {host_root}/Mounts"
-        ));
-    };
-    if socket_name.is_empty() || socket_name.contains('/') {
-        return Err(format!(
-            "socket {socket_path} must be a direct child of {host_root}/Mounts"
+            "host {} does not apply LunCoMountHostAPI",
+            spec.host_path
         ));
     }
     let socket = openusd::sdf::Path::new(socket_path)
         .map_err(|error| format!("invalid socket path {socket_path}: {error}"))?;
+    let advertised_sockets = relationship_targets(&composed, &host_path, "lunco:mount:sockets")?;
+    if !advertised_sockets.iter().any(|path| path == socket_path) {
+        return Err(format!(
+            "socket {socket_path} is not advertised by host {}",
+            spec.host_path
+        ));
+    }
     if composed.spec(&socket).is_none() {
         return Err(format!(
             "socket {socket_path} does not exist in document {doc}"
@@ -1676,7 +1925,8 @@ fn validate_attach_component(
         crate::attach::AttachJoint::Prismatic { .. } => "prismatic",
     };
     let actual_joint = authored_text(&composed, &socket, "lunco:mount:joint")
-        .unwrap_or_else(|| "fixed".to_string());
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("socket {socket_path} has no lunco:mount:joint"))?;
     if actual_joint != expected_joint {
         return Err(format!(
             "socket {socket_path} requires joint {actual_joint}, request supplied {expected_joint}"
@@ -1707,8 +1957,13 @@ fn validate_attach_component(
             ));
         }
     }
-    if let Some(existing) = lunco_usd_bevy::read_rel_target(&composed, &socket, "lunco:mount:part")
-    {
+    let occupied = relationship_targets(&composed, &socket, "lunco:mount:part")?;
+    if occupied.len() > 1 {
+        return Err(format!(
+            "socket {socket_path} has multiple lunco:mount:part targets"
+        ));
+    }
+    if let Some(existing) = occupied.into_iter().next() {
         let existing_path = openusd::sdf::Path::new(&existing).map_err(|error| {
             format!("socket {socket_path} has invalid lunco:mount:part target {existing}: {error}")
         })?;
@@ -1744,15 +1999,14 @@ fn validate_attach_component(
         let _ = accepts;
         return Err("socket attachment asset validation is unavailable on wasm".into());
     }
-    let child = format!("{host_root}/{}", spec.name);
-    let child_path = openusd::sdf::Path::new(&child)
-        .map_err(|error| format!("invalid attached child path {child}: {error}"))?;
-    if composed.spec(&child_path).is_some() {
-        return Err(format!("attached child {child} already exists"));
-    }
     Ok(())
 }
 
+/// Attach one component asset to a host body as one journalled USD change set.
+///
+/// The spec contains the explicit child identity, generated joint identity,
+/// placement, and optional socket occupancy. Validation and lowering happen at
+/// the USD authoring boundary, so the attach is atomic and undoable.
 #[Command(default)]
 pub struct AttachComponent {
     /// Target document.
@@ -1762,22 +2016,110 @@ pub struct AttachComponent {
 }
 
 #[on_command(AttachComponent)]
-fn on_attach_component(trigger: On<AttachComponent>, mut commands: Commands) {
+fn on_attach_component(
+    trigger: On<AttachComponent>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+) {
     let doc = trigger.event().doc;
     let spec = trigger.event().spec.clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
     commands.queue(move |world: &mut World| {
-        if let Err(error) = validate_attach_component(world, doc, &spec) {
+        let outcome = match validate_attach_component(world, doc, &spec) {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let ops = crate::attach::attach_component_ops(&spec);
+                let label = format!("Attach {} to {}", spec.name, spec.host_path);
+                let (applied, total) = apply_ops_as_change_set(world, doc, label, ops);
+                if applied != total {
+                    Err(format!(
+                        "attach {} applied {applied}/{total} operations",
+                        spec.name
+                    ))
+                } else {
+                    bevy::log::info!(
+                        "[AttachComponent] {doc}: attached `{}` to `{}` ({total} ops, one change set)",
+                        spec.name,
+                        spec.host_path
+                    );
+                    Ok(Ack::with_data(
+                        OpId::new(),
+                        serde_json::json!({
+                            "component_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.name),
+                            "joint_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.joint_name),
+                        }),
+                    ))
+                }
+            }
+        };
+        if let Err(error) = &outcome {
             bevy::log::warn!("[AttachComponent] attach rejected: {error}");
-            return;
         }
-        let ops = crate::attach::attach_component_ops(&spec);
-        let label = format!("Attach {} to {}", spec.name, spec.host_path);
-        let (applied, n) = apply_ops_as_change_set(world, doc, label, ops);
-        bevy::log::info!(
-            "[AttachComponent] {doc}: attached `{}` to `{}` ({applied}/{n} ops, one change set)",
-            spec.name,
-            spec.host_path
-        );
+        if let Some(command_id) = command_id {
+            if let Some(mut results) = world.get_resource_mut::<CommandResults>() {
+                results.record(command_id, outcome);
+            }
+        }
+    });
+}
+
+/// Remove one attached component as one atomic authored intent. The caller
+/// supplies the exact component/joint/socket identities; Rust validates their
+/// ownership and topology, then reuses the generic compound journal boundary.
+#[Command(default)]
+pub struct DetachComponent {
+    /// Target document.
+    pub doc: DocumentId,
+    /// Exact component attachment to remove.
+    pub spec: crate::attach::DetachSpec,
+}
+
+#[on_command(DetachComponent)]
+fn on_detach_component(
+    trigger: On<DetachComponent>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    commands.queue(move |world: &mut World| {
+        let outcome = match validate_detach_component(world, command.doc, &command.spec) {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let ops = crate::attach::detach_component_ops(&command.spec);
+                let label = format!("Detach {}", command.spec.component_path);
+                let (applied, total) = apply_ops_as_change_set(world, command.doc, label, ops);
+                if applied != total {
+                    Err(format!(
+                        "detach {} applied {applied}/{total} operations",
+                        command.spec.component_path
+                    ))
+                } else {
+                    bevy::log::info!(
+                        "[DetachComponent] {}: removed `{}` and `{}` ({total} ops, one change set)",
+                        command.doc,
+                        command.spec.component_path,
+                        command.spec.joint_path
+                    );
+                    Ok(Ack::with_data(
+                        OpId::new(),
+                        serde_json::json!({
+                            "component_path": command.spec.component_path,
+                            "joint_path": command.spec.joint_path,
+                            "socket_path": command.spec.socket_path,
+                        }),
+                    ))
+                }
+            }
+        };
+        if let Err(error) = &outcome {
+            bevy::log::warn!("[DetachComponent] detach rejected: {error}");
+        }
+        if let Some(command_id) = command_id {
+            if let Some(mut results) = world.get_resource_mut::<CommandResults>() {
+                results.record(command_id, outcome);
+            }
+        }
     });
 }
 
@@ -2081,7 +2423,7 @@ pub fn is_usd_path(path: &str) -> bool {
 mod change_set_tests {
     //! **H10** — a multi-op command undoes as ONE unit.
     //!
-    //! `AttachComponent` lowers to 7 base `UsdOp`s. Each operation retains its
+    //! `AttachComponent` lowers to a compound `UsdOp` sequence. Each operation retains its
     //! lossless `(forward, inverse)` entry, while the change-set ID makes the
     //! complete attach one undo unit.
     use super::*;
@@ -2098,6 +2440,7 @@ mod change_set_tests {
             LayerId::root(),
             "/Rig/Chassis",
             "Wheel",
+            "constraint_47",
             "components/mobility/wheel.usda",
             [0.5, -0.3, 1.2],
             AttachJoint::Revolute { axis: Axis::X },
@@ -2135,6 +2478,15 @@ mod change_set_tests {
             (applied, total),
             (n, n),
             "every op applies onto a valid host"
+        );
+        assert_eq!(
+            world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document host")
+                .undo_depth(),
+            1,
+            "the lowered attach must occupy one document history group"
         );
 
         journal.with_read(|j| {

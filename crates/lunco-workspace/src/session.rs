@@ -220,6 +220,7 @@ mod tests {
             origin: DocumentOrigin::untitled("X"),
             context_twin: None,
             title: "X".into(),
+            dirty: true,
         });
         assert_eq!(r.documents().len(), 1);
     }

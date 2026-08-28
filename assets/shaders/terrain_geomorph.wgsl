@@ -1,6 +1,6 @@
 //! CDLOD geomorph terrain tile — **procedural regolith look** with a custom
 //! `@vertex` morph stage. This is the production material for streamed LOD tiles
-//! (promoted from the old depth-tint debug view): the same world-space FBM bump +
+//! (promoted from the old depth-tint debug view): the same DEM-anchored FBM bump +
 //! albedo variation as `regolith.wgsl`, lit by the scene sun through `lit_n`, on
 //! top of the CDLOD vertex geomorph so tiles never pop as the LOD switches.
 //!
@@ -10,10 +10,10 @@
 //! camera distance over the node's CDLOD morph band, so a tile collapses smoothly
 //! onto its parent. No texture fetch, no compute → wasm-safe.
 //!
-//! Self-contained shading: the FBM/bump look needs no engine-filled uniforms, so
-//! per-tile materials render correctly without the `wire_terrain_materials`
-//! heightfield wiring (which only reaches the single static terrain entity). It
-//! therefore omits `regolith.wgsl`'s live horizon ray-march. Streamed tiles use
+//! The FBM/bump look needs only the terrain's authored DEM extent, so per-tile
+//! materials remain independent of the `wire_terrain_materials` heightfield
+//! wiring (which only reaches the single static terrain entity). It therefore
+//! omits `regolith.wgsl`'s live horizon ray-march. Streamed tiles use
 //! the pre-baked DEM horizon cache for terrain self-shadow at every distance and
 //! receive Bevy's CSM for shadows cast by dynamic objects.
 //!
@@ -31,7 +31,7 @@
     mesh_view_bindings::view,
 }
 #import lunco::pbr_lit::lit_n
-#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, layer_height, map_weights, ramp, surface_fbm}
+#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, layer_height, map_weights, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
@@ -53,6 +53,7 @@
 // screen-space surface footprint and the map's physical texel size. Mesh LOD is
 // deliberately absent, so replacing a tile by its parent cannot change colour.
 //!@default map_texel_size_m 1.0
+//!@default terrain_half_extent 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
 //!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
@@ -95,6 +96,7 @@ struct Material {
     rough_mix:         f32,
     mottle:            f32,
     map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
+    terrain_half_extent: f32, // engine-filled: authored DEM half side in terrain metres
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
     weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
@@ -259,10 +261,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let mottle      = mat.mottle;
     var albedo = mat.albedo;
 
-    let p = in.world_position.xyz;
+    let world_p = in.world_position.xyz;
+    var detail_p = world_p;
+    var detail_n = normalize(in.world_normal);
+    var n = normalize(in.world_normal);
+#ifdef VERTEX_UVS_A
+    detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
+#endif
     // Pixel footprint in world metres (BEFORE any branch — fwidth needs uniform
     // control flow). Drives the footprint-based detail fades.
-    let pw = length(fwidth(p));
+    let pw = length(fwidth(detail_p));
 
     // Baked derived maps (sampled unconditionally — uniform control flow; the
     // weight gates make an unbound/fallback map a no-op). UVs are DEM-global.
@@ -283,8 +291,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // scattered rock meshes — the fragment no longer fakes relief. It adds only
     // believable normal-only micro-texture (features small enough that the absence
     // of parallax is imperceptible) + lunar photometry + broad albedo variation.
-    var n = normalize(in.world_normal);
-
     // Physical material detail is a property of the map and the projected
     // surface, not of whichever quadtree mesh currently represents it. `pw` is
     // continuous across a CDLOD edge, while an integer tile depth is not.
@@ -310,6 +316,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         n = normalize(mix(n, n_baked, weight_normal));
     }
 
+#ifdef VERTEX_UVS_A
+    detail_n = terrain_detail_normal_to_local(n, in.instance_index);
+#endif
+
     //   • regolith tooth — a sub-decimetre material detail. All relief at metre
     //     scale belongs to the DEM/mesh; normal-only FBM at that scale produced
     //     painted black patches under the authored grazing sun.
@@ -317,7 +327,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let tooth_fade  = aa_fade(tooth_scale, pw);
     var tooth_h = 0.5;
     if (tooth_fade > 0.0) {
-        n = bump_layer(n, p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.tooth_bump * tooth_fade, &tooth_h);
+        detail_n = bump_layer(detail_n, detail_p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.tooth_bump * tooth_fade, &tooth_h);
     }
 
     //   • fine regolith grain — millimetre tooth that catches the grazing sun in
@@ -325,13 +335,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let fine_fade = aa_fade(fine_scale, pw);
     var fine_h = 0.5;
     if (fine_fade > 0.0) {
-        n = bump_layer(n, p, fine_scale, 2, 0.5, 0.42, 0.58, fine_bump * fine_fade, &fine_h);
+        detail_n = bump_layer(detail_n, detail_p, fine_scale, 2, 0.5, 0.42, 0.58, fine_bump * fine_fade, &fine_h);
     }
+
+    n = detail_n;
+#ifdef VERTEX_UVS_A
+    n = terrain_detail_normal_to_world(detail_n, in.instance_index);
+#endif
 
     // Large-scale tonal variation (albedo only — cheap, no relief, carries far).
     // Very low frequency = broad maria/highland-style patches, NOT per-metre
     // speckle. This breaks up the flat grey without inventing fake geometry.
-    let dust = surface_fbm(p * 0.004, 3, 0.5);
+    let dust = surface_fbm(detail_p * 0.004, 3, 0.5);
     albedo *= 1.0 + (dust - 0.5) * mottle;
 
     // Metre-scale tonal grain: between the 250 m dust wash above and the
@@ -341,7 +356,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // ~3 m albedo variation. This changes colour only; it never invents relief.
     let grain_fade = aa_fade(0.35, pw);
     if (grain_fade > 0.0) {
-        let grain = surface_fbm(p * 0.35, 2, 0.5);
+        let grain = surface_fbm(detail_p * 0.35, 2, 0.5);
         albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
     }
 
@@ -398,7 +413,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Same guard as the static-mesh path: before the wiring system has run the
     // uniform is zero, and `normalize` of that is NaN — which would propagate
     // through the albedo multiply and paint black holes across the terrain.
-    let V = normalize(view.world_position - p);
+    let V = normalize(view.world_position - world_p);
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {

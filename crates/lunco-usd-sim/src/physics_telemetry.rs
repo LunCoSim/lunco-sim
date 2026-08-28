@@ -24,6 +24,8 @@ use crate::UsdPrimPath;
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {
     previous: HashMap<Entity, PreviousKinematics>,
+    metadata: HashMap<SignalRef, SignalMeta>,
+    metadata_group_paths: HashMap<Entity, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -74,15 +76,21 @@ pub fn retain_physics_telemetry(
 ) {
     let Some(settings) = settings else {
         state.previous.clear();
+        state.metadata.clear();
+        state.metadata_group_paths.clear();
         return;
     };
     if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
     {
         state.previous.clear();
+        state.metadata.clear();
+        state.metadata_group_paths.clear();
         return;
     }
     let Some(signals) = signals.as_deref_mut() else {
         state.previous.clear();
+        state.metadata.clear();
+        state.metadata_group_paths.clear();
         return;
     };
 
@@ -98,6 +106,10 @@ pub fn retain_physics_telemetry(
     }
     let mut seen = HashSet::new();
     let mut retained_any = HashSet::new();
+    // The registry owns the channel catalog. Snapshot its size once per fixed
+    // pass; checking it by walking every signal for every body sample turns
+    // telemetry overhead into an avoidable quadratic scan.
+    let mut channel_count = signals.iter_scalar().count();
 
     for (
         entity,
@@ -113,6 +125,13 @@ pub fn retain_physics_telemetry(
     ) in &bodies
     {
         seen.insert(entity);
+        let metadata_dirty = state
+            .metadata_group_paths
+            .get(&entity)
+            .is_none_or(|path| path != &prim.path);
+        if metadata_dirty {
+            state.metadata_group_paths.insert(entity, prim.path.clone());
+        }
         let linear_velocity = linear.map(|value| value.0);
         let angular_velocity = angular.map(|value| value.0);
         if linear_velocity.is_some_and(|value| !value.is_finite())
@@ -355,12 +374,22 @@ pub fn retain_physics_telemetry(
             &prim.path,
             time,
             samples,
+            &mut channel_count,
+            &mut state.metadata,
+            metadata_dirty,
         ) {
             retained_any.insert(entity);
         }
     }
 
     for (entity, prim, wheel, suspension, hits) in &wheels {
+        let metadata_dirty = state
+            .metadata_group_paths
+            .get(&entity)
+            .is_none_or(|path| path != &prim.path);
+        if metadata_dirty {
+            state.metadata_group_paths.insert(entity, prim.path.clone());
+        }
         let contact = hits
             .iter_sorted()
             .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
@@ -410,12 +439,21 @@ pub fn retain_physics_telemetry(
             &prim.path,
             time,
             samples,
+            &mut channel_count,
+            &mut state.metadata,
+            metadata_dirty,
         ) {
             commands.entity(entity).try_insert(SignalSource);
         }
     }
 
     state.previous.retain(|entity, _| seen.contains(entity));
+    state
+        .metadata_group_paths
+        .retain(|entity, _| seen.contains(entity));
+    state
+        .metadata
+        .retain(|signal, _| seen.contains(&signal.entity));
     for entity in retained_any {
         commands.entity(entity).try_insert(SignalSource);
     }
@@ -452,6 +490,9 @@ fn retain_samples(
     group_path: &str,
     time: f64,
     samples: impl IntoIterator<Item = PhysicsSample>,
+    channel_count: &mut usize,
+    metadata: &mut HashMap<SignalRef, SignalMeta>,
+    metadata_dirty: bool,
 ) -> bool {
     let mut retained = false;
     for (name, value, unit, description) in samples {
@@ -459,26 +500,26 @@ fn retain_samples(
             continue;
         }
         let signal = SignalRef::new(entity, name);
-        if signals.scalar_history(&signal).is_none()
-            && signals.iter_scalar().count() >= settings.max_channels
-        {
+        let known = signals.scalar_history(&signal).is_some();
+        if !known && *channel_count >= settings.max_channels {
             warn_once!(
                 "physics telemetry: max_channels ({}) reached; additional state is not retained",
                 settings.max_channels
             );
             continue;
         }
-        signals.update_meta(
-            signal.clone(),
-            SignalMeta {
+        if metadata_dirty || !metadata.contains_key(&signal) {
+            let signal_meta = SignalMeta {
                 description: Some(description.to_string()),
                 unit: Some(unit.to_string()),
                 provenance: Some("avian".to_string()),
                 group_path: Some(group_path.to_string()),
                 exposure: Default::default(),
                 ..Default::default()
-            },
-        );
+            };
+            signals.update_meta(signal.clone(), signal_meta.clone());
+            metadata.insert(signal.clone(), signal_meta);
+        }
         if signals.record_scalar_at_rate(
             signal,
             time,
@@ -487,6 +528,9 @@ fn retain_samples(
             settings.default_retention,
         ) {
             retained = true;
+            if !known {
+                *channel_count += 1;
+            }
         }
     }
     retained

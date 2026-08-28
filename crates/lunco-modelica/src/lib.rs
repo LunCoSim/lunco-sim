@@ -1713,6 +1713,7 @@ fn sync_workspace_on_doc_opened(
         origin: origin.clone(),
         context_twin: None,
         title: origin.display_name(),
+        dirty: document.is_dirty(),
     });
 }
 
@@ -1722,6 +1723,23 @@ fn sync_workspace_on_doc_closed(
 ) {
     if let Some(mut workspace) = workspace {
         workspace.close_document(trigger.event().doc);
+    }
+}
+
+fn sync_workspace_on_doc_changed(
+    trigger: On<lunco_doc_bevy::DocumentChanged>,
+    registry: Res<ModelicaDocumentRegistry>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let id = trigger.event().doc;
+    let Some(host) = registry.host(id) else {
+        return;
+    };
+    if let Some(entry) = workspace.document_mut(id) {
+        entry.dirty = host.document().is_dirty();
     }
 }
 
@@ -1744,6 +1762,7 @@ fn sync_workspace_on_doc_saved(
     if let Some(entry) = workspace.document_mut(id) {
         entry.title = origin.display_name();
         entry.origin = origin;
+        entry.dirty = host.document().is_dirty();
     }
 }
 
@@ -1996,6 +2015,7 @@ fn build_modelica_core(app: &mut App) {
     );
     app.add_observer(sync_workspace_on_doc_opened);
     app.add_observer(sync_workspace_on_doc_closed);
+    app.add_observer(sync_workspace_on_doc_changed);
     app.add_observer(sync_workspace_on_doc_saved);
 
     // In-app rhai scripting runtime: `RunScenario` (attach + hot-reload a

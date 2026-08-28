@@ -35,6 +35,11 @@ it with this one.
 - Modelica owns continuous equations/state; behavior trees own sequencing; Rhai
   owns scenario glue/policy; Rust owns engine mechanisms. Production Rhai must
   not use `on_tick` except for test verdicts. Prefer events to polling.
+- Assembly tools follow the same ownership rule: Rhai chooses component/socket/
+  joint identities and builds explicit plans from composed USD queries; Rust
+  validates generic USD topology and commits the plan through the existing
+  compound journal boundary. Relationships come from explicit authored
+  metadata, and no Rust-side default may hide missing metadata.
 - A movable mounted part needs both a rigid body and a joint; hierarchy is not
   attachment. The `nested-body-no-joint` lint guards this.
 - Edit schema sources and regenerate with `scripts/gen_schema.py`; update

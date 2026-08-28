@@ -150,6 +150,9 @@ pub struct DocumentEntry {
     /// The Workspace doesn't enforce a format — consumers set and
     /// update this as they see fit.
     pub title: String,
+    /// Whether the owning document has unsaved changes. Domain registries
+    /// update this mirror on `DocumentChanged` and `DocumentSaved`.
+    pub dirty: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -291,8 +294,8 @@ impl Workspace {
         &self.documents
     }
 
-    /// Mutable access — callers update `title` (dirty marker) and
-    /// `origin` (after Save-As).
+    /// Mutable access — callers update `title`, `dirty`, and `origin`
+    /// (after Save-As).
     pub fn documents_mut(&mut self) -> &mut [DocumentEntry] {
         &mut self.documents
     }
@@ -435,6 +438,7 @@ version = "0.1.0"
             origin: DocumentOrigin::writable_file(&model_path),
             context_twin: None,
             title: "Rover.mo".into(),
+            dirty: false,
         });
 
         assert_eq!(ws.twin_for(&ws.documents()[0]), Some(tid));
@@ -457,6 +461,7 @@ version = "0.1.0"
             origin: DocumentOrigin::untitled("Untitled-1"),
             context_twin: Some(tid),
             title: "● Untitled-1".into(),
+            dirty: true,
         });
 
         // Untitled with context pin is claimed by that Twin even though
@@ -489,6 +494,7 @@ version = "0.1.0"
             origin: DocumentOrigin::writable_file(&model),
             context_twin: Some(b),
             title: "shared.mo".into(),
+            dirty: false,
         });
         assert_eq!(ws.twin_for(&ws.documents()[0]), Some(a));
         let _ = b; // silence unused in release
@@ -513,6 +519,7 @@ version = "0.1.0"
             origin: DocumentOrigin::writable_file(&model),
             context_twin: None,
             title: "m.mo".into(),
+            dirty: false,
         });
         assert_eq!(ws.documents_in_twin(tid).count(), 1);
 
@@ -533,6 +540,7 @@ version = "0.1.0"
             origin: DocumentOrigin::untitled("U"),
             context_twin: None,
             title: "U".into(),
+            dirty: true,
         });
         ws.active_document = Some(id);
         let closed = ws.close_document(id);

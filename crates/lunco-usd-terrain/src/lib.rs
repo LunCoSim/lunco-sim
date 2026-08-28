@@ -1870,6 +1870,40 @@ fn bridge_dem_prim_read(
                 return;
             }
         };
+    let collider_defaults = lunco_terrain_surface::TerrainColliderSettings::default();
+    let collider_depth = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_i64("colliderDepth"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => i64::from(collider_defaults.max_depth),
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
+    };
+    let collider_resolution = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_i64("colliderResolution"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => collider_defaults.tile_resolution as i64,
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
+    };
+    let collider =
+        match lunco_terrain_surface::resolve_collider_settings(collider_depth, collider_resolution)
+        {
+            Ok(settings) => settings,
+            Err(reason) => {
+                warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+                return;
+            }
+        };
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
     let lod_viz = match dem_attrs
         .as_ref()
@@ -1922,6 +1956,7 @@ fn bridge_dem_prim_read(
             target_res,
             lod_viz,
             collider_ring,
+            collider,
             with_default_material: false,
         },
         stack,
@@ -2357,12 +2392,14 @@ def Xform \"Traverse\"\n{\n}\n"
     #[test]
     fn dem_layer_attrs_project_into_request() {
         // `lunco:layer:*` on the ground layer prim: windowM halves into
-        // half_window, targetRes passes through, demSource resolves against the
-        // scene root.
+        // half_window, targetRes stays visual-only, and the collider lattice
+        // projects as an independent physics contract.
         let scene = dem_scene(
             "",
             "        float lunco:layer:windowM = 512\n\
-             \x20       int lunco:layer:targetRes = 128\n",
+             \x20       int lunco:layer:targetRes = 128\n\
+             \x20       int lunco:layer:colliderDepth = 7\n\
+             \x20       int lunco:layer:colliderResolution = 33\n",
         );
         let (world, e) = bridge(&scene);
         let req = world
@@ -2373,6 +2410,8 @@ def Xform \"Traverse\"\n{\n}\n"
             "windowM = side length ⇒ half_window = windowM/2"
         );
         assert_eq!(req.target_res, 128);
+        assert_eq!(req.collider.max_depth, 7);
+        assert_eq!(req.collider.tile_resolution, 33);
         assert!(
             req.uri.ends_with("site/heightmap.tif") && req.uri.starts_with("/twin/moonbase"),
             "demSource resolves against the scene root, got `{}`",
@@ -2388,6 +2427,9 @@ def Xform \"Traverse\"\n{\n}\n"
             "        float lunco:layer:windowM = -1\n",
             "        int lunco:layer:targetRes = -1\n",
             "        int64 lunco:layer:targetRes = 8192\n",
+            "        int lunco:layer:colliderDepth = 0\n",
+            "        int lunco:layer:colliderResolution = 1\n",
+            "        int lunco:layer:colliderResolution = 1025\n",
             "        string lunco:layer:lodViz = \"true\"\n",
         ] {
             let scene = dem_scene("", layer_extra);
@@ -2433,6 +2475,10 @@ def Xform \"Traverse\"\n{\n}\n"
         assert!(
             req.collider_ring,
             "unauthored colliderRing uses the schema fallback"
+        );
+        assert_eq!(
+            req.collider,
+            lunco_terrain_surface::TerrainColliderSettings::default()
         );
     }
 

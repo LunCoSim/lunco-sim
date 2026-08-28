@@ -1,0 +1,68 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyWorkflowTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Positive producer-to-consumer test for catalog-driven component assembly.
+def Xform "AssemblyWorkflowTest"
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Chassis" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountHostAPI"]
+    )
+    {
+        float physics:mass = 1.0
+        rel lunco:mount:sockets = [
+            </AssemblyWorkflowTest/Chassis/Interfaces/decoy_port>,
+            </AssemblyWorkflowTest/Chassis/Interfaces/probe_port>
+        ]
+
+        def Cube "Body" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.5
+            bool physics:collisionEnabled = true
+        }
+
+        def Xform "Interfaces"
+        {
+            def Xform "decoy_port" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "other"
+                uniform token lunco:mount:joint = "fixed"
+                uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
+            }
+
+            def Xform "probe_port" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "probe"
+                uniform token lunco:mount:joint = "fixed"
+                uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-workflow"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/assembly_workflow.rhai@
+        }
+    }
+}

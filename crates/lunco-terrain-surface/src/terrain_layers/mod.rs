@@ -38,7 +38,7 @@ use lunco_obstacle_field::field::HeightGrid;
 use lunco_obstacle_field::spec::{CraterLayer, RockLayer};
 use lunco_terrain_core::Overzoom;
 
-use crate::stream_viz::DemHeightField;
+use crate::oracle::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
