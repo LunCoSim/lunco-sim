@@ -102,6 +102,12 @@ impl SceneFileKind {
         Self::Shader,
         Self::Asset,
     ];
+
+    /// True for source files owned by the shared text viewer rather than a
+    /// typed USD or Modelica document editor.
+    fn opens_in_source_view(self) -> bool {
+        matches!(self, Self::Script | Self::Shader)
+    }
 }
 
 /// One file in the scene's closure.
@@ -348,16 +354,12 @@ impl BrowserSection for SceneFilesSection {
                     for row in group {
                         // Openable rows are routed through the normal typed
                         // `OpenFile` surface. USD and Modelica have richer
-                        // editors; WGSL intentionally opens in the shared
-                        // read-only source viewer so the exact shader driving
-                        // the scene is inspectable from the scene closure.
+                        // editors; Rhai and WGSL intentionally open in the
+                        // shared source viewer so the exact behaviour/shader
+                        // driving the scene is inspectable from the closure.
                         let openable = !row.missing
-                            && matches!(
-                                row.kind,
-                                SceneFileKind::Layer
-                                    | SceneFileKind::Modelica
-                                    | SceneFileKind::Shader
-                            );
+                            && (matches!(row.kind, SceneFileKind::Layer | SceneFileKind::Modelica)
+                                || row.kind.opens_in_source_view());
                         let resp = ui
                             .horizontal(|ui| {
                                 if row.missing {
@@ -415,11 +417,11 @@ impl BrowserSection for SceneFilesSection {
         }
 
         if let Some((path, kind)) = clicked {
-            if kind == SceneFileKind::Shader {
-                // A shader is source text, not a USD/Modelica document. Send the
-                // typed source command directly so the shared text viewer owns
-                // the absolute scene-closure path; BrowserAction is intentionally
-                // reserved for domain document dispatchers.
+            if kind.opens_in_source_view() {
+                // Scripts and shaders are source text, not USD/Modelica
+                // documents. Send the typed source command directly so the
+                // shared text viewer owns the absolute scene-closure path;
+                // BrowserAction is reserved for domain document dispatchers.
                 ctx.trigger(OpenFile {
                     path: path.to_string_lossy().into_owned(),
                 });
@@ -461,6 +463,14 @@ mod tests {
             SceneFileKind::of(Path::new("/a/rover.glb")),
             SceneFileKind::Asset
         );
+    }
+
+    #[test]
+    fn scripts_and_shaders_use_the_shared_source_viewer() {
+        assert!(SceneFileKind::Script.opens_in_source_view());
+        assert!(SceneFileKind::Shader.opens_in_source_view());
+        assert!(!SceneFileKind::Layer.opens_in_source_view());
+        assert!(!SceneFileKind::Modelica.opens_in_source_view());
     }
 
     #[test]

@@ -726,7 +726,8 @@ mod tests {
     }
 
     #[test]
-    fn wgsl_open_file_uses_the_shared_text_viewer() {
+    fn rhai_and_wgsl_open_files_use_the_shared_text_viewer() {
+        assert!(is_text_view_path(Path::new("scripts/teleop_policy.rhai")));
         assert!(is_text_view_path(Path::new("shaders/terrain_layered.wgsl")));
         assert!(!is_text_view_path(Path::new("textures/ortho.png")));
     }

@@ -511,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn shader_always_uses_the_source_viewer() {
+    fn source_only_text_always_uses_the_source_viewer() {
         let mut registry = DocumentKindRegistry::default();
         registry.register(
             DocumentKindId::new("shader"),
@@ -521,8 +521,21 @@ mod tests {
                 ..Default::default()
             },
         );
+        registry.register(
+            DocumentKindId::new("rhai"),
+            DocumentKindMeta {
+                display_name: "Rhai".into(),
+                extensions: vec!["rhai".into()],
+                ..Default::default()
+            },
+        );
         assert!(!should_open_as_document(
             Path::new("shaders/terrain.wgsl"),
+            Some(&registry),
+            true,
+        ));
+        assert!(!should_open_as_document(
+            Path::new("scripts/teleop_policy.rhai"),
             Some(&registry),
             true,
         ));
