@@ -28,7 +28,7 @@ around it:
 - **A `Document` trait** per domain (Modelica, USD, SysML, mission, ...)
 - **Typed operations** that mutate documents in well-defined ways
 - **Change notification** so views redraw on edit
-- **Free undo/redo** from op inverses
+- **Free undo/redo** from op inverses, with authored batches as one history step
 - **Serialization** per-domain (`.mo`, `.usda`, etc.)
 - **Future: collaborative sync** via Op transmission over CRDT/OT
 
@@ -83,9 +83,10 @@ enum UsdOp {
 }
 ```
 
-Ops are the **unit of undo**, the **unit of collaborative sync**, and the
-**unit of replay/recording**. Designing the op set is the most important
-decision per domain.
+An individual op is the unit of collaborative sync and replay/recording;
+`DocumentHost` history groups are the unit of local undo. Designing both the
+op set and the authored batch boundaries is the most important decision per
+domain.
 
 ### Op properties
 
@@ -231,16 +232,20 @@ pub trait DocumentView<D: Document> {
 **Also in `lunco-doc`** (host):
 
 ```rust
-/// Holds a Document plus its undo/redo stacks. Headless-capable:
+/// Holds a Document plus grouped undo/redo history. Headless-capable:
 /// not a Bevy component, works in tests and CLI tools.
 pub struct DocumentHost<D: Document> {
     document: D,
-    undo_stack: Vec<D::Op>,
-    redo_stack: Vec<D::Op>,
+    undo_stack: Vec<Vec<D::Op>>,
+    redo_stack: Vec<Vec<D::Op>>,
 }
 
 impl<D: Document> DocumentHost<D> {
-    pub fn apply(&mut self, op: D::Op) -> Result<(), DocumentError>;
+    pub fn apply<M: Into<Mutation<D::Op>>>(&mut self, mutation: M) -> Result<Ack, Reject>;
+    pub fn apply_group(
+        &mut self,
+        ops: impl IntoIterator<Item = D::Op>,
+    ) -> Result<Ack, Reject> where D: Clone;
     pub fn undo(&mut self) -> Result<bool, DocumentError>;
     pub fn redo(&mut self) -> Result<bool, DocumentError>;
     pub fn document(&self) -> &D;

@@ -670,20 +670,22 @@ pub trait OpRecorder<O>: Send + Sync {
 ///
 /// ## Undo / redo
 ///
-/// - [`apply`](Self::apply) runs the document's op, pushes the inverse onto
-///   the undo stack, and clears the redo stack.
-/// - [`undo`](Self::undo) pops the most recent inverse, applies it, and
-///   pushes the resulting inverse (the original forward op) onto the redo
-///   stack.
-/// - [`redo`](Self::redo) pops from the redo stack and applies it, pushing
-///   the resulting inverse back onto the undo stack.
+/// - [`apply`](Self::apply) runs one document op, pushes its inverse as one
+///   history group, and clears the redo stack.
+/// - [`apply_group`](Self::apply_group) validates and commits several local
+///   ops as one history group, so one undo reverses the complete authored
+///   intent.
+/// - [`undo`](Self::undo) applies the most recent inverse group and pushes the
+///   resulting forward group onto the redo stack.
+/// - [`redo`](Self::redo) applies the most recently undone forward group and
+///   pushes its inverse group back onto the undo stack.
 ///
-/// This symmetric design means undo and redo are just "apply an op" — the
-/// document itself doesn't know whether it's a forward edit or an undo.
+/// This symmetric design means undo and redo are just "apply a group" — the
+/// document itself doesn't know whether an edit is forward, undo, or redo.
 pub struct DocumentHost<D: Document> {
     document: D,
-    undo_stack: Vec<D::Op>,
-    redo_stack: Vec<D::Op>,
+    undo_stack: Vec<Vec<D::Op>>,
+    redo_stack: Vec<Vec<D::Op>>,
     /// Bounded ring buffer of recently-applied [`OpId`]s for
     /// idempotent replay. A duplicate op-id (same client retrying
     /// after a flaky network drop, or a wire frame redelivered) is
@@ -807,7 +809,7 @@ impl<D: Document> DocumentHost<D> {
         if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
             rec.record(fwd, &inverse);
         }
-        self.undo_stack.push(inverse);
+        self.undo_stack.push(vec![inverse]);
         self.redo_stack.clear();
         if self.seen_ops.len() == SEEN_OPS_CAP {
             self.seen_ops.pop_front();
@@ -818,57 +820,146 @@ impl<D: Document> DocumentHost<D> {
         Ok(ack)
     }
 
-    /// Undo the most recent op. Returns `Ok(false)` if the undo stack is
-    /// empty (nothing to undo), `Ok(true)` if an op was undone.
+    /// Apply several local ops as one undo/redo group.
+    ///
+    /// The cloneable document is validated on a private candidate first. The
+    /// live document is replaced only after every op succeeds, so a compound
+    /// intent cannot leave a half-authored state. The inverses are stored in
+    /// reverse order because undo must reverse the original sequence.
+    ///
+    /// This is intentionally a generic document primitive. Domain command
+    /// handlers decide which authored intent forms a group; the document
+    /// system only supplies the atomic history boundary.
+    pub fn apply_group<I>(&mut self, ops: I) -> Result<Ack, Reject>
+    where
+        D: Clone,
+        I: IntoIterator<Item = D::Op>,
+    {
+        let ops: Vec<D::Op> = ops.into_iter().collect();
+        if ops.is_empty() {
+            let mut ack = Ack::new(OpId::new());
+            ack.new_gen = Some(self.document.generation());
+            return Ok(ack);
+        }
+
+        let mut candidate = self.document.clone();
+        let mut inverses = Vec::with_capacity(ops.len());
+        for op in &ops {
+            let inverse = match candidate.apply(op.clone()) {
+                Ok(inverse) => inverse,
+                Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
+                Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
+                    return Err(Reject::InvalidOp(msg))
+                }
+            };
+            inverses.push(inverse);
+        }
+
+        self.document = candidate;
+        if let Some(rec) = &self.recorder {
+            for (forward, inverse) in ops.iter().zip(&inverses) {
+                rec.record(forward, inverse);
+            }
+        }
+        self.undo_stack.push(inverses.into_iter().rev().collect());
+        self.redo_stack.clear();
+
+        let mut ack = Ack::new(OpId::new());
+        ack.new_gen = Some(self.document.generation());
+        Ok(ack)
+    }
+
+    /// Apply a history group to the live document, rolling back already
+    /// applied members if a later member rejects. The returned pairs are in
+    /// application order and are recorded only after the whole group commits.
+    fn apply_history_group(
+        &mut self,
+        group: &[D::Op],
+    ) -> Result<Vec<(D::Op, D::Op)>, DocumentError> {
+        let mut applied = Vec::with_capacity(group.len());
+        for op in group {
+            match self.document.apply(op.clone()) {
+                Ok(inverse) => applied.push((op.clone(), inverse)),
+                Err(error) => {
+                    for (_, inverse) in applied.iter().rev() {
+                        if let Err(rollback_error) = self.document.apply(inverse.clone()) {
+                            return Err(DocumentError::Internal(format!(
+                                "history group failed ({error:?}) and rollback failed ({rollback_error:?})"
+                            )));
+                        }
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(applied)
+    }
+
+    /// Undo the most recent history group. Returns `Ok(false)` if the undo
+    /// stack is empty (nothing to undo), `Ok(true)` if a group was undone.
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
-        // Peek first, pop only on success — a failed apply must leave the op
+        // Peek first, pop only on success — a failed apply must leave the group
         // on the stack so the user can retry.
-        let Some(op) = self.undo_stack.last().cloned() else {
+        let Some(group) = self.undo_stack.last().cloned() else {
             return Ok(false);
         };
-        let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
-        let inverse = self.document.apply(op)?;
+        let applied = self.apply_history_group(&group)?;
         self.undo_stack.pop();
-        if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
-            rec.record(fwd, &inverse);
+        if let Some(rec) = &self.recorder {
+            for (forward, inverse) in &applied {
+                rec.record(forward, inverse);
+            }
         }
-        self.redo_stack.push(inverse);
+        self.redo_stack.push(
+            applied
+                .into_iter()
+                .map(|(_, inverse)| inverse)
+                .rev()
+                .collect(),
+        );
         Ok(true)
     }
 
-    /// Redo the most recently undone op. Returns `Ok(false)` if the redo
-    /// stack is empty, `Ok(true)` if an op was redone.
+    /// Redo the most recently undone history group. Returns `Ok(false)` if the
+    /// redo stack is empty, `Ok(true)` if a group was redone.
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
         // Peek first, pop only on success — mirrors `undo`.
-        let Some(op) = self.redo_stack.last().cloned() else {
+        let Some(group) = self.redo_stack.last().cloned() else {
             return Ok(false);
         };
-        let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
-        let inverse = self.document.apply(op)?;
+        let applied = self.apply_history_group(&group)?;
         self.redo_stack.pop();
-        if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
-            rec.record(fwd, &inverse);
+        if let Some(rec) = &self.recorder {
+            for (forward, inverse) in &applied {
+                rec.record(forward, inverse);
+            }
         }
-        self.undo_stack.push(inverse);
+        self.undo_stack.push(
+            applied
+                .into_iter()
+                .map(|(_, inverse)| inverse)
+                .rev()
+                .collect(),
+        );
         Ok(true)
     }
 
-    /// Whether there is at least one op available to undo.
+    /// Whether there is at least one history group available to undo.
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
 
-    /// Whether there is at least one op available to redo.
+    /// Whether there is at least one history group available to redo.
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
 
-    /// Number of ops on the undo stack.
+    /// Number of history groups on the undo stack.
     pub fn undo_depth(&self) -> usize {
         self.undo_stack.len()
     }
 
-    /// Number of ops on the redo stack.
+    /// Number of history groups on the redo stack.
     pub fn redo_depth(&self) -> usize {
         self.redo_stack.len()
     }
@@ -892,6 +983,7 @@ impl<D: Document> DocumentHost<D> {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct TextDocument {
         id: DocumentId,
         text: String,
@@ -980,6 +1072,40 @@ mod tests {
         host.redo().unwrap();
         assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 3);
+    }
+
+    #[test]
+    fn test_document_host_group_is_one_undo_redo_unit() {
+        let mut host = DocumentHost::new(TextDocument {
+            id: DocumentId::new(2),
+            text: "Hello".to_string(),
+            generation: 0,
+        });
+
+        host.apply_group([
+            TextOp::Insert {
+                pos: 5,
+                text: " World".to_string(),
+            },
+            TextOp::Insert {
+                pos: 11,
+                text: "!".to_string(),
+            },
+        ])
+        .unwrap();
+        assert_eq!(host.document().text, "Hello World!");
+        assert_eq!(host.undo_depth(), 1);
+        assert_eq!(host.redo_depth(), 0);
+
+        assert!(host.undo().unwrap());
+        assert_eq!(host.document().text, "Hello");
+        assert_eq!(host.undo_depth(), 0);
+        assert_eq!(host.redo_depth(), 1);
+
+        assert!(host.redo().unwrap());
+        assert_eq!(host.document().text, "Hello World!");
+        assert_eq!(host.undo_depth(), 1);
+        assert_eq!(host.redo_depth(), 0);
     }
 
     /// A3 auto-bridge: an installed [`OpRecorder`] captures the

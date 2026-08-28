@@ -701,6 +701,7 @@ mod save_tests {
             origin: lunco_doc::DocumentOrigin::untitled("scratch"),
             context_twin: None,
             title: "Engine Model".into(),
+            dirty: true,
         };
         let second = lunco_workspace::DocumentEntry {
             id: lunco_doc::DocumentId::new(2),

@@ -647,8 +647,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This is the command boundary for program construction, component assembly,
  and other compound edits: UI, Rhai and API callers all submit the same typed
- operation list, which is journalled as one undo unit and observed by the live
- projector only after the document reaches its complete shape.
+ operation list, which is committed as one document history group and one
+ journal change set when journaling is enabled. The live projector observes it
+ only after the document reaches its complete shape.
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 
@@ -671,9 +672,10 @@ the part, its placement, its joint and the joint's anchors together.
  The complete lowered sequence is validated against a document clone before
  the live document is touched. If any op is rejected (for example because the
  host prim does not exist), no op is authored and the command logs the
- rejection. A valid sequence is then committed as one journal change set and
- undone as one unit. Socket-specific validation also rejects stale or
- incompatible requests before lowering.
+ rejection. A valid sequence is then committed as one document history group
+ and one journal change set when journaling is enabled, and undone as one unit.
+ Socket-specific validation also rejects stale or incompatible requests before
+ lowering.
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 
@@ -2563,7 +2565,7 @@ cascading their deletion.
 
 #### `RedoDocument`
 
- Request to redo the last undone op on the document.
+ Request to redo the last undone history group on the document.
 
  Counterpart of [`UndoDocument`]. Same per-domain dispatch rules.
 
@@ -2571,7 +2573,7 @@ cascading their deletion.
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document whose most recent undone op should be re-applied. |
+| `doc` | `DocumentId` |  The document whose most recent undone history group should be re-applied. |
 
 #### `SaveAsDocument`
 
@@ -2621,7 +2623,7 @@ cascading their deletion.
 
 #### `UndoDocument`
 
- Request to undo one op on the document, syncing any dependent UI
+ Request to undo the most recent history group on the document, syncing any dependent UI
  state (editor buffer, diagram canvas) to match the reverted source.
 
  Handled per-domain: the registry that owns `doc` runs its
@@ -2634,7 +2636,7 @@ cascading their deletion.
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document whose most recent op should be undone. |
+| `doc` | `DocumentId` |  The document whose most recent history group should be undone. |
 
 ## Time & clock
 

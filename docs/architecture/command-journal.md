@@ -219,9 +219,10 @@ to forbid.
   > unit is worse than no undo at all.
   >
   > The complete lowered sequence is validated before the live document is
-  > touched. A rejected sequence applies zero ops; a valid sequence is journalled
-  > as one change set. Headless builds with no `JournalResource` retain the same
-  > all-or-nothing validation, without undo grouping.
+  > touched. A rejected sequence applies zero ops; a valid sequence is committed
+  > as one `DocumentHost` history group and, when a `JournalResource` is present,
+  > one journal change set. Headless builds without a journal retain the same
+  > all-or-nothing document history, just without the Twin journal entry group.
 - **Phase 3 — Replay / determinism.** Seeds + sim-time in ops; replay `merged_order`
   → spec 020's deterministic Input Log; divergence checks.
 - **Phase 4 — Projection-authoritative.** State = snapshot + replay(log); ECS becomes a

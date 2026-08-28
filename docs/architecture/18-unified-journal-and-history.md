@@ -13,7 +13,7 @@ replay is a separate design in [`command-journal.md`](command-journal.md).
 |---|---|---|
 | Journal data model | `lunco-twin-journal` | Append-only `Journal` scoped by `TwinId`; entries use author/lamport identity, `EntryKind`, `ChangeSet`, and reversible op payloads |
 | ECS access and automatic recording | `lunco-doc-bevy` | `JournalResource` wraps the active journal; `JournalOpRecorder` records successful document apply, undo, and redo operations |
-| Document undo/redo | `lunco-doc::DocumentHost` | Each domain owns its typed inverse stacks; the recorder mirrors those edits into the Twin journal |
+| Document undo/redo | `lunco-doc::DocumentHost` | Each domain owns typed inverse history groups; the recorder mirrors each member edit into the Twin journal |
 | Twin selection and persistence policy | `lunco-twin` + `lunco-workspace` | `[journal] persist = true` opts a Twin into `history/journal.json`; session-only is the default |
 | Network distribution | `lunco-networking` | The journal replication plane sends entries and merges them by `EntryId` |
 

@@ -34,7 +34,7 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_core::{
     on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
 };
-use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
     SaveAsDocument, SaveDocument, UndoDocument,
@@ -165,8 +165,27 @@ fn sync_workspace_on_doc_opened(
         title: origin.display_name(),
         origin,
         context_twin,
+        dirty: host.document().is_dirty(),
     });
     workspace.active_document = Some(doc);
+}
+
+/// Reflect USD edits into the shared Workspace dirty mirror.
+fn sync_workspace_on_doc_changed(
+    trigger: On<DocumentChanged>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let doc = trigger.event().doc;
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    if let Some(entry) = workspace.document_mut(doc) {
+        entry.dirty = host.document().is_dirty();
+    }
 }
 
 /// Reflect USD Save and Save-As origin changes into the shared Workspace.
@@ -189,6 +208,7 @@ fn sync_workspace_on_doc_saved(
     if let Some(entry) = workspace.document_mut(doc) {
         entry.title = origin.display_name();
         entry.origin = origin;
+        entry.dirty = host.document().is_dirty();
     }
 }
 
@@ -278,6 +298,7 @@ impl Plugin for UsdCommandsPlugin {
 
         app.add_systems(Update, drain_usd_pending_events);
         app.add_observer(sync_workspace_on_doc_opened);
+        app.add_observer(sync_workspace_on_doc_changed);
         app.add_observer(sync_workspace_on_doc_saved);
         app.add_observer(sync_workspace_on_doc_closed);
         // A3 auto-bridge: when the journal appears, hand it to the registry
@@ -1421,13 +1442,13 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 // with a byte-for-byte identical body, which would have advertised four undo verbs on the
 // API and silently done nothing on a Modelica document.
 
-/// Per-domain [`UndoDocument`] handler for **USD** documents: pop the document's last op
-/// and apply its typed inverse.
+/// Per-domain [`UndoDocument`] handler for **USD** documents: undo the document's last
+/// history group by applying its typed inverses.
 ///
 /// This is the **only** undo. Every authored edit — spawn, move, delete, terrain stroke,
 /// waypoint, property — reaches the world as a [`UsdOp`] through [`ApplyUsdOp`], and
 /// `UsdDocument::apply` hands back a typed inverse for each. So undo is a document
-/// concern, not an editor one: pop the inverse, apply it, and the projection re-derives
+/// concern, not an editor one: apply the inverse group, and the projection re-derives
 /// the ECS ([`crate::live_consume`]). It journals (undo/redo record through the same
 /// `OpRecorder` seam) and replicates like any other op.
 ///
@@ -1443,13 +1464,18 @@ pub fn on_undo_usd_document(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
     mut commands: Commands,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     let doc = trigger.event().doc;
-    let outcome = {
-        let Some(host) = registry.host_mut(doc) else {
-            return;
-        };
-        host.undo()
+    if registry.host(doc).is_none() {
+        return;
+    }
+    let mut apply = || registry.host_mut(doc).map_or(Ok(false), |host| host.undo());
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Undo document {doc}"), apply),
+        None => apply(),
     };
     match outcome {
         Ok(true) => {
@@ -1475,13 +1501,18 @@ pub fn on_redo_usd_document(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
     mut commands: Commands,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     let doc = trigger.event().doc;
-    let outcome = {
-        let Some(host) = registry.host_mut(doc) else {
-            return;
-        };
-        host.redo()
+    if registry.host(doc).is_none() {
+        return;
+    }
+    let mut apply = || registry.host_mut(doc).map_or(Ok(false), |host| host.redo());
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Redo document {doc}"), apply),
+        None => apply(),
     };
     match outcome {
         Ok(true) => {
@@ -1500,8 +1531,8 @@ pub fn on_redo_usd_document(
 // AttachComponent — build-from-parts (doc 48 §3.1)
 // ─────────────────────────────────────────────────────────────────────
 
-/// Apply a lowered [`UsdOp`] sequence to `doc` as **one journal change set** —
-/// i.e. one undo unit (H10).
+/// Apply a lowered [`UsdOp`] sequence to `doc` as **one document history group**
+/// and one journal change set (H10).
 ///
 /// A command that lowers to many primitive ops (`AttachComponent` → multiple base ops,
 /// plus optional socket/rotation/axis ops; `realign_component_ops` → 4) must not
@@ -1516,11 +1547,9 @@ pub fn on_redo_usd_document(
 /// **Every multi-op USD handler should route through this** — including the
 /// `realign_component_ops` call sites in `lunco-luncosim-edit`.
 ///
-/// The complete sequence is validated against a clone of the current USD document
-/// before the live host is touched. A malformed multi-op intent therefore applies
-/// zero operations; a valid intent is then committed as one journal change set.
-/// Headless builds with no `JournalResource` still get the same all-or-nothing
-/// validation, just without undo grouping.
+/// The generic document host validates the complete sequence against a clone before
+/// committing it. A malformed multi-op intent therefore applies zero operations;
+/// a valid intent is committed as one history group even without a journal.
 ///
 /// Returns `(applied, total)`.
 pub fn apply_ops_as_change_set(
@@ -1530,40 +1559,7 @@ pub fn apply_ops_as_change_set(
     ops: Vec<UsdOp>,
 ) -> (usize, usize) {
     let total = ops.len();
-    // `UsdDocument` is cloneable and its `Document::apply` path is the authoritative
-    // validator. Run the whole intent against a private candidate first so a bad
-    // attribute, missing prim, or read-only document cannot leave a half-authored
-    // terrain/component assembly in the live host.
-    let validation = {
-        let registry = world.resource::<DocumentRegistry<UsdDocument>>();
-        match registry.host(doc) {
-            None => Err(lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}"))),
-            Some(host) => {
-                let mut candidate = host.document().clone();
-                let mut result = Ok(());
-                for op in &ops {
-                    if let Err(error) = candidate.apply(op.clone()) {
-                        result = Err(match error {
-                            lunco_doc::DocumentError::ReadOnly => lunco_doc::Reject::ReadOnly,
-                            lunco_doc::DocumentError::ValidationFailed(message)
-                            | lunco_doc::DocumentError::Internal(message) => {
-                                lunco_doc::Reject::InvalidOp(message)
-                            }
-                            _ => lunco_doc::Reject::InvalidOp(format!("{error:?}")),
-                        });
-                        break;
-                    }
-                }
-                result
-            }
-        }
-    };
-    if let Err(reject) = validation {
-        bevy::log::warn!("[usd] {doc} compound operation rejected before apply: {reject:?}");
-        return (0, total);
-    }
-
-    // Clone the handle FIRST: `registry.apply` takes `&mut World`'s registry, so
+    // Clone the handle FIRST: the registry takes a mutable borrow, so
     // the journal resource can't stay borrowed across it.
     let journal = world
         .get_resource::<lunco_doc_bevy::JournalResource>()
@@ -1571,16 +1567,13 @@ pub fn apply_ops_as_change_set(
 
     let apply_all = |world: &mut World| {
         let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-        let mut applied = 0usize;
-        for op in ops {
-            match registry.apply(doc, op) {
-                Ok(_) => applied += 1,
-                Err(reject) => bevy::log::warn!(
-                    "[usd] {doc} op rejected ({applied}/{total} applied): {reject:?}"
-                ),
+        match registry.apply_group(doc, ops) {
+            Ok(_) => total,
+            Err(reject) => {
+                bevy::log::warn!("[usd] {doc} compound operation rejected: {reject:?}");
+                0
             }
         }
-        applied
     };
 
     let applied = match journal {
@@ -2480,6 +2473,15 @@ mod change_set_tests {
             (applied, total),
             (n, n),
             "every op applies onto a valid host"
+        );
+        assert_eq!(
+            world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document host")
+                .undo_depth(),
+            1,
+            "the lowered attach must occupy one document history group"
         );
 
         journal.with_read(|j| {
