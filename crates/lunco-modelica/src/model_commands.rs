@@ -10,11 +10,9 @@ use bevy::prelude::*;
 use lunco_api::executor::{finish_command_result, PendingApiRequest};
 #[cfg(feature = "lunco-api")]
 use lunco_api::schema::ApiErrorCode;
-use lunco_core::{
-    on_command, register_commands, Ack, ActiveCommandId, Command, OpId,
-};
 #[cfg(not(feature = "lunco-api"))]
 use lunco_core::CommandResults;
+use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::DocumentId;
 
 use crate::state::ModelicaDocumentRegistry;

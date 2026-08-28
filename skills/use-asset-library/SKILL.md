@@ -152,7 +152,6 @@ are:
 def Xform "Widget" ( kind = "component" prepend apiSchemas = ["LunCoCatalogAPI"] )
 {
     uniform bool lunco:spawnable = true
-    float lunco:spawnLift = 0.5     # metres lifted off terrain on spawn
 }
 ```
 
@@ -164,7 +163,6 @@ def Xform "Widget" ( kind = "component" prepend apiSchemas = ["LunCoCatalogAPI"]
 | `display_name` | stem Title-cased (splits `_` and `-`) |
 | `category` | the **immediate parent folder**, Title-cased |
 | description | the stage's `doc` metadata |
-| lift | `lunco:spawnLift` |
 
 So `components/power/solar_panel.usda` lands under **"Power"** — not
 "Components". A file with no parent folder lands in "Other". Nothing is

@@ -2505,6 +2505,10 @@ fn build_usd_physics_joints(
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&big_space_bridge::BridgeShadow>,
+    // Ground placement may have authored the final active-frame pose directly
+    // while the bridge was intentionally excluded from that transaction. That
+    // marker is the provenance for an already-valid Position in that case.
+    q_pose_authoritative: Query<(), With<lunco_core::PhysicsPoseAuthoritative>>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -2633,7 +2637,10 @@ fn build_usd_physics_joints(
         // ordering against a system that never ran — and it is wrong in both
         // directions: it cannot see two bodies genuinely stacked at one origin, and
         // it calls uninitialised poses "ready" as soon as anything perturbs one.
-        let seeded = |e: Entity| q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true);
+        let seeded = |e: Entity| {
+            q_pose_authoritative.contains(e)
+                || q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true)
+        };
         if body0_ent.is_some_and(|e| !seeded(e)) || body1_ent.is_some_and(|e| !seeded(e)) {
             debug!(
                 "[usd-avian] joint {} — body poses not seeded by the physics-transform \

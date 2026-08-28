@@ -56,7 +56,6 @@ def Xform "MyRover" (
 )
 {
     uniform bool lunco:spawnable = true
-    float lunco:spawnLift = 1.0
     float physics:mass = 1000.0
     float3 physics:diagonalInertia = (1028, 1354, 341)   # author it — see skid_rover
 

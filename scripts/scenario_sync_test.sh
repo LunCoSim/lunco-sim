@@ -42,7 +42,10 @@
 #
 # Exits 0 on PASS, nonzero on FAIL — CI-gateable, like scripts/net_smoke.sh.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+# shellcheck source=cache_dir.sh
+source "$SCRIPT_DIR/cache_dir.sh"
 
 TWIN="${1:-$PWD/assets/scenes/luncosim/sandbox_scene.usda}"
 # Prims the HOST must have (rhai `find`). Default suits the luncosim scene.
@@ -71,14 +74,7 @@ cargo build --bin luncosim --features networking -j"${SYNC_JOBS:-8}" || exit 2
 # cache root — both binaries use the OS-global default unless explicitly
 # overridden. Wipe ONLY `scenarios/`: nuking the whole
 # root strips fonts/models the app needs (the "cold-cache isolation gotcha").
-CACHE_ROOT="${LUNCOSIM_CACHE:-}"
-if [ -z "$CACHE_ROOT" ]; then
-  case "$(uname -s)" in
-    Darwin*) CACHE_ROOT="${HOME:?}/Library/Caches/lunco" ;;
-    MINGW*|MSYS*|CYGWIN*) CACHE_ROOT="${LOCALAPPDATA:-${HOME:?}/AppData/Local}/lunco" ;;
-    *) CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:?}/.cache}/lunco" ;;
-  esac
-fi
+CACHE_ROOT="$(resolve_cache_dir)"
 export LUNCOSIM_CACHE="$CACHE_ROOT"
 echo "==> cache root: $CACHE_ROOT (wiping scenarios/ for a cold sync)"
 rm -rf "$CACHE_ROOT/scenarios" 2>/dev/null || true

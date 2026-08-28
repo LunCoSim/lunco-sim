@@ -268,29 +268,29 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
             // The script is the one property a lesson cannot do without: with no
             // program there is nothing to run, so the lesson is not registered
             // rather than offered and then failing when a student picks it.
-            let script =
-                match lunco_usd_bevy::program::resolve_program(&program_view, &prim.path()) {
-                    Ok(lunco_usd_bevy::program::ResolvedProgram {
-                        backend: lunco_usd_bevy::program::ProgramBackend::Rhai,
-                        source: lunco_usd_bevy::program::ProgramSource::Asset(source),
-                    }) => source,
-                    Ok(_) => {
-                        let detail =
-                            format!("lesson '{path}' must select a Rhai info:sourceAsset; skipped");
-                        warn!("[tutorial] {detail}");
-                        out.failures.push(detail);
-                        continue;
-                    }
-                    Err(issue) => {
-                        let detail = format!(
-                            "lesson '{path}' has unresolved program {}: {}",
-                            issue.property, issue.message
-                        );
-                        warn!("[tutorial] {detail}");
-                        out.failures.push(detail);
-                        continue;
-                    }
-                };
+            let script = match lunco_usd_bevy::program::resolve_program(&program_view, &prim.path())
+            {
+                Ok(lunco_usd_bevy::program::ResolvedProgram {
+                    backend: lunco_usd_bevy::program::ProgramBackend::Rhai,
+                    source: lunco_usd_bevy::program::ProgramSource::Asset(source),
+                }) => source,
+                Ok(_) => {
+                    let detail =
+                        format!("lesson '{path}' must select a Rhai info:sourceAsset; skipped");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+                Err(issue) => {
+                    let detail = format!(
+                        "lesson '{path}' has unresolved program {}: {}",
+                        issue.property, issue.message
+                    );
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
             let payloads = match payload_assets(&prim) {
                 Ok(payloads) => payloads,
                 Err(error) => {

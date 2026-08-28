@@ -41,7 +41,6 @@ def Xform "SixWheelIndependent" (
 {
     uniform bool lunco:spawnable = true
     float physics:mass = 1400.0
-    float lunco:spawnLift = 1.0
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)

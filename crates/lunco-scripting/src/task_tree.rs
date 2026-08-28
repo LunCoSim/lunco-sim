@@ -265,17 +265,25 @@ impl Node<dyn TaskCtx> for Leaf {
     }
 }
 
-/// Extract an optional `FnPtr` field, erroring on a present-but-wrong type
-/// (the silent-skip alternative turns a typo'd action field into a no-op).
+/// Extract an anonymous closure field, erroring on a present-but-wrong type or
+/// a named `Fn("...")` pointer. Task callbacks need the method-bound `this`
+/// state, so accepting a named pointer would create a second callback contract
+/// and fail later with a misleading arity error.
 fn fnptr_field(m: &Map, key: &str) -> Result<Option<FnPtr>, String> {
     match m.get(key) {
         None => Ok(None),
         Some(v) if v.is_unit() => Ok(None),
-        Some(v) => v
-            .clone()
-            .try_cast::<FnPtr>()
-            .map(Some)
-            .ok_or_else(|| format!("task leaf `{key}` must be a closure/function pointer")),
+        Some(v) => {
+            let pointer = v.clone().try_cast::<FnPtr>().ok_or_else(|| {
+                format!("task leaf `{key}` must be an anonymous closure `|me| ...`")
+            })?;
+            if !pointer.is_anonymous() {
+                return Err(format!(
+                    "task leaf `{key}` must be an anonymous closure `|me| ...`; named `Fn(\"...\")` callbacks are not task leaves"
+                ));
+            }
+            Ok(Some(pointer))
+        }
     }
 }
 
@@ -568,6 +576,14 @@ mod tests {
         Dynamic::from_map(m)
     }
 
+    fn anonymous_fn() -> FnPtr {
+        let engine = rhai::Engine::new();
+        let ast = engine.compile("fn make() { |me| me }").unwrap();
+        engine
+            .call_fn(&mut rhai::Scope::new(), &ast, "make", ())
+            .unwrap()
+    }
+
     #[test]
     fn seq_of_dwells_advances_with_time() {
         // seq([ wait(1.0), wait(2.0) ]) — done only after 3 s of cumulative dwell.
@@ -627,7 +643,7 @@ mod tests {
         let tree = tagged(
             "act_until_event",
             &[
-                ("act", Dynamic::from(FnPtr::new("noop").unwrap())),
+                ("act", Dynamic::from(anonymous_fn())),
                 ("event", "GO".into()),
                 ("src", "launcher".into()),
             ],
@@ -707,6 +723,11 @@ mod tests {
         assert!(compile_node(&map(&[("items", Dynamic::from_array(vec![]))])).is_err()); // missing kind
         assert!(compile_node(&tagged("warp", &[])).is_err()); // unknown kind
         assert!(compile_node(&tagged("once", &[("act", Dynamic::from_int(5))])).is_err()); // act not a closure
+        assert!(compile_node(&tagged(
+            "once",
+            &[("act", Dynamic::from(FnPtr::new("named_action").unwrap()))],
+        ))
+        .is_err()); // named functions are not task callbacks
         assert!(compile_node(&tagged(
             "act_for",
             &[

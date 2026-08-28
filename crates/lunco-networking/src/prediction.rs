@@ -2334,7 +2334,7 @@ pub fn apply_net_replication(
 /// `SpawnCommandPlugin` (lunco-luncosim-edit) keeps `apply_replicated_spawns`, the
 /// first system of the old `Update` chain, because it spawns from the editor's
 /// catalog. The chain's relative order survives the split via
-/// [`lunco_core::NetcodeSet`]: sandbox-edit puts its system in
+/// [`lunco_core::NetcodeSet`]: scene-edit puts its system in
 /// `NetcodeSet::InstantiateSpawns`, and everything here runs in `NetcodeSet::Predict`,
 /// configured `.after()` it below. The internal order of the rest of the chain is
 /// unchanged.

@@ -597,6 +597,9 @@ fn invoke_task(
     me: i64,
     mut this: Dynamic,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+    // Task leaves are anonymous closures with the authored `(me)` contract.
+    // Calling them as methods supplies the persistent lifecycle map as `this`
+    // without changing the positional callback arguments.
     let result = f.call_as_method_within_context::<Dynamic>(&context, &mut this, (me,))?;
     let mut out = Map::new();
     out.insert("result".into(), result);
@@ -609,18 +612,14 @@ fn invoke_task(
 /// It has no world-touching top-level statements other than the imports/consts
 /// intentionally hoisted for this call. The task invoker is a native engine
 /// function so it can call the closure with a bound `this` pointer.
-fn build_task_ast(
-    full: &AST,
-    imports: Option<&AST>,
-    asset_id: Option<&str>,
-) -> Result<AST, rhai::ParseError> {
+fn build_task_ast(full: &AST, imports: Option<&AST>, asset_id: Option<&str>) -> AST {
     let mut base = imports
         .cloned()
         .unwrap_or_else(|| full.clone_functions_only());
     if let Some(id) = asset_id {
         base.set_source(id);
     }
-    Ok(base)
+    base
 }
 
 fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<AST, String> {
@@ -846,6 +845,17 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {
+        // An unqualified name is the canonical co-simulation port spelling.
+        // Resolve it before reflection: otherwise a port name that happens to
+        // match a registered reflected type can be captured by the component
+        // namespace and return that type's default scalar instead of the live
+        // producer value. Reflected component fields stay explicitly qualified
+        // as `Component.field`, so the two namespaces remain unambiguous.
+        if !path.contains('.') {
+            if let Some(p) = bridge_core::read_port(id as u64, path.as_str()) {
+                return Dynamic::from_float(p);
+            }
+        }
         if let Some(v) = bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()) {
             return v;
         }
@@ -1287,8 +1297,10 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         },
     );
 
-    // list_entities() -> [#{ id, name, type, pos, catalog_id }] for every
-    // registered entity. `catalog_id` is authored identity, never a name guess.
+    // list_entities() -> [#{ id, name, type, pos, catalog_id, input_surface,
+    // control_bound, celestial_body }] for every registered entity.
+    // `catalog_id` is authored identity, never a name guess; `input_surface`
+    // is the authoritative InputPorts readiness bit.
     engine.register_fn("list_entities", || -> Dynamic {
         bridge_core::list_entities(&RhaiBuilder)
     });
@@ -1888,15 +1900,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                                     return CompileOutcome::Failed(d);
                                 }
                             };
-                        let task_ast = match build_task_ast(&ast, imports_ast.as_ref(), asset_id) {
-                            Ok(ast) => ast,
-                            Err(e) => {
-                                error!("[rhai] entity {entity:?} generated task scope failed: {e}");
-                                let d = rhai_diagnostic(e.to_string(), e.position());
-                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                return CompileOutcome::Failed(d);
-                            }
-                        };
+                        let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
                         let p = Arc::new(CompiledProgram {
                             ast,
                             imports_ast,
@@ -2492,12 +2496,10 @@ pub fn drain_world_scripts(world: &mut World) {
     }
     for (id, code, authority, correlation_id) in pending {
         let outcome = match eval_with_world_as(world, &code, authority) {
-            Ok(stdout) => {
-                Ok(Ack::with_data(
-                    OpId::new(),
-                    serde_json::json!({ "stdout": stdout }),
-                ))
-            }
+            Ok(stdout) => Ok(Ack::with_data(
+                OpId::new(),
+                serde_json::json!({ "stdout": stdout }),
+            )),
             Err(e) => Err(e),
         };
         // `id == 0` means an in-process trigger with no internal result key.
@@ -2839,8 +2841,7 @@ mod tests {
         let imports = super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
             .expect("hoisted imports must parse")
             .expect("the scenario has a top-level import");
-        let task_ast = super::build_task_ast(&full, Some(&imports), Some("twin://ep1/main.rhai"))
-            .expect("task scope must compile");
+        let task_ast = super::build_task_ast(&full, Some(&imports), Some("twin://ep1/main.rhai"));
 
         let action: rhai::FnPtr = engine
             .call_fn_with_options(
@@ -2877,8 +2878,7 @@ mod tests {
             fn make_action() { |me| { this.count += me; this.count } }
         "#;
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        let task_ast = super::build_task_ast(&full, None, Some("twin://state/main.rhai"))
-            .expect("task scope must compile");
+        let task_ast = super::build_task_ast(&full, None, Some("twin://state/main.rhai"));
         let action: rhai::FnPtr = engine
             .call_fn_with_options(
                 rhai::CallFnOptions::new().eval_ast(true),
@@ -3162,6 +3162,7 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<ApiEntityRegistry>();
+        world.register_component::<lunco_core::InputPorts>();
         let parent = world.spawn(Name::new("base")).id();
         // Inserting ChildOf fires the relationship hook → parent gains Children.
         let child = world.spawn((Name::new("arm"), ChildOf(parent))).id();
@@ -3193,6 +3194,7 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<ApiEntityRegistry>();
+        world.register_component::<lunco_core::InputPorts>();
         let frame = world
             .spawn(lunco_core::WorldGridConfig::default().grid())
             .id();

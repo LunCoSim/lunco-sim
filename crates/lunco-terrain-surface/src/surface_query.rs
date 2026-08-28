@@ -310,6 +310,21 @@ impl GridSurfaceQuery<'_, '_> {
         self.raycast(origin, direction, max_distance)
     }
 
+    /// Convert a point returned by [`Self::raycast`] back into the floating-origin
+    /// render frame. Picking backends use this for `HitData::position`; keeping the
+    /// conversion here prevents a renderer-facing caller from reconstructing the
+    /// active grid origin and accidentally placing the hit in the wrong cell.
+    pub fn to_render(&self, point: GridPos) -> Option<RenderPos> {
+        let (_, grid) = self.frame()?;
+        let local_origin = grid.local_floating_origin();
+        let grid_relative = point.0 - grid.cell_to_float(&local_origin.cell());
+        Some(RenderPos(
+            local_origin
+                .grid_transform()
+                .transform_point3(grid_relative),
+        ))
+    }
+
     /// Split a grid-absolute point into the world grid's `(entity, cell, local)`
     /// so it can be spawned as a grid-direct child. The counterpart of
     /// [`Self::to_grid`] for the write side.
@@ -353,7 +368,7 @@ pub fn fit_footprint(
     half_w: f64,
     half_l: f64,
     sample: impl Fn(DVec3) -> Option<f64>,
-) -> SurfaceFit {
+) -> Option<SurfaceFit> {
     let forward_xz = {
         let f = DVec3::new(forward_xz.x, 0.0, forward_xz.z);
         if f.length_squared() < 1e-5 {
@@ -372,8 +387,8 @@ pub fn fit_footprint(
     ];
     let heights: Vec<DVec3> = corners
         .iter()
-        .map(|c| DVec3::new(c.x, sample(*c).unwrap_or(center.0.y), c.z))
-        .collect();
+        .map(|c| sample(*c).map(|y| DVec3::new(c.x, y, c.z)))
+        .collect::<Option<_>>()?;
     let (fl, fr, rl, rr) = (heights[0], heights[1], heights[2], heights[3]);
     let avg_y = (fl.y + fr.y + rl.y + rr.y) / 4.0;
 
@@ -412,11 +427,11 @@ pub fn fit_footprint(
         spawn_backward.as_vec3(),
     ));
 
-    SurfaceFit {
+    Some(SurfaceFit {
         point: GridPos(DVec3::new(center.0.x, avg_y, center.0.z)),
         normal,
         rotation,
-    }
+    })
 }
 
 /// Report a transformed terrain that has no streamed representation.
@@ -587,6 +602,7 @@ mod tests {
     fn fit_footprint_rests_on_the_sampled_surface() {
         let center = GridPos(DVec3::new(0.0, 0.0, 0.0));
         let fit = fit_footprint(center, DVec3::NEG_Z, 1.5, 1.5, |_| Some(SITE_ELEVATION));
+        let fit = fit.expect("all four corners have a surface sample");
         assert!((fit.point.0.y - SITE_ELEVATION).abs() < 1e-9);
         assert!((fit.normal - DVec3::Y).length() < 1e-9);
     }
@@ -596,7 +612,19 @@ mod tests {
         let center = GridPos(DVec3::ZERO);
         // Ground rising towards +x at 45°.
         let fit = fit_footprint(center, DVec3::NEG_Z, 1.0, 1.0, |c| Some(c.x));
+        let fit = fit.expect("all four corners have a surface sample");
         assert!(fit.normal.y > 0.0);
         assert!(fit.normal.x < 0.0, "normal must lean away from the rise");
+    }
+
+    #[test]
+    fn fit_footprint_rejects_missing_corner_samples() {
+        let fit = fit_footprint(GridPos(DVec3::ZERO), DVec3::NEG_Z, 1.0, 1.0, |corner| {
+            (corner.x >= 0.0).then_some(0.0)
+        });
+        assert!(
+            fit.is_none(),
+            "missing corner data must not become center height"
+        );
     }
 }

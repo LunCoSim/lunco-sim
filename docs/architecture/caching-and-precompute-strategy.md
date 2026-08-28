@@ -55,9 +55,9 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 
 | Primitive | Where | What it gives us |
 |---|---|---|
-| Per-platform cache root | `lunco-assets/src/lib.rs:168` `cache_dir()` | `~/.cache/lunco` (Linux) / `~/Library/Caches/lunco` (mac) / `%LOCALAPPDATA%\lunco` (win), `LUNCOSIM_CACHE` override, `cache://` asset source. wasm returns nominal (no FS). |
+| Per-platform cache root | `lunco-assets/src/lib.rs:168` `cache_dir()` | `~/.cache/lunco` (Linux) / `~/Library/Caches/lunco` (mac) / `%LOCALAPPDATA%\lunco` (win), `LUNCOSIM_CACHE` override. wasm returns nominal (no FS). |
 | Named cache subdirs | `lunco-assets` `cache_subdir`, `textures_dir`, `msl_dir`, … | An established taxonomy under the root. |
-| **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `cache://terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
+| **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `<cache_dir>/terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
 | In-memory async dedup | **The ECS idiom** — a `Task` *Component* + `Without<BakeTask>` in the spawning query (`lunco-environment/src/horizon.rs:274`, `terrain-surface/src/derived_layers.rs:96`, `celestial/src/trajectories.rs:82`, …) | Entity-keyed load with in-flight dedup **for free** — the query filter *is* the pending set. This is what the codebase actually converged on; see the note below. |
 | I/O chokepoint | `lunco-storage` `atomic_write` / `read_file_sync` | Cross-target, wasm-aware; tmp+fsync+rename. |
 | SHA-256 asset pinning | `lunco-assets/src/download.rs:63` | Integrity + skip-redownload on hash match. |

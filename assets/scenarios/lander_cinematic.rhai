@@ -83,7 +83,7 @@ fn cinematic_intro() {
         // the timed cuts (doc 35, slice 1). Progressive mounted cameras (wide →
         // medium → onboard) all ride the descending lander and auto-aim, so each
         // cut reads as a continuous push-in / zoom toward the surface.
-        once(Fn("cinematic_intro_notice")),
+        once(|m| cinematic_intro_notice(m)),
         wait(6.0),
     ])
 }
@@ -92,11 +92,11 @@ fn cinematic_approach() {
     seq([
 
         // ── Beat 2: closer external tracking shot (cut driven by CameraTrack) ─
-        once(Fn("tracking_notice")),
+        once(|m| tracking_notice(m)),
         wait(6.0),
 
         // ── Beat 3: onboard descent POV (cut driven by CameraTrack) ─────────
-        once(Fn("approach_notice")),
+        once(|m| approach_notice(m)),
 
         // ── Beat 4: landing transition join ────────────────────────────────
         // The physical touchdown and both GNC mode transitions are independent
@@ -106,7 +106,7 @@ fn cinematic_approach() {
             wait_for_from("lander_flight_handoff", "/LanderTest/Lander/GNC"),
             wait_for_from("lander_touchdown", "/LanderTest/Lander"),
         ]),
-        once(Fn("touchdown_notice")),
+        once(|m| touchdown_notice(m)),
     ])
 }
 
@@ -115,9 +115,9 @@ fn deploy_rover() {
         wait(2.0),
 
         // ── Beat 5: deploy the rover ────────────────────────────────────────
-        once(Fn("deploy_notice")),
+        once(|m| deploy_notice(m)),
         wait(2.0),
-        once(Fn("engage_notice")),
+        once(|m| engage_notice(m)),
     ])
 }
 
@@ -125,14 +125,14 @@ fn gate_one() {
     seq([
         // ── Beat 6: planned 3-gate survey (chase cam follows) ───────────────
         wait_for("waypoint_1_reached"),
-        once(Fn("gate_one_notice")),
+        once(|m| gate_one_notice(m)),
     ])
 }
 
 fn gate_two() {
     seq([
         wait_for("waypoint_2_reached"),
-        once(Fn("gate_two_notice")),
+        once(|m| gate_two_notice(m)),
     ])
 }
 
@@ -141,7 +141,7 @@ fn gate_three() {
         wait_for("waypoint_3_reached"),
 
         // ── Beat 7: pull back to the wide shot ──────────────────────────────
-        once(Fn("survey_complete_notice")),
+        once(|m| survey_complete_notice(m)),
     ])
 }
 

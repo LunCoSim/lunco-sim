@@ -593,7 +593,7 @@ def Xform "SandboxScene" (
     # Demonstrates the `lunco-usd-avian` joint pipeline end-to-end.
     # Two side-by-side cubes (red + orange) sit 3 m apart, joined
     # by a `PhysicsFixedJoint` whose anchors coincide at the midpoint
-    # between them. Move either cube with the sandbox-edit gizmo and
+    # between them. Move either cube with the scene-edit gizmo and
     # the other follows rigidly — that's the visible proof the joint
     # is constraining their relative pose.
     #

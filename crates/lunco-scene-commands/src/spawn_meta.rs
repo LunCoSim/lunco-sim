@@ -23,9 +23,9 @@
 //!
 //! So there is now ONE path: fetch the bytes, hand them to openusd. Which means:
 //!
-//! - **One parser** — the real one. `bool lunco:spawnable` reads as a `bool`,
-//!   `float lunco:spawnLift` as a float, and a description containing an `=`, a
-//!   quote, or a newline parses correctly instead of being mangled by a scan.
+//! - **One parser** — the real one. `bool lunco:spawnable` is read as a `bool`,
+//!   and a description containing an `=`, a quote, or a newline parses correctly
+//!   instead of being mangled by a scan.
 //! - **No stale table.** The bake was a *copy* of the assets' contents compiled
 //!   into the binary. Edit an asset without rebuilding and the web silently
 //!   served the old metadata; ship an asset the bake never saw and it was, by
@@ -34,11 +34,10 @@
 //!
 //! # The properties are real USD now
 //!
-//! `lunco:spawnable` and `lunco:spawnLift` are declared by **`LunCoCatalogAPI`**
-//! (`lunco-usd/schema/schema.usda`), applied to the asset's default prim. They were
-//! undeclared names, and the assets disagreed about admitting it — `custom bool
-//! lunco:spawnable` was honest, while `float lunco:spawnLift` was authored *without*
-//! `custom`, claiming a schema that did not exist.
+//! `lunco:spawnable` is declared by **`LunCoCatalogAPI`**
+//! (`lunco-usd/schema/schema.usda`), applied to the asset's default prim. It is
+//! an explicit opt-in; placement is derived from standard `UsdPhysics` collision
+//! geometry by the editor.
 //!
 //! `lunco:description` is **deleted**, not declared. USD already has this field: every
 //! prim carries `doc` metadata — the standard "what is this thing" string that usdview
@@ -61,8 +60,6 @@ pub struct SpawnMeta {
     /// forgotten to, so they showed up as spawnable parts. A default that must be
     /// disclaimed everywhere is a default that leaks.
     pub spawnable: bool,
-    /// `float lunco:spawnLift` — metres to lift the spawn point.
-    pub lift: f32,
     /// The prim's **`doc` metadata** — the blurb shown as a palette/Scenarios
     /// tooltip.
     ///
@@ -76,7 +73,6 @@ impl Default for SpawnMeta {
     fn default() -> Self {
         SpawnMeta {
             spawnable: false,
-            lift: 0.0,
             description: None,
         }
     }
@@ -94,9 +90,8 @@ pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
     SpawnMeta {
         // Typed: `bool`, not the string "true". The scan this replaces accepted
         // `true` or `1` textually and would equally have accepted `truthy`.
-        // Both are declared by `LunCoCatalogAPI` (see lunco-usd/schema/schema.usda).
+        // Declared by `LunCoCatalogAPI` (see lunco-usd/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
-        lift: prim.real_f32("lunco:spawnLift").unwrap_or(0.0),
         // USD's `doc` prim metadata — NOT an attribute of ours. See the field doc.
         description: prim.documentation(),
     }
@@ -117,7 +112,6 @@ def Xform "Rover" (
 )
 {
     uniform bool lunco:spawnable = true
-    float lunco:spawnLift = 1.5
 }
 "#;
 
@@ -125,7 +119,6 @@ def Xform "Rover" (
     fn reads_typed_metadata_off_the_default_prim() {
         let m = parse_spawn_meta(SRC);
         assert!(m.spawnable);
-        assert_eq!(m.lift, 1.5);
         assert_eq!(m.description.as_deref(), Some("A rover."));
     }
 
@@ -134,21 +127,12 @@ def Xform "Rover" (
         let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n}\n";
         let m = parse_spawn_meta(src);
         assert!(!m.spawnable);
-        assert_eq!(m.lift, 0.0);
         assert_eq!(m.description, None);
     }
 
     #[test]
     fn unparseable_source_is_not_spawnable() {
         assert_eq!(parse_spawn_meta("not usd at all"), SpawnMeta::default());
-    }
-
-    /// `double lunco:spawnLift` must not be silently dropped for being authored
-    /// in the other precision — the `real_f32` rule (see `UsdRead::real_f32`).
-    #[test]
-    fn lift_tolerates_double_authoring() {
-        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    double lunco:spawnLift = 2\n}\n";
-        assert_eq!(parse_spawn_meta(src).lift, 2.0);
     }
 
     /// The line scan this replaces split on `=` and took the first quoted run on

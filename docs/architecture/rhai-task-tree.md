@@ -43,6 +43,15 @@ they are intentionally not replaced by a task enum. The Rust adapter parses a
 discriminator once into its private `TaskKind` enum, then dispatches only on
 that enum and the maintained `lunco-behavior` node constructors.
 
+## Leaf callback contract
+
+Action and predicate fields are anonymous Rhai closures with one positional
+argument: `|me| ...`. `me` is the host entity id. The native task driver binds
+the persistent scenario-state map as `this` while invoking the closure, so task
+policy can use state without a second callback convention. Named
+`Fn("...")` pointers are rejected as task leaves; named helpers may still be
+called explicitly from an anonymous closure.
+
 ## Authoring rule
 
 Production scripts return a tree from `fn task(me)`. The native kernel owns the

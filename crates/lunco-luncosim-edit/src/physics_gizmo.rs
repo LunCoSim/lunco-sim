@@ -56,7 +56,7 @@
 //!
 //! This module takes a `Gizmos` system param, which panics without
 //! `GizmoPlugin`. It is therefore registered only inside
-//! [`crate::SandboxEditPlugin`], which itself is only added by the
+//! [`crate::SceneEditPlugin`], which itself is only added by the
 //! render-side UI plugin (`lunco-luncosim`'s `ui` module) — the same
 //! gate `physics_viz.rs` and `joint_viz.rs` live behind. Headless
 //! hosts link only `lunco-scene-commands` and never see this code.

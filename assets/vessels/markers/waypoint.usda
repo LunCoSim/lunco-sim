@@ -7,8 +7,9 @@
 
 # Reusable mission waypoint marker — a translucent glowing DOME a vehicle is
 # meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
-# body. Arrival is an EVENT (`enter:waypoint`) reacted to in rhai, not a per-tick
-# distance poll.
+# body. The physics Sensor is consumed by the shared route projection, which
+# emits the canonical `waypoint.reached` event for Rhai; mission code does not
+# poll a duplicate distance tolerance.
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`. Transparency
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +

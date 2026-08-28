@@ -3,13 +3,16 @@
 //!
 //! (Design: `docs/architecture/waypoints-in-usd.md`.)
 //!
-//! There is no checkpoint domain. A waypoint is an ordinary prim referencing
+//! A document-backed waypoint is an ordinary prim referencing
 //! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission
 //! (the `info:sourceCode` of its `LunCoProgramAPI "Mission"` child) gains a `drive_to`
 //! leaf that names it by path. Both edits go
 //! through the one authoring funnel, [`ApplyUsdOp`] — so the waypoint is journaled,
 //! undoable, persisted to `.usda`, and replicated exactly like every other prim, with
 //! no new command verb.
+//! Runtime-only rovers use the existing `AddRuntimeWaypoint` behavior command because
+//! they have no document to author; that path shares the same route projection and
+//! marker asset.
 //!
 //! Everything else about a waypoint is therefore already implemented, by code that
 //! knows nothing about waypoints:
@@ -51,10 +54,25 @@ use lunco_usd::document::{
 };
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
 
+use super::authoring_paths::{join_prim, prim_exists};
+use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
+
 fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
     warn!("[waypoint] {message}");
     lunco_core::trigger_error(commands, "waypoint-edit-failed", message);
+}
+
+/// Return the mounted scene root represented by a vessel prim path.
+///
+/// A waypoint must be authored below the vessel's actual composed root. The
+/// prim path is the only identity that survives references and Twin
+/// recomposition; a document-layer `defaultPrim` or `/` is not a valid
+/// substitute for malformed runtime identity.
+fn vessel_root_path(path: &str) -> Option<String> {
+    path.split('/')
+        .find(|component| !component.is_empty())
+        .map(|component| format!("/{component}"))
 }
 
 /// Track context menu state for right-clicking waypoints.
@@ -78,21 +96,24 @@ pub enum PlacementMode {
     InsertAfter,
 }
 
-/// A waypoint edit waiting on a ground click, armed from the context menu.
+/// A waypoint edit waiting on a ground click.
 ///
-/// Addressed by DOCUMENT + PRIM PATH, never by the vessel's `Entity`. Authoring the
-/// arming edit can recompose the stage, which despawns and respawns the vessel — a
-/// captured `Entity` is stale by the time the ground click lands, and the placement
-/// then failed silently ("vessel has no BehaviorXml/UsdPrimPath"). The path is stable
-/// across recomposition, so the owning vessel is re-resolved at click time from the
-/// mission that names this waypoint (see [`vessel_for_target`]).
+/// Move and insert are addressed by document + prim path, never by a vessel
+/// entity. Append resolves the selected or possessed vessel when the click lands,
+/// so a scene recompose cannot leave an armed tool holding a stale entity.
 #[derive(Debug)]
-pub struct PendingPlacement {
-    /// The document that owns the marker (and the mission that names it).
-    pub doc: lunco_doc::DocumentId,
-    /// The waypoint MARKER prim path: the leg to move, or the leg to insert after.
-    pub coord_key: String,
-    pub mode: PlacementMode,
+pub enum PendingPlacement {
+    /// An edit armed by a waypoint context menu.
+    Route {
+        /// The document that owns the marker and mission.
+        doc: lunco_doc::DocumentId,
+        /// The marker prim path whose leg is edited.
+        coord_key: String,
+        /// The edit operation.
+        mode: PlacementMode,
+    },
+    /// Append a route member to the selected or possessed vessel.
+    Append,
 }
 
 /// Armed "click the ground to place" mode. While `Some`, the next scene click is
@@ -103,6 +124,61 @@ pub struct PendingPlacement {
 /// not siblings).
 #[derive(Resource, Default)]
 pub struct WaypointPlacement(pub Option<PendingPlacement>);
+
+/// Identity of one pointer click as seen by the global picking observer.
+///
+/// Streamed terrain can be reported by both the analytic backend and a resident
+/// mesh backend in the same frame. `bevy_picking` dispatches that one pointer
+/// action to each eligible target, but waypoint authoring is one global
+/// operation rather than a per-target operation. Deduplicate at this operation's
+/// owner so every click path remains the normal `Pointer<Click>` path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WaypointClickFingerprint {
+    frame_time: f64,
+    pointer: bevy::picking::pointer::PointerId,
+    position: Vec2,
+    count: u8,
+    duration: std::time::Duration,
+}
+
+fn duplicate_waypoint_click(
+    last: &mut Option<WaypointClickFingerprint>,
+    frame_time: f64,
+    click: &Pointer<Click>,
+) -> bool {
+    let fingerprint = WaypointClickFingerprint {
+        frame_time,
+        pointer: click.pointer_id,
+        position: click.pointer_location.position,
+        count: click.count,
+        duration: click.duration,
+    };
+    let duplicate = *last == Some(fingerprint);
+    *last = Some(fingerprint);
+    duplicate
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct WaypointClickDedup(Option<WaypointClickFingerprint>);
+
+impl WaypointClickDedup {
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
+/// Arm route-member placement from the Spawn palette's semantic Waypoint entry.
+/// The ground-click handler selects authored USD or runtime patrol ownership at
+/// the same boundary used by Alt+LMB.
+#[derive(Event)]
+pub(crate) struct AppendWaypointPlacementRequested;
+
+pub(crate) fn on_append_waypoint_placement_requested(
+    _trigger: On<AppendWaypointPlacementRequested>,
+    mut placement: ResMut<WaypointPlacement>,
+) {
+    placement.0 = Some(PendingPlacement::Append);
+}
 
 /// Mirror [`WaypointPlacement`] into the shared `WaypointToolActive` gate so the
 /// avatar-possession and entity-selection observers stand down while a placement is
@@ -154,7 +230,12 @@ fn on_cancel_waypoint_edit(
     mut menu_open: ResMut<lunco_core::WaypointMenuOpen>,
 ) {
     if let Some(p) = placement.0.take() {
-        info!("[waypoint] cancelled {:?} of '{}'", p.mode, p.coord_key);
+        match p {
+            PendingPlacement::Route {
+                mode, coord_key, ..
+            } => info!("[waypoint] cancelled {:?} of '{}'", mode, coord_key),
+            PendingPlacement::Append => info!("[waypoint] cancelled append placement"),
+        }
     }
     menu_state.entity = None;
     menu_open.0 = false;
@@ -211,6 +292,8 @@ impl<'w> WaypointDocContext<'w> {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointClickFrame<'w, 's> {
     pub viewport: Res<'w, SceneViewport>,
+    dedup: ResMut<'w, WaypointClickDedup>,
+    time: Res<'w, Time>,
     pub cameras: Query<
         'w,
         's,
@@ -236,6 +319,12 @@ pub struct WaypointClickFrame<'w, 's> {
     >,
 }
 
+impl WaypointClickFrame<'_, '_> {
+    fn is_duplicate(&mut self, click: &Pointer<Click>) -> bool {
+        duplicate_waypoint_click(&mut self.dedup.0, self.time.elapsed_secs_f64(), click)
+    }
+}
+
 /// Vessel-side queries bundled separately from the click-ray inputs so the
 /// waypoint click observer stays within Bevy's system-parameter limit. The bundle also
 /// makes the authored-document and runtime-only target surfaces explicit in one
@@ -256,9 +345,8 @@ pub struct WaypointVesselQueries<'w, 's> {
 ///
 /// Casts through the active camera against BOTH the DEM oracle (ground truth over open
 /// terrain, where the band-limited collider ring rounds a crater bowl) and the physics
-/// colliders (structures/props), taking the nearer hit — the same pairing
-/// `spawn::on_scene_click_spawn` uses. [`GridSpatialQuery`] converts the winning
-/// render-frame hit to grid-absolute world coordinates.
+/// colliders (structures/props), taking the nearer hit. The shared surface resolver
+/// owns the frame conversion and precedence policy used by spawn as well.
 fn pick_ground_world(
     frame: &WaypointClickFrame,
     surface: &lunco_terrain_surface::GridSurfaceQuery,
@@ -281,46 +369,16 @@ fn pick_ground_world(
         lunco_core::coords::RenderPos(ray.origin.as_dvec3()),
         ray.direction,
     )?;
-    let dir = direction.as_dvec3();
-    let phys_hit = raycaster
-        .cast_ray_grid(
-            origin,
-            direction,
-            1.0e6,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        )
-        // Collider tiles are band-limited, streamed approximations.  A tile
-        // hit must never replace the DEM's absolute surface in authored
-        // waypoint coordinates; static props remain eligible physics hits.
-        .filter(|hit| !frame.terrain_colliders.contains(hit.entity));
-    let phys = phys_hit.map(|hit| hit.distance);
-    let terr = surface.raycast(origin, direction, 1.0e6);
-    select_ground_point(origin.0, dir, phys, terr)
-}
-
-/// Choose the nearest authored placement surface after streamed terrain
-/// colliders have been removed from the physics candidate set.
-///
-/// Keeping this small decision pure makes the precedence contract explicit:
-/// the analytic DEM is the terrain authority, while a real physics prop that
-/// lies above it remains selectable.
-fn select_ground_point(
-    origin: DVec3,
-    direction: DVec3,
-    physics_distance: Option<f64>,
-    terrain: Option<lunco_terrain_surface::surface_query::SurfaceHit>,
-) -> Option<DVec3> {
-    match (physics_distance, terrain) {
-        (Some(pd), Some(hit)) => Some(if hit.distance <= pd {
-            hit.point.0
-        } else {
-            origin + direction * pd
-        }),
-        (Some(pd), None) => Some(origin + direction * pd),
-        (None, Some(hit)) => Some(hit.point.0),
-        (None, None) => None,
-    }
+    cursor_surface_hit(
+        surface,
+        raycaster,
+        origin,
+        direction,
+        1.0e6,
+        SurfacePickPolicy::Nearest,
+        |entity| !frame.terrain_colliders.contains(entity),
+    )
+    .map(|hit| hit.point.0)
 }
 
 /// Global `Pointer<Click>` observer: the `PlaceWaypoint` input intent paired with
@@ -331,7 +389,7 @@ fn select_ground_point(
 /// Stands down when the spawn / terrain-sculpt tool is armed, and when egui owns the
 /// pointer (the authoritative gate). The semantic waypoint intent is excluded from
 /// the possession observer, so this click does not also possess or follow the hit.
-pub fn on_scene_click_checkpoint(
+pub fn on_scene_click_waypoint(
     mut click: On<Pointer<Click>>,
     egui_focus: Res<EguiFocus>,
     spawn_tool: Res<SpawnToolActive>,
@@ -341,7 +399,8 @@ pub fn on_scene_click_checkpoint(
     avatars: Query<(Entity, &IntentState), (With<Avatar>, With<LocalAvatar>)>,
     simulated_intents: Option<Res<SimulatedIntents>>,
     q_link: Query<&ControllerLink>,
-    frame: WaypointClickFrame,
+    mut placement: ResMut<WaypointPlacement>,
+    mut frame: WaypointClickFrame,
     vessels: WaypointVesselQueries,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     raycaster: lunco_physics::GridSpatialQuery,
@@ -359,9 +418,18 @@ pub fn on_scene_click_checkpoint(
     if click.button != PointerButton::Primary {
         return;
     }
+    if frame.is_duplicate(&click) {
+        return;
+    }
+    let append_armed = matches!(placement.0.as_ref(), Some(PendingPlacement::Append));
+    // Move / Insert-after owns the next click. Do not let an incidental Alt key
+    // (or another pointer hit for the same click) create a competing append.
+    if placement.0.is_some() && !append_armed {
+        return;
+    }
     // A plain primary click possesses/selects; the semantic PlaceWaypoint intent
-    // paired with it drops a waypoint. The input map supplies that intent, so
-    // rebinding the gesture changes this path without editor-only key handling.
+    // paired with it drops a waypoint. The Spawn palette's Append mode uses the
+    // same authoring path without requiring a keyboard modifier.
     let place_waypoint_held = local_avatar
         .0
         .and_then(|entity| avatars.get(entity).ok())
@@ -373,7 +441,7 @@ pub fn on_scene_click_checkpoint(
                         .is_some_and(|set| set.contains(&UserIntent::PlaceWaypoint))
                 })
         });
-    if !place_waypoint_held {
+    if !append_armed && !place_waypoint_held {
         return;
     }
 
@@ -433,6 +501,10 @@ pub fn on_scene_click_checkpoint(
         return;
     };
 
+    if append_armed {
+        placement.0.take();
+    }
+
     info!("[waypoint] dropping waypoint at {:?}", hit);
 
     // A runtime-spawned asset is not backed by an authored scene document. Route
@@ -458,16 +530,16 @@ pub fn on_scene_click_checkpoint(
     // is the scene's default prim (e.g. "/Traverse" for traverse.usda). This is
     // more robust than reading defaultPrim from the document layer, which may
     // differ when the vessel is composed from a referenced twin scene.
-    let root = vessel_prim
-        .path
-        .split('/')
-        .nth(1) // first non-empty component after the leading '/'
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| {
-            lunco_usd_bevy::layer_default_prim(host.document().data())
-                .map(|p| format!("/{p}"))
-                .unwrap_or_else(|| "/".to_string())
-        });
+    let Some(root) = vessel_root_path(&vessel_prim.path) else {
+        report_waypoint_failure(
+            &mut commands,
+            format!(
+                "Vessel prim path {:?} has no mounted scene root",
+                vessel_prim.path
+            ),
+        );
+        return;
+    };
     // ── The MARKER is an authored prim ────────────────────────────────────────
     // Not a Rust-built sphere: `vessels/markers/waypoint.usda` already defines
     // the dome, its livery and its arrival trigger zone. Referencing it means
@@ -501,11 +573,13 @@ pub fn on_scene_click_checkpoint(
     let (mission, mission_ops) =
         ensure_mission_program_ops(host, &vessel_prim.path, mission_exists);
     ops.extend(mission_ops);
-    ops.extend(lunco_usd::program::inline_program_source_ops(
-        LayerId::root(),
-        mission.clone(),
-        xml,
-    ));
+    ops.push(UsdOp::SetAttribute {
+        edit_target: LayerId::root(),
+        path: mission.clone(),
+        name: "info:sourceCode".to_string(),
+        type_name: "string".to_string(),
+        value: xml,
+    });
     info!(
         "[waypoint] writing to doc {:?}, mission prim {:?}",
         doc, mission
@@ -587,7 +661,9 @@ pub fn on_scene_click_place_waypoint(
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
 ) {
-    if placement.0.is_none() || click.button != PointerButton::Primary {
+    if click.button != PointerButton::Primary
+        || !matches!(placement.0.as_ref(), Some(PendingPlacement::Route { .. }))
+    {
         return;
     }
     if egui_focus.wants_pointer {
@@ -595,12 +671,20 @@ pub fn on_scene_click_place_waypoint(
         return; // clicking the menu itself, not the ground
     }
     click.propagate(false);
-    let Some(pending) = placement.0.take() else {
-        return;
+    let Some(pending @ PendingPlacement::Route { .. }) = placement.0.take() else {
+        unreachable!("route placement was checked immediately before consumption");
+    };
+    let PendingPlacement::Route {
+        doc,
+        coord_key,
+        mode,
+    } = pending
+    else {
+        unreachable!("append placement is handled by on_scene_click_waypoint");
     };
     info!(
         "[waypoint] placement: consuming click for {:?} of '{}'",
-        pending.mode, pending.coord_key
+        mode, coord_key
     );
 
     let Some(world) = pick_ground_world(
@@ -613,8 +697,6 @@ pub fn on_scene_click_place_waypoint(
         info!("[waypoint] placement cancelled: no ground under the cursor");
         return;
     };
-    let doc = pending.doc;
-
     // MOVE repositions the MARKER, and touches the mission not at all: the leg
     // targets the prim by path, and the prim's pose is the prim's business. The
     // coordinate-in-the-XML spelling had to rewrite the whole mission to drag a
@@ -623,13 +705,13 @@ pub fn on_scene_click_place_waypoint(
     // It therefore needs NOTHING but the marker path and its document — no vessel
     // lookup, so a stage recomposition between arming the move and clicking the
     // ground (which respawns the vessel entity) cannot strand it.
-    if pending.mode == PlacementMode::Move {
-        info!("[waypoint] Move → {} to {:?}", pending.coord_key, world);
+    if mode == PlacementMode::Move {
+        info!("[waypoint] Move → {} to {:?}", coord_key, world);
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
-                path: pending.coord_key,
+                path: coord_key,
                 value: [world.x, world.y, world.z],
             },
         });
@@ -639,22 +721,26 @@ pub fn on_scene_click_place_waypoint(
     // INSERT-AFTER edits the mission, so it does need the vessel — resolved HERE,
     // from the route that names this waypoint, rather than from an entity captured
     // when the menu was open.
-    let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
+    let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &coord_key) else {
         report_waypoint_failure(
             &mut commands,
             format!(
                 "No unique vessel mission refers to '{}'; waypoint insertion was refused",
-                pending.coord_key
+                coord_key
             ),
         );
         return;
     };
-    let root = vessel_prim
-        .path
-        .split('/')
-        .nth(1)
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
+    let Some(root) = vessel_root_path(&vessel_prim.path) else {
+        report_waypoint_failure(
+            &mut commands,
+            format!(
+                "Vessel prim path {:?} has no mounted scene root",
+                vessel_prim.path
+            ),
+        );
+        return;
+    };
     let Some(host) = doc_ctx.usd_registry.host(doc) else {
         report_waypoint_failure(
             &mut commands,
@@ -663,15 +749,19 @@ pub fn on_scene_click_place_waypoint(
         return;
     };
     let (new_target, mut ops) = author_marker_ops(host, &root, world, &canonical, vessel_prim);
-    let edited = insert_waypoint_after(&xml.0, &pending.coord_key, &new_target);
+    let edited = insert_waypoint_after(&xml.0, &coord_key, &new_target);
     match edited {
         Ok(new_xml) => {
-            info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            ops.extend(lunco_usd::program::inline_program_source_ops(
-                LayerId::root(),
-                join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
-                new_xml,
-            ));
+            info!("[waypoint] {:?} → {}", mode, new_target);
+            ops.push(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                // Editing an EXISTING tree, so the program prim is already there —
+                // the XML above was read back off it.
+                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
+                name: "info:sourceCode".to_string(),
+                type_name: "string".to_string(),
+                value: new_xml,
+            });
             commands.trigger(ApplyUsdOps {
                 doc,
                 label: "Insert waypoint".to_string(),
@@ -770,7 +860,7 @@ pub fn draw_waypoint_context_menu(
                     )
                     .clicked()
                 {
-                    placement.0 = Some(PendingPlacement {
+                    placement.0 = Some(PendingPlacement::Route {
                         doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::Move,
@@ -786,7 +876,7 @@ pub fn draw_waypoint_context_menu(
                     .clicked()
                 {
                     info!("[waypoint] armed Insert-after of '{}'", marker_target);
-                    placement.0 = Some(PendingPlacement {
+                    placement.0 = Some(PendingPlacement::Route {
                         doc,
                         coord_key: marker_target.clone(),
                         mode: PlacementMode::InsertAfter,
@@ -864,14 +954,15 @@ pub fn draw_waypoint_context_menu(
     menu_state.dwell = dwell;
 
     if let Some(value) = edited {
-        commands.trigger(ApplyUsdOps {
+        commands.trigger(ApplyUsdOp {
             doc,
-            label: "Update waypoint mission".to_string(),
-            ops: lunco_usd::program::inline_program_source_ops(
-                LayerId::root(),
-                join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
+            op: UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
+                name: "info:sourceCode".to_string(),
+                type_name: "string".to_string(),
                 value,
-            ),
+            },
         });
     }
 
@@ -1148,10 +1239,11 @@ fn author_marker_ops(
 ) -> (String, Vec<UsdOp>) {
     let route_scope = join_prim(root, WAYPOINT_ROUTE_SCOPE);
     let mut ops = Vec::new();
-    // `AddPrim` on an existing prim is a rejection, not a merge.
-    if !composed_prim_exists(canonical, vessel_prim, &route_scope)
-        && !prim_exists(host, &route_scope)
-    {
+    // The composed stage can already contain Route from a referenced or variant
+    // layer, while this document's root layer has no local parent spec. AddPrim
+    // validates the edit target's authored data, so composed existence cannot
+    // suppress this required local spec.
+    if !prim_exists(host, &route_scope) {
         ops.push(UsdOp::AddPrim {
             edit_target: LayerId::root(),
             parent_path: root.to_string(),
@@ -1191,33 +1283,24 @@ fn author_marker_ops(
     (marker_path, ops)
 }
 
-/// Join a parent prim path and a child name, handling the stage root (`"/"`).
-fn join_prim(parent: &str, name: &str) -> String {
-    if parent == "/" {
-        format!("/{name}")
-    } else {
-        format!("{parent}/{name}")
-    }
-}
-
 /// The API-applied Scope that carries a vessel's mission tree, creating it if
-/// this is the first waypoint — returns the path to author the selected inline
-/// source onto
+/// this is the first waypoint — returns the path to author `info:sourceCode` onto
 /// and the operations needed to create it when absent.
 ///
 /// The tree is a PROGRAM, not an attribute on the vessel: a mission is bolted on,
 /// so it is a child prim that can be deleted to remove the behaviour, and the
-/// selected implementation arm is `sourceCode` for these editor writes.
-/// `process_usd_sim_prims` reads it back off this child and stamps
+/// behaviour engine is chosen by the source's extension exactly as `.mo` and
+/// `.rhai` are. `process_usd_sim_prims` reads it back off this child and stamps
 /// `BehaviorXml` on the vessel that owns it.
 ///
 /// `AddPrim` on an existing prim is a rejection rather than a merge, so it is only
 /// authored when genuinely absent.
 ///
 /// `mission_exists` comes from the **live composed stage**, not the document
-/// layer. Traverse authors its mission inside the selected site variant; an
-/// authored-layer lookup cannot see that composed prim and used to create a
-/// duplicate Mission on the first waypoint click, forcing a rover re-projection.
+/// layer. Traverse authors its mission inside the selected site variant; the
+/// existing `SetAttribute` document operation creates a local over when the
+/// composed prim is absent from the root layer. Do not add a duplicate local
+/// Mission spec here merely because the mission came from a referenced layer.
 fn ensure_mission_program_ops(
     host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
     vessel_path: &str,
@@ -1240,18 +1323,6 @@ fn ensure_mission_program_ops(
         });
     }
     (path, ops)
-}
-
-/// Whether `path` is already authored in either layer of the document.
-fn prim_exists(
-    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
-    path: &str,
-) -> bool {
-    let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else {
-        return false;
-    };
-    host.document().data().spec(&sdf).is_some()
-        || host.document().runtime_data().spec(&sdf).is_some()
 }
 
 /// Waypoint creation targets the selected USD variant, so its existence
@@ -1773,7 +1844,7 @@ pub(crate) fn arm_route_projection_rebuild(
     if !q_route_inputs.is_empty()
         || !q_route_poses.is_empty()
         || !q_surface.is_empty()
-        || removed_xml.read().count() > 0
+        || removed_xml.read().next().is_some()
         || active_frame.is_changed()
         || selected.is_changed()
         || local_avatar.is_changed()
@@ -1797,7 +1868,6 @@ pub(crate) fn route_projection_rebuild_is_pending(
 /// route projection owns only the transient line view. It is change-gated by
 /// the same authoritative inputs and does no work while they are stable.
 pub(crate) fn project_waypoint_markers_to_surface(
-    mut commands: Commands,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
@@ -1806,16 +1876,14 @@ pub(crate) fn project_waypoint_markers_to_surface(
         Query<(
             Entity,
             &lunco_usd_sim::marker::WaypointMarker,
-            Option<&mut big_space::grid::cell::CellCoord>,
+            &mut big_space::grid::cell::CellCoord,
             &mut Transform,
         )>,
     )>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
 ) {
     let frame = active_frame.0;
-    if q_grids.get(frame).is_err() {
-        return;
-    }
+    let Ok(grid) = q_grids.get(frame) else { return };
     if !surface.has_terrain() {
         return;
     }
@@ -1834,37 +1902,21 @@ pub(crate) fn project_waypoint_markers_to_surface(
                     entity, frame, &q_parents, &q_grids, &q_spatial,
                 )?;
                 let ground = surface.height_at(lunco_core::coords::GridPos(position))?;
-                lunco_core::coords::position_in_grid_to_parent_local(
+                Some((
                     entity,
-                    DVec3::new(position.x, ground, position.z),
-                    frame,
-                    &q_parents,
-                    &q_grids,
-                    &q_spatial,
-                )
-                .map(|(cell, local)| (entity, cell, local))
+                    grid.translation_to_grid(DVec3::new(position.x, ground, position.z)),
+                ))
             })
             .collect::<Vec<_>>()
     };
 
     let mut q_markers = spatial.p1();
-    for (entity, cell, local) in updates {
+    for (entity, (cell, local)) in updates {
         let Ok((_, _, mut marker_cell, mut transform)) = q_markers.get_mut(entity) else {
             continue;
         };
-        match (cell, marker_cell.as_deref_mut()) {
-            (Some(next), Some(current)) if *current != next => *current = next,
-            (Some(next), None) => {
-                commands.entity(entity).insert(next);
-            }
-            (None, Some(_)) => {
-                // A marker under a plain parent stores no BigSpace cell.
-                // Remove a component that is not valid for that parent.
-                commands
-                    .entity(entity)
-                    .remove::<big_space::grid::cell::CellCoord>();
-            }
-            _ => {}
+        if *marker_cell != cell {
+            *marker_cell = cell;
         }
         if transform.translation != local {
             transform.translation = local;
@@ -2271,7 +2323,6 @@ fn waypoint_look_for_visit(base: &PbrLook, visited: bool) -> PbrLook {
 /// its authored material remain in USD; only the resolved render intent is changed
 /// for this session. `unshared` is required because the tint is animated state and
 /// must not be put through the shared material cache.
-
 /// Apply the cached route progress to authored marker looks. This is a consumer
 /// of `RouteVisualProjection`; it never parses mission XML or scans route paths.
 pub(crate) fn sync_waypoint_marker_visuals(
@@ -2349,8 +2400,9 @@ mod tests {
     use super::{
         has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
         route_ribbon_points, route_right, route_tangent, route_visual_state, runtime_route_loops,
-        select_ground_point, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
+    use crate::surface_pick::{resolve_cursor_surface, SurfacePickPolicy};
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
     use lunco_autopilot::{
@@ -2366,8 +2418,16 @@ mod tests {
             terrain: Entity::PLACEHOLDER,
         };
 
-        let point = select_ground_point(DVec3::ZERO, DVec3::NEG_Y, None, Some(terrain))
-            .expect("the DEM hit is a valid placement point");
+        let point = resolve_cursor_surface(
+            lunco_core::coords::GridPos(DVec3::ZERO),
+            DVec3::NEG_Y,
+            Some(terrain),
+            None,
+            None,
+            SurfacePickPolicy::Nearest,
+        )
+        .map(|hit| hit.point.0)
+        .expect("the DEM hit is a valid placement point");
 
         assert_eq!(point, terrain.point.0);
     }
@@ -2387,7 +2447,10 @@ mod tests {
             panic!("runtime waypoint must create a patrol");
         };
         assert_eq!(waypoints.len(), 1);
-        assert_eq!((speed, radius, dwell), (0.6, 3.0, 0.0));
+        // Runtime markers carry a 2.5 m authored sensor; the runtime click
+        // command uses its 2.0 m arrival radius so the rover must enter the
+        // physical trigger rather than merely approach its edge.
+        assert_eq!((speed, radius, dwell), (0.6, 2.0, 0.0));
 
         let current = AutopilotBehaviorSpec::new(BehaviorSpec::Patrol {
             waypoints: vec![PatrolWaypoint::at([1.0, 2.0, 3.0])],

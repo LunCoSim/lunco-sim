@@ -31,10 +31,8 @@ fn rover_network_root_contains_program_api_components() {
         .compute_membership_query(view.stage())
         .unwrap();
     let members = compute_included_paths(view.stage(), &query, PrimPredicate::DEFAULT).unwrap();
-    let member_paths: std::collections::HashSet<String> = members
-        .iter()
-        .map(ToString::to_string)
-        .collect();
+    let member_paths: std::collections::HashSet<String> =
+        members.iter().map(ToString::to_string).collect();
     let expected_paths: std::collections::HashSet<String> = [
         "Battery",
         "Motor_FL",

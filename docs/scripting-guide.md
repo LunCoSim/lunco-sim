@@ -48,11 +48,12 @@ target/debug/luncosim --api 4101
 | `fn on_event(me, evt)` | optional reaction to a `TelemetryEvent` |
 | `fn on_stop(me)` | optional teardown on hot-reload / detach / despawn |
 
-`me` is the host entity's id. Task progress, dwell timing, and event waits are
-owned by the native task kernel. A Rhai function called indirectly by the task
-driver must receive its configuration as arguments; do not rely on top-level
-variables being visible there. You sense with queries/`get` and act with
-`cmd`/`set`.
+`me` is the host entity's id. Task action and predicate leaves use anonymous
+closures with that one positional argument (`|me| ...`). The native task driver
+binds the persistent scenario-state map as `this` and owns task progress, dwell
+timing, and event waits. Named `Fn("...")` pointers are not task leaves; named
+helpers may be called explicitly from an anonymous closure. You sense with
+queries/`get` and act with `cmd`/`set`.
 
 ## 2. Your first script
 
@@ -204,7 +205,7 @@ You'll use these constantly (the complete table is in
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` next tick). |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
-| `list_entities()` | every entity (`#{id,name,type,catalog_id,usd_prim_path,pos}`) — identity comes from USD/catalog data; filter/select in-script. |
+| `list_entities()` | every entity (`#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}`) — identity comes from USD/catalog data; filter/select in-script. |
 
 > **`set` vs `cmd`.** Use `set` to tune a reflected value. When `set`
 > falls through to a scalar port it is a raw write and has no persistent hold;
@@ -266,7 +267,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
 | `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |
 | `is_controlled(id)` | bool | is any session (human or autopilot) driving it |
-| `list_entities()` | `[#{id,name,type,catalog_id,usd_prim_path,pos}]` | every registered entity; `type` is the projected USD kind, not a control-component heuristic |
+| `list_entities()` | `[#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}]` | every registered entity; `type` is the projected USD kind, not a control-component heuristic; `input_surface` is the authoritative `InputPorts` readiness bit |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
@@ -303,7 +304,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
-- **Task trees (`task(me)`):** every constructor emits a node with an explicit `kind`; there is no field-presence inference. Leaves are `step`/`once`/`act_for`/`act_until_event`/`wait`/`wait_until`/`wait_for`/`wait_for_from`/`check`, composites are `seq`/`par_all`/`par_race`/`sel`/`reactive_seq`/`reactive_sel`, and decorators are `repeat`/`forever`/`retry`/`invert`/`force_ok`/`force_fail`. The adapter rejects missing/unknown kinds and cross-kind fields, then compiles once onto the existing `lunco-behavior` kernel. See [`rhai-task-tree.md`](architecture/rhai-task-tree.md). The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
+- **Task trees (`task(me)`):** every constructor emits a node with an explicit `kind`; there is no field-presence inference. Leaves are `step`/`once`/`act_for`/`act_until_event`/`wait`/`wait_until`/`wait_for`/`wait_for_from`/`check`, and action/predicate leaves require anonymous `|me| ...` closures. Composites are `seq`/`par_all`/`par_race`/`sel`/`reactive_seq`/`reactive_sel`, and decorators are `repeat`/`forever`/`retry`/`invert`/`force_ok`/`force_fail`. The adapter rejects missing/unknown kinds, cross-kind fields, and named `Fn("...")` task callbacks, then compiles once onto the existing `lunco-behavior` kernel. See [`rhai-task-tree.md`](architecture/rhai-task-tree.md). The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`. A timeline step
   must contain exactly one explicit operation word (`move_to`,
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`);
@@ -325,7 +326,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   the id in editor sessions.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
-- **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
+- **Patrol / waypoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
 - **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` (capture from a vessel's mounted camera — fires `CaptureFromCamera`), `take_photo()` / `take_photo(args)` (a `run_tool` action value for a waypoint's `on_arrival` list, naming the registered `science::take_photo` tool). The Rust core owns firing & cleaning via the `lunco-tools` registry + `lunco-tools-bevy` dispatch; these helpers just NAME the tool from data.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 

@@ -25,6 +25,10 @@ fn battery_discharge_current_reduces_soc() {
         "battery drained must be a branch-free normalized empty-boundary signal for authored notification"
     );
     assert!(
+        source.contains("soc_empty_threshold(unit=\"1\", min=1e-6) = 1e-3"),
+        "battery empty detection must use the authored 0.1% physical reserve interval"
+    );
+    assert!(
         source.contains("+ p.i * R_internal"),
         "negative discharge current must lower, not raise, terminal voltage"
     );

@@ -62,7 +62,6 @@ def Xform "Widget" (
 )
 {
     uniform bool lunco:spawnable = true
-    float lunco:spawnLift = 0          # lift off the terrain when spawned
 
     def Scope "Looks" { def Material "Shell" { ... } }
 

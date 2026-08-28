@@ -46,7 +46,7 @@ fn sample_physics_step(
     diags: Option<Res<PhysicsTotalDiagnostics>>,
     // `Option<Res>` so binaries that don't include the workbench
     // (and therefore don't init `PerfHudSettings`) can still use
-    // `SandboxEditPlugin` for selection/gizmo. When the resource is
+    // `SceneEditPlugin` for selection/gizmo. When the resource is
     // missing, behave as if the perf HUD is off.
     settings: Option<Res<PerfHudSettings>>,
     // Same rationale: optional so the system tolerates a missing

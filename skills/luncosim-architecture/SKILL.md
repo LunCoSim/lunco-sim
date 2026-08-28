@@ -17,6 +17,15 @@ representation:
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+### Rhai task callback contract
+
+Task leaves use one callback form: an anonymous closure `|me| ...`. `me` is the
+host entity id, while `this` is the persistent scenario-state map bound by the
+native task driver. Named `Fn("...")` pointers are not task leaves. Named Rhai
+helpers remain ordinary callable policy and may be invoked explicitly from an
+anonymous task closure. This keeps one positional contract and lets the native
+kernel bind state without a compatibility path.
+
 ## Plugin and crate layering
 
 Use a domain `CorePlugin` for headless-safe state, lifecycle, commands, and

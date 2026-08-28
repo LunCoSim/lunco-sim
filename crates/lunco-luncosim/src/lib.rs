@@ -4656,9 +4656,9 @@ impl Plugin for SandboxHeadlessPlugin {
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with
         // `NetReplicate`). Windowed builds get this transitively via
-        // `SandboxEditPlugin`; without it the headless host replicates NOTHING
+        // `SceneEditPlugin`; without it the headless host replicates NOTHING
         // (the connect baseline is empty) because nothing marks the rovers. The
-        // gizmo/selection/physics-viz halves of `SandboxEditPlugin` stay UI-only.
+        // gizmo/selection/physics-viz halves of `SceneEditPlugin` stay UI-only.
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
 
         // No GPU renderer here, so the render-side systems that produce visual

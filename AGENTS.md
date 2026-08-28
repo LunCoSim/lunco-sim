@@ -98,7 +98,12 @@ it with this one.
 - Establish a behavior baseline before physics/vehicle changes and rerun it.
   Use focused tests first, then production luncosim. Use `-j 4`, the repository
   `target/`, and regular `sccache`; never use managed temporary build directories
-  or custom temporary files, and avoid overlapping Cargo builds.
+  or custom temporary files, and avoid overlapping Cargo builds. Minimize
+  unnecessary test runs: reuse a valid result when the tested code and inputs
+  have not changed, do not duplicate equivalent unit/scene coverage, and run
+  the full expensive suite only after a meaningful integration change. Repeat a
+  test only when its inputs changed, the previous run was invalidated (for
+  example by a clean rebuild), or nondeterminism needs confirmation.
 - Full scene reload is supported; partial object/reference reload remains TODO.
 
 ## Session lifecycle

@@ -9,8 +9,9 @@ use lunco_render::SceneCamera;
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
+use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
 use crate::SpawnState;
-use lunco_scene_commands::catalog::{prim_path_from_entry_id, SpawnCatalog, SpawnSource};
+use lunco_scene_commands::catalog::{SpawnCatalog, SpawnSource};
 
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
@@ -118,14 +119,11 @@ struct CachedFootprint {
     /// Explicit load state: an asset that has not composed yet is not equivalent
     /// to a composed pure-visual asset with no collision geometry.
     footprint: FootprintState,
-    /// Authored `lunco:spawnLift` — the rest-height fallback used only when no
-    /// collision geometry is found (pure-visual / mesh-only asset).
-    spawn_lift: f32,
 }
 
 enum FootprintState {
     Pending,
-    Ready(Option<lunco_usd_bevy::ObjectAabb>),
+    Ready(lunco_usd_bevy::ObjectAabb),
     Invalid,
 }
 
@@ -149,27 +147,20 @@ fn placement_root_pose(
 }
 
 impl FootprintCache {
-    /// Resolve `entry_id`'s placement data: the collision-AABB footprint + rest
-    /// depth for any asset with colliders, the authored `lunco:spawnLift` as a
-    /// fallback for a composed pure-visual asset. Returns `None` until the
-    /// canonical stage is ready, because previewing or committing an invented
-    /// footprint would make the two poses diverge when the real data arrives.
+    /// Resolve `entry_id`'s placement data from its composed collision AABB.
+    /// Returns `None` until the canonical stage is ready or when the asset has
+    /// no authored placement collision geometry. A pure-visual asset is not
+    /// silently assigned invented dimensions or a guessed drop height.
     fn resolve(&self, entry_id: &str) -> Option<ResolvedFootprint> {
         let c = self.map.get(entry_id)?;
         match c.footprint {
             // Rest on the lowest collision point (+ a small skin gap), with the
             // footprint box from the collider extents — general across landers,
             // rovers and props, no wheel-specific path.
-            FootprintState::Ready(Some(aabb)) => Some(ResolvedFootprint {
+            FootprintState::Ready(aabb) => Some(ResolvedFootprint {
                 half_w: aabb.half_w().max(0.1),
                 half_l: aabb.half_l().max(0.1),
                 lift: aabb.rest_depth() + SPAWN_GROUND_CLEARANCE,
-            }),
-            // No collision geometry (pure-visual / mesh-only): authored lift.
-            FootprintState::Ready(None) => Some(ResolvedFootprint {
-                half_w: 0.75,
-                half_l: 1.0,
-                lift: c.spawn_lift as f64,
             }),
             FootprintState::Pending | FootprintState::Invalid => None,
         }
@@ -200,9 +191,11 @@ fn ensure_footprint(
             .entry(entry_id.to_string())
             .or_insert_with(|| CachedFootprint {
                 handle: asset_server.load(path.clone()),
-                root_prim: prim_path_from_entry_id(entry_id),
+                // The root is resolved from the stage's defaultPrim once the
+                // canonical stage is available. Catalog ids are identity, not
+                // USD prim paths.
+                root_prim: String::new(),
                 footprint: FootprintState::Pending,
-                spawn_lift: entry.spawn_lift,
             });
         if matches!(cached.footprint, FootprintState::Pending) {
             // Ph0′ canonical-only: derive the footprint off the LIVE canonical
@@ -215,18 +208,34 @@ fn ensure_footprint(
                 }
             }
             if let Some(stage) = canonical.get(id) {
+                if cached.root_prim.is_empty() {
+                    let Some(name) = lunco_usd_bevy::stage_default_prim(&stage.view()) else {
+                        error!(
+                            entry_id,
+                            "[spawn] rejected asset without authored defaultPrim"
+                        );
+                        cached.footprint = FootprintState::Invalid;
+                        return cache.resolve(entry_id);
+                    };
+                    cached.root_prim = format!("/{name}");
+                }
                 match lunco_usd_bevy::collision_aabb(&stage.view(), &cached.root_prim) {
-                    Ok(footprint) => {
-                        if let Some(aabb) = footprint {
-                            info!(
-                                "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
-                                entry_id,
-                                aabb.half_w(),
-                                aabb.half_l(),
-                                aabb.rest_depth()
-                            );
-                        }
-                        cached.footprint = FootprintState::Ready(footprint);
+                    Ok(Some(aabb)) => {
+                        info!(
+                            "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
+                            entry_id,
+                            aabb.half_w(),
+                            aabb.half_l(),
+                            aabb.rest_depth()
+                        );
+                        cached.footprint = FootprintState::Ready(aabb);
+                    }
+                    Ok(None) => {
+                        error!(
+                            entry_id,
+                            "[spawn] rejected asset without authored collision placement geometry"
+                        );
+                        cached.footprint = FootprintState::Invalid;
                     }
                     Err(error) => {
                         error!(
@@ -246,92 +255,6 @@ fn ensure_footprint(
 fn cursor_ray(camera: &Camera, cam_tf: &GlobalTransform, cursor: Vec2) -> Option<(DVec3, Dir3)> {
     let ray = camera.viewport_to_world(cam_tf, cursor).ok()?;
     Some((ray.origin.as_dvec3(), ray.direction))
-}
-
-/// The single cursor-surface query used by both the preview and committed
-/// placement, in the GRID frame. Terrain is authoritative where it exists;
-/// physics supplies props and is the complete fallback for scenes without a DEM.
-///
-/// The analytic surface comes from [`GridSurfaceQuery`], which owns the frame:
-/// this module used to keep its own copy that inverted the terrain's *render*
-/// `GlobalTransform` and marched the oracle in that frame. At a site with real
-/// elevation that offset the ray by the terrain's world position (~one big_space
-/// cell), so no cursor ray ever met the surface and placement silently degraded
-/// to the collider ring, which exists only around dynamic bodies.
-#[derive(Clone, Copy, Debug)]
-struct CursorSurfaceHit {
-    /// Surface point under the cursor in the semantic active physics frame.
-    point: GridPos,
-    terrain_primary: bool,
-    terrain: Option<lunco_terrain_surface::SurfaceHit>,
-    physics_distance: Option<f64>,
-    /// WHICH collider answered. "A physics hit happened" does not say whether
-    /// placement landed on the site's streamed terrain ring or on a leftover
-    /// ground plane from a previously-loaded scene — and those are opposite
-    /// bugs. Diagnostics only.
-    physics_entity: Option<Entity>,
-}
-
-fn cursor_surface_hit(
-    surface: &lunco_terrain_surface::GridSurfaceQuery,
-    raycaster: &lunco_physics::GridSpatialQuery<'_, '_>,
-    origin: GridPos,
-    direction: Dir3,
-) -> Option<CursorSurfaceHit> {
-    let terrain = surface.raycast(origin, direction, f64::INFINITY);
-    // Terrain is a useful near bound when it exists, but it must never be a
-    // prerequisite: a physical scene can have no DEM, or its terrain can still
-    // be streaming when a user begins placing assets.
-    let physics_limit = terrain.map(|hit| hit.distance).unwrap_or(f64::INFINITY);
-    let physics = raycaster.cast_ray_grid(
-        origin,
-        direction,
-        physics_limit,
-        false,
-        &avian3d::prelude::SpatialQueryFilter::default(),
-    );
-    resolve_cursor_surface(
-        origin,
-        direction.as_dvec3(),
-        terrain,
-        physics.map(|hit| hit.distance),
-        physics.map(|hit| hit.entity),
-    )
-}
-
-fn resolve_cursor_surface(
-    origin: GridPos,
-    direction: DVec3,
-    terrain: Option<lunco_terrain_surface::SurfaceHit>,
-    physics_distance: Option<f64>,
-    physics_entity: Option<Entity>,
-) -> Option<CursorSurfaceHit> {
-    match (physics_distance, terrain) {
-        (Some(physics_distance), Some(hit)) if physics_distance < hit.distance => {
-            Some(CursorSurfaceHit {
-                point: GridPos(origin.0 + direction * physics_distance),
-                terrain_primary: false,
-                terrain: Some(hit),
-                physics_distance: Some(physics_distance),
-                physics_entity,
-            })
-        }
-        (_, Some(hit)) => Some(CursorSurfaceHit {
-            point: hit.point,
-            terrain_primary: true,
-            terrain: Some(hit),
-            physics_distance,
-            physics_entity,
-        }),
-        (Some(physics_distance), None) => Some(CursorSurfaceHit {
-            point: GridPos(origin.0 + direction * physics_distance),
-            terrain_primary: false,
-            terrain: None,
-            physics_distance: Some(physics_distance),
-            physics_entity,
-        }),
-        (None, None) => None,
-    }
 }
 
 /// Corner-height sampler for the footprint fit: the analytic surface over open
@@ -476,7 +399,15 @@ pub fn update_spawn_ghost(
         return;
     };
 
-    let hit = cursor_surface_hit(&surface, &raycaster, origin_grid, direction_grid);
+    let hit = cursor_surface_hit(
+        &surface,
+        &raycaster,
+        origin_grid,
+        direction_grid,
+        f64::INFINITY,
+        SurfacePickPolicy::Nearest,
+        |_| true,
+    );
     let terrain_trace = hit.and_then(|h| h.terrain);
     let phys = hit.and_then(|h| h.physics_distance);
     let phys_name = hit
@@ -491,13 +422,25 @@ pub fn update_spawn_ghost(
         // below (`lunco_terrain_surface::fit_footprint`). These were two copies
         // that had to be kept in step by hand; the preview and the commit can no
         // longer disagree about where an asset rests.
-        let fit = lunco_terrain_surface::fit_footprint(
+        let Some(fit) = lunco_terrain_surface::fit_footprint(
             point,
             cam_tf.forward().as_dvec3(),
             fp.half_w,
             fp.half_l,
             |corner| corner_height(&surface, &raycaster, terrain_primary, corner),
-        );
+        ) else {
+            if diagnostics.enabled {
+                info!(
+                    cursor = ?cursor,
+                    grid_hit = ?point,
+                    "[spawn-trace] ghost rejected: footprint corner has no surface sample"
+                );
+            }
+            for (ghost, _) in q_ghost.iter() {
+                commands.entity(ghost).try_despawn();
+            }
+            return;
+        };
         // The preview marks the exact asset-root pose that commit will use. A
         // terrain-contact marker was a different location for every asset whose
         // root is above its wheels/pads, which made correct spawns look displaced.
@@ -695,7 +638,15 @@ pub fn on_scene_click_spawn(
         }
         return;
     };
-    let Some(hit) = cursor_surface_hit(&surface, &raycaster, origin_grid, direction_grid) else {
+    let Some(hit) = cursor_surface_hit(
+        &surface,
+        &raycaster,
+        origin_grid,
+        direction_grid,
+        f64::INFINITY,
+        SurfacePickPolicy::Nearest,
+        |_| true,
+    ) else {
         if diagnostics.enabled {
             info!(
                 pointer = ?click.pointer_location.position,
@@ -732,13 +683,24 @@ pub fn on_scene_click_spawn(
         }
         return;
     };
-    let fit = lunco_terrain_surface::fit_footprint(
+    let Some(fit) = lunco_terrain_surface::fit_footprint(
         hit.point,
         cam_gtf.forward().as_dvec3(),
         fp.half_w,
         fp.half_l,
         |corner| corner_height(&surface, &raycaster, hit.terrain_primary, corner),
-    );
+    ) else {
+        warn!(
+            entry_id,
+            "[spawn] click rejected: footprint corner has no surface sample"
+        );
+        lunco_core::trigger_error(
+            &mut commands,
+            "spawn-placement-failed",
+            format!("Cannot place '{entry_id}': footprint is outside the available surface"),
+        );
+        return;
+    };
 
     // This is exactly the pose shown by the ghost. Clearance is part of the
     // canonical USD-derived footprint; no second embed/lift policy is applied.
@@ -775,6 +737,7 @@ pub fn on_scene_click_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface_pick::resolve_cursor_surface;
 
     #[test]
     fn test_spawn_state_transitions() {
@@ -812,8 +775,15 @@ mod tests {
     #[test]
     fn physics_surface_is_valid_when_no_dem_is_loaded() {
         let origin = GridPos(DVec3::new(10.0, 20.0, 30.0));
-        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, None, Some(7.5), None)
-            .expect("a collider hit must place without terrain");
+        let hit = resolve_cursor_surface(
+            origin,
+            DVec3::NEG_Y,
+            None,
+            Some(7.5),
+            None,
+            SurfacePickPolicy::Nearest,
+        )
+        .expect("a collider hit must place without terrain");
 
         assert_eq!(hit.point.0, DVec3::new(10.0, 12.5, 30.0));
         assert!(!hit.terrain_primary);
@@ -829,8 +799,15 @@ mod tests {
             distance: 12.0,
             terrain: Entity::PLACEHOLDER,
         };
-        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, Some(terrain), Some(3.0), None)
-            .expect("one of the surfaces must win");
+        let hit = resolve_cursor_surface(
+            origin,
+            DVec3::NEG_Y,
+            Some(terrain),
+            Some(3.0),
+            None,
+            SurfacePickPolicy::Nearest,
+        )
+        .expect("one of the surfaces must win");
 
         assert_eq!(hit.point.0, DVec3::new(0.0, -3.0, 0.0));
         assert!(!hit.terrain_primary);
@@ -849,8 +826,15 @@ mod tests {
             distance: 60.0,
             terrain: Entity::PLACEHOLDER,
         };
-        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, Some(terrain), None, None)
-            .expect("the analytic surface must place with no collider present");
+        let hit = resolve_cursor_surface(
+            origin,
+            DVec3::NEG_Y,
+            Some(terrain),
+            None,
+            None,
+            SurfacePickPolicy::Nearest,
+        )
+        .expect("the analytic surface must place with no collider present");
 
         assert!(hit.terrain_primary);
         assert_eq!(hit.point.0.y, SITE);

@@ -2,18 +2,11 @@
 
 > Status: Active · Audience: contributors on waypoints, routes, and mission authoring
 
-## The mistake this corrects
-
-The merged checkpoint feature invented a private domain: `AppendCheckpoint` /
-`DeleteCheckpoint` mutated an ECS component, and pins were drawn with Bevy `Gizmos`.
-Nothing was authored, so nothing was persisted, journaled, undoable, or replicated —
-an Alt+LMB patrol evaporated on scene reload. And no `.usda` in the repo could give a
-vessel a `BehaviorSpec` mission at all.
+## The route contract
 
 Three statements settle the design:
 
-1. **The behaviour tree is the model.** There is no "checkpoint" concept — a waypoint
-   is a spatial leaf of a tree.
+1. **The behaviour tree is the model.** A waypoint is a spatial leaf of a tree.
 2. **Waypoints are a visualization of the tree.** Editing a pin is editing the tree.
 3. **Visuals are the USD scene.** A pin is a real prim, not a gizmo.
 
@@ -220,15 +213,13 @@ about waypoints:
 
 That is the whole point: **the feature mostly stops existing.**
 
-## What was deleted
+## Ownership boundary
 
-- `checkpoint_gizmo.rs` — the entire Bevy `Gizmos` pin renderer.
-- `AppendCheckpoint`, `DeleteCheckpoint`, the `CheckpointContextMenu` popup, and the
-  bespoke right-click delete flow.
-- The Command Deck's checkpoint delete/clear buttons — the route readout is now
-  strictly a read-only view of the derived spec.
-
-`PatrolDefaults` moved to `lunco-autopilot` (it is domain tuning, not editor state).
+The editor owns authoring intent and submits typed USD operations for document-backed
+routes. The autopilot owns the compiled behavior and runtime control state. The
+Command Deck and generic billboard renderer are read-only projections of those
+authoritative sources; they do not maintain a second waypoint list or draw a second
+route annotation.
 
 ## What correctly stays in ECS
 

@@ -60,8 +60,6 @@ def Xform "RockerBogie" (
     # Ackermann vehicle contract.
     float physxVehicleAckermannSteering:maxSteerAngle = 0.5
     float physxVehicleAckermannSteering:strength = 0.0
-    float lunco:spawnLift = 1.5
-
     # ── THERE IS NO AIR. DRAG LIVES IN THE PARTS. ───────────────────────────
     # Body damping is a fluid model: a force proportional to velocity, applied to
     # the hull. It is kept near zero so the Mars-rover behavior comes from wheel

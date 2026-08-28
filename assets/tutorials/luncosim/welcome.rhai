@@ -11,9 +11,7 @@ fn steps() {
         #{ anchor: "panel.side_browser", focus: (), title: "Read live state", body: "Open Telemetry in the left dock. Select the rover's speed or wheel signal to inspect it while the simulation runs." },
         #{ anchor: "panel.right_inspector", focus: (), title: "Inspect the selection", body: "Look at Inspector in the right dock. It shows the selected prim's authored properties and current state." },
         #{ anchor: "panel.right_inspector", focus: "command_deck", title: "Check control authority", body: "Open Command Deck in the right dock. It tells you whether the rover is free, human-driven, or on autopilot." },
-        #{ anchor: "", focus: (), title: "Next: choose a perspective", body: "The next lesson explains ◉ View, ⚒ Build, and ∿ Lunica.
-
-Click Next in the Tutorial complete dialog when you are ready." },
+        #{ anchor: "", focus: (), title: "Next: choose a perspective", body: "The next lesson explains ◉ View, ⚒ Build, and ∿ Lunica.\n\nClick Next in the Tutorial complete dialog when you are ready." },
     ]
 }
 

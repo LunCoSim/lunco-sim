@@ -35,6 +35,8 @@ NC='\033[0m' # No Color
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=cache_dir.sh
+source "$SCRIPT_DIR/cache_dir.sh"
 
 # Print colored message
 info() {
@@ -51,20 +53,6 @@ warn() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Keep downloads on the same machine-global cache used by lunco-assets.
-# LUNCOSIM_CACHE is an explicit override for CI or custom installations.
-resolve_cache_dir() {
-    if [ -n "${LUNCOSIM_CACHE:-}" ]; then
-        echo "$LUNCOSIM_CACHE"
-        return
-    fi
-    case "$(uname -s)" in
-        Darwin*) echo "${HOME:?}/Library/Caches/lunco" ;;
-        MINGW*|MSYS*|CYGWIN*) echo "${LOCALAPPDATA:-${HOME:?}/AppData/Local}/lunco" ;;
-        *) echo "${XDG_CACHE_HOME:-${HOME:?}/.cache}/lunco" ;;
-    esac
 }
 
 # Get binary config

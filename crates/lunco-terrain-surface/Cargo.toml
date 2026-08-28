@@ -75,7 +75,7 @@ lunco-storage = { path = "../lunco-storage" }
 # (critical on web, where the DEM byte-fetch + decode takes seconds). Same freeze
 # mechanism the obstacle-field regen uses. See `collider_ring::hold_physics_until_dem_ready`.
 lunco-time = { path = "../lunco-time" }
-# Shared content-addressed cache dir (`cache://`) for the derived-layer bake
+# Shared content-addressed cache directory for the derived-layer bake
 # (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
 # isn't redone every load and peers converge. `cache_dir()` is cross-platform.
 lunco-assets = { path = "../lunco-assets" }

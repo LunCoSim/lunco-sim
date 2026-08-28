@@ -167,12 +167,12 @@ fn task(me) {
     seq([
         wait_for("rover_deployed"),
         wait(0.5),
-        once(Fn("lander_autopilot_takeover")),
+        once(|m| lander_autopilot_takeover(m)),
         // The autopilot yielded on possession, so nothing is steering. Drive the
         // three gates ourselves, exactly as a student would.
-        step(Fn("lander_drive_gate_1"), Fn("lander_gate_1_done")),
-        step(Fn("lander_drive_gate_2"), Fn("lander_gate_2_done")),
-        step(Fn("lander_drive_gate_3"), Fn("lander_gate_3_done")),
-        act_for(Fn("lander_brake"), 1.0),
+        step(|m| lander_drive_gate_1(m), |m| lander_gate_1_done(m)),
+        step(|m| lander_drive_gate_2(m), |m| lander_gate_2_done(m)),
+        step(|m| lander_drive_gate_3(m), |m| lander_gate_3_done(m)),
+        act_for(|m| lander_brake(m), 1.0),
     ])
 }

@@ -75,11 +75,11 @@ fn pause_notice(me) {
 fn intro_and_deploy() {
     seq([
         // ── Beat 1: Intro ─────────
-        once(Fn("intro_notice")),
+        once(|m| intro_notice(m)),
         wait(5.0),
 
         // ── Beat 2: Deploy ─────────
-        once(Fn("deploy_notice")),
+        once(|m| deploy_notice(m)),
     ])
 }
 
@@ -87,19 +87,19 @@ fn battery_depleted() {
     seq([
 
         // ── Beat 3: Wait for battery depletion ─────────
-        wait_until(Fn("battery_low")),
+        wait_until(|m| battery_low(m)),
 
         // ── Beat 4: Charging showcase ─────────
         // The panel is already tracking the sun (SunTracker.mo runs continuously).
         // Cut to the side camera so the panel orientation is visible.
-        once(Fn("battery_low_notice")),
+        once(|m| battery_low_notice(m)),
     ])
 }
 
 fn battery_charging() {
     seq([
         wait(3.0),
-        once(Fn("charging_notice")),
+        once(|m| charging_notice(m)),
     ])
 }
 
@@ -107,10 +107,10 @@ fn battery_recharged() {
     seq([
 
         // ── Beat 5: Wait for recharge ─────────
-        wait_until(Fn("battery_ready")),
+        wait_until(|m| battery_ready(m)),
 
         // ── Beat 6: Resume ─────────
-        once(Fn("resume_notice")),
+        once(|m| resume_notice(m)),
     ])
 }
 
@@ -122,7 +122,7 @@ fn gate_one() {
     seq([
         // ── Beat 7: Gate 1 ─────────
         wait_for("waypoint_1_reached"),
-        once(Fn("gate_one_notice")),
+        once(|m| gate_one_notice(m)),
     ])
 }
 
@@ -131,7 +131,7 @@ fn gate_two() {
 
         // ── Beat 8: Gate 2 ─────────
         wait_for("waypoint_2_reached"),
-        once(Fn("gate_two_notice")),
+        once(|m| gate_two_notice(m)),
     ])
 }
 
@@ -140,9 +140,9 @@ fn gate_three() {
 
         // ── Beat 9: Final gate ─────────
         wait_for("waypoint_3_reached"),
-        once(Fn("final_notice")),
+        once(|m| final_notice(m)),
         wait(5.0),
-        once(Fn("pause_notice"))
+        once(|m| pause_notice(m))
     ])
 }
 

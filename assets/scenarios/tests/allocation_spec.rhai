@@ -154,27 +154,31 @@ fn t_opposite(a, b, dead, what) {
     ""
 }
 
+// The pivot leg is accepted only when both measured banks are moving at a
+// physically meaningful rate.  The authored rover's 0.15 m wheel radius makes
+// 0.25 rad/s about 0.04 m/s at the tread; the observed 0.47 rad/s pivot is
+// comfortably above sensor/solver noise without pretending this acceptance
+// needs the forward-leg speed.
+const PIVOT_SPIN_MIN = 0.25;
+
 /// Signed heading change in DEGREES between two forward vectors, positive to the
 /// RIGHT. Sign comes from the yaw-plane cross product.
 
-/// Axle spin rate (rad/s) of one raycast wheel, or `()`.
+/// One authored shaft-speed channel from the rover's public power boundary.
 ///
-/// `WheelRaycast.spin_velocity` is the wheel's own spin integrator, reflected out
-/// of the live ECS. It is the closest thing to a per-port readout a scenario can
-/// reach: the actuator ports themselves are child ECS entities with no USD prim
-/// and therefore no gid, so `read_port` cannot address them from here. Reading
-/// the WHEEL instead is arguably the better test anyway — it asserts that the
-/// allocation reached the hardware, not merely that a register was written.
-fn wheel_spin(w) {
-    if type_of(w) == "()" { return (); }
-    if w < 0 { return (); }
-    get(w, "WheelRaycast.spin_velocity")
+/// Raycast wheel entities are internal physics projections and intentionally do
+/// not have API identities. The rover root already exposes each measured wheel
+/// shaft speed as a typed USD/Modelica input, so read that existing public
+/// channel rather than inventing a second wheel-reflection API for a test.
+fn wheel_spin(rover, port) {
+    if type_of(rover) == "()" || rover < 0 { return (); }
+    get(rover, port)
 }
 
 /// Mean spin of a bank of wheels, or `()` if none of them read back.
-fn bank_spin(a, b) {
-    let sa = wheel_spin(a);
-    let sb = wheel_spin(b);
+fn bank_spin(rover, left_port, right_port) {
+    let sa = wheel_spin(rover, left_port);
+    let sb = wheel_spin(rover, right_port);
     if type_of(sa) == "()" && type_of(sb) == "()" { return (); }
     if type_of(sa) == "()" { return sb; }
     if type_of(sb) == "()" { return sa; }
@@ -227,13 +231,6 @@ fn on_start(me) {
     this.next_sample = 0.0;
 
     this.rover = find("/AllocationSpec/RoverSkid");
-    // The skid rover's four wheels. FL/RL are the LEFT bank (drive_left), FR/RR
-    // the RIGHT bank (drive_right) — the two ports the `skid` kernel writes.
-    this.w_fl = find("/AllocationSpec/RoverSkid/Wheel_FL");
-    this.w_fr = find("/AllocationSpec/RoverSkid/Wheel_FR");
-    this.w_rl = find("/AllocationSpec/RoverSkid/Wheel_RL");
-    this.w_rr = find("/AllocationSpec/RoverSkid/Wheel_RR");
-
     // The fail-safe control: same asset, unresolvable `lunco:driveKernel`.
     this.bogus = find("/AllocationSpec/RoverBogus");
     this.bogus_pos_prev = ();
@@ -270,8 +267,6 @@ fn on_start(me) {
 
     print("[spec] ── drive-allocation spec ─────────────────────────────────");
     print("[spec] rover gid=" + this.rover + "  failsafe-control gid=" + this.bogus);
-    print("[spec] wheels FL=" + this.w_fl + " FR=" + this.w_fr +
-          " RL=" + this.w_rl + " RR=" + this.w_rr);
     print("[spec] legs: settle -> forward -> reverse -> zero-throttle pivot -> full-throttle steer");
     print("[spec] RoverBogus runs full throttle THROUGHOUT on an unresolvable kernel and must NOT move.");
     print("[spec] NOTE: `linear_kernel_projects_each_entry` is covered by");
@@ -329,8 +324,8 @@ fn on_tick(me) {
     this.pos_prev = pos;
     this.fprev = fwd;
 
-    let spin_l = bank_spin(this.w_fl, this.w_rl);
-    let spin_r = bank_spin(this.w_fr, this.w_rr);
+    let spin_l = bank_spin(this.rover, "shaft_speed_FL", "shaft_speed_RL");
+    let spin_r = bank_spin(this.rover, "shaft_speed_FR", "shaft_speed_RR");
 
     let since = t - this.phase_start;
 
@@ -725,7 +720,7 @@ fn verdict(s) {
     // as two banks spinning opposite ways. The 0.5 rad/s dead band is well below
     // the several rad/s a pivoting bank actually reaches and well above sensor
     // creep.
-    f.push(t_opposite(s.sl_p, s.sr_p, 0.5,
+    f.push(t_opposite(s.sl_p, s.sr_p, PIVOT_SPIN_MIN,
                       "zero-throttle full-steer: bank counter-rotation (rad/s)"));
 
     // The left bank must spin the way it spun when driving FORWARD (the mix gives

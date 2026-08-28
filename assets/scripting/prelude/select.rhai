@@ -1,6 +1,6 @@
 // ── Selection toolkit (write targeting/selection algorithms in rhai) ─────────
 //
-// list_entities() returns #{ id, name, type, pos, catalog_id } per entity, so selection is
+// list_entities() returns #{ id, name, type, pos, catalog_id, input_surface } per entity, so selection is
 // idiomatic functional rhai over the built-in filter/map/reduce/sort_by. These
 // are the reusable PRIMITIVES — compose them or write your own; all are policy,
 // hot-reloadable, no Rust rebuild. Deeper per-entity reads use get(id, "Comp.f").
@@ -13,6 +13,11 @@ fn vscale(a, s) { [a[0]*s, a[1]*s, a[2]*s] }
 /// True if entity `id` currently has component `name` (e.g. "RoverVessel",
 /// "LinearVelocity"). Built on get(), which returns () for an absent component.
 fn has_component(id, name) { get(id, name) != () }
+
+/// True when the entity currently exposes the authoritative InputPorts surface.
+fn has_input_surface(id) {
+    list_entities().some(|entity| entity.id == id && entity.input_surface)
+}
 
 /// Kind tag for one entity ("rover"/"planet"/"unknown"), matching list_entities().type.
 fn kind(id) {

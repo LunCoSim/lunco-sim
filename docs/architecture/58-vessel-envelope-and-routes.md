@@ -153,7 +153,7 @@ pays for itself three times:
 2. **It is the remote-sensing import format.** The handoff pack already specifies
    waypoints coming back as `[[x,y,z], …]`; waypoint prims are what those become.
    A GIS-authored route becomes a `.usda` overlay, not a script edit.
-3. **It is what the path-line gizmo needs anyway** — see below.
+3. **It is what the route-ribbon projection needs anyway** — see below.
 
 Heights: waypoints should carry authored Y, but a route authored from GIS knows
 only XZ. Resolve at load by sampling `TerrainHeight` (analytic, answers anywhere

@@ -7,7 +7,7 @@
 
 # Dynamic ball — a falling rigid body. Authored in USD (was a Rust procedural
 # factory) so it's discovered + constructed by the same path as everything
-# else. `lunco:spawnLift` lifts the spawn point so it drops onto the terrain.
+# else. Its collision geometry defines the placement footprint and rest depth.
 def Xform "BallDynamic" (
     doc = "Dynamic test ball that drops and rolls under the scene's physics."
     kind = "component"
@@ -30,8 +30,6 @@ def Xform "BallDynamic" (
         }
     }
     float physics:mass = 5.0
-    float lunco:spawnLift = 1.0
-
     def Sphere "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )

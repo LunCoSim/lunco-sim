@@ -23,7 +23,7 @@ completion, and then runs the script on a host entity via
 the shared HUD + the rhai prelude — **no Rust per lesson.**
 
 This is [`author-scenario`](../author-scenario/SKILL.md) plus a teaching HUD —
-read that first for hooks, `this`-state, and verbs. Reference lesson:
+read that first for the `me`/`this` callback contract and verbs. Reference lesson:
 `assets/tutorials/sandbox/first_drive.rhai`. Overview: `assets/tutorials/README.md`.
 
 ## Layout & the two-step add
@@ -169,7 +169,9 @@ or authoritative state rather than raw key names. The settings owner is the
 **Advancing objectives — always on a real action, never a timer:**
 - `requires_event: "cmd:<Name>"` — any command dispatch lands on the bus as
   `cmd:<Name>` (e.g. `cmd:PossessVessel`), so the step completes however the user
-  triggers it (click or key). Physics/zone events work too (`enter:waypoint`).
+  triggers it (click or key). For waypoint missions consume the canonical
+  `waypoint.reached` event; the lower-level Sensor/zone notification is an
+  engine detail and is projected before tutorial policy sees it.
 - `done: |m| <predicate>` — a rhai closure over live state (distance, a port
   read, SoC). Use for "reached / held / value crossed".
 
@@ -237,6 +239,12 @@ the lesson.
   completion + `autoproceed`; `SkipTutorial` opts out; `next` chains lessons.
 
 ## Gotchas
+
+- **Task leaves use anonymous closures.** Write `once(|me| action(me))`,
+  `step(|me| action(me), |me| done(me))`, and `wait_until(|me| done(me))`.
+  `me` is the host entity id and `this` is persistent scenario state. Named
+  `Fn("...")` pointers are not task leaves; named helpers may be called from
+  an anonymous closure.
 
 - **Scene paths as LOCALS inside `mission(me)`, not top-level `const`.** rhai
   closures (`done`/`on_complete`) capture enclosing locals by value, but named

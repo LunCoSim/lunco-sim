@@ -182,12 +182,18 @@ prim applies `LunCoProgramAPI` in place — see
 
 ## Decision 2 — the PortRegistry is the ONE input-write path
 
-`SetModelInput`, `SetPorts`, rhai `set(id,name,v)`, Python, and wires **all
-converge** on `SimComponent.inputs` for a cosim'd entity — the cosim value *is* the
-value everyone reads. `sync_modelica_inputs` copies `SimComponent.inputs →
-ModelicaModel.inputs` every tick, so a **direct `ModelicaModel.inputs` write is
-clobbered within one frame.** Always write through a port (`SetPorts`, `set_input`,
-rhai `set()`), never bypass to the model.
+`SetModelInput`, `SetPorts`, rhai `set(id,name,v)`, Python, and wires all use the
+shared `PortRegistry`. On a generated Modelica root that also carries
+`InputPorts`, `InputPorts` is the authored public command boundary and therefore
+wins for names it declares; the generic bridge mirrors those accepted values
+into `ModelicaModel.inputs`. Other propagated model inputs remain on
+`SimComponent.inputs`. A direct `ModelicaModel.inputs` write is clobbered within
+one frame. Always write through a port (`SetPorts`, `set_input`, rhai `set()`),
+never bypass to the model.
+
+Battery empty events use the authored 0.1% usable-storage reserve in
+`Battery.mo`; do not replace that physical boundary with Rust actuator policy or
+a solver-epsilon comparison.
 
 ## Decision 3 — the scenario is a first-class USD concept
 

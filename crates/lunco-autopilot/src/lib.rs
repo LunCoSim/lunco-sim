@@ -231,7 +231,7 @@ use lunco_core::tools::{ToolFired, ToolInvocation};
 /// ]}
 /// ```
 ///
-/// `Serialize` so the UI can round-trip a spec (read → append a checkpoint →
+/// `Serialize` so the UI can round-trip a spec (read → append a waypoint →
 /// re-emit via `SetAutopilotBehavior`) without a separate JSON mirror.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PatrolWaypoint {
@@ -1197,7 +1197,7 @@ pub struct RunToolNode {
     /// the whole lap — so a patrol whose rover is already parked inside the
     /// waypoint radius completes a lap EVERY TICK (`drive_to` succeeds
     /// immediately), re-arming `fired` and queueing the tool at tick rate. A
-    /// one-waypoint patrol — exactly what a single Alt+LMB checkpoint builds,
+    /// one-waypoint patrol — exactly what a single Alt+LMB waypoint builds,
     /// with the default `dwell` of 0 — would fire 60 screenshots a second.
     ///
     /// The fix is to fire on the arrival EDGE, not while parked: `drive_to` sets
@@ -1487,7 +1487,7 @@ impl AutopilotBehaviorSpec {
 
     /// Borrowed view of the patrol waypoints, if the spec's top-level node is a
     /// [`BehaviorSpec::Patrol`]. `None` for non-patrol trees (the UI hides the
-    /// checkpoint list in that case). This is the read path the path-line gizmo
+    /// waypoint list in that case). This is the read path the route projection
     /// and the Alt+LMB "append" both use.
     pub fn patrol_waypoints(&self) -> Option<&[PatrolWaypoint]> {
         match &self.0 {
@@ -1530,7 +1530,7 @@ pub fn nav_setpoint(
         // the physically available recovery maneuver; reversing also flips the
         // steering response, hence `+cy` rather than the forward `-cy`.
         let reverse_throttle = -speed * (-dot as f64).clamp(0.25, 1.0);
-        let reverse_steer = (cy * 2.5).clamp(-1.0, 1.0) as f64;
+        let reverse_steer = cy.clamp(-1.0, 1.0) as f64;
         return (reverse_throttle, reverse_steer, 0.0, false);
     }
     let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
@@ -2061,7 +2061,7 @@ fn on_engage_autopilot(
             Ok(b) => {
                 e.try_insert(b);
                 // Mirror the source spec onto the VESSEL entity (not the
-                // autopilot actor) so the UI / path-line gizmo can read the
+                // autopilot actor) so the UI / route projection can read the
                 // waypoints back without walking the autopilot→vessel link.
                 let spec = AutopilotBehaviorSpec::from_json(&cmd.spec_json);
                 if let Ok(s) = spec {
@@ -2224,11 +2224,11 @@ fn on_set_autopilot_behavior(
 
 /// Clear the patrol (or any behaviour) on `vessel` and stop it: sets the
 /// autopilot's behaviour to [`BehaviorSpec::Brake`] AND removes the
-/// [`AutopilotBehaviorSpec`] mirror from the vessel, so the path-line gizmo /
-/// Command Deck stop showing checkpoints. The single canonical "stop & clear"
+/// [`AutopilotBehaviorSpec`] mirror from the vessel, so the route projection /
+/// Command Deck stop showing waypoints. The single canonical "stop & clear"
 /// verb — replaces the hand-built `SetAutopilotBehavior` + `Brake`-JSON dance
 /// that was duplicated in the Command Deck, the right-click menu, and the
-/// delete-last-waypoint path (§4.2 — one input shape, every surface).
+/// waypoint context actions (§4.2 — one input shape, every surface).
 #[Command]
 pub struct ClearPatrol {
     /// Vessel whose patrol to clear.
@@ -2256,7 +2256,7 @@ fn on_clear_patrol(
             cmd.vessel
         ),
     }
-    // Remove the source-spec mirror so the UI/gizmo stop showing checkpoints.
+    // Remove the source-spec mirror so the UI/gizmo stop showing waypoints.
     // `try_remove`: ClearPatrol can legitimately arrive for an already-despawned
     // vessel (the panel defers the trigger a frame), and a plain `remove` would
     // panic at flush.
@@ -2358,7 +2358,10 @@ fn on_export_behavior_xml(_t: On<ExportBehaviorXml>) -> Result<Ack, String> {
     let value: serde_json::Value =
         serde_json::from_str(&cmd.spec_json).map_err(|e| format!("ExportBehaviorXml: {e}"))?;
     let xml = btcpp_xml::value_to_xml(&value)?;
-    Ok(Ack::with_data(OpId::new(), serde_json::json!({ "xml": xml })))
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "xml": xml }),
+    ))
 }
 
 /// Import a BehaviorTree.CPP v4 XML tree back to a JSON [`BehaviorSpec`] — the

@@ -119,19 +119,19 @@ fn task(me) {
     if !is_unattended() { return; }
     seq([
         wait(1.0),
-        once(Fn("b3_autopilot_possess")),
+        once(|m| b3_autopilot_possess(m)),
         wait(0.5),
         // Cross the grade first so the debug run satisfies `feel_the_edge` — the
         // demo must exercise the same objective chain a student does, or CI proves
         // a path nobody takes.
-        step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
+        step(|m| b3_cross_grade(m), |m| b3_cross_grade_done(m)),
         // The task event is scoped to this lesson's authored Trigger Sensor.
         act_until_event(
-            Fn("b3_climb"),
+            |m| b3_climb(m),
             "enter:waypoint",
             "/SlopeTest/Marker/Trigger",
         ),
-        once(Fn("b3_report_tip")),
-        act_for(Fn("b3_brake"), 1.5),
+        once(|m| b3_report_tip(m)),
+        act_for(|m| b3_brake(m), 1.5),
     ])
 }

@@ -359,8 +359,7 @@ class "LunCoCatalogAPI" (
         token apiSchemaType = "singleApply"
     }
     doc = """Marks a `*.usda` as a **spawnable part** — something the editor offers
-    in its palette and drops into the scene — and carries the one authoring hint
-    that placement needs.
+    in its palette and drops into the scene.
 
     Applied to the stage's `defaultPrim`, because the unit of spawning is the FILE:
     the catalogue asks each asset whether it is a part, and spawning it mounts its
@@ -375,14 +374,6 @@ class "LunCoCatalogAPI" (
         be disclaimed everywhere is a default that leaks.
 
         Uniform: an asset does not stop being a part partway through a shot."""
-    )
-    float lunco:spawnLift = 0 (
-        doc = """Metres to lift the spawn point above the click/terrain hit.
-
-        Data, not a category rule. A dynamic prop that must settle onto the terrain
-        wants a positive value; a structure authored with its origin already at
-        ground level wants `0`. Encoding that as "props get lifted, structures
-        don't" would put a content decision in Rust."""
     )
 }
 

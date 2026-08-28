@@ -30,6 +30,17 @@ def Xform "DriveLaw" (
     kind = "component"
 )
 {
+    # Contribute the law's Modelica member to the host rover's composed
+    # component collection; collection membership is the generated-network
+    # ownership contract.
+    prepend rel collection:components:includes = [</DriveLaw/Drivetrain>]
+
+    # The command surface is projected on the host rover root by the OBC's
+    # authored Controls profile. Declare the same causal boundary here so the
+    # generated network can receive those live InputPorts values.
+    float inputs:throttle = 0.0
+    float inputs:steer = 0.0
+
     # These connected outputs are the authoritative allocation. Their presence
     # prevents derivation of a second, imperative DriveMix on the vessel.
     float outputs:drive_w0.connect = </DriveLaw/Drivetrain.outputs:drive_left>
@@ -48,6 +59,8 @@ def Xform "DriveLaw" (
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
+        float outputs:drive_left
+        float outputs:drive_right
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>

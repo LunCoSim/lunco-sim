@@ -6,8 +6,11 @@ within LunCo.Electrical;
 // its authored total inertia, so no state is integrated twice across the boundary.
 model DCMotor
   extends LunCo.Icons.Motor;
-  parameter Real stall_torque = 1.5 "Motor-shaft stall torque, N.m";
-  parameter Real no_load_speed = 4800.0 "Motor-shaft no-load speed, rad/s";
+  // Fleet default: the reusable USD motor component authors the same 0.9 N.m,
+  // 2400 rad/s nameplate. Individual vehicle variants override these parameters
+  // in USD; this source default remains physically consistent when used alone.
+  parameter Real stall_torque = 0.9 "Motor-shaft stall torque, N.m";
+  parameter Real no_load_speed = 2400.0 "Motor-shaft no-load speed, rad/s";
   parameter Real rated_power = 500.0 "Continuous electrical nameplate power, W";
   parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 

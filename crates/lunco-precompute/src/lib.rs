@@ -33,7 +33,7 @@
 //! ## Layout
 //!
 //! Entries live at `<root>/<namespace>/<key-hex>/…`, where `root` is the app's
-//! `cache://` dir (`lunco_assets::cache_dir()`, passed in so this crate stays
+//! machine-global cache directory (`lunco_assets::cache_dir()`, passed in so this crate stays
 //! runtime-agnostic) and `namespace` is a `/`-separated subpath like
 //! `"terrain/derived"`. An entry may hold one or several named blobs.
 

@@ -219,7 +219,7 @@ pub struct DemTerrainRequest {
     pub half_window: f64,
     /// Visual-quality knob: if `> 0` and below the cropped native resolution, the
     /// static visual mesh is resampled (lossy downsample, via
-    /// [`crate::bake::resample`]) to this many samples per side. `0` = native
+    /// [`lunco_terrain_bake::bake::resample`]) to this many samples per side. `0` = native
     /// visual resolution. The retained oracle and static collider always keep
     /// the complete cropped DEM resolution; this setting cannot change physics
     /// or analytic waypoint heights.

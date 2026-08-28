@@ -137,10 +137,10 @@ UI Panel (read-only query) ──Typed Command──▶ Observer (domain crate)
 ```
 crates/lunco-luncosim-edit/
 ├── src/
-│   ├── lib.rs              # SandboxEditPlugin (logic only)
+│   ├── lib.rs              # SceneEditPlugin (logic only)
 │   ├── spawn.rs
 │   └── ui/                 # ALL UI — independent plugin
-│       ├── mod.rs          # SandboxEditUiPlugin
+│       ├── mod.rs          # SceneEditUiPlugin
 │       ├── spawn_palette.rs
 │       └── inspector.rs
 ```
@@ -190,9 +190,9 @@ use lunco_workbench::WorkbenchAppExt;
 pub mod spawn_palette;
 pub mod inspector;
 
-pub struct SandboxEditUiPlugin;
+pub struct SceneEditUiPlugin;
 
-impl Plugin for SandboxEditUiPlugin {
+impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
         app.register_panel(spawn_palette::SpawnPalette);
         app.register_panel(inspector::Inspector);
@@ -204,14 +204,14 @@ impl Plugin for SandboxEditUiPlugin {
 
 ```rust
 // With UI:
-app.add_plugins(SandboxEditPlugin)       // logic
+app.add_plugins(SceneEditPlugin)        // logic
    .add_plugins(WorkbenchPlugin::default())
    .add_plugins(LuncoUiPlugin)
-   .add_plugins(SandboxEditUiPlugin)     // UI
+   .add_plugins(SceneEditUiPlugin)      // UI
    .run();
 
 // Headless (no UI deps):
-app.add_plugins(SandboxEditPlugin)
+app.add_plugins(SceneEditPlugin)
    .run();
 ```
 
@@ -256,8 +256,8 @@ Removing UI plugins leaves a functioning simulation. Headless binaries don't com
 App::new()
     .add_plugins((MinimalPlugins, ScheduleRunnerPlugin::run_loop(...)))
     .add_plugins(LunCoAvatarPlugin)
-    .add_plugins(SandboxEditPlugin)
-    // No WorkbenchPlugin, no LuncoUiPlugin, no SandboxEditUiPlugin
+    .add_plugins(SceneEditPlugin)
+    // No WorkbenchPlugin, no LuncoUiPlugin, no SceneEditUiPlugin
     .run();
 ```
 
@@ -315,7 +315,7 @@ crates/lunco-luncosim/src/ui/
 └── models_palette.rs        # Panel impl
 
 crates/lunco-luncosim-edit/src/ui/
-├── mod.rs                   # SandboxEditUiPlugin
+├── mod.rs                   # SceneEditUiPlugin
 ├── spawn_palette.rs         # Panel impl
 ├── inspector.rs             # Panel impl
 └── entity_list.rs           # Panel impl

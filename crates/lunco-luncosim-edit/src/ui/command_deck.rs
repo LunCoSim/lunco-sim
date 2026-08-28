@@ -217,14 +217,14 @@ impl Panel for CommandDeck {
         // ── Autopilot / behaviour ────────────────────────────────────────
         ui.label("Behaviour");
         if view.is_patrol {
-            ui.label(format!("Patrol — {} checkpoint(s)", view.patrol.len()));
+            ui.label(format!("Patrol — {} waypoint(s)", view.patrol.len()));
         } else if !view.behaviour_kind.is_empty() {
             ui.label(view.behaviour_kind.to_string());
         } else {
-            // The bundled keymap binds PlaceWaypoint to AltLeft. The handler reads
-            // that semantic intent, so this hint describes the default binding
-            // without making the editor depend on a particular key.
-            ui.weak("none — PlaceWaypoint (Alt+click by default) the ground to add a checkpoint");
+            // The bundled keymap binds PlaceWaypoint to either Alt key. The handler
+            // reads that semantic intent, so this hint describes the default binding
+            // without making the editor depend on a particular physical key.
+            ui.weak("none — PlaceWaypoint (Alt+click by default) the ground to add a waypoint");
         }
 
         ui.horizontal(|ui| {

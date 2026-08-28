@@ -117,7 +117,9 @@ The electrical storage boundary follows the same ownership rule. `Battery.mo`
 authors the initial `soc` as a fixed state inside the physical `[0, 1]` storage
 interval. At `soc = 0`, its solved terminal potential is zero; the circuit still
 contains every authored source, including solar generation, and Kirchhoff's laws
-determine whether another source can energize a load. No Rust actuator policy,
+determine whether another source can energize a load. Its `drained` output covers
+the authored 0.1% usable-storage reserve interval so event detection remains
+well-conditioned at the constrained boundary. No Rust actuator policy,
 drained-state recovery, or source-disabling branch is part of this contract.
 
 ### The registry is the vocabulary

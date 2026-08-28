@@ -1,4 +1,4 @@
-//! Command handlers for sandbox-edit world manipulation.
+//! Command handlers for scene-edit world manipulation.
 //!
 //! - `SpawnEntity` — spawn from the catalog at a world position.
 //! - `MoveEntity` — teleport an entity to an absolute world position.
@@ -3465,7 +3465,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_systems(bevy::app::First, apply_pending_focus);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
-        // module; `SandboxEditPlugin` registers them. The headless server has no
+        // module; `SceneEditPlugin` registers them. The headless server has no
         // selection, so they're absent here by design.
         // THE single catalog-population system: scans project USD → spawn
         // catalog and WGSL → shader catalog via the shared `lunco_assets`
@@ -3482,7 +3482,7 @@ impl Plugin for SpawnCommandPlugin {
         );
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         // Resources this plugin's OWN systems read, so it stands alone without the
-        // UI-layer `SandboxEditPlugin` / the render-layer `ShaderMaterialPlugin`
+        // UI-layer `SceneEditPlugin` / the render-layer `ShaderMaterialPlugin`
         // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
         // The host must install `lunco_assets::register_lunco_asset_sources`
         // before Bevy's asset plugin; that shared asset boundary owns the

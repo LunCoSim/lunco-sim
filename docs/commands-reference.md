@@ -128,7 +128,7 @@ actually call, with the fields the deserializer actually accepts. See the
  case bolted onto Move) and is reachable from rhai/the API like anything else —
  rather than each mode sniffing a raw key for itself.
 
-- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/waypoint_click.rs`
 - *fields:* none — call with `CancelWaypointEdit` (no params)
 
 #### `SelectEntity`
@@ -181,7 +181,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Command to engage autopilot on a vessel.
 
-- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/waypoint_click.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -191,7 +191,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Command to toggle autopilot on/off on a vessel.
 
-- *defined in:* `crates/lunco-luncosim-edit/src/ui/checkpoint_click.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/ui/waypoint_click.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -841,7 +841,8 @@ actually call, with the fields the deserializer actually accepts. See the
  - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
  - `root_prim`: optional override for the SDF path of the prim to
    spawn. Empty (default) reads the stage's `defaultPrim` metadata;
-   if absent, falls back to `/` (walk all top-level prims).
+   if absent, the scene load fails visibly; the runtime never mounts the whole
+   stage at `/`.
 
  Despawns every existing entity carrying `UsdPrimPath` plus every
  `SimConnection` (cosim wires are scene-derived in current code), then
@@ -865,7 +866,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). Filesystem paths  are opened through `OpenFile`, not this scene-mount command. |
-| `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header, falling back to  `/` when none is declared. |
+| `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads `defaultPrim` from the stage's metadata header; a missing `defaultPrim` is a visible scene-load error. |
 
 #### `RestartScene`
 
@@ -1545,11 +1546,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Clear the patrol (or any behaviour) on `vessel` and stop it: sets the
  autopilot's behaviour to [`BehaviorSpec::Brake`] AND removes the
- [`AutopilotBehaviorSpec`] mirror from the vessel, so the path-line gizmo /
- Command Deck stop showing checkpoints. The single canonical "stop & clear"
+ [`AutopilotBehaviorSpec`] mirror from the vessel, so the route projection /
+ Command Deck stop showing waypoints. The single canonical "stop & clear"
  verb — replaces the hand-built `SetAutopilotBehavior` + `Brake`-JSON dance
- that was duplicated in the Command Deck, the right-click menu, and the
- delete-last-waypoint path (§4.2 — one input shape, every surface).
+ that was duplicated in the Command Deck and the waypoint context actions
+ (§4.2 — one input shape, every surface).
 
 - *defined in:* `crates/lunco-autopilot/src/lib.rs`
 

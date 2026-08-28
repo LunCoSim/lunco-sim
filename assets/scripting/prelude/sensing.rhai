@@ -94,12 +94,12 @@ fn entities_in_radius(point, radius) {
 // The mobility crate mirrors avian `CollisionStart`/`CollisionEnd` onto the
 // telemetry bus as `COLLISION_START` / `COLLISION_END` events whose value is the
 // gid pair "a:b" (a = avian event target, 0 = unregistered collider). They land
-// in `on_event(self, evt)` one tick after contact (same actor-model delay as
+// in `on_event(me, evt)` one tick after contact (same actor-model delay as
 // emit). avian only fires for entities with collision events enabled — trigger
 // volumes (Sensors) are auto-armed; solid bodies opt in via CollisionEventsEnabled.
 //
-//   fn on_event(self, evt) {
-//       let other = collision_other(evt, self);
+//   fn on_event(me, evt) {
+//       let other = collision_other(evt, me);
 //       if other != () { /* touched `other` — react */ }
 //   }
 
@@ -139,7 +139,7 @@ fn exited(evt, self_id) {
 // value is the ENTERING entity's gid. So a scenario reacts to a zone by name,
 // not by reverse-mapping gids:
 //
-//   fn on_event(self, evt) {
+//   fn on_event(me, evt) {
 //       if entered_zone(evt, "pad_2") { possess(evt.value); }   // evt.value = who entered
 //       let z = zone_of(evt);                                   // or branch on the name
 //   }

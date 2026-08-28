@@ -33,7 +33,8 @@ Simulation-specific behaviors applied by this crate are intended to take priorit
 *   [x] Basic `PhysxVehicleWheelAPI` intercept.
 *   [x] `PhysxVehicleTireAPI` mapping.
 *   [x] `PhysxVehicleSuspensionAPI` mapping.
-*   [ ] Automatic removal/replacement of standard `UsdPhysics` colliders on intercepted prims.
+*   [x] Intercepted vehicle wheels use the authored raycast realization instead
+    of a second standard collider path.
 
 ## Co-simulation translator (`cosim` module)
 
@@ -110,10 +111,10 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 `LoadScene` despawns every entity carrying `UsdPrimPath` plus every
 `SimConnection`, force-reads the asset from disk, and spawns a fresh
 root parented directly under the canonical `WorldGrid`. Use during authoring to iterate on a
-USD scene without restarting the binary. `root_prim: ""` auto-derives
-`/PascalCaseFromFilename`. Note: leaks Modelica steppers in the worker
-for entities that were despawned (acceptable for authoring; durable
-cleanup needs a `ModelicaCommand::Despawn` per stepper, follow-up).
+USD scene without restarting the binary. `root_prim: ""` reads the stage's authored
+`defaultPrim` after the asset loads. A stage without `defaultPrim` is rejected
+as an invalid scene mount; the runtime never mounts the whole stage at `/`.
+Worker-side Modelica state is cleaned up with the scene transition.
 
 ### Live status
 

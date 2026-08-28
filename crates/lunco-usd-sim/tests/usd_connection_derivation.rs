@@ -604,8 +604,7 @@ fn solar_rover_programs_resolve_to_their_owned_projections() {
         "the standalone tracker must not be treated as a generated-network member"
     );
 
-    let autopilot =
-        SdfPath::new("/SolarRoverTest/SolarRover/Autopilot").expect("autopilot path");
+    let autopilot = SdfPath::new("/SolarRoverTest/SolarRover/Autopilot").expect("autopilot path");
     assert_eq!(
         lunco_usd_bevy::program::resolve_program(&view, &autopilot)
             .expect("autopilot source resolves")

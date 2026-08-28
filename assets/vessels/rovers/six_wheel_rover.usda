@@ -49,8 +49,6 @@ def Xform "SixWheelRover" (
 {
     uniform bool lunco:spawnable = true
     float physics:mass = 1400.0
-    float lunco:spawnLift = 1.0
-
     # The two bank actuator ports, as attributes the wheels CONNECT to. Declaring
     # them here gives each `inputs:drive.connect` a real property to resolve to,
     # so the binding is PCP-resolved and path-translated through the wheels'

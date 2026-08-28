@@ -52,7 +52,7 @@ use lunco_terrain_core::{measure_node_error, HeightSource};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::SurfaceOracle;
-use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
+use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
 /// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
 /// persisted in [`lunco_render::RenderingQualitySettings`]. Keeping them there

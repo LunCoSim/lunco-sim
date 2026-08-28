@@ -140,6 +140,10 @@ fn row(tag, t, v_rc, v_ph, d_rc, d_ph) {
     print(s);
 }
 
+/// Read the solved wheel boundary without adding a Rust-only debug API. The
+/// actuator endpoints are authored child ports, while the tire/Avian values are
+/// the live runtime state. Keeping this probe in the Rhai gate makes the
+/// producer-to-consumer mismatch visible at the exact time parity diverges.
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 fn on_start(me) {

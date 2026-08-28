@@ -170,6 +170,7 @@ model PositionPID3D
   Real tilt_reference_accel;
   Real thrust_authority;
   Real lateral_accel_magnitude;
+  Real lateral_support_vertical_command;
   Real available_lateral_accel;
   Real lateral_scale;
   Real bounded_lateral_accel_x;
@@ -386,12 +387,25 @@ equation
     * max(0.0, min(1.0,
       altitude_above_target
         / max(1.0e-9, landing_flare_range_m)));
+  // A lateral acceleration request is a thrust-vector request, not an
+  // independent force channel.  Allowing the vertical law to coast at zero
+  // while lateral demand is nonzero makes the later `thrust_authority`
+  // multiplier erase the entire thrust vector, so an initial cross-range
+  // velocity can never be braked.  Keep the vehicle's normal hover thrust
+  // component active while lateral demand exists; the tilt-envelope projection
+  // below then limits lateral acceleration to the amount that this hover thrust
+  // can realize.  Solving lateral/tan(tilt) here would add upward acceleration
+  // to a channel whose value is the gravity-compensating thrust component.
+  lateral_support_vertical_command = g * max(0.0, min(1.0,
+    lateral_accel_magnitude / max(minimum_vertical_accel_mps2,
+      lateral_accel_magnitude)));
   vertical_limiter.command = max(
     target_contact_engine_gate * (g + pid_y_command),
     landing_flare_gate
       * g * landing_handoff_position_gate * (1.0 - landing_handoff)
       * target_contact_engine_gate,
-    recovery_vertical_command);
+    recovery_vertical_command,
+    lateral_support_vertical_command);
   vertical_limiter.lower_limit = 0.0;
   vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;

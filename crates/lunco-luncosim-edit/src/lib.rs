@@ -1,4 +1,4 @@
-//! # LunCoSim Sandbox Editing Tools
+//! # LunCoSim Scene Editing Tools
 //!
 //! Provides a suite of in-scene editing tools for the LunCoSim luncosim:
 //!
@@ -14,8 +14,8 @@
 //! ## UI
 //!
 //! All UI panels live in the `ui/` subdirectory and are registered via
-//! [`ui::SandboxEditUiPlugin`]. This plugin should
-//! be added alongside `SandboxEditPlugin` for full functionality.
+//! [`ui::SceneEditUiPlugin`]. This plugin should
+//! be added alongside `SceneEditPlugin` for full functionality.
 //!
 //! ## Adding New Spawn Types
 //!
@@ -55,6 +55,10 @@ pub mod selection;
 #[cfg(feature = "ui")]
 pub mod spawn;
 #[cfg(feature = "ui")]
+pub(crate) mod surface_pick;
+#[cfg(feature = "ui")]
+pub mod terrain_picking;
+#[cfg(feature = "ui")]
 pub mod terrain_tools;
 
 /// UI panels — `lunco-workbench::Panel` implementations (for editor mode).
@@ -67,10 +71,10 @@ use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 #[cfg(feature = "ui")]
-pub struct SandboxEditPlugin;
+pub struct SceneEditPlugin;
 
 #[cfg(feature = "ui")]
-impl Plugin for SandboxEditPlugin {
+impl Plugin for SceneEditPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpawnState>()
             .init_resource::<SelectedEntities>()
@@ -131,13 +135,23 @@ impl Plugin for SandboxEditPlugin {
         );
 
         // Scene picking is bevy_picking-driven (egui occlusion handled by the
-        // framework's egui picking backend) — no hand-rolled gate, no manual
-        // ray-casts. Selection, placement and terrain-sculpt observe the same
-        // `Pointer<Click>`; each stands down when another tool owns the click.
+        // framework's egui picking backend). Streamed DEM ground contributes
+        // hits through the same backend set using GridSurfaceQuery; no tool
+        // owns a separate click path. Selection, placement and terrain-sculpt
+        // observe the same `Pointer<Click>` and stand down when another tool
+        // owns the click.
         app.add_observer(selection::on_scene_click_select);
         app.add_observer(spawn::on_scene_click_spawn);
         app.add_observer(terrain_tools::on_scene_click_terrain);
         app.add_observer(script_tools::on_scene_click_script_tool);
+        // Streamed DEM tiles intentionally keep no CPU vertex copy, so the mesh
+        // picking backend cannot hit open terrain. Feed the same Pointer<Click>
+        // pipeline from the analytic GridSurfaceQuery instead of adding a second
+        // click path to every terrain-aware tool.
+        app.add_systems(
+            PreUpdate,
+            terrain_picking::emit_terrain_hits.in_set(bevy::picking::PickingSystems::Backend),
+        );
 
         spawn::register_all_commands(app);
 
@@ -236,7 +250,7 @@ impl Plugin for SandboxEditPlugin {
         // NOTE: waypoints have no gizmo, and no plugin. A waypoint is a USD prim
         // referencing `vessels/markers/waypoint.usda` — the USD scene renders it, the
         // ordinary transform gizmo drags it, and Delete removes it. See
-        // `ui::checkpoint_click`.
+        // `ui::waypoint_click`.
 
         // NOTE: gizmo handle picking is provided by transform-gizmo-bevy's own
         // `TransformGizmoPickingPlugin` (added by `TransformGizmoPlugin`). Its

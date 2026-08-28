@@ -13,21 +13,18 @@ use lunco_workbench::{
 };
 
 pub mod asset_visibility;
+pub(crate) mod authoring_paths;
 /// Read-only node graph of the selected vessel's authored autopilot program.
 pub mod autopilot_canvas;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
-/// Interactive checkpoint authoring — PlaceWaypoint intent + primary pointer append
-/// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
-/// commands (no new journal domain).
-pub mod checkpoint_click;
 /// Cinematic camera authoring — capture the current view as a `def Camera`
 /// prim. The current camera-path contract is in
 /// `docs/architecture/51-cinematic-camera.md`; capture and transport live in
 /// the docked Cinematic panel.
 pub mod cinematic;
 /// Command Deck panel — the read+control surface for the selected vessel
-/// (possession status, autopilot engage/disengage, checkpoint list). Pure
+/// (possession status, autopilot engage/disengage, waypoint list). Pure
 /// reader: every mutation dispatches a typed command (§4.2).
 pub mod command_deck;
 pub mod connection_canvas;
@@ -44,6 +41,11 @@ pub mod usd_mount;
 pub mod usd_params;
 pub mod usd_prim_tree;
 pub mod usd_variants;
+/// Interactive waypoint authoring — PlaceWaypoint intent and primary-pointer
+/// append menu. Document-backed routes use the existing USD authoring funnel;
+/// runtime-only routes use the existing live behavior command (no new waypoint
+/// domain).
+pub mod waypoint_click;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -248,13 +250,13 @@ fn refresh_view_help_controls(
 /// confined to that
 /// rect each frame by `lunco_workbench::apply_workbench_viewport`, and
 /// the panel paints its theme backdrop around it.
-pub struct SandboxEditUiPlugin;
+pub struct SceneEditUiPlugin;
 
-impl Plugin for SandboxEditUiPlugin {
+impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
         // Camera-path overlay: state + the gizmo pass that draws it, and the
         // tracker that tells the panel's transport which path clock to drive.
-        // Gate inputs for `usd_selection_view_changed`. `SandboxEditPlugin` also
+        // Gate inputs for `usd_selection_view_changed`. `SceneEditPlugin` also
         // inits both, but this plugin is added independently of it (see
         // `lunco_luncosim::ui`), and a run condition that reads a missing resource
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
@@ -572,12 +574,14 @@ impl Plugin for SandboxEditUiPlugin {
 
         // PlaceWaypoint + LMB (Alt+LMB in the bundled keymap) drops a mission
         // waypoint by AUTHORING A USD PRIM (`ApplyUsdOp`) —
-        // no checkpoint command, no checkpoint domain. Moving, deleting, undoing and
-        // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
-        app.init_resource::<checkpoint_click::WaypointContextMenuState>()
-            .init_resource::<checkpoint_click::WaypointPlacement>()
-            .init_resource::<checkpoint_click::RouteVisualProjection>()
-            .init_resource::<checkpoint_click::RouteProjectionRebuildRequested>()
+        // no dedicated waypoint command or parallel waypoint state. Moving,
+        // deleting, undoing and inspecting it are ordinary prim paths. See
+        // `waypoint_click`.
+        app.init_resource::<waypoint_click::WaypointContextMenuState>()
+            .init_resource::<waypoint_click::WaypointPlacement>()
+            .init_resource::<waypoint_click::WaypointClickDedup>()
+            .init_resource::<waypoint_click::RouteVisualProjection>()
+            .init_resource::<waypoint_click::RouteProjectionRebuildRequested>()
             // An armed placement names the vessel whose route it edits, and a
             // context menu names the waypoint it opened on. Both are entities of
             // the scene being unloaded — carried across a reload they leave the
@@ -587,12 +591,15 @@ impl Plugin for SandboxEditUiPlugin {
             .add_systems(
                 lunco_core::SceneTeardown,
                 (
-                    |mut placement: ResMut<checkpoint_click::WaypointPlacement>,
-                     mut menu: ResMut<checkpoint_click::WaypointContextMenuState>| {
+                    |mut placement: ResMut<waypoint_click::WaypointPlacement>,
+                     mut menu: ResMut<waypoint_click::WaypointContextMenuState>| {
                         if placement.0.is_some() {
                             placement.0 = None;
                         }
-                        *menu = checkpoint_click::WaypointContextMenuState::default();
+                        *menu = waypoint_click::WaypointContextMenuState::default();
+                    },
+                    |mut dedup: ResMut<waypoint_click::WaypointClickDedup>| {
+                        dedup.clear();
                     },
                     |q_reached: Query<Entity, With<lunco_autopilot::usd_tree::ReachedWaypoints>>,
                      mut commands: Commands| {
@@ -600,14 +607,14 @@ impl Plugin for SandboxEditUiPlugin {
                             commands.entity(entity).remove::<lunco_autopilot::usd_tree::ReachedWaypoints>();
                         }
                     },
-                    checkpoint_click::clear_route_visual_projection,
+                    waypoint_click::clear_route_visual_projection,
                 ),
             )
-            .add_observer(checkpoint_click::on_scene_click_checkpoint)
-            .add_observer(checkpoint_click::on_scene_right_click_waypoint)
-            .add_observer(checkpoint_click::on_append_waypoint_placement_requested)
+            .add_observer(waypoint_click::on_scene_click_waypoint)
+            .add_observer(waypoint_click::on_scene_right_click_waypoint)
+            .add_observer(waypoint_click::on_append_waypoint_placement_requested)
             // Consumes the ground click that follows a Move / Insert-after.
-            .add_observer(checkpoint_click::on_scene_click_place_waypoint)
+            .add_observer(waypoint_click::on_scene_click_place_waypoint)
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
             // a context's begin/end pass here, so a widget built outside it never joins
             // egui's input pass: the context menu PAINTED but nothing in it could be
@@ -626,10 +633,10 @@ impl Plugin for SandboxEditUiPlugin {
                     // producer for terrain-grid ribbon geometry and marker state.
                     billboard_overlay::draw_billboard_overlay
                         .before(lunco_workbench::WorkbenchRenderSet),
-                    checkpoint_click::draw_waypoint_context_menu
+                    waypoint_click::draw_waypoint_context_menu
                         .in_set(lunco_workbench::ApplicationOverlayRenderSet),
                     // Crosshair + Esc-to-cancel while a placement is armed.
-                    checkpoint_click::handle_waypoint_placement_mode
+                    waypoint_click::handle_waypoint_placement_mode
                         .in_set(lunco_workbench::ApplicationOverlayRenderSet),
                 ),
             )
@@ -642,33 +649,33 @@ impl Plugin for SandboxEditUiPlugin {
                     // Route interpretation and terrain projection are a
                     // change-driven producer. The mesh and marker consumers
                     // run only when this snapshot changes.
-                    checkpoint_click::arm_route_projection_rebuild
-                        .before(checkpoint_click::project_waypoint_markers_to_surface)
-                        .before(checkpoint_click::rebuild_waypoint_route_projection),
-                    checkpoint_click::project_waypoint_markers_to_surface
-                        .run_if(checkpoint_click::route_projection_rebuild_is_pending),
-                    checkpoint_click::rebuild_waypoint_route_projection
-                        .after(checkpoint_click::project_waypoint_markers_to_surface)
-                        .run_if(checkpoint_click::route_projection_rebuild_is_pending),
-                    checkpoint_click::sync_route_visual_meshes
-                        .after(checkpoint_click::rebuild_waypoint_route_projection)
-                        .run_if(resource_changed::<checkpoint_click::RouteVisualProjection>),
-                    checkpoint_click::sync_waypoint_marker_visuals
-                        .after(checkpoint_click::rebuild_waypoint_route_projection)
-                        .run_if(resource_changed::<checkpoint_click::RouteVisualProjection>),
-                    checkpoint_click::handle_autopilot_toggle_intent,
+                    waypoint_click::arm_route_projection_rebuild
+                        .before(waypoint_click::project_waypoint_markers_to_surface)
+                        .before(waypoint_click::rebuild_waypoint_route_projection),
+                    waypoint_click::project_waypoint_markers_to_surface
+                        .run_if(waypoint_click::route_projection_rebuild_is_pending),
+                    waypoint_click::rebuild_waypoint_route_projection
+                        .after(waypoint_click::project_waypoint_markers_to_surface)
+                        .run_if(waypoint_click::route_projection_rebuild_is_pending),
+                    waypoint_click::sync_route_visual_meshes
+                        .after(waypoint_click::rebuild_waypoint_route_projection)
+                        .run_if(resource_changed::<waypoint_click::RouteVisualProjection>),
+                    waypoint_click::sync_waypoint_marker_visuals
+                        .after(waypoint_click::rebuild_waypoint_route_projection)
+                        .run_if(resource_changed::<waypoint_click::RouteVisualProjection>),
+                    waypoint_click::handle_autopilot_toggle_intent,
                     inspector::delete_selected_on_intent,
                     // Grabbing the controls takes the vessel back from its autopilot.
-                    checkpoint_click::manual_input_disengages_autopilot,
+                    waypoint_click::manual_input_disengages_autopilot,
                     // Mirrors an armed placement into the shared tool gate so
                     // possession/selection stand down for that one click.
-                    checkpoint_click::sync_waypoint_tool_active,
+                    waypoint_click::sync_waypoint_tool_active,
                     // `Cancel` intent (Esc/Backspace, from the data keymap) → the
                     // CancelWaypointEdit command. Backs out of ANY waypoint mode.
-                    checkpoint_click::cancel_waypoint_edit_on_intent,
+                    waypoint_click::cancel_waypoint_edit_on_intent,
                 ),
             );
-        checkpoint_click::register_all_commands(app);
+        waypoint_click::register_all_commands(app);
         cinematic::register_all_commands(app);
     }
 }

@@ -44,7 +44,6 @@ fn balloon_entry() -> SpawnableEntry {
         display_name: "Modelica Balloon".into(),
         category: "Vessels".into(),
         source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
-        spawn_lift: 0.0,
         default_transform: Transform::default(),
     }
 }

@@ -1245,9 +1245,7 @@ function F end F;
             "SolarPanel"
         );
         assert_eq!(
-            crate::state::generated_class_display_name(
-                "SolarRoverTest_x2f_SolarRover_System"
-            ),
+            crate::state::generated_class_display_name("SolarRoverTest_x2f_SolarRover_System"),
             "SolarRoverTest / SolarRover"
         );
         assert_eq!(
@@ -1292,9 +1290,6 @@ function F end F;
             member_output_aliases: Vec::new(),
             error: None,
         };
-        assert_eq!(
-            generated_network_open_class(&entry),
-            "Rover_System"
-        );
+        assert_eq!(generated_network_open_class(&entry), "Rover_System");
     }
 }

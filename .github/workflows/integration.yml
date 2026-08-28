@@ -27,7 +27,6 @@ on:
   #     - 'crates/lunco-usd-sim/**'
   #     - 'scripts/scenario_sync_test.sh'
   #     - 'scripts/scenario_sync_assert.rhai'
-  #     - 'scripts/api/rhai_eval.py'
   #     - 'scripts/api/entities_present.py'
   #     - '.github/workflows/integration.yml'
   # pull_request:

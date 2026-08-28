@@ -68,11 +68,11 @@ fn spawn_palette_content(
         .map(|s| matches!(*s, SpawnState::Selecting { .. }))
         .unwrap_or(false);
     let is_placing_waypoint = ctx
-        .resource::<crate::ui::checkpoint_click::WaypointPlacement>()
+        .resource::<crate::ui::waypoint_click::WaypointPlacement>()
         .is_some_and(|placement| {
             matches!(
                 placement.0.as_ref(),
-                Some(crate::ui::checkpoint_click::PendingPlacement::Append)
+                Some(crate::ui::waypoint_click::PendingPlacement::Append)
             )
         });
     let selecting_id = ctx.resource::<SpawnState>().and_then(|s| match s {
@@ -93,7 +93,7 @@ fn spawn_palette_content(
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Placing: waypoint").color(tokens.success));
                 if ui.button("Cancel").clicked() {
-                    ctx.trigger(crate::ui::checkpoint_click::CancelWaypointEdit {});
+                    ctx.trigger(crate::ui::waypoint_click::CancelWaypointEdit {});
                 }
             });
             ui.separator();
@@ -126,11 +126,7 @@ fn spawn_palette_content(
                         .unwrap_or(false)
                         || (route_waypoint && is_placing_waypoint);
 
-                    let btn_text = if selected {
-                        entry.display_name.clone()
-                    } else {
-                        entry.display_name.clone()
-                    };
+                    let btn_text = entry.display_name.clone();
 
                     let btn = egui::Button::new(&btn_text);
                     let btn = if selected {
@@ -159,7 +155,7 @@ fn spawn_palette_content(
                     if response.clicked() {
                         if route_waypoint {
                             ctx.trigger(
-                                crate::ui::checkpoint_click::AppendWaypointPlacementRequested,
+                                crate::ui::waypoint_click::AppendWaypointPlacementRequested,
                             );
                         } else {
                             let entry_id = entry.id.clone();
@@ -174,7 +170,7 @@ fn spawn_palette_content(
                     if response.drag_started() {
                         if route_waypoint {
                             ctx.trigger(
-                                crate::ui::checkpoint_click::AppendWaypointPlacementRequested,
+                                crate::ui::waypoint_click::AppendWaypointPlacementRequested,
                             );
                         } else {
                             let entry_id = entry.id.clone();

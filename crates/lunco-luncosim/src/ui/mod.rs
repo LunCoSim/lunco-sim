@@ -9,7 +9,7 @@
 //! (`SandboxHeadlessPlugin`) live in `lib.rs` and carry no UI.
 //!
 //! Mirrors the `ui/` + `*UiPlugin` convention every library crate already uses
-//! (`SandboxEditUiPlugin`, `UsdUiPlugin`, `ModelicaUiPlugin`, …) — the app crate
+//! (`SceneEditUiPlugin`, `UsdUiPlugin`, `ModelicaUiPlugin`, …) — the app crate
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
@@ -206,8 +206,8 @@ impl Plugin for SandboxUiPlugin {
             // SECOND time (doubled crater meshes / rocks). A view must not own a
             // scene — see `docs/architecture/usd-source-of-truth.md`.
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
-            .add_plugins(lunco_luncosim_edit::SandboxEditPlugin)
-            .add_plugins(lunco_luncosim_edit::ui::SandboxEditUiPlugin)
+            .add_plugins(lunco_luncosim_edit::SceneEditPlugin)
+            .add_plugins(lunco_luncosim_edit::ui::SceneEditUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
             // pipeline) used to be added here. It now lives inside
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
@@ -474,7 +474,7 @@ fn on_runtime_ui_action(
                 );
                 return;
             };
-            commands.trigger(lunco_luncosim_edit::ui::checkpoint_click::ToggleAutopilot {
+            commands.trigger(lunco_luncosim_edit::ui::waypoint_click::ToggleAutopilot {
                 vessel: link.vessel_entity,
             });
         }

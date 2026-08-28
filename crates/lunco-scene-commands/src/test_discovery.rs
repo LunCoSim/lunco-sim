@@ -149,7 +149,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
             continue;
         };
         let source_rel = lunco_assets::engine_asset_rel(&source_asset);
-        if !lunco_assets::discovery::is_test_asset(&source_rel) || !source_rel.ends_with(".rhai") {
+        if !lunco_assets::discovery::is_test_asset(source_rel) || !source_rel.ends_with(".rhai") {
             continue;
         }
         if !sources.insert(source_asset.clone()) {

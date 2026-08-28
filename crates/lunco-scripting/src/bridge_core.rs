@@ -49,8 +49,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity,
-    SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity, SimTick,
+    TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -1093,10 +1093,11 @@ pub fn despawn_entity(gid: u64) -> Result<(), String> {
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
-/// `list_entities()` — `[{ id, name, type, pos, catalog_id, usd_prim_path,
+/// `list_entities()` — `[{ id, name, type, pos, catalog_id, input_surface,
 /// control_bound, celestial_body }]` for every registered entity. `type` comes
 /// from the projected USD `kind`; it is never inferred from control or physics
-/// components. `catalog_id` is present only for catalog-spawned entities.
+/// components. `catalog_id` is present only for catalog-spawned entities, and
+/// `input_surface` is the authoritative `InputPorts` readiness bit.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         let Some(pairs) = world
@@ -1112,6 +1113,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<(
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,
+                Has<lunco_core::InputPorts>,
                 Option<&CelestialBody>,
                 Option<&lunco_core::CatalogEntryId>,
                 Option<&lunco_core::UsdPrimKind>,
@@ -1123,9 +1125,9 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, body, catalog_id, usd_kind) = q_meta
+                let (name, accepts_commands, input_surface, body, catalog_id, usd_kind) = q_meta
                     .get(entity)
-                    .unwrap_or((None, false, None, None, None));
+                    .unwrap_or((None, false, false, None, None, None));
                 let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
                 let pos = poses
                     .position(entity)
@@ -1138,6 +1140,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                         b.string(name.map(|n| n.as_str()).unwrap_or("")),
                     ),
                     ("type".to_string(), b.string(kind)),
+                    ("input_surface".to_string(), b.bool(input_surface)),
                     ("control_bound".to_string(), b.bool(accepts_commands)),
                     ("celestial_body".to_string(), b.bool(body.is_some())),
                     (

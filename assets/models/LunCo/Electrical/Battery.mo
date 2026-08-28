@@ -5,12 +5,12 @@ within LunCo.Electrical;
 // and rises when they do not — the balance is the circuit's, not a number anyone sums.
 model Battery
   extends LunCo.Icons.Battery;
-  parameter Real voltage_nom = 48.0 "Nominal terminal voltage, V";
+  parameter Real voltage_nom = 28.0 "Nominal terminal voltage, V";
   parameter Real R_internal = 0.01 "Equivalent series resistance, Ohm";
   parameter Real capacity(unit="Ah") = 208.0 "Total capacity";
   parameter Real soc_init(unit="1") = 0.8 "State of charge at t=0, 0..1";
-  parameter Real soc_empty_threshold(unit="1", min=1e-12) = 1e-6
-    "Normalized SoC interval used to expose the empty-boundary signal";
+  parameter Real soc_empty_threshold(unit="1", min=1e-6) = 1e-3
+    "Normalized SoC reserve interval used to expose the empty-boundary signal";
 
   Pin p annotation(Placement(transformation(extent={{90,-10},{110,10}})));
   Real soc(unit="1", start = soc_init, fixed = true, min = 0.0, max = 1.0) "State of charge, 0..1";
@@ -25,7 +25,7 @@ model Battery
   output Real discharge_power_w(unit="W") "Power currently supplied by the battery; zero while charging";
   output Real charge_current_a(unit="A") "Current entering the battery; positive while charging";
   output Real discharge_current_a(unit="A") "Current leaving the battery; positive while discharging";
-  output Real drained "1 at the empty storage boundary, otherwise 0";
+  output Real drained "1 in the authored empty reserve interval, otherwise 0";
   Real soc_rate(unit="1/s") "State-of-charge rate limited to the physical storage interval";
 equation
   // Terminal voltage droops with SoC and with the current drawn through the ESR.
@@ -51,7 +51,9 @@ equation
   discharge_current_a = max(0.0, -p.i);
   // Event bindings consume a normalized empty-boundary signal, not a depletion
   // fraction. Saturation keeps it branch-free for the solver while retaining
-  // the exact boundary value: 1 at soc=0 and 0 at or above the tiny authored
-  // empty interval.
+  // the exact boundary value: 1 at soc=0 and 0 at or above the authored 0.1%
+  // empty reserve interval. The finite interval is intentional: it represents
+  // a usable-storage reserve and keeps the event signal well-conditioned at
+  // the constrained state boundary instead of relying on solver epsilon.
   drained = max(0.0, min(1.0, 1.0 - soc / soc_empty_threshold));
 end Battery;

@@ -2,7 +2,8 @@
 //!
 //! This crate is the single source of truth for:
 //! - Cache directory resolution (shared across all git worktrees)
-//! - Asset source registration (`cache://`, `user://`, `assets://`)
+//! - Asset source registration (`lunco://` and `twin://`, alongside Bevy's
+//!   default asset source)
 //! - Unified asset loading that works across desktop and wasm32 targets
 //!
 //! ## Cache Directory Strategy
@@ -12,7 +13,10 @@
 //!
 //! 1. `LUNCOSIM_CACHE` environment variable (explicit override for CI/custom installs)
 //! 2. OS-conventional cache directory
-//! 3. CWD-relative `.cache/` only when no OS cache directory is available
+//!
+//! If neither an explicit override nor an OS cache directory is available,
+//! cache resolution fails visibly; it never silently creates a worktree-local
+//! cache.
 //!
 //! ```text
 //! ~/.cache/lunco/             # Shared across ALL worktrees and Twins
@@ -107,10 +111,10 @@ pub use twin_source::{
 ///    Linux:   `~/.cache/lunco/`
 ///    macOS:   `~/Library/Caches/lunco/`
 ///    Windows: `%LOCALAPPDATA%\lunco\`
-/// 3. CWD-relative `.cache/` as a last resort (no resolvable OS dir).
 ///
-/// There is deliberately NO per-worktree cache: an earlier dev-mode walk
-/// preferred a workspace-local `.cache/` when populated, which silently
+/// If no OS cache directory is resolvable, this function panics with an
+/// actionable message. There is deliberately NO per-worktree cache: an earlier
+/// dev-mode walk preferred a workspace-local `.cache/` when populated, which silently
 /// made each worktree an island re-downloading the same assets. One shared
 /// pool, keyed by content (sha256 in manifests, bake keys on outputs), is
 /// both cheaper and correct.
@@ -139,10 +143,11 @@ pub fn cache_dir() -> PathBuf {
         if let Some(val) = std::env::var_os("LUNCOSIM_CACHE") {
             return PathBuf::from(val);
         }
-        if let Some(c) = dirs::cache_dir() {
-            return c.join("lunco");
-        }
-        PathBuf::from(".cache")
+        dirs::cache_dir()
+            .map(|base| base.join("lunco"))
+            .unwrap_or_else(|| {
+                panic!("unable to resolve an OS cache directory; set LUNCOSIM_CACHE explicitly")
+            })
     }
 }
 

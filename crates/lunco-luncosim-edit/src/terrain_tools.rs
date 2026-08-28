@@ -28,6 +28,8 @@ use big_space::prelude::CellCoord;
 use lunco_render::SceneCamera;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
+use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
+
 /// Which terrain brush is armed. `None` = the tool is off and clicks pass
 /// through to possess / select as usual.
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
@@ -229,27 +231,22 @@ pub fn update_terrain_brush_ghost(
 
     // The brush edits the terrain, so the oracle hit IS the target surface;
     // physics is only the fallback for scenes without a DEM terrain. Both are
-    // asked in the GRID frame — the one conversion happens here, at the ray.
+    // resolved by the shared editor surface picker in the GRID frame.
     let Some((origin_grid, dir_grid)) =
         surface.ray_to_grid(lunco_core::coords::RenderPos(origin), dir)
     else {
         return;
     };
-    let Some(point) = surface
-        .raycast(origin_grid, dir_grid, 10_000.0)
-        .map(|hit| hit.point.0)
-        .or_else(|| {
-            raycaster
-                .cast_ray_grid(
-                    origin_grid,
-                    dir_grid,
-                    10_000.0,
-                    false,
-                    &avian3d::prelude::SpatialQueryFilter::default(),
-                )
-                .map(|h| origin_grid.0 + dir_grid.as_dvec3() * h.distance)
-        })
-    else {
+    let Some(point) = cursor_surface_hit(
+        &surface,
+        &raycaster,
+        origin_grid,
+        dir_grid,
+        10_000.0,
+        SurfacePickPolicy::TerrainFirst,
+        |_| true,
+    )
+    .map(|hit| hit.point.0) else {
         return;
     };
 
@@ -331,6 +328,7 @@ pub fn on_scene_click_terrain(
     // one source of truth.
     active: Res<lunco_core::TerrainToolActive>,
     keys: Res<ButtonInput<KeyCode>>,
+    surface: lunco_terrain_surface::GridSurfaceQuery,
     mut commands: Commands,
 ) {
     use bevy::picking::pointer::PointerButton;
@@ -349,13 +347,21 @@ pub fn on_scene_click_terrain(
         return;
     }
     // Chrome guard — egui's pick carries no world position; a terrain hit does.
-    let Some(point) = click.hit.position else {
+    let Some(render_point) = click.hit.position else {
+        return;
+    };
+    // `HitData::position` is the renderer's floating-origin frame. Terrain
+    // commands own grid-local coordinates, so cross that boundary exactly once
+    // here instead of allowing each command branch to receive render values.
+    let Some(point) = surface.to_grid(lunco_core::coords::RenderPos(render_point.as_dvec3()))
+    else {
+        warn!("[terrain] click ignored: active terrain grid is unavailable");
         return;
     };
 
     let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let (x, z, radius) = (point.x, point.z, state.radius);
+    let (x, z, radius) = (point.0.x as f32, point.0.z as f32, state.radius);
 
     // Crater stamps one impact; Rock drops one boulder; Ctrl overrides Sculpt
     // into a one-shot flatten-to-clicked-height; the Flatten tool always flattens.
@@ -383,7 +389,7 @@ pub fn on_scene_click_terrain(
             x,
             z,
             radius,
-            target_y: point.y,
+            target_y: point.0.y as f32,
             id: String::new(),
         });
     } else {

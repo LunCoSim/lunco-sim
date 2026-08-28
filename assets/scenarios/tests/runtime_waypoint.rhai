@@ -61,12 +61,25 @@ fn on_tick(me) {
         }
     }
 
+    // SpawnEntity is asynchronous: catalog identity exists before the USD
+    // subtree has projected its command ports. Do not race AddRuntimeWaypoint
+    // against that projection; the GUI only exposes the waypoint action after
+    // the same command surface is present.
+    if !has_input_surface(this.rover) {
+        if this.elapsed > 10.0 {
+            this.done = true;
+            runtime_waypoint_fail("spawned rover command surface did not materialize");
+        }
+        return;
+    }
+
     if this.waypoint_issued == 0 {
         let result = cmd("AddRuntimeWaypoint", #{
             target: this.rover,
-            // Put the sensor ahead of the spawn point. Spawning it on top of
-            // the rover would be initial penetration, not a CollisionStart
-            // enter event, and would leave this acceptance test unproven.
+            // Put the sensor behind the default -Z heading. This deliberately
+            // exercises the front-steered rover's bounded reverse approach;
+            // spawning it on top would be initial penetration, not a
+            // CollisionStart enter event.
             position: [0.0, 0.0, 8.0],
         });
         if !result.ok {
@@ -112,7 +125,11 @@ fn on_tick(me) {
         return;
     }
 
-    if this.elapsed > 120.0 {
+    // The route intentionally includes a reverse approach. At the authored
+    // 0.6 m/s setpoint and 0.5 rad steering limit, this is a route-liveness
+    // budget, not a physics-substep budget; it leaves bounded room for the
+    // Ackermann rover to turn and converge without masking solver instability.
+    if this.elapsed > 180.0 {
         this.done = true;
         let detail = "RuntimeWaypointStatus query unavailable";
         if status != () {

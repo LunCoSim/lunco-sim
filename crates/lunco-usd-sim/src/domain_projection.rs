@@ -2964,6 +2964,7 @@ pub fn read_network(
         };
         for attr in attrs {
             if let Some(name) = attr.strip_prefix("connectors:") {
+                let name = name.strip_suffix(".connect").unwrap_or(name);
                 declared_connectors.insert(name.to_string());
                 let targets: Vec<String> = view
                     .connections(&path, &attr)
@@ -2974,6 +2975,7 @@ pub fn read_network(
                     connectors.insert(name.to_string(), targets);
                 }
             } else if let Some(name) = attr.strip_prefix("inputs:") {
+                let name = name.strip_suffix(".connect").unwrap_or(name);
                 let targets = view.connections(&path, &attr);
                 if targets.len() > 1 {
                     extraction_errors.push(DomainProjectionError {
@@ -3007,6 +3009,7 @@ pub fn read_network(
                     });
                 }
             } else if let Some(name) = attr.strip_prefix("outputs:") {
+                let name = name.strip_suffix(".connect").unwrap_or(name);
                 declared_outputs.insert(name.to_string());
             }
         }
@@ -3051,18 +3054,20 @@ pub fn read_network(
         return Ok(None);
     }
     let communication_period_secs = network_communication_period(view, &components)?;
-
     let attrs = view.attr_names(root);
-    let inputs: BTreeSet<_> = attrs
+    let authored_inputs: BTreeSet<_> = attrs
         .iter()
-        .filter_map(|attr| attr.strip_prefix("inputs:").map(str::to_string))
+        .filter_map(|attr| {
+            attr.strip_prefix("inputs:")
+                .map(|name| name.strip_suffix(".connect").unwrap_or(name).to_string())
+        })
         .collect();
-    let mut input_sources = BTreeMap::new();
-    let mut outputs = BTreeMap::new();
+    let mut authored_input_sources = BTreeMap::new();
     for attr in &attrs {
         let Some(name) = attr.strip_prefix("inputs:") else {
             continue;
         };
+        let name = name.strip_suffix(".connect").unwrap_or(name);
         let targets = view.connections(root, attr);
         if targets.len() > 1 {
             extraction_errors.push(DomainProjectionError {
@@ -3070,13 +3075,66 @@ pub fn read_network(
                 message: "a scalar network input must have at most one connection source".into(),
             });
         } else if let Some(target) = targets.first() {
-            input_sources.insert(name.to_string(), target.to_string());
+            authored_input_sources.insert(name.to_string(), target.to_string());
         }
     }
+    let internal_inputs: BTreeMap<String, String> = authored_inputs
+        .iter()
+        .filter_map(|name| {
+            lunco_usd_bevy::program::internal_network_input_source(view, root, name)
+                .map(|source| (name.clone(), source))
+        })
+        .collect();
+    let internal_outputs: BTreeMap<String, String> = attrs
+        .iter()
+        .filter_map(|attr| {
+            let name = attr
+                .strip_prefix("outputs:")
+                .map(|name| name.strip_suffix(".connect").unwrap_or(name))?;
+            lunco_usd_bevy::program::network_member_output_source(view, root, name)
+                .map(|source| (name.to_string(), source))
+        })
+        .collect();
+    // Collapse a root input whose source is a member output into a direct
+    // causal member edge. This keeps an authored drive-law forward internal to
+    // the generated network instead of declaring the same identifier as both
+    // a Modelica input and output.
+    let root_input_prefix = format!("{root_string}.inputs:");
+    for component in &mut components {
+        for target in component.inputs.values_mut() {
+            if let Some(name) = target.strip_prefix(&root_input_prefix) {
+                if let Some(source) = internal_inputs.get(name) {
+                    *target = source.clone();
+                }
+            } else if let Some(name) = target.strip_prefix(&format!("{root_string}.outputs:")) {
+                if let Some(source) = internal_outputs.get(name) {
+                    *target = source.clone();
+                }
+            }
+        }
+    }
+    let inputs: BTreeSet<_> = authored_inputs
+        .into_iter()
+        .filter(|name| !internal_inputs.contains_key(name))
+        .collect();
+    let input_sources: BTreeMap<_, _> = authored_input_sources
+        .into_iter()
+        .filter(|(name, _)| !internal_inputs.contains_key(name))
+        .collect();
+    let mut outputs = BTreeMap::new();
     for attr in &attrs {
         let Some(name) = attr.strip_prefix("outputs:") else {
             continue;
         };
+        // A USD prim may expose the same spelling in both namespaces. The
+        // generated Modelica root cannot declare one identifier as input and
+        // output, so a colliding output stays on the runtime actuator surface;
+        // its promoted member alias is wired to that surface by the generic
+        // USD connection pass.
+        let name = name.strip_suffix(".connect").unwrap_or(name);
+        if inputs.contains(name) {
+            continue;
+        }
         // A network root can also expose ordinary vehicle outputs such as
         // `drive_left`. Only an output sourced from a member in this root's
         // component collection is part of the generated Modelica interface.
@@ -4028,6 +4086,96 @@ mod tests {
     }
 
     #[test]
+    fn read_network_admits_the_composed_modelica_drive_law() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scenes/tests/modelica_drive_law.usda");
+        let composed =
+            lunco_usd_bevy::compose_file_to_stage(&path).expect("compose drive-law scene");
+        let stage = lunco_usd_bevy::CanonicalStage::from_stage(
+            composed,
+            path.to_string_lossy().to_string(),
+        );
+        let view = stage.view();
+        let root = SdfPath::new("/ModelicaDriveLaw/RoverModelica").unwrap();
+        assert_eq!(
+            lunco_usd_bevy::program::internal_network_input_source(&view, &root, "drive_left"),
+            Some("/ModelicaDriveLaw/RoverModelica/Drivetrain.outputs:drive_left".into())
+        );
+        assert_eq!(
+            lunco_usd_bevy::program::network_member_output_source(&view, &root, "drive_left"),
+            Some("/ModelicaDriveLaw/RoverModelica/Drivetrain.outputs:drive_left".into())
+        );
+        let mut classes = MemberClasses::default();
+        for member in view.collection_members(&root, "components").unwrap() {
+            if !view.has_api_schema(&member, "LunCoProgramAPI") {
+                continue;
+            }
+            let asset = view.asset(&member, "info:sourceAsset").unwrap();
+            let source = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../assets")
+                    .join(lunco_assets::engine_asset_rel(&asset)),
+            )
+            .unwrap();
+            let interface = parse_model_interface(&source, "drive-law-member.mo");
+            let class = match interface.within {
+                Some(within) => format!("{within}.{}", interface.model_name.unwrap()),
+                None => interface.model_name.unwrap(),
+            };
+            classes.declare(asset, class);
+        }
+        let network = read_network(&view, &root, &classes)
+            .expect("the composed drive-law network must be structurally valid")
+            .expect("drive-law scene must expose a Modelica network");
+        lunco_hooks_rhai::register_rhai_hook(
+            "synth.acausal-network",
+            "synthesize",
+            lunco_assets::scripting::policy("synth_acausal_network").unwrap(),
+            true,
+        )
+        .unwrap();
+        let synthesizer = HookSynthesizer {
+            name: DEFAULT_DOMAIN_SYNTHESIZER.into(),
+            hook_id: "synth.acausal-network".into(),
+        };
+        assert!(matches!(
+            synthesizer
+                .synthesize(
+                    &view,
+                    &root,
+                    "ModelicaDriveLaw_x2f_RoverModelica_System",
+                    &SynthContext { classes: &classes },
+                )
+                .expect("synthesize composed drive-law network"),
+            SynthOutcome::Ready(_)
+        ));
+        assert!(network
+            .components
+            .iter()
+            .any(|component| component.path.ends_with("/Drivetrain")));
+        assert!(
+            !network.inputs.contains("drive_left") && !network.inputs.contains("drive_right"),
+            "a drive-law-produced actuator must not remain an external network input"
+        );
+        assert!(
+            network.input_sources.get("drive_left").is_none()
+                && network.input_sources.get("drive_right").is_none(),
+            "the internal actuator path must not be rebound as a runtime input"
+        );
+        assert!(
+            network.components.iter().any(|component| component
+                .inputs
+                .values()
+                .any(|target| target.ends_with("/Drivetrain.outputs:drive_left"))),
+            "the authored drive-left path must become a direct causal member edge"
+        );
+        assert!(
+            !network.outputs.contains_key("drive_left"),
+            "a USD input/output name collision must not become duplicate Modelica declarations"
+        );
+    }
+
+    #[test]
     fn member_path_without_a_name_is_reported_instead_of_panicking() {
         let error = instance_identifier("/Rig", "/Rig")
             .expect_err("the network root is not a member instance");
@@ -4232,10 +4380,7 @@ def Scope "Rig"
             network_model_name("/Rover", Some(10)),
             network_model_name("/Payload", Some(20))
         );
-        assert_eq!(
-            network_model_name("/Rover", Some(42)),
-            "Rover_G42_System"
-        );
+        assert_eq!(network_model_name("/Rover", Some(42)), "Rover_G42_System");
         assert_ne!(
             network_model_name("/Rover", Some(10)),
             network_model_name("/Rover", Some(20))

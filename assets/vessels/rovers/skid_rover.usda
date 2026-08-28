@@ -88,7 +88,6 @@ def Xform "SkidRover" (
     float3 physics:centerOfMass = (0.0, 0.0, 0.0)
     # Lift the spawn point 1 m so the rover settles onto terrain (read by the
     # spawn catalog — keeps spawn height as USD data, not Rust category logic).
-    float lunco:spawnLift = 1.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
     float outputs:steering = 0.0

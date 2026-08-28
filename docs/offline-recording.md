@@ -288,18 +288,18 @@ recorder's state machine in between. The close leaf instead holds until `shot_fr
 reports "not recording" (`< 0`), making the handoff observable state rather than command
 ordering.
 
-### Closures cannot see imports
+### Task callback contract
 
-A top-level or in-`fn` `import` **is** visible inside a named `fn` — the runtime re-runs an
-imports-only AST per hook (`top_level_import_source` in `lunco-scripting/src/world_bridge.rs`).
-It is **not** visible inside a closure invoked through `FnPtr::call`, which is exactly how
-the task kernel runs leaf callbacks: `FnPtr::call` takes an `AST` and has no `eval_ast`
-switch, so there is nowhere to re-run the imports.
+Shot callbacks are anonymous task closures with one positional host id:
+`|me| ...`. The task driver binds the persistent scenario state map as `this`,
+and the closure may call prelude verbs or named helpers explicitly. Named
+`Fn("...")` pointers are not accepted as task leaves; this keeps the callback
+contract identical for every native task invocation and makes invalid task data
+fail at compile time.
 
-**A `begin` or `frame` closure may therefore only call prelude verbs** (`cmd`, `query`,
-`get`, `shot_step`, …). Those are registered as an engine **global module**, not resolved
-through the import stack, so they resolve from any calling context. A module alias inside
-one of these closures is a runtime error mid-shot, which stalls the beat and spools frames.
+Imports used by a callback must be resolved through the normal scenario
+execution context. Keep shot-library calls on the maintained prelude/library
+surface rather than creating a second import or callback mechanism.
 
 ### The import is spelled `/scripting/lib/shots`, not `lunco://`
 

@@ -11,46 +11,58 @@ fn on_start(me) {
     print("[wifi-links] -- separate rover radio graph --");
 }
 
+fn catalog_has(catalog, entry_id) {
+    if catalog == () || catalog.entries == () { return false; }
+    for entry in catalog.entries {
+        if entry.entry_id == entry_id { return true; }
+    }
+    false
+}
+
 fn on_tick(me) {
     if this.done { return; }
     this.elapsed += dt();
 
-    // SpawnCatalog is populated asynchronously from USD.  Keep the public
-    // command intact, but do not turn that normal startup race into a false
-    // acceptance failure.
-    if !this.spawn_a && this.elapsed >= 1.0 {
+    // SpawnEntity validates against the asynchronously published catalog.  A
+    // successful command dispatch is not an acknowledgement that the entry
+    // exists, so wait for the same public catalog the command consumes.
+    let catalog = query("ListSpawnCatalog");
+    if !catalog_has(catalog, "ackermann_rover") ||
+       !catalog_has(catalog, "skid_rover") {
+        if this.elapsed > 30.0 {
+            this.done = true;
+            report_verdict(["spawn catalog did not publish both rover entries"],
+                           "WIFI LINKS", "WIFI_LINKS");
+        }
+        return;
+    }
+
+    if !this.spawn_a {
         let result = cmd("SpawnEntity", #{
             entry_id: "ackermann_rover",
             position: [0.0, 0.0, 0.0],
         });
-        if !result.ok {
-            if this.elapsed <= 10.0 { return; }
-            this.done = true;
-            report_verdict(["first rover spawn failed: " + result.error],
-                           "WIFI LINKS", "WIFI_LINKS");
-            return;
-        }
+        if !result.ok { return; }
         this.spawn_a = true;
         return;
     }
+
+    // Do not issue the second spawn until the first command has materialized a
+    // live entity.  This makes each command's target unambiguous and keeps the
+    // scenario a real producer-to-consumer test of the catalog command.
+    if this.rover_a < 0 { this.rover_a = find_catalog("ackermann_rover"); }
+    if this.rover_a < 0 { return; }
 
     if !this.spawn_b {
         let result = cmd("SpawnEntity", #{
             entry_id: "skid_rover",
             position: [20.0, 0.0, 0.0],
         });
-        if !result.ok {
-            if this.elapsed <= 10.0 { return; }
-            this.done = true;
-            report_verdict(["second rover spawn failed: " + result.error],
-                           "WIFI LINKS", "WIFI_LINKS");
-            return;
-        }
+        if !result.ok { return; }
         this.spawn_b = true;
         return;
     }
 
-    if this.rover_a < 0 { this.rover_a = find_catalog("ackermann_rover"); }
     if this.rover_b < 0 { this.rover_b = find_catalog("skid_rover"); }
     if this.rover_a < 0 || this.rover_b < 0 {
         if this.elapsed > 20.0 {

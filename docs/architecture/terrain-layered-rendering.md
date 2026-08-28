@@ -327,6 +327,9 @@ Implemented: deterministic `SurfaceField` and `TransferFn` queries, the
 `SetTerrainOverlay` partial updates, and the inspector legend/sliders. The
 headless field is not yet addressable as a USD layer, and the overlay is wired
 to the streamed `terrain_geomorph` material rather than the static DEM path.
+Open DEM ground is picked through the same `bevy_picking` backend using the
+analytic `GridSurfaceQuery`; it does not retain CPU mesh vertices or require a
+separate click path per scene tool.
 
 Remaining work, in dependency order:
 

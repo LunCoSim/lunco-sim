@@ -37,6 +37,8 @@ use lunco_usd_bevy::camera_path::{eval_curve, eval_curve_tangent, AimMode, Camer
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
+use super::authoring_paths::{join_prim, prim_exists};
+
 /// How many points to sample along a camera path when drawing it. The authored
 /// keys are the shot; this is just how finely the polyline approximates the
 /// interpolation between them.
@@ -299,7 +301,7 @@ fn on_add_camera_here(
             let mut n = 1;
             loop {
                 let candidate = format!("View_{n}");
-                if !prim_exists(host, &join(&root, &candidate)) {
+                if !prim_exists(host, &join_prim(&root, &candidate)) {
                     break candidate;
                 }
                 n += 1;
@@ -313,7 +315,7 @@ fn on_add_camera_here(
             }
         }
     };
-    let path = join(&root, &name);
+    let path = join_prim(&root, &name);
     if prim_exists(host, &path) {
         report_capture_failure(
             &mut commands,
@@ -362,25 +364,6 @@ register_commands!(on_add_camera_here);
 fn euler_degrees(rot: DQuat) -> (f64, f64, f64) {
     let (x, y, z) = rot.to_euler(EulerRot::XYZ);
     (x.to_degrees(), y.to_degrees(), z.to_degrees())
-}
-
-fn join(root: &str, name: &str) -> String {
-    if root == "/" {
-        format!("/{name}")
-    } else {
-        format!("{root}/{name}")
-    }
-}
-
-fn prim_exists(
-    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
-    path: &str,
-) -> bool {
-    let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else {
-        return false;
-    };
-    host.document().data().spec(&sdf).is_some()
-        || host.document().runtime_data().spec(&sdf).is_some()
 }
 
 /// Cinematic palette — capture views, list the scene's cameras.

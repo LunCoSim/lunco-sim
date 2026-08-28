@@ -279,12 +279,12 @@ const STATIC_TOOLS = [
   },
   {
     name: 'load_scene',
-    description: 'Reload (or replace) the active USD scene at runtime. Despawns every entity carrying `UsdPrimPath`, despawns every `SimConnection`, force-reloads the asset from disk, then spawns a fresh root parented to the first `Grid`. Use after editing a `.usda` file to pick up changes without restarting the binary. `root_prim` empty auto-derives `/PascalCaseFromFilename` (so `sandbox_scene.usda` → `/SandboxScene`).',
+    description: 'Reload (or replace) the active USD scene at runtime. Despawns every entity carrying `UsdPrimPath`, despawns every `SimConnection`, force-reloads the asset from disk, then spawns a fresh root parented to the first `Grid`. Use after editing a `.usda` file to pick up changes without restarting the binary. `root_prim` empty mounts the stage\'s authored `defaultPrim` and the loader writes the resolved path back.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'USD asset path relative to `assets/` (e.g. "scenes/luncosim/sandbox_scene.usda").' },
-        root_prim: { type: 'string', description: 'SDF path of the root prim to spawn. Empty = auto-derive from filename.', default: '' },
+        root_prim: { type: 'string', description: 'SDF path of the root prim to spawn. Empty = use the stage\'s authored `defaultPrim`.', default: '' },
       },
       required: ['path'],
     },

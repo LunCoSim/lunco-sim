@@ -16,8 +16,8 @@ use lunco_autopilot::usd_tree::{
     append_waypoint_leaf, authored_route_metadata, BehaviorXml, ReachedWaypoints,
 };
 use lunco_core::{
-    on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
-    TelemetryEvent, TelemetryValue, TriggerZone,
+    on_command, register_commands, Command, GlobalEntityId, InputPorts, Severity, TelemetryEvent,
+    TelemetryValue, TriggerZone,
 };
 use lunco_usd::document::{
     WAYPOINT_BILLBOARD_FADE_END, WAYPOINT_BILLBOARD_OFFSET_Y, WAYPOINT_BILLBOARD_TEXT,
@@ -332,18 +332,18 @@ pub fn mark_reached_waypoints_on_enter(
         Option<&Name>,
     )>,
     q_runtime_bindings: Query<&RuntimeWaypointBinding>,
-    // A physics body can expose generic input/output ports without being a
-    // controllable vessel (the authored ground body does exactly that).  The
-    // route boundary is the authored control binding; requiring it prevents a
-    // waypoint trigger's normal contact with the ground from becoming a rover
-    // arrival event.
-    q_vessel_roots: Query<(), (With<UsdPrimPath>, With<ControlBinding>)>,
+    // An authored route is owned by the vessel's BehaviorXml projection. It
+    // must receive waypoint arrivals even while the vessel is autonomous and
+    // therefore has no human ControlBinding; requiring possession here made
+    // mission routes silently stop reporting arrivals. Keep the source and
+    // identity in one query so a plain physics body cannot qualify as a route
+    // owner by accident.
     // Runtime waypoints are explicitly bound to the command surface by
     // `AddRuntimeWaypoint`; an unpossessed spawned rover has `InputPorts` but
     // intentionally has no `ControlBinding` until a controller possesses it.
     q_runtime_vessels: Query<(), (With<UsdPrimPath>, With<InputPorts>)>,
     q_parents: Query<&ChildOf>,
-    q_vessels: Query<(Entity, Option<&BehaviorXml>)>,
+    q_vessels: Query<(Entity, Option<&BehaviorXml>, Option<&UsdPrimPath>)>,
     q_reached: Query<&ReachedWaypoints>,
     q_gids: Query<&GlobalEntityId>,
     world_time: Option<Res<lunco_time::WorldTime>>,
@@ -438,11 +438,8 @@ pub fn mark_reached_waypoints_on_enter(
                             resolved = true;
                             break;
                         }
-                    } else if q_vessel_roots.get(curr).is_ok() {
+                    } else if let Ok((_, Some(xml), Some(_))) = q_vessels.get(curr) {
                         let Some(marker_path) = marker_path.as_deref() else {
-                            break;
-                        };
-                        let Ok((_, Some(xml))) = q_vessels.get(curr) else {
                             break;
                         };
                         let Ok(metadata) = authored_route_metadata(&xml.0) else {

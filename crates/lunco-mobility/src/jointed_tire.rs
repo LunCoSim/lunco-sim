@@ -111,7 +111,7 @@ fn body_state(
 /// substep loop or advance a Modelica participant inside one.
 pub fn apply_jointed_tire_forces(
     mut bodies: ParamSet<(
-        Query<Forces>,
+        Query<Forces, lunco_physics::Integrable>,
         Query<(
             &Position,
             &Rotation,
@@ -132,7 +132,6 @@ pub fn apply_jointed_tire_forces(
     if full_dt <= 0.0 {
         return;
     }
-
     let mut pending: Vec<(Entity, DVec3, DVec3)> = Vec::new();
 
     {

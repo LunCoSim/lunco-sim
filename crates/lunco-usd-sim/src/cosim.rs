@@ -1408,7 +1408,7 @@ fn process_usd_cosim_prim_read(
     // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later
     // in `tag_cosim_opaque`, which waits for the asynchronously-wrapped
     // `SimComponent`. That async gap was a prediction-takeover race: on a
-    // client, `maintain_predicted_dynamic` (sandbox-edit) could stamp a balloon
+    // client, `maintain_predicted_dynamic` (scene-edit) could stamp a balloon
     // `PredictedDynamic` during the multi-frame window before `NotPredictable`
     // landed — once b99991dd dropped the `SkipContentStamp` structural guard,
     // `NotPredictable` became the SOLE membership guard, so a late stamp meant
@@ -2066,22 +2066,49 @@ pub fn sync_modelica_outputs(
 /// cosim surface but are not Modelica inputs. Promoting them into
 /// `ModelicaModel::inputs` would hide same-named Modelica actuator outputs from
 /// the worker's observable set and stop the self-loop from ever binding.
-fn copy_modelica_input_values(model: &mut ModelicaModel, component: &SimComponent) {
+fn copy_modelica_input_values(
+    model: &mut ModelicaModel,
+    component: &SimComponent,
+    command_surface: Option<&lunco_core::InputPorts>,
+) {
     for (name, value) in &component.inputs {
         if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
             model.inputs.insert(name.clone(), *value);
         }
     }
+
+    // `InputPorts` is the authored command surface and is registered before the
+    // Modelica backend. When a generated domain root carries both components,
+    // SetPorts therefore writes the command there; mirror that authoritative
+    // value into the solver buffer instead of leaving Modelica on its bind-time
+    // default. This is the generic bridge for a shared endpoint, not a vehicle
+    // or tutorial-specific path.
+    if let Some(command_surface) = command_surface {
+        for (name, value) in &command_surface.values {
+            if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
+                model.inputs.insert(name.clone(), *value);
+            }
+        }
+    }
 }
 
-/// Per-tick: SimComponent.inputs → ModelicaModel.inputs.
+/// Per-tick: shared command/wire inputs → ModelicaModel.inputs.
 /// Hands wire-propagated values (height, velocity, …) back to the
-/// Modelica worker for the next solver step.
+/// Modelica worker for the next solver step. An authored `InputPorts` command
+/// surface wins for names it owns because it is the public control boundary;
+/// the `SimComponent` map remains the destination for propagated model inputs.
 pub fn sync_modelica_inputs(
-    mut q: Query<(&SimComponent, &mut ModelicaModel), With<UsdSourcedCosim>>,
+    mut q: Query<
+        (
+            &SimComponent,
+            Option<&lunco_core::InputPorts>,
+            &mut ModelicaModel,
+        ),
+        With<UsdSourcedCosim>,
+    >,
 ) {
-    for (comp, mut model) in &mut q {
-        copy_modelica_input_values(&mut model, comp);
+    for (comp, command_surface, mut model) in &mut q {
+        copy_modelica_input_values(&mut model, comp, command_surface);
     }
 }
 
@@ -2719,13 +2746,19 @@ pub fn rewire_usd_connections(
                 view.type_name(&sink_sdf).as_deref(),
                 Some("Material" | "Shader" | "NodeGraph")
             );
-            let forward =
-                attr.strip_prefix("outputs:").filter(|_| !shading_prim).map(
-                    |name| match q_outputs.get(entity).ok().and_then(|outputs| outputs.get(name)) {
+            let forward = attr
+                .strip_prefix("outputs:")
+                .filter(|_| !shading_prim)
+                .map(|name| {
+                    match q_outputs
+                        .get(entity)
+                        .ok()
+                        .and_then(|outputs| outputs.get(name))
+                    {
                         Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
                         None => (entity, name.to_string()),
-                    },
-                );
+                    }
+                });
             // `inputs:` is a sink; `outputs:` is a sink only when it forwards.
             // Everything else on the prim is not part of the wire fabric.
             let Some(sink_conn) = attr
@@ -2784,6 +2817,7 @@ pub fn rewire_usd_connections(
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
                 && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+                && lunco_usd_bevy::program::is_network_boundary_output(&view, &sink_sdf, &attr)
             {
                 continue;
             }
@@ -2793,6 +2827,15 @@ pub fn rewire_usd_connections(
             // a SimConnection early only produces a false unknown-port warning on
             // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
             // when the contract arrives.
+            if attr.starts_with("inputs:")
+                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+                && lunco_usd_bevy::program::internal_network_input_source(
+                    &view, &sink_sdf, sink_conn,
+                )
+                .is_some()
+            {
+                continue;
+            }
             if attr.starts_with("inputs:")
                 && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
                 && !has_modelica
@@ -3989,7 +4032,8 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 /// - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
 /// - `root_prim`: optional override for the SDF path of the prim to
 ///   spawn. Empty (default) reads the stage's `defaultPrim` metadata;
-///   if absent, falls back to `/` (walk all top-level prims).
+///   if absent, the scene load fails visibly; a whole-stage `/` mount is not a
+///   valid scene root.
 ///
 /// Despawns every existing entity carrying `UsdPrimPath` plus every
 /// `SimConnection` (cosim wires are scene-derived in current code), then
@@ -4013,8 +4057,8 @@ pub struct LoadScene {
     /// are opened through `OpenFile`, not this scene-mount command.
     pub path: String,
     /// Optional override for the prim to spawn. Empty (default) reads
-    /// `defaultPrim` from the stage's metadata header, falling back to
-    /// `/` when none is declared.
+    /// `defaultPrim` from the stage's metadata header. A missing `defaultPrim`
+    /// is a visible scene-load error; the runtime never mounts `/`.
     pub root_prim: String,
 }
 
@@ -4591,7 +4635,8 @@ pub fn spawn_scene_root_world(
 ///
 /// `label` names the root (`Scene:{label}`) and feeds `defaultPrim` resolution;
 /// `root_prim_in` empty defers the mount path to the stage's `defaultPrim`
-/// (see [`resolve_root_prim`]). Blender-style no-op when the same
+/// (see [`resolve_root_prim`]). Missing `defaultPrim` is a terminal scene
+/// error. Blender-style no-op when the same
 /// `(handle, root_prim)` is already mounted. Returns the spawned entity, or
 /// `None` on no-op.
 pub fn spawn_scene_root_with_stage(
@@ -4685,7 +4730,7 @@ pub fn spawn_scene_root_with_stage(
 ///    scene-root entity is spawned with an empty path, and
 ///    `lunco_usd_bevy::instantiate_usd_prim` resolves it from the
 ///    stage's `defaultPrim` metadata once the asset has parsed
-///    (falling back to `/` — whole-stage mount — when none is declared).
+///    (a missing `defaultPrim` is a terminal scene error).
 ///
 /// The defaultPrim lookup is deliberately deferred rather than read
 /// here: this runs synchronously at command time, before the stage
@@ -5653,13 +5698,30 @@ mod tests {
         component.inputs.insert("guidance_throttle".into(), 0.75);
         component.inputs.insert("force_y".into(), 0.0);
 
-        copy_modelica_input_values(&mut model, &component);
+        copy_modelica_input_values(&mut model, &component, None);
 
         assert_eq!(model.inputs.get("guidance_throttle"), Some(&0.75));
         assert!(
             !model.inputs.contains_key("force_y"),
             "a physical sink must remain outside the Modelica input map"
         );
+    }
+
+    #[test]
+    fn authored_command_surface_reaches_shared_modelica_input() {
+        let mut model = dispatched_but_unsolved();
+        model.inputs.insert("throttle".into(), 0.0);
+        model.compiled_input_names.insert("throttle".into());
+        let component = SimComponent::default();
+        let command_surface = lunco_core::InputPorts::with_defaults([
+            ("throttle".to_string(), 0.75),
+            ("steer".to_string(), -0.2),
+        ]);
+
+        copy_modelica_input_values(&mut model, &component, Some(&command_surface));
+
+        assert_eq!(model.inputs.get("throttle"), Some(&0.75));
+        assert!(!model.inputs.contains_key("steer"));
     }
 
     #[test]

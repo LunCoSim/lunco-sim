@@ -586,7 +586,7 @@ pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
 
 /// Marker resource indicating that entity dragging is active.
 ///
-/// Used by sandbox editing systems to signal other systems (like avatar possession)
+/// Used by scene editing systems to signal other systems (like avatar possession)
 /// to disable conflicting interactions during drag operations.
 #[derive(Resource, Default)]
 pub struct DragModeActive {
@@ -596,7 +596,7 @@ pub struct DragModeActive {
 
 /// Marker resource indicating a click-to-place spawn tool is armed.
 ///
-/// Set by sandbox-edit's spawn placement system whenever `SpawnState`
+/// Set by scene-edit's spawn placement system whenever `SpawnState`
 /// is `Selecting`. Read by avatar possession to suppress vessel
 /// possession on the placement click.
 #[derive(Resource, Default)]
@@ -681,13 +681,13 @@ pub fn scene_click_ray(
 
 /// Marker resource indicating a terrain-sculpt tool is armed.
 ///
-/// Set by sandbox-edit's terrain-tools system whenever a [`TerrainTool`] is
+/// Set by scene-edit's terrain-tools system whenever a [`TerrainTool`] is
 /// selected in the Tools palette. Read by avatar possession and entity
 /// selection to suppress their click handling — while a sculpt brush is armed
 /// every scene click applies terrain, not possess/select. Mirrors
 /// [`SpawnToolActive`].
 ///
-/// [`TerrainTool`]: (sandbox-edit) crate::terrain_tools::TerrainTool
+/// [`TerrainTool`]: (scene-edit) crate::terrain_tools::TerrainTool
 #[derive(Resource, Default)]
 pub struct TerrainToolActive(pub bool);
 
@@ -793,7 +793,7 @@ impl DeleteSelectionIntent<'_, '_> {
 /// True while a waypoint's right-click context menu is open.
 ///
 /// Read by avatar mouse-look to hold the camera still while the pointer is
-/// being used by the menu. Set/cleared by sandbox-edit's waypoint menu.
+/// being used by the menu. Set/cleared by scene-edit's waypoint menu.
 /// Deliberately separate from [`WaypointToolActive`]: during ground-placement
 /// you still WANT to look around.
 #[derive(Resource, Default)]
@@ -803,14 +803,14 @@ pub struct WaypointMenuOpen(pub bool);
 /// (Move / Insert-after, armed from a waypoint's right-click menu). Read by avatar
 /// possession and entity selection to suppress their click handling — that click
 /// belongs to the placement, not to possess/select. Mirrors [`SpawnToolActive`] and
-/// [`TerrainToolActive`]; set/cleared by sandbox-edit's waypoint systems.
+/// [`TerrainToolActive`]; set/cleared by scene-edit's waypoint systems.
 #[derive(Resource, Default)]
 pub struct WaypointToolActive(pub bool);
 
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.
 ///
-/// Set/cleared by sandbox-edit's gizmo systems (an editor/UI concern that lives
+/// Set/cleared by scene-edit's gizmo systems (an editor/UI concern that lives
 /// behind the `ui` feature). It exists in `lunco-core` so render/sim systems can
 /// react to a drag **without** depending on `transform-gizmo-bevy`: e.g. the
 /// avatar camera-follow systems pause following a target while it's dragged.
@@ -929,7 +929,7 @@ pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
 /// so the shared set lives here.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NetcodeSet {
-    /// Instantiate host-replicated spawns (`apply_replicated_spawns`, sandbox-edit).
+    /// Instantiate host-replicated spawns (`apply_replicated_spawns`, scene-edit).
     InstantiateSpawns,
     /// The client-prediction pipeline (`lunco-networking::prediction`), after the
     /// spawns it may act on exist.

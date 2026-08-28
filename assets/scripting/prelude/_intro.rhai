@@ -14,7 +14,7 @@
 //   get(id, "Comp.field")         read:  reflected field; vectors/quats come
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
 //                                        structs as maps
-//   list_entities() -> [#{id,name,type,pos,catalog_id}]  (catalog_id is authored identity)
+//   list_entities() -> [#{id,name,type,pos,catalog_id,input_surface,...}]  (catalog_id is authored identity)
 //   find(name) -> id              lookup: id of the entity named `name` (-1 if none)
 //   find_catalog(id) -> id        lookup: first entity spawned from catalog id, or -1
 //   name(id) -> string            lookup: reverse of find — id back to its Name, or ()
@@ -24,7 +24,7 @@
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
 //   elapsed_seconds() -> f64      time:  monotonic sim seconds since startup
 //   emit(name, value)             event: fire a TelemetryEvent
-//   on_event(self, evt)           event: receives emit()s AND physics
+//   on_event(me, evt)             event: receives emit()s AND physics
 //                                        COLLISION_START / COLLISION_END pulses
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled

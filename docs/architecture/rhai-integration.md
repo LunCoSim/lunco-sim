@@ -576,13 +576,20 @@ subset for UI (`SyncChannel::Local` vs `ControlStream`). No client-side divergen
 per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Rhai
 scenarios use `RhaiScenarioRuntime`; Python has no `ScriptedModel` lifecycle
 runtime yet and is currently limited to one-shot `RunPython` evaluation. The
-script's `task(self)` identity IS the host entity.
+script's `task(me)` identity is the host entity id; `this` is the persistent
+scenario-state map supplied to lifecycle hooks and native task closures.
 
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source
 change). Fixes today's "fresh Engine per eval" cost. The same `ScriptDocument`
 reused on many entities = **prefab scripts** — 10 rovers run `patrol.rhai`, each
 with its own `Scope` (independent goal index/state).
+
+Task leaves use anonymous closures with one positional host id: `|me| ...`.
+The task driver invokes them with the persistent scenario state map as `this`.
+Named `Fn("...")` pointers are ordinary script callbacks, not task leaves; a
+named helper can be called explicitly from an anonymous task closure. This is
+the single callback contract at the Rhai-to-kernel boundary.
 
 **Two roles, both just `ScriptedModel`s:** entity-script (autonomy, ~Unity
 MonoBehaviour) and scenario-script (orchestration, on a scenario/singleton entity).

@@ -78,9 +78,9 @@ fn task(me) {
     if !is_unattended() { return; }
     seq([
         wait(1.0),
-        once(Fn("authority_possess")),
+        once(|m| authority_possess(m)),
         wait(1.0),
-        once(Fn("authority_release")),
+        once(|m| authority_release(m)),
         wait(1.0),
     ])
 }

@@ -16,7 +16,7 @@
 use lunco_obstacle_field::field::grid_indices;
 use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
-use crate::quadtree::Square;
+use lunco_terrain_core::quadtree::Square;
 
 /// CPU vertex data for one CDLOD tile. `morph_targets[i]` is the position on
 /// the parent-lattice surface at vertex `i` as the camera recedes. Positions are in

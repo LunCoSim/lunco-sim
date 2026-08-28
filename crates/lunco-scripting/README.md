@@ -44,6 +44,12 @@ or dwell timing in user policy.
 Every task node has an explicit `kind` discriminator; missing/unknown kinds and
 fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).
 
+Task action and predicate fields are anonymous closures with one positional
+argument, `|me| ...`, where `me` is the host entity id. The native task driver
+binds the persistent scenario-state map as `this` and owns cursor, dwell, and
+event progression. Named `Fn("...")` pointers are not task leaves; named
+helpers may be called explicitly from an anonymous closure.
+
 The host exposes a minimal generic bridge — `cmd` / `query` / `get` / `set` /
 `get_setting` / `set_setting` / `world_pos` / `world_forward` / `find` / `name` /
 `parent` / `children` / `list_entities` / `emit` / `sim_tick` / `dt` /

@@ -124,18 +124,25 @@ Ordered, with the load-bearing item flagged.
    1–3 follow existing patterns exactly.
 5. **Footprint validation** against the DEM, reporting on the `StatusBus`.
 
-The GPU side needs nothing new: `TextureLayer` already declares six slots
-(`materials/src/look.rs:73`), `terrain_layered.wgsl` binds them with mix weights,
-and `shader_look.rs:73-83` maps every one. `Albedo` and `Mineral` are simply never
-populated on terrain and their weights default to 0.
+The fixed-slot GPU path is already in place for authored terrain appearance:
+`TextureLayer` declares the slots (`materials/src/look.rs:73`),
+`terrain_layered.wgsl` and the streamed `terrain_geomorph.wgsl` bind the authored
+albedo/mineral maps with mix weights, and `shader_look.rs:73-83` maps them. The
+runtime binder publishes those USD material-network inputs as
+`TerrainAuthoredMaps`, and resident streamed tiles receive the same handles and
+weights. This is the current PNG/asset-handle path; it does not yet provide the
+general `GeoRaster` loader, georeference validation, or arbitrary raster-layer
+stack described above.
 
 ### Scoping trap
 
-The albedo/mineral bindings live in `terrain_layered.wgsl` — the **static-mesh**
-path. The streamed-tile shader `terrain_geomorph.wgsl` declares only bindings 6–11.
-Any scene using streamed terrain (the school twin does) needs those bindings added
-to the streaming shader as well. Confirm which path the target scene renders
-through before estimating.
+Do not infer the current rendered path from the generalized design below. The
+school twin uses streamed CDLOD tiles, and those tiles now consume
+`TerrainAuthoredMaps` through `terrain_geomorph.wgsl`; bindings 2–5 are the
+authored albedo/mineral inputs, while bindings 6–11 remain the surface/derived
+slots. A missing `GeoRaster` importer is therefore an ingest limitation, not a
+reason for an authored USD albedo map to disappear from an existing streamed
+scene.
 
 ## Routes are not rasters
 

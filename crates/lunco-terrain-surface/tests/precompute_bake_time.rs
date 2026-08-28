@@ -22,10 +22,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use lunco_terrain_surface::{
-    height_grid_from_geotiff, quadtree::Square, tile_mesh::bake_tile_mesh, HeightSource, QuadCoord,
-    SurfaceOracle,
-};
+use lunco_terrain_bake::dem::height_grid_from_geotiff;
+use lunco_terrain_core::{HeightSource, QuadCoord, Square};
+use lunco_terrain_surface::{tile_mesh::bake_tile_mesh, SurfaceOracle};
 
 fn dem_dir() -> PathBuf {
     PathBuf::from("/home/rod/Documents/models/moonbase/twin/terrain/connecting_ridge")

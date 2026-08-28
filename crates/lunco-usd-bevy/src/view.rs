@@ -183,6 +183,46 @@ mod compose_tests {
     }
 
     #[test]
+    fn modelica_drive_law_contributes_its_member_to_the_composed_network() {
+        let stage = compose_file_to_stage(&asset("scenes/tests/modelica_drive_law.usda"))
+            .expect("compose Modelica drive-law stage");
+        let view = StageView::new(&stage);
+        let root = SdfPath::new("/ModelicaDriveLaw/RoverModelica").unwrap();
+        let members = view
+            .collection_members(&root, "components")
+            .expect("read composed drive-law component collection");
+        let member = SdfPath::new("/ModelicaDriveLaw/RoverModelica/Drivetrain").unwrap();
+        println!("drive-law attrs: {:?}", view.attr_names(&member));
+        println!(
+            "drive-law root outputs: {:?}",
+            view.connections(&root, "outputs:drive_left")
+        );
+        println!(
+            "drive-law member inputs canonical: {:?}",
+            view.connections(&member, "inputs:throttle")
+        );
+        println!(
+            "drive-law member inputs: {:?}",
+            view.connections(&member, "inputs:throttle.connect")
+        );
+        assert!(
+            members.contains(&member),
+            "the referenced drive-law overlay must contribute its Modelica member; got {members:?}"
+        );
+        assert!(
+            view.has_api_schema(&member, "LunCoProgramAPI"),
+            "the contributed drive-law member must retain its executable program schema"
+        );
+        assert_eq!(
+            view.rel_targets(&root, "collection:components:includes")
+                .iter()
+                .find(|path| *path == &member),
+            Some(&member),
+            "the composed collection must retain the translated drive-law target"
+        );
+    }
+
+    #[test]
     fn collection_members_uses_standard_subtree_expansion() {
         let dir = tempfile::tempdir().expect("scratch dir");
         let scene = dir.path().join("collection.usda");

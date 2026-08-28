@@ -215,8 +215,9 @@ fn spawn_rover(app: &mut App) -> Entity {
     rover
 }
 
-/// Spawn a rover carrying a `ControlBinding` (so `list_entities().type == "rover"` and
-/// the selection toolkit / formation tool library can find it) at world x = `x`.
+/// Spawn a rover carrying the same authored kind marker that the USD projector
+/// publishes (so `list_entities().type == "rover"` and the selection toolkit /
+/// formation tool library can find it) at world x = `x`.
 fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
     let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
     let e = app
@@ -226,6 +227,7 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
             lunco_core::ControlBinding { binds: Vec::new() },
+            lunco_core::UsdPrimKind("rover".to_string()),
             ChildOf(frame),
         ))
         .id();
@@ -271,11 +273,12 @@ fn setup(source: &str) -> (App, Entity) {
 
 /// Run one production-style simulation frame, then flush so the dispatcher's
 /// queued command-triggers (SetPorts) actually execute and reach the spies.
-/// Scene-authored scenario markers are projected during Update; lifecycle hooks
-/// run during FixedUpdate. Keeping both schedules here exercises the same
-/// ownership boundary as the production app instead of testing an obsolete
-/// fixed-schedule-only attachment path.
+/// Scene-authored scenario markers are attached during PreUpdate; lifecycle
+/// hooks run during FixedUpdate. Keeping the production schedule boundary here
+/// exercises the real attachment path instead of testing an obsolete
+/// Update-only marker consumer.
 fn tick(app: &mut App) {
+    app.world_mut().run_schedule(PreUpdate);
     app.world_mut().run_schedule(Update);
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().flush();

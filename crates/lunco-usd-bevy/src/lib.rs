@@ -1012,6 +1012,9 @@ fn instantiate_usd_prim_from_stage(
             error!(
                 "[usd-bevy] stage has invalid convention metadata: {error}; refusing visual projection"
             );
+            commands
+                .entity(entity)
+                .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
             return;
         }
     };
@@ -1029,12 +1032,16 @@ fn instantiate_usd_prim_from_stage(
             let p = match stage_default_prim(reader) {
                 Some(name) => format!("/{name}"),
                 None => {
-                    warn!(
-                        "[usd] stage has no `defaultPrim` — mounting whole stage at `/`. \
-                         Add `( defaultPrim = \"Name\" )` to the stage header if this \
-                         file will be referenced from other USD files."
+                    let message = format!(
+                        "stage for {} has no `defaultPrim`; visual projection refused",
+                        prim_path.stage_handle.id()
                     );
-                    "/".to_string()
+                    error!("[usd] {message}");
+                    commands
+                        .entity(entity)
+                        .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    return;
                 }
             };
             // `try_insert` (not `.insert`): one of these prims may have been
@@ -1968,7 +1975,7 @@ fn on_usd_prim_added(
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
         ),
-        Without<UsdVisualSynced>,
+        (Without<UsdVisualSynced>, Without<UsdVisualSyncFailed>),
     >,
     q_high_precision: Query<
         (),
@@ -2073,7 +2080,11 @@ pub fn sync_usd_visuals(
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
         ),
-        (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
+        (
+            With<UsdAwaitingStage>,
+            Without<UsdVisualSynced>,
+            Without<UsdVisualSyncFailed>,
+        ),
     >,
     q_high_precision: Query<
         (),
@@ -2179,7 +2190,11 @@ fn retry_awaiting_usd_visuals_after_quality_change(
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
         ),
-        (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
+        (
+            With<UsdAwaitingStage>,
+            Without<UsdVisualSynced>,
+            Without<UsdVisualSyncFailed>,
+        ),
     >,
     q_high_precision: Query<
         (),
@@ -4655,7 +4670,7 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 /// [`rest_depth`](ObjectAabb::rest_depth) (`-min.y`) is the distance from the root
 /// origin down to the lowest collision point: lift a spawn by it and the object
 /// rests ON the ground with no part buried — for ANY asset (lander, rover, prop),
-/// no per-asset `lunco:spawnLift` tuning, no dependency on wheels. Computed off the
+/// no per-asset placement tuning, no dependency on wheels. Computed off the
 /// same composed stage the live entity is instantiated from, so the placement
 /// solver and the physics body can never disagree.
 ///

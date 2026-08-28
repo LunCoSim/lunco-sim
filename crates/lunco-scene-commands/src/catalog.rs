@@ -1,9 +1,10 @@
 //! Spawn catalog — the registry of everything spawnable, derived from the USD.
 //!
 //! Nothing here is hardcoded. A spawnable is any project `*.usda` that says it is
-//! one (`bool lunco:spawnable`), its palette group is its folder, and its drop
-//! height is its own `float lunco:spawnLift`. Drop a file into `assets/` or an
-//! open Twin and it is spawnable, with no Rust change and no rebuild.
+//! one (`bool lunco:spawnable`), and its palette group is its folder. Placement
+//! dimensions come from the asset's composed USD collision geometry. Drop a
+//! file into `assets/` or an open Twin and it is spawnable, with no Rust change
+//! and no rebuild.
 //!
 //! # The scan is asynchronous, and has to be
 //!
@@ -80,7 +81,6 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                     "name": entry.display_name,
                     "category": entry.category,
                     "route_marker": entry.is_route_marker(),
-                    "spawn_lift": entry.spawn_lift,
                     "default_transform": {
                         "position": [
                             entry.default_transform.translation.x,
@@ -164,11 +164,6 @@ pub struct SpawnableEntry {
     pub category: String,
     /// How this entry is spawned.
     pub source: SpawnSource,
-    /// Metres to lift the spawn point above the click/terrain hit. Data, not a
-    /// category rule: dynamic props that must drop onto terrain set a positive
-    /// value; structures authored with origin at the ground use `0.0`. Sourced
-    /// from the USD `float lunco:spawnLift` attribute for discovered assets.
-    pub spawn_lift: f32,
     /// Default transform applied at spawn (overridden by click position).
     pub default_transform: Transform,
 }
@@ -200,26 +195,6 @@ pub enum SpawnSource {
 pub struct SpawnResult {
     /// The root entity of the spawned object.
     pub root_entity: Entity,
-}
-
-/// Derive the USD root prim path from an entry id: snake_case → PascalCase
-/// with a leading `/` (e.g. `"skid_rover"` → `"/SkidRover"`,
-/// `"rocker_bogie"` → `"/RockerBogie"`). Single home so [`spawn_usd_entry`]
-/// and the real-time footprint derivation ([`crate::spawn`]) agree on which
-/// prim to walk.
-pub fn prim_path_from_entry_id(id: &str) -> String {
-    let pascal = id
-        .split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    format!("/{}", pascal)
 }
 
 /// The scene root a runtime spawn mounts under — a type, not a bare `Entity`,
@@ -255,8 +230,9 @@ impl SpawnAnchor {
 /// Returns the root entity that was spawned. The USD asset is loaded
 /// asynchronously — the caller should handle the loading state.
 ///
-/// The USD prim path is derived from the entry ID by converting snake_case
-/// to PascalCase (e.g., "solar_panel" → "/SolarPanel", "skid_rover" → "/SkidRover").
+/// The empty [`UsdPrimPath`] sentinel asks the USD loader to mount the stage's
+/// authored `defaultPrim`; the loader writes the resolved path back before the
+/// projected subtree is used by runtime consumers.
 pub fn spawn_usd_entry(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -282,10 +258,8 @@ pub fn spawn_usd_entry(
             // Empty path = "mount the stage's `defaultPrim`" sentinel (resolved
             // by the loader, which writes the concrete path back — see
             // `instantiate_usd_prim` in lunco-usd-bevy). USD is the source of
-            // truth for the root prim; deriving `/PascalCase(stem)` from the
-            // filename silently mounts a non-existent prim (→ invisible spawn)
-            // whenever the file stem and its `defaultPrim` disagree (e.g. a
-            // `*_glb.usda` wrapper whose prim has no `Glb` suffix).
+            // truth for the root prim; the asset filename is never used as a
+            // path guess.
             path: String::new(),
         },
         Transform {
@@ -328,7 +302,7 @@ use lunco_assets::discovery::AssetFile;
 ///
 /// The catalogue's *source*, and the Scenarios menu's tooltip source — one store
 /// for one fact. These used to be two: [`SpawnCatalog`] scanned the files for
-/// `lunco:spawnable`/`lunco:spawnLift`, and the sandbox UI kept its own
+/// `lunco:spawnable`, and the sandbox UI kept its own
 /// `SceneDescCache` that re-parsed the *same default prim of the same files*
 /// for the standard USD `doc` metadata.
 ///
@@ -547,13 +521,12 @@ pub fn drain_usd_scan(
 /// The catalogue entry an asset+metadata pair describes. Pure — no I/O, so the
 /// mapping from "what the file says" to "what the palette shows" is testable
 /// without touching a disk or a network.
-pub fn entry_for(asset: &AssetFile, meta: &SpawnMeta) -> SpawnableEntry {
+pub fn entry_for(asset: &AssetFile, _meta: &SpawnMeta) -> SpawnableEntry {
     SpawnableEntry {
         id: asset.stem.clone(),
         display_name: title_case(&asset.stem),
         category: categorize(&asset.rel),
         source: SpawnSource::UsdFile(asset.asset_path.clone()),
-        spawn_lift: meta.lift,
         default_transform: Transform::default(),
     }
 }
@@ -645,7 +618,6 @@ mod spawn_anchor_tests {
                 display_name: "Modelica Balloon".into(),
                 category: "Vessels".into(),
                 source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
-                spawn_lift: 0.0,
                 default_transform: Transform::default(),
             },
             scene_root,
@@ -725,7 +697,6 @@ mod tests {
             display_name: id.into(),
             category: "Structures".into(),
             source: SpawnSource::UsdFile("x.usda".into()),
-            spawn_lift: 0.0,
             default_transform: Transform::default(),
         };
         assert!(c.add_unique(mk("a")));
@@ -746,7 +717,6 @@ mod tests {
             display_name: "Waypoint".into(),
             category: "Markers".into(),
             source: SpawnSource::UsdFile("vessels/markers/waypoint.usda".into()),
-            spawn_lift: 0.0,
             default_transform: Transform::default(),
         };
         let rover = SpawnableEntry {
@@ -768,7 +738,6 @@ mod tests {
                     display_name: "Last".into(),
                     category: "Other".into(),
                     source: SpawnSource::UsdFile("z.usda".into()),
-                    spawn_lift: 1.5,
                     default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
                 },
                 SpawnableEntry {
@@ -776,7 +745,6 @@ mod tests {
                     display_name: "First".into(),
                     category: "Other".into(),
                     source: SpawnSource::UsdFile("a.usda".into()),
-                    spawn_lift: 0.25,
                     default_transform: Transform::default(),
                 },
             ],
@@ -804,7 +772,6 @@ mod tests {
             display_name: id.into(),
             category: cat.into(),
             source: SpawnSource::UsdFile("x.usda".into()),
-            spawn_lift: 0.0,
             default_transform: Transform::default(),
         };
         c.add_unique(mk("a", "Rovers"));
@@ -903,7 +870,6 @@ mod tests {
             "scenes/luncosim/x.usda".into(),
             SpawnMeta {
                 spawnable: false,
-                lift: 0.0,
                 description: None,
             },
         );

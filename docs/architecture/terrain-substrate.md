@@ -34,8 +34,10 @@ The composed source is the **single source of truth**. Both consumers sample it:
   raycast — it answers **before** the collider tile under the drop point has
   streamed/baked, so a spawn over un-baked terrain rests on the ground instead of
   free-falling. The GUI path takes `max(oracle, raycast)` so an obstacle rock poking
-  up under the chassis still lifts the spawn; the API path snaps `y` to the surface
-  (+ the asset's `lunco:spawnLift`) when DEM terrain covers the point.
+  up under the chassis still lifts the spawn. The GUI uses the asset's composed
+  `UsdPhysics` collision footprint; an asset without one is rejected instead of
+  receiving invented dimensions or a lift. The API path uses the explicit
+  position supplied by the caller.
 
 Because they all call one function, they **converge** — near a rover the mesh,
 collider, and spawn height agree, so there is no visual/physics mismatch. Crater

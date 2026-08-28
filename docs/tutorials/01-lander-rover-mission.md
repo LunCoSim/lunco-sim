@@ -849,10 +849,12 @@ def Xform "WaypointMarker"
 ```
 
 The dome is visual only. The `Trigger` uses standard USD `radius`, collision, and
-`lunco:triggerZone` properties to provide the non-solid Sensor footprint; it emits
-`enter:waypoint`, and the waypoint projection records the composed marker path in
-`ReachedWaypoints` and emits `waypoint.reached`. The marker stays visible after
-arrival; the route UI tints only the marker recorded as reached.
+`lunco:triggerZone` properties to provide the non-solid Sensor footprint. The
+shared waypoint projection consumes its physics overlap, records the composed
+marker path in `ReachedWaypoints`, and emits the canonical `waypoint.reached`
+event. The marker stays visible after arrival; the route UI tints only the marker
+recorded as reached. The lower-level Sensor/zone notification is an engine
+mechanism, not the mission completion contract.
 
 Drop three markers into the scene:
 

@@ -307,13 +307,26 @@ pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
 /// A vehicle root may carry ordinary output ports such as `drive_left` and
 /// `steering` while also owning a `CollectionAPI:components` network. Those
 /// ports are not generated-model outputs unless their authored connection
-/// names a member of the collection. Keeping this distinction in the shared
-/// USD contract prevents the linter and projector from treating an actuator
-/// command surface as an unsourced Modelica boundary.
+/// names a member of the collection. A USD root may also have an input and an
+/// output with the same name: the input is the generated network's internal
+/// boundary, while the output is the external actuator surface. Modelica has
+/// one identifier namespace, so the colliding output remains a runtime port
+/// fed by the promoted member output rather than becoming a second generated
+/// boundary. Keeping this distinction in the shared USD contract prevents the
+/// linter and projector from treating an actuator command surface as an
+/// unsourced or duplicate Modelica boundary.
 pub fn is_network_boundary_output(view: &StageView<'_>, root: &SdfPath, attr: &str) -> bool {
-    let Some(_) = attr.strip_prefix("outputs:") else {
+    let Some(name) = attr
+        .strip_prefix("outputs:")
+        .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+    else {
         return false;
     };
+    if view.attr_names(root).iter().any(|candidate| {
+        candidate.strip_suffix(".connect").unwrap_or(candidate) == format!("inputs:{name}")
+    }) {
+        return false;
+    }
     let Ok(members) = view.collection_members(root, "components") else {
         return false;
     };
@@ -327,6 +340,66 @@ pub fn is_network_boundary_output(view: &StageView<'_>, root: &SdfPath, attr: &s
             .rsplit_once(".outputs:")
             .is_some_and(|(source, _)| member_paths.contains(source))
     })
+}
+
+/// Resolve a root input that is internally fed by a member output.
+///
+/// A composed assembly can expose an actuator name in both namespaces: the
+/// power network consumes `inputs:drive_left`, while a composed drive law
+/// produces `outputs:drive_left`.  When the latter is authored as the source
+/// of the former, the path is internal to one generated Modelica network.  It
+/// must not become an external wrapper input or a second runtime wire.
+///
+/// The returned value is the member output target after following the one
+/// authored root-output forward.  `None` means the root input remains an
+/// ordinary external boundary, including the common case where its source is
+/// a runtime actuator port rather than a generated member.
+pub fn internal_network_input_source(
+    view: &StageView<'_>,
+    root: &SdfPath,
+    input: &str,
+) -> Option<String> {
+    let root_string = root.to_string();
+    let input_name = input.strip_prefix("inputs:").unwrap_or(input);
+    let input_name = input_name.strip_suffix(".connect").unwrap_or(input_name);
+    let input_attr = view.attr_names(root).into_iter().find(|attr| {
+        attr.strip_prefix("inputs:")
+            .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+            == Some(input_name)
+    })?;
+    let input_source = view.connections(root, &input_attr).first()?.to_string();
+    let (source_root, source_output) = input_source.split_once(".outputs:")?;
+    if source_root != root_string {
+        return None;
+    }
+    network_member_output_source(view, root, source_output)
+}
+
+/// Resolve an authored root output to a generated member output.
+///
+/// This is the output half of [`internal_network_input_source`].  It is useful
+/// when USD composition has already normalized a member's consumer connection
+/// to `root.outputs:name`: the reader still needs the authored member address so
+/// it can turn that edge into a direct Modelica causal equation.
+pub fn network_member_output_source(
+    view: &StageView<'_>,
+    root: &SdfPath,
+    output: &str,
+) -> Option<String> {
+    let output_name = output.strip_prefix("outputs:").unwrap_or(output);
+    let output_name = output_name.strip_suffix(".connect").unwrap_or(output_name);
+    let output_attr = view.attr_names(root).into_iter().find(|attr| {
+        attr.strip_prefix("outputs:")
+            .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+            == Some(output_name)
+    })?;
+    let member_output = view.connections(root, &output_attr).first()?.to_string();
+    let (member, _) = member_output.split_once(".outputs:")?;
+    let members = view.collection_members(root, "components").ok()?;
+    members
+        .into_iter()
+        .any(|path| !path.is_property_path() && path.to_string() == member)
+        .then_some(member_output)
 }
 
 /// The default synthesizer for a collection of Modelica program facets.

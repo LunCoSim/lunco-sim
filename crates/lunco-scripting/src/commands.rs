@@ -507,10 +507,13 @@ fn on_register_tool_library(
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
     }
-    Ok(Ack::with_data(OpId::new(), serde_json::json!({
-        "name": cmd.name,
-        "libraries": crate::tool_libs::library_names(),
-    })))
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "name": cmd.name,
+            "libraries": crate::tool_libs::library_names(),
+        }),
+    ))
 }
 
 /// Run a declarative **mission timeline** on an entity — Layer 2 of the
@@ -747,11 +750,14 @@ fn on_run_timeline(
         &q_existing,
         &mut commands,
     );
-    Ok(Ack::with_data(OpId::new(), serde_json::json!({
-        "document_id": doc_id_raw,
-        "generation": generation,
-        "steps": step_count,
-    })))
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "document_id": doc_id_raw,
+            "generation": generation,
+            "steps": step_count,
+        }),
+    ))
 }
 
 /// Save a named mission **timeline** to the Twin — the storage counterpart of
@@ -865,12 +871,15 @@ fn on_run_stored_timeline(
         &q_existing,
         &mut commands,
     );
-    Ok(Ack::with_data(OpId::new(), serde_json::json!({
-        "name": cmd.name,
-        "document_id": doc_id_raw,
-        "generation": generation,
-        "steps": step_count,
-    })))
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "name": cmd.name,
+            "document_id": doc_id_raw,
+            "generation": generation,
+            "steps": step_count,
+        }),
+    ))
 }
 
 #[cfg(feature = "python")]

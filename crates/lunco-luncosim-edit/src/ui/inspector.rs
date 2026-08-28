@@ -2709,10 +2709,11 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
 
 /// If a shader for `stem` is now registered, swap `part` onto it.
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
-    let path = match {
+    let shader_path = {
         let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
         lunco_scene_commands::commands::shader_asset_path_for(tr, stem)
-    } {
+    };
+    let path = match shader_path {
         Ok(path) => path,
         Err(error) => {
             report_inspector_error(

@@ -137,6 +137,13 @@ Member icons must resolve from
 their native Modelica classes; a fabricated card or direct solar-to-motor wire
 is a projection defect, not an acceptable fallback.
 
+When an authored Modelica endpoint also carries `InputPorts`, that component is
+the single public command boundary. `SetPorts` and Rhai writes land there, and
+the generic Modelica bridge mirrors only names accepted by the compiled model
+into its solver input buffer. Do not add a vehicle-specific setter. Battery
+empty events use the authored 0.1% usable-storage reserve in `Battery.mo`, not
+a solver-epsilon comparison.
+
 Node movement has two valid outcomes. On an editable `.mo` document, drag a
 component and verify that the standard `annotation(Placement(...))` changes in
 the source and survives a re-projection. On a generated document, the canvas

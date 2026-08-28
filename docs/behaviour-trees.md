@@ -14,8 +14,10 @@ JSON/rhai `BehaviorSpec` an autopilot compiles and can hot-swap at runtime).
     as data so rhai/JSON can define them and swap them live (`SetAutopilotBehavior`).
   - [`lunco-scripting`](../crates/lunco-scripting/src/task_tree.rs) — every
     scenario's `this.task` tree: the prelude's `seq`/`par_all`/`wait_*`
-    constructors build pure data maps that compile onto this kernel, with rhai
-    closures as `Action`-style leaves (`TaskCtx`). One tick engine serves both;
+    constructors build pure data maps that compile onto this kernel, with
+    anonymous `|me| ...` closures as `Action`-style leaves (`TaskCtx`). The
+    native driver binds the persistent scenario state as `this`; named
+    `Fn("...")` pointers are not task leaves. One tick engine serves both;
     the prelude's former rhai `__tick*` recursion is retired.
 - **Related:** [scripting-guide.md](./scripting-guide.md) (the task-tree verbs +
   linear task sequences), spec

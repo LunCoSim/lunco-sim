@@ -2687,7 +2687,11 @@ def Xform "DescentLander" (
         )
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -7.2, 0)
+            # The 100 mm pad thickness puts its lower face on the authored
+            # ground plane at the seated ride height. Runtime placement showed
+            # the previous opinion still left a 10 mm lower-face gap, so the
+            # center is lowered by that measured amount.
+            double3 xformOp:translate = (0, -7.26, 0)
             double3 xformOp:rotateXYZ = (0, 0, -20)
             double3 xformOp:scale = (0.91, 0.10, 0.91)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2811,7 +2815,7 @@ def Xform "DescentLander" (
         )
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:translate = (0, -7.26, 0)
             double3 xformOp:rotateXYZ = (0, 0, 20)
             double3 xformOp:scale = (0.91, 0.10, 0.91)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2873,7 +2877,7 @@ def Xform "DescentLander" (
         )
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:translate = (0, -7.26, 0)
             double3 xformOp:rotateXYZ = (20, 0, 0)
             double3 xformOp:scale = (0.91, 0.10, 0.91)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2935,7 +2939,7 @@ def Xform "DescentLander" (
         )
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:translate = (0, -7.26, 0)
             double3 xformOp:rotateXYZ = (-20, 0, 0)
             double3 xformOp:scale = (0.91, 0.10, 0.91)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -3005,8 +3009,11 @@ def Xform "DescentLander" (
     # mass, not chosen as solver stabilisers. Each leg carries about
     # 4000 kg * 1.6249 m/s^2 / 4 = 1625 N at rest. With k = 4000 N/m the
     # static compression is 0.406 m. For a 40 kg moving assembly,
-    # c_critical = 2*sqrt(k*m) = 800 N s/m, so c = 1600 N s/m is damping
-    # ratio 2 (overdamped, with no artificial hull drag). The 12000 N force
+    # For the planted vehicle's vertical mode, one spring carries roughly a
+    # quarter of the 4000 kg hull: m_eff ≈ 1000 kg and
+    # c_critical = 2*sqrt(k*m_eff) ≈ 4000 N s/m. The leg-body relative mode
+    # remains overdamped at this value because its 40 kg moving assembly has
+    # c_critical = 800 N s/m. The 12000 N force
     # limit is 7.4 times the static leg load and remains finite for touchdown
     # impulse authority while the joint stroke limit remains -0.8..0 m.
     def PhysicsPrismaticJoint "LegPX_Spring" (
@@ -3032,7 +3039,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:damping = 4000.0
         float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
@@ -3055,7 +3062,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:damping = 4000.0
         float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
@@ -3074,7 +3081,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:damping = 4000.0
         float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
@@ -3093,7 +3100,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 4000.0
-        float drive:linear:physics:damping = 1600.0
+        float drive:linear:physics:damping = 4000.0
         float drive:linear:physics:maxForce = 12000.0
     }
 

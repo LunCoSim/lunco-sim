@@ -8,7 +8,7 @@ within LunCo.Electrical;
 // video scene can deliberately select this ideal rail.
 model IdealVoltageSource
   extends LunCo.Icons.ElectricalControl;
-  parameter Real voltage = 48.0 "Fixed bus voltage, V";
+  parameter Real voltage = 28.0 "Fixed bus voltage, V";
 
   Pin p;
   output Real terminal_voltage_v(unit="V") "Voltage delivered to the bus";

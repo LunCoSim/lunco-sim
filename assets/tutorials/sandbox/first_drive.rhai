@@ -115,18 +115,18 @@ fn task(me) {
     if !is_unattended() { return; }   // a human is watching: they drive
     seq([
         wait(1.0),                     // let the scene settle / rover spawn
-        once(Fn("first_drive_autopilot_possess")),
+        once(|m| first_drive_autopilot_possess(m)),
         wait(0.5),
         // Phase 1: cruise toward the flag at a moderate speed until within 8 m.
-        step(Fn("first_drive_cruise"), Fn("first_drive_cruise_done")),
+        step(|m| first_drive_cruise(m), |m| first_drive_cruise_done(m)),
         // Phase 2: creep SLOWLY to a point 1.5 m short of the flag (an offset in
         // front of it) and stop there — so the rover's centre parks a body-length
         // out with its nose AT the flag, instead of ramming through and settling
         // ~2.3 m back. Aiming short, not just braking, is what puts it on the flag.
-        step(Fn("first_drive_creep"), Fn("first_drive_creep_done")),
+        step(|m| first_drive_creep(m), |m| first_drive_creep_done(m)),
         // Brake and HOLD for a couple of sim-seconds so it parks instead of coasting.
         // `act_for` re-brakes every tick while the dwell holds the step, so the
         // brake persists (a single pulse would let it roll onward).
-        act_for(Fn("first_drive_brake"), 2.0),
+        act_for(|m| first_drive_brake(m), 2.0),
     ])
 }

@@ -130,7 +130,11 @@ fn on_tick(me) {
     }
     if this.elapsed > 480.0 {
         this.done = true;
-        verdict(false, "production descent/deployment/course did not finish in 480 simulated seconds");
+        let route_detail = "rover=" + world_pos(this.rover) +
+            " target1=" + world_pos(find("/LanderTest/RoverTarget1")) +
+            " target2=" + world_pos(find("/LanderTest/RoverTarget2")) +
+            " target3=" + world_pos(find("/LanderTest/RoverTarget3"));
+        verdict(false, "production descent/deployment/course did not finish in 480 simulated seconds; " + route_detail);
     }
 }
 

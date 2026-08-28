@@ -70,6 +70,8 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=cache_dir.sh
+source "$SCRIPT_DIR/cache_dir.sh"
 
 usage() {
     sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -157,25 +159,6 @@ velopack_runtime() {
     esac
 }
 
-# ── Resolve the cache directory ───────────────────────────────────────────
-# Mirrors lunco_assets::cache_dir(): an explicit LUNCOSIM_CACHE override, then
-# the OS-global cache. A workspace-local `.cache/` is never selected.
-resolve_cache_dir() {
-    if [ -n "${LUNCOSIM_CACHE:-}" ]; then
-        mkdir -p "$LUNCOSIM_CACHE"
-        echo "$LUNCOSIM_CACHE"
-        return
-    fi
-    local base
-    case "$(uname -s)" in
-        Darwin*) base="${HOME:?}/Library/Caches" ;;
-        MINGW*|MSYS*|CYGWIN*) base="${LOCALAPPDATA:-${HOME:?}/AppData/Local}" ;;
-        *) base="${XDG_CACHE_HOME:-${HOME:?}/.cache}" ;;
-    esac
-    mkdir -p "$base/lunco"
-    echo "$base/lunco"
-}
-
 # ── Portable directory sync ───────────────────────────────────────────────
 # Desktop bundles must be reproducible on Linux, macOS and Git Bash. Git
 # Bash's `cp` rejects the POSIX `source/.` spelling used by the former unified
@@ -240,6 +223,7 @@ download_cache_for() {
     local binary="$1"
     local cache_dir
     cache_dir="$(resolve_cache_dir)"
+    mkdir -p "$cache_dir"
     if [ -z "$cache_dir" ]; then
         warn "Unable to resolve the OS-global cache — cannot download assets. Set LUNCOSIM_CACHE."
         return 0

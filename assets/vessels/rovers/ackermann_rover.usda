@@ -58,7 +58,6 @@ def Xform "AckermannRover" (
     # Symmetric box chassis: the body frame origin is the authored COM for both
     # raycast and joint realizations.
     float3 physics:centerOfMass = (0.0, 0.0, 0.0)
-    float lunco:spawnLift = 1.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
     float outputs:steering = 0.0

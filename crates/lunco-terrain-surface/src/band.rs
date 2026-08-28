@@ -110,7 +110,7 @@ impl SurfaceBand {
     pub fn limited_region(
         &self,
         oracle: &SurfaceOracle,
-        region: crate::quadtree::Square,
+        region: lunco_terrain_core::quadtree::Square,
         margin: f64,
     ) -> SurfaceOracle {
         let half = region.half + margin;

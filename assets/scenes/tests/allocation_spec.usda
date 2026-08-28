@@ -103,9 +103,9 @@ def Xform "AllocationSpec" (
 
     # ── The measured rover ───────────────────────────────────────────────────
     # Stock skid rover. `drivetrain = "raycast"` is the asset's own fallback but
-    # is written out explicitly: the spec measures wheel spin off
-    # `WheelRaycast.spin_velocity`, so the realization is not an incidental
-    # detail of this rig, it is a precondition of the measurement.
+    # is written out explicitly: the spec measures the authored rover-root
+    # shaft-speed boundary, so the realization is not an incidental detail of
+    # this rig, it is a precondition of the measurement.
     def Xform "RoverSkid" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
         variants = {

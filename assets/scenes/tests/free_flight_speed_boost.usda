@@ -37,6 +37,7 @@ def Xform "FreeFlightSpeedBoost" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/free_flight_speed_boost.rhai@
         }
     }

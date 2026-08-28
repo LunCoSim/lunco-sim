@@ -313,8 +313,9 @@ curl -X POST http://127.0.0.1:4101/api/commands \
   }'
 ```
 
-`root_prim` empty auto-derives `/PascalCaseFromFilename`
-(`sandbox_scene.usda` → `/SandboxScene`).
+`root_prim` empty reads the stage's authored `defaultPrim` after the USD asset
+has loaded. A stage without `defaultPrim` is rejected as an invalid scene mount;
+the runtime never mounts `/`.
 
 ### Example: Control USD animation playback
 

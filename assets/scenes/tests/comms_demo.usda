@@ -148,6 +148,11 @@ def Xform "CommsDemoScene" (
                     over "LinkAperture"
                     {
                         string lunco:link:class = "base"
+                        # This is the local site mast, not an Earth relay. The
+                        # authored 5 km service radius is long enough to reach
+                        # the rover at this site and far too short to make a
+                        # 360,000 km lunar-to-Earth hop an accidental shortcut.
+                        double lunco:link:maxRangeM = 5000.0
                     }
                 }
             }

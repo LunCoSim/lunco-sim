@@ -486,15 +486,13 @@ author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` s
 > Deactivating a prim drops its whole subtree, which is the intended way to subtract from a
 > composed asset.
 
-### Sandbox Editing Tools (UX Bridge)
+### Scene Editing Tools (UX Bridge)
 The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, inspector).
 - **Spawning**: `SpawnEntity` command is wired to `UsdOp::AddReference` against the active stage.
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
-  prim path. USD stays the source of truth for the root prim; deriving
-  `/PascalCase(stem)` from the filename silently mounts a non-existent prim (→
-  invisible spawn) whenever the stem and its `defaultPrim` disagree (e.g. a
-  `*_glb.usda` wrapper whose prim has no `Glb` suffix).
+  prim path. USD stays the source of truth for the root prim; the loader resolves
+  the authored `defaultPrim` rather than making a filename-based path guess.
 - **Selection root**: a prim that declares `lunco:spawnable = true` — authored or
   *composed from a referenced wrapper* — is tagged `SelectableRoot`, so a click on
   a deep glTF sub-mesh resolves *up* (via `find_selectable`, depth cap 32) to the

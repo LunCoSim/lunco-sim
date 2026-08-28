@@ -23,8 +23,10 @@
 
 use std::path::PathBuf;
 
+use lunco_terrain_bake::dem::height_grid_from_geotiff;
 use lunco_terrain_core::error::measure_node_error;
-use lunco_terrain_surface::{height_grid_from_geotiff, quadtree::Square, QuadCoord, SurfaceOracle};
+use lunco_terrain_core::{QuadCoord, Square};
+use lunco_terrain_surface::SurfaceOracle;
 
 /// The twin this measures against. Skipped (not failed) when absent, so the suite still runs
 /// on a checkout without the twin.

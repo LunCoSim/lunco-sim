@@ -234,8 +234,8 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     (
         "list_entities",
         "list_entities()",
-        "[#{ id, name, type, pos, catalog_id }]",
-        "Every registered entity with display metadata and exact catalog identity; `catalog_id` is empty when the entity was not catalog-spawned.",
+        "[#{ id, name, type, pos, catalog_id, input_surface, control_bound, celestial_body }]",
+        "Every registered entity with display metadata; `catalog_id` is empty when the entity was not catalog-spawned and `input_surface` reports the authoritative InputPorts readiness.",
     ),
     (
         "add",
@@ -354,9 +354,7 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                 return None;
             }
             let short_type = registration.type_info().type_path_table().short_path();
-            if registry.get_with_short_type_path(short_type).is_none() {
-                return None;
-            }
+            registry.get_with_short_type_path(short_type)?;
             let (fields, writable_field) = match registration.type_info() {
                 TypeInfo::Struct(info) => {
                     let mut writable = false;
@@ -529,27 +527,27 @@ impl ApiQueryProvider for ScriptCompleteProvider {
 const HOOKS: &[(&str, &str)] = &[
     (
         "task",
-        "fn task(self) — returns the native task tree; the behavior kernel advances it every fixed step.",
+        "fn task(me) — returns the native task tree; action/predicate leaves are anonymous |me| closures, and the behavior kernel binds this and advances the tree every fixed step.",
     ),
     (
         "mission",
-        "fn mission(self) — returns declarative objectives evaluated alongside the task tree.",
+        "fn mission(me) — returns declarative objectives evaluated alongside the task tree.",
     ),
     (
         "on_start",
-        "fn on_start(self) — called once after (re)compile; `self` is the host entity id.",
+        "fn on_start(me) — called once after (re)compile; `me` is the host entity id and `this` is persistent scenario state.",
     ),
     (
         "on_tick",
-        "fn on_tick(self) — test-only fixed-step observer for sampling state and publishing a bounded verdict; production missions use task/events.",
+        "fn on_tick(me) — test-only fixed-step observer for sampling state and publishing a bounded verdict; production missions use task/events.",
     ),
     (
         "on_stop",
-        "fn on_stop(self) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here.",
+        "fn on_stop(me) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here.",
     ),
     (
         "on_event",
-        "fn on_event(self, evt) — a TelemetryEvent arrived; evt is #{ name, source, value, severity, timestamp }. `source` = emitter gid (WHICH sensor/script fired — branch on it), `value` = payload (e.g. a zone enter's entrant gid).",
+        "fn on_event(me, evt) — a TelemetryEvent arrived; evt is #{ name, source, value, severity, timestamp }. `source` = emitter gid (WHICH sensor/script fired — branch on it), `value` = payload (e.g. a zone enter's entrant gid).",
     ),
 ];
 

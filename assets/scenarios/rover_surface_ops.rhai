@@ -73,7 +73,7 @@ fn gate_three_notice(me) {
 /// drive a 3-gate course, with each arrival reported by its marker Sensor.
 fn descent() {
     seq([
-        once(Fn("begin_descent")),
+        once(|m| begin_descent(m)),
         // These are independent latched projections. `par_all` makes the
         // mission order-independent without polling or duplicating latch state.
         par_all([
@@ -81,21 +81,21 @@ fn descent() {
             wait_for_from("lander_flight_handoff", "/LanderTest/Lander/GNC"),
             wait_for_from("lander_touchdown", "/LanderTest/Lander"),
         ]),
-        once(Fn("touchdown_notice")),
+        once(|m| touchdown_notice(m)),
     ])
 }
 
 fn release_rover() {
     seq([
         wait(1.5),                                       // brief settle (sim seconds)
-        once(Fn("release_notice")),
+        once(|m| release_notice(m)),
         wait(2.0),                                       // let the rover fall clear
     ])
 }
 
 fn engage_rover() {
     seq([
-        once(Fn("engage_notice")),
+        once(|m| engage_notice(m)),
     ])
 }
 
@@ -105,21 +105,21 @@ fn gate_one() {
         // Arrival is the shared marker Sensor event. The USD-backed waypoint
         // projection tints only the marker that actually emitted this event.
         wait_for("waypoint_1_reached"),
-        once(Fn("gate_one_notice")),
+        once(|m| gate_one_notice(m)),
     ])
 }
 
 fn gate_two() {
     seq([
         wait_for("waypoint_2_reached"),
-        once(Fn("gate_two_notice")),
+        once(|m| gate_two_notice(m)),
     ])
 }
 
 fn gate_three() {
     seq([
         wait_for("waypoint_3_reached"),
-        once(Fn("gate_three_notice")),
+        once(|m| gate_three_notice(m)),
     ])
 }
 

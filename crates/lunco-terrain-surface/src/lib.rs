@@ -14,7 +14,7 @@
 //! - **Physics LOD is deterministic** — colliders are built at a canonical
 //!   resolution independent of visual LOD, so networking still replicates only
 //!   the spec and every peer agrees on contact.
-//! - **Pure, deterministic core** — [`source`] `height_at` is a pure function of
+//! - **Pure, deterministic core** — [`lunco_terrain_core::HeightSource`] `height_at` is a pure function of
 //!   position, so derived data is content-addressable, cacheable, and
 //!   re-derivable on any peer with nothing to transfer.
 //! - **wasm-safe** — the core touches only std + glam; heavy work is chunked or
@@ -22,17 +22,16 @@
 //!
 //! The projection-agnostic LOD spine — the quadtree-CDLOD selector, tile-grid
 //! ring math, and the [`HeightSource`] trait — lives in the pure leaf crate
-//! [`lunco_terrain_core`] (shared with the cube-sphere planetary tiler); it is
-//! re-exported here ([`quadtree`], [`tile`], [`source`]) so this crate's public
-//! API is unchanged. This crate is the **planar DEM adapter** on top of it.
+//! [`lunco_terrain_core`] (shared with the cube-sphere planetary tiler). This
+//! crate is the **planar DEM adapter** on top of it.
 //!
 //! Layers:
-//! - [`dem`] — loader for real DEM assets from `lunar_terrain_exporter`
+//! - `lunco-terrain-bake::dem` — loader for real DEM assets from `lunar_terrain_exporter`
 //!   (a georeferenced float32 GeoTIFF) into a reused `HeightGrid`, which then
 //!   acts as a [`HeightSource`]. This replaces the analytic placeholder with
 //!   real LOLA elevation. Byte-based and filesystem-free → identical on native
 //!   and wasm (the host supplies bytes via `lunco-storage` / `AssetServer`).
-//! - [`bake`] — resample a [`HeightSource`] into a render/collider-sized
+//! - `lunco-terrain-bake::bake` — resample a [`HeightSource`] into a render/collider-sized
 //!   `HeightGrid` (the bridge from a too-dense DEM to a drawable/collidable tile).
 //! - [`terrain`] — M3 spawn: build a static terrain entity (mesh + avian
 //!   `Collider::heightfield`) from a DEM asset via the `SpawnDemTerrain` command.
@@ -54,20 +53,11 @@ pub mod terrain_layers;
 pub mod tile_cache;
 pub mod tile_mesh;
 
-// Re-export the shared LOD spine modules so `crate::quadtree` / `crate::source` /
-// `crate::tile` paths (and the external API) keep working after the extraction.
-pub use lunco_terrain_core::{quadtree, source, tile};
-
-// The pure DEM decode/crop/resample pipeline moved to `lunco-terrain-bake` (so
-// the wasm Web Worker can run it without linking Bevy). Re-export its modules so
-// `crate::bake` / `crate::dem` paths — and the external API surface — are unchanged.
-pub use bake::resample;
 /// The shared filter policy for band-limited surface products — the DRY seam
 /// between what a wheel touches and what an eye sees. See [`band`] and
 /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1.
 pub use band::SurfaceBand;
 pub use collider_ring::{ColliderTileOf, ColliderTiles, TerrainColliderRing};
-pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
 pub use derived_layers::{
     DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus,
 };
@@ -80,7 +70,6 @@ pub use georef::{FlatSiteSurface, TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// `lunco-obstacle-field` directly, which is an implementation detail of where the
 /// type happens to live.
 pub use lunco_obstacle_field::field::HeightGrid;
-pub use lunco_terrain_bake::{bake, dem};
 pub use lunco_terrain_core::{
     hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
     Selected, Square, TileCoord, TileGrid, TransferFn,

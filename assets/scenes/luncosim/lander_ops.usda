@@ -178,7 +178,11 @@ def Xform "LanderTest" (
             # initialization as constants avoids making an initial-equation value a
             # live ground-truth feedback edge.
             float inputs:initial_pos_x = 0.0
-            float inputs:initial_pos_y = 0.0
+            # The estimator state is the lander's authored initial condition,
+            # not the touchdown datum.  Starting it at zero while the airframe
+            # is spawned at Y=60 m makes the descent law think it is already
+            # below the landing plane and removes the braking phase.
+            float inputs:initial_pos_y = 60.0
             float inputs:initial_pos_z = 0.0
             float inputs:initial_vel_x = -5.0
             float inputs:initial_vel_y = 0.0

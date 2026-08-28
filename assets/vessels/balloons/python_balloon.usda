@@ -20,8 +20,6 @@ def Xform "PythonBalloon" (
 )
 {
     uniform bool lunco:spawnable = true
-    float lunco:spawnLift = 2.0
-
     bool physics:rigidBodyEnabled = true
     float physics:mass = 4.5
 

@@ -439,10 +439,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         &plan.source,
         "shipped-synthesis-policy.mo",
     );
-    assert_eq!(
-        interface.model_name.as_deref(),
-        Some("Rig_System")
-    );
+    assert_eq!(interface.model_name.as_deref(), Some("Rig_System"));
     let ast = rumoca_phase_parse::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(

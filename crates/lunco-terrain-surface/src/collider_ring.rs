@@ -10,7 +10,8 @@
 //! **Deterministic, decoupled from visual LOD.** Tiles are selected at a single
 //! *canonical depth* from each body's **world position** (not the camera, not a
 //! screen metric) — so every peer and the headless server pick the identical tile
-//! set and agree on contact (the networking invariant in [`crate::quadtree`]). The
+//! set and agree on contact (the networking invariant in
+//! [`lunco_terrain_core::quadtree`]). The
 //! collider resolution is fixed (≈ native DEM spacing), independent of how coarse
 //! or fine the visual tiles happen to be.
 //!
@@ -40,8 +41,8 @@ use lunco_terrain_core::{quantize, HeightSource};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
-use crate::quadtree::{QuadCoord, Quadtree, Square};
 use crate::stream_viz::DemHeightField;
+use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Square};
 
 /// Seed values for the collider ring. Production terrain constructs the ring
 /// from the authoritative Graphics profile; these values remain only for
@@ -1457,6 +1458,8 @@ pub fn settle_grounded_assemblies(
     )>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
     footprints: Query<Option<&lunco_physics::PhysicsSupportFootprint>>,
+    pose_seeded: Query<(), With<lunco_physics::PhysicsPoseSeeded>>,
+    pose_authoritative: Query<(), With<lunco_core::PhysicsPoseAuthoritative>>,
     mut avian: ParamSet<(
         Query<(
             Entity,
@@ -1481,6 +1484,7 @@ pub fn settle_grounded_assemblies(
     grids: Query<&Grid>,
     spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
     local_gravity: Query<&lunco_environment::LocalGravity>,
+    flat_sites: Query<(), With<crate::georef::FlatSiteSurface>>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
@@ -1595,6 +1599,21 @@ pub fn settle_grounded_assemblies(
             continue;
         }
         let members = joint_component(seed, &adj);
+        // `Position` is not an authored-pose readiness signal. The USD bridge
+        // seeds it from the composed grid frame after activation; before that
+        // point Avian may expose its zero value while child bodies already have
+        // their authored local offsets. Consuming placement in that interval
+        // permanently marks the root as authoritative at the wrong position,
+        // and the bridge then writes the root to the origin while articulated
+        // children retain their authored offsets. Wait for the shared pose
+        // contract for every dynamic member. A member already settled by this
+        // transaction is authoritative and does not need another bridge seed.
+        if members
+            .iter()
+            .any(|member| !pose_seeded.contains(*member) && !pose_authoritative.contains(*member))
+        {
+            continue;
+        }
         done.extend(members.iter().copied());
         let mut rigid_lift = 0.0_f64;
         let mut probe_displacement: Option<f64> = None;
@@ -1640,6 +1659,12 @@ pub fn settle_grounded_assemblies(
             };
             let placement_up = if let Some(terrain_up) = terrain_up {
                 terrain_up
+            } else if !flat_sites.is_empty() {
+                // `FlatSiteSurface` is an authored ENU-aligned Cube, so its
+                // support normal is the scene +Y axis. This is the surface
+                // contract for static flat ground; the rover need not carry a
+                // per-body LocalGravity component for initial placement.
+                DVec3::Y
             } else {
                 let Ok(gravity) = local_gravity.get(footprint_owner) else {
                     continue;
@@ -1779,7 +1804,7 @@ pub fn settle_grounded_assemblies(
             }
             continue;
         }
-        let displacement = probe_displacement.unwrap_or(rigid_lift.max(0.0));
+        let displacement = probe_displacement.unwrap_or_else(|| rigid_lift.max(0.0));
         if !displacement.is_finite() {
             continue;
         }
@@ -2057,10 +2082,10 @@ register_commands!(on_recover_vessel);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quadtree::QuadCoord;
     use avian3d::parry::query::Ray;
     use bevy::ecs::entity::Entity;
     use lunco_obstacle_field::field::HeightGrid;
+    use lunco_terrain_core::quadtree::QuadCoord;
     use lunco_terrain_core::{Crater, Craters};
 
     /// Absolute DEM-like altitude of the flat base — deliberately far from 0 so

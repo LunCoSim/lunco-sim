@@ -485,8 +485,8 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 /// P4: content-addressed cache. Load the derived maps from disk if a bake with
 /// the same surface + parameters was already persisted; otherwise bake and write
 /// them through. Pure-function bake → byte-identical key across runs and peers, so
-/// a second load (or a second peer) skips the expensive AO march. The `cache://`
-/// dir is shared with the rest of the asset stack.
+/// a second load (or a second peer) skips the expensive AO march. The machine-global
+/// cache directory is shared with the rest of the asset stack.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bake_or_load(
     oracle: &SurfaceOracle,

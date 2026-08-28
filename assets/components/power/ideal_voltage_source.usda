@@ -19,7 +19,7 @@ def Xform "IdealVoltageSource" (
 
     # The bus value is exposed on the component so Inspector and generated
     # Modelica source see the same authored parameter.
-    float inputs:voltage = 48.0
+    float inputs:voltage = 28.0
     float outputs:terminal_voltage_v
     float outputs:terminal_current_a
     float outputs:terminal_power_w

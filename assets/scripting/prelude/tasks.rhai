@@ -12,6 +12,14 @@
 // rather than top-level Rhai constants: indirect prelude calls do not resolve
 // top-level constants in the runtime's separate function-call scope.
 
+// Task leaves take anonymous closures with one positional argument:
+//   |me| ...
+// `me` is the host entity id. The native task driver binds the persistent
+// scenario state map as `this`, so closures may use hook state without a second
+// callback convention. Named `Fn("...")` pointers are not task leaves. A
+// named helper is still valid when called explicitly from an anonymous leaf:
+//   once(|me| drive_to(me, GOAL))
+
 /// Step constructors (sugar over the map literals; all optional to use).
 fn step(act, done) { #{ kind: "step", act: act, done: done } }
 fn once(act)       { #{ kind: "once", act: act } }

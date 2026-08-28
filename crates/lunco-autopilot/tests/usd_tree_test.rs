@@ -4,7 +4,7 @@
 //! the compiler bakes that prim's live world position into the tree — so **dragging
 //! the pin re-routes the rover**. That is what makes a waypoint an ordinary prim
 //! (selectable, gizmo-draggable, journaled, persisted) instead of a bespoke
-//! checkpoint domain.
+//! route data structure.
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
@@ -89,7 +89,7 @@ fn ctrl_click_on_a_vessel_with_no_mission_creates_the_patrol_shell() {
     assert_eq!(
         target_paths(&xml),
         vec!["/World/Route/W0".to_string()],
-        "the first checkpoint must create a one-way sequence[drive_to] mission that \
+        "the first waypoint must create a one-way sequence[drive_to] mission that \
          REFERENCES the pin prim (not bake its coordinates)"
     );
 }
@@ -191,7 +191,7 @@ fn waypoint_prim_position_is_baked_into_the_tree() {
 #[test]
 fn dragging_the_pin_reroutes_the_rover() {
     // THE point of putting waypoints in USD: moving the prim (which is what the
-    // transform gizmo does) re-derives the mission. No checkpoint command, no bespoke
+    // transform gizmo does) re-derives the mission. No waypoint command, no bespoke
     // domain — just a prim that moved.
     let mut app = app();
     let (vessel, pin) = scene(&mut app, Vec3::new(10.0, 0.0, 3.0));

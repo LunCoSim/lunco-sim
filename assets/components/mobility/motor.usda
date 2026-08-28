@@ -36,8 +36,12 @@ def Xform "Motor" (
     # Modelica parameter boundary. The names match DCMotor.mo exactly; the
     # generated network reads these authored inputs and no Rust reader mirrors
     # them.
-    float inputs:stall_torque = 1.5
-    float inputs:no_load_speed = 4800.0
+    # Fleet-standard 28 V winding. The 0.9 N·m shaft stall torque gives
+    # 153 N·m at the authored 200:1, 85% reduction: enough traction for a
+    # 1,120 kg lunar rover without making the flat-ground drive torque lift
+    # its front axle. Higher-output variants override this on the motor asset.
+    float inputs:stall_torque = 0.9
+    float inputs:no_load_speed = 2400.0
     float inputs:rated_power = 500.0
     float inputs:v_rated = 28.0
     float inputs:demand = 0.0

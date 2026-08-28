@@ -119,7 +119,6 @@ fn marker_sensor_enter_marks_the_waypoint_reached_without_deleting_it() {
                 stage_handle: Default::default(),
                 path: "/SandboxScene/Skid_Raycast_2".to_string(),
             },
-            lunco_core::ControlBinding { binds: Vec::new() },
             Transform::from_xyz(10.0, 0.0, 20.0),
         ))
         .id();

@@ -1933,18 +1933,14 @@ mod tests {
             &reg,
             |_| None,
             |_| None,
-            |entity| {
-                (entity == network_root).then(|| "/SandboxScene/Rover".to_string())
-            },
+            |entity| (entity == network_root).then(|| "/SandboxScene/Rover".to_string()),
             |_| false,
             |_| false,
         );
 
         let rover = &tree.children["/SandboxScene"].children["/SandboxScene/Rover"];
         assert!(
-            !rover
-                .children
-                .contains_key("/SandboxScene/Rover/Power"),
+            !rover.children.contains_key("/SandboxScene/Rover/Power"),
             "the removed domain child must not reappear as a telemetry node"
         );
         let motor = &rover.children["/SandboxScene/Rover/Motor_FL"];

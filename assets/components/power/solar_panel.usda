@@ -60,8 +60,6 @@ def Xform "SolarPanel" (
     custom token connectors:p
 
     float physics:mass = 15.0
-    float lunco:spawnLift = 2.0
-
     # Looks — the panel's photovoltaic surface. A `Material` whose surface comes from a
     # `Shader` named for the `wgsl` render context, with the shader's parameters as its
     # `inputs:`.

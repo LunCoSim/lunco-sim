@@ -120,6 +120,11 @@ equation
 end Battery;
 ```
 
+`Battery.drained` is a normalized empty-boundary signal over the authored
+0.1% state-of-charge reserve interval. The finite interval is a physical
+usable-storage reserve and keeps the event well-conditioned at the bounded
+state, rather than depending on solver epsilon at exactly `soc = 0`.
+
 **Note what it is *not*.** There is no `input Real current_in`. `Pin` carries a
 `flow` variable, so the current is decided by the circuit — every load and source
 on the bus at once — not written in by a caller. Nobody sums the draw; Kirchhoff

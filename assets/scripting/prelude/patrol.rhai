@@ -1,10 +1,10 @@
-// ── Patrol / checkpoints (DATA authored in rhai, visualised by the Rust core) ─
+// ── Patrol / waypoints (DATA authored in rhai, visualised by the Rust core) ─
 //
-// A checkpoint list is a [`BehaviorSpec::Patrol`] — the SAME data shape
+// A waypoint list is a [`BehaviorSpec::Patrol`] — the SAME data shape
 // `SetAutopilotBehavior` takes. These helpers build that data as a native
 // `#{...}` map, serialise it with `to_json`, and feed it to the EXISTING typed
 // command — no new Rust verb, the spec persists when the scenario is journaled
-// (`DomainKind::Script`) and the live path-line gizmo reads the mirrored
+// (`DomainKind::Script`) and the live route projection reads the mirrored
 // `AutopilotBehaviorSpec` component the command installs on the vessel.
 //
 // `points` is an array of waypoints. Each may be a bare `[x, y, z]` world
@@ -18,7 +18,6 @@
 //   engage_patrol(rover, [[10,0,0], [10,0,10], [0,0,10]], 0.5, 2.0, 1.0)
 //   patrol(rover, points)               // set behaviour on an engaged vessel
 //   patrol(rover, [#{pos:[5,0,5], on_arrival:[take_photo()]}])  // armed waypoint
-//   add_checkpoint(rover, 5.0, 0.0, 5.0) // append to this scenario's list + reset
 //   clear_patrol(rover)                 // ClearPatrol (brake + drop the mirror)
 
 /// Default patrol tuning (kept here, not in Rust — no magic numbers in core).
@@ -47,8 +46,8 @@ fn __patrol_spec(points, speed, radius, dwell) {
 
 /// Engage an autopilot on `vessel` AND set its behaviour to a patrol over
 /// `points` in one step. The single canonical way to start a rover driving a
-/// checkpoint loop from a scenario; the spec mirrors to `AutopilotBehaviorSpec`
-/// on the vessel, so the path-line gizmo + Command Deck render it.
+/// waypoint loop from a scenario; the spec mirrors to `AutopilotBehaviorSpec`
+/// on the vessel, so the route projection + Command Deck render it.
 fn engage_patrol(vessel, points, speed, radius, dwell) {
     let s   = if speed  == () { PATROL_SPEED  } else { speed  };
     let r   = if radius == () { PATROL_RADIUS } else { radius };
@@ -62,7 +61,7 @@ fn engage_patrol(vessel, points) { engage_patrol(vessel, points, (), (), ()); }
 
 /// Set (or hot-swap) the behaviour of an already-engaged vessel to a patrol over
 /// `points`. Use after `engage_patrol`/`EngageAutopilot` to redefine the
-/// checkpoint loop without re-claiming the vessel.
+/// waypoint loop without re-claiming the vessel.
 fn patrol(vessel, points, speed, radius, dwell) {
     let s = if speed  == () { PATROL_SPEED  } else { speed  };
     let r = if radius == () { PATROL_RADIUS } else { radius };
@@ -74,37 +73,12 @@ fn patrol(vessel, points, speed, radius, dwell) {
 /// `(vessel, points)` — set patrol with default tuning.
 fn patrol(vessel, points) { patrol(vessel, points, (), (), ()); }
 
-/// Append a checkpoint to THIS scenario's per-vessel list, then re-emit a patrol
-/// covering the full list.
-///
-/// CALL IT AS A METHOD ON THE SCENARIO STATE — `this.add_checkpoint(v, x, y, z)`.
-/// The list lives on `this` so a long mission can accumulate, and Rhai binds
-/// `this` for method-call syntax only: a plain `add_checkpoint(v, x, y, z)`
-/// raises "'this' not bound" and takes the calling tick down with it.
-///
-/// Interactive PlaceWaypoint + primary-pointer additions (Alt+LMB in the bundled
-/// keymap) go through the Rust UI and don't call this —
-/// that path mutates the live spec and re-emits `SetAutopilotBehavior` directly.
-/// Scenario scripts use this so their checkpoint list survives for later steps.
-fn add_checkpoint(vessel, x, y, z) {
-    if this.__checkpoints == () { this.__checkpoints = #{}; }
-    let list = this.__checkpoints[vessel];
-    if list == () { list = []; }
-    list.push([x, y, z]);
-    this.__checkpoints[vessel] = list;
-    patrol(vessel, list, (), (), ());
-}
-
-/// Clear the patrol on `vessel` and stop it, and forget this scenario's
-/// checkpoint list for it. Fires the canonical `ClearPatrol` typed command —
-/// the same verb the Command Deck "Clear patrol" button and the
-/// delete-last-waypoint path use (§4.2 — one input shape, every surface). No
+/// Clear the patrol on `vessel` and stop it. Fires the canonical
+/// `ClearPatrol` typed command —
+/// the same verb the Command Deck "Clear patrol" button and waypoint context
+/// actions use (§4.2 — one input shape, every surface). No
 /// hand-built `Brake` JSON.
 ///
-/// CALL IT AS A METHOD ON THE SCENARIO STATE — `this.clear_patrol(vessel)`, for
-/// the same reason as `add_checkpoint` above: it touches the scenario's own
-/// checkpoint list, and Rhai binds `this` for method-call syntax only.
 fn clear_patrol(vessel) {
-    if this.__checkpoints != () { this.__checkpoints.remove(vessel); }
     cmd("ClearPatrol", #{ vessel: vessel });
 }

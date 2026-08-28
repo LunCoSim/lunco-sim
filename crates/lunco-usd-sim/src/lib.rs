@@ -2149,11 +2149,7 @@ fn process_usd_sim_prim_read(
             if reader.real(&sdf_path, &attr).is_none() {
                 continue;
             }
-            if lunco_usd_bevy::program::is_network_boundary_output(
-                reader,
-                &sdf_path,
-                &attr,
-            ) {
+            if lunco_usd_bevy::program::is_network_boundary_output(reader, &sdf_path, &attr) {
                 continue;
             }
             if !port_names.iter().any(|n| n == name) {
@@ -2209,12 +2205,10 @@ fn process_usd_sim_prim_read(
         // vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and
         // they are not the same value (analog command vs discretized gate).
-        commands
-            .entity(entity)
-            .try_insert((
-                lunco_core::MobilityRoot,
-                lunco_core::OutputPorts::new(port_map),
-            ));
+        commands.entity(entity).try_insert((
+            lunco_core::MobilityRoot,
+            lunco_core::OutputPorts::new(port_map),
+        ));
     }
 
     // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
@@ -4597,7 +4591,12 @@ fn activate_dynamic_bodies(
     ground_pending: Res<GroundColliderPending>,
     mut activation: ResMut<GroundActivationInFlight>,
     q_kinematic: Query<
-        (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&AuthoredInitialVelocity>,
+            Option<&avian3d::prelude::RigidBodyDisabled>,
+        ),
         With<ShouldBeDynamic>,
     >,
     q_pending_joints: Query<
@@ -4636,7 +4635,7 @@ fn activate_dynamic_bodies(
     // first and hoping the parked constraint appears before the next solver tick
     // is precisely how an articulated pad escaped during warm-cache startup.
     let mut promoted = false;
-    for (entity, path, authored_velocity) in q_kinematic.iter() {
+    for (entity, path, authored_velocity, body_disabled) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
             joint_path.stage_handle == path.stage_handle
                 && (pending.body0_path == path.path || pending.body1_path == path.path)
@@ -4682,9 +4681,17 @@ fn activate_dynamic_bodies(
         let has_pending_diff = q_pending_diffs
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
+        // Readiness deliberately disables the body before the fixed physics
+        // schedule can admit its island node. A native joint may therefore be
+        // parked while this marker is present, but it must not keep the
+        // authored body in `ShouldBeDynamic`: promotion while disabled is
+        // inert, and release of the readiness marker then creates the island
+        // node that `JointAdmission` needs. Outside that explicit freeze,
+        // pending admission still blocks promotion so a live body can never
+        // integrate before its constraint is installed.
         let blocked = ground_pending.0
             || has_pending_joint
-            || has_pending_admission
+            || (has_pending_admission && body_disabled.is_none())
             || has_unready_authored_joint
             || has_pending_diff;
         if !blocked {

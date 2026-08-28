@@ -15,8 +15,9 @@ description: >
   sequencer step, `emit` / a `TelemetryEvent`, `this`-state that resets or
   reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgramAPI` prim.) These
   rules are project-specific: rhai `fn`s are pure (they can't see top-level
-  `let`, so naive state silently vanishes), `this` binds ONLY in the hook the
-  engine calls, `goto` is reserved, events arrive one tick late, scripts are
+  `let`, so naive state silently vanishes), lifecycle hooks and task closures
+  use the explicit `me`/`this` contract, `goto` is reserved, events arrive one
+  tick late, scripts are
   host-authoritative (never run on a client), and control MATH does not belong
   here (that's Modelica — see authoring-vessel-controllers). Reference impls:
   assets/scripting/examples/ (patrol, mission, sequence, timeline, avoid).
@@ -86,10 +87,12 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 **The state rule that trips up everyone (get this right first):**
 - rhai `fn`s are **pure** — they CANNOT see top-level `let`s. Thread all
   persistent state through **`this`**.
-- `this` is bound **ONLY** inside directly-called lifecycle/mission drivers —
-  **NOT** in task closures or prelude/helper functions. Task closures receive
-  the host gid as `m`; pass configuration explicitly and let the native kernel
-  own task cursor/dwell/event state.
+- `this` is the persistent scenario-state map. Direct lifecycle/mission drivers
+  receive the host entity id as `me`; task leaves receive that same id as their
+  one positional argument and are authored as anonymous closures (`|me| ...`).
+  The native task driver binds `this` while invoking those closures, and owns
+  the task cursor/dwell/event state. Named `Fn("...")` pointers are not task
+  leaves; call a named helper explicitly from an anonymous closure when useful.
 - `this` resets on hot-reload (re-`RunScenario` recompiles in place; the old
   program's `on_stop` runs first).
 
@@ -339,8 +342,9 @@ the very authoring the test exists to check.
 ## 4. Missions & sequencing (task policy, both pure rhai)
 
 - **Layer 1 — task tree** (`examples/sequence.rhai`): build a tree with
-  `step`/`wait`/`wait_for` and return it from `task(me)`. The native kernel owns
-  progression and event delivery.
+  `step`/`wait`/`wait_for` and return it from `task(me)`. Action and predicate
+  leaves are anonymous `|me| ...` closures; the native kernel owns progression,
+  state binding, and event delivery.
 - **Layer 2 — declarative timeline** (`examples/timeline.rhai`): a mission as
   **pure data**. Each step has exactly one operation word (`move_to`,
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`)
@@ -406,8 +410,9 @@ libraries → `<twin>/tools/*.rhai`.
    reactive (`on_event`). Use a Behavior Tree for reactive AI. Use `on_tick`
    only in authored tests for bounded state sampling and verdicts; rover
    continuous control/dynamics belong to native fixed-step systems or Modelica.
-2. Return a task tree; pass task configuration into closures. Keep lifecycle
-   state on `this` only where a hook genuinely needs it.
+2. Return a task tree; pass task configuration into anonymous `|me| ...`
+   closures. Keep persistent lifecycle state on `this` only where a hook or
+   task closure genuinely needs it; named `Fn("...")` callbacks are not leaves.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
 5. `RunScenario` on the target gid through the live API; verify with `ScriptInspect`; iterate by re-running (in-place hot-reload, no app restart).
@@ -422,6 +427,8 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ Assuming a scenario runs on clients — it's host-authoritative; clients get replicated state, not the script.
 - ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).
+- ❌ Passing `Fn("named_helper")` to `once`/`step`/`wait_until` — task leaves
+  require anonymous `|me| ...` closures so the native driver can bind `this`.
 
 ## The gate set — what the shipped scene tests guard
 

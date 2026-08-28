@@ -3065,7 +3065,7 @@ fn is_vessel_control_endpoint(
 /// Occlusion must not depend on a mesh pick. The analytic spheres should be tested
 /// against the terrain the same way every other placement tool already does — cast
 /// the click ray at the surface oracle (`lunco_terrain_surface::GridSurfaceQuery::raycast`,
-/// which `spawn.rs` and `checkpoint_click.rs` both use) and fold that distance into
+/// which `spawn.rs` and `waypoint_click.rs` both use) and fold that distance into
 /// `min_t` before the sphere loop. That fixes Earth-through-the-ground too, and stops
 /// the behaviour depending on whether a terrain happens to be tile-streamed.
 ///
@@ -3123,10 +3123,10 @@ pub fn avatar_raycast_possession(
     if intents.pressed(&UserIntent::PlaceWaypoint) {
         return;
     }
-    // Ctrl-click appends a patrol checkpoint (`on_scene_click_checkpoint`, the
+    // Ctrl-click appends a patrol waypoint (`on_scene_click_waypoint`, the
     // third global `Pointer<Click>` observer). Both observers see the same click
     // — `propagate(false)` stops bubbling, not sibling observers — so without
-    // this guard every checkpoint placement would ALSO possess/follow whatever
+    // this guard every waypoint placement would ALSO possess/follow whatever
     // the ray hit, yanking the camera onto the terrain.
     if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
         return;

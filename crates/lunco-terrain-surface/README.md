@@ -3,8 +3,8 @@
 **Surface-scale** terrain: DEM-backed, dynamically-LOD'd local ground with avian
 heightfield colliders and big_space per-tile anchoring.
 
-Builds on `lunco-terrain-core`'s projection-agnostic LOD spine (re-exported here
-as `quadtree` / `source` / `tile`) and adds the bevy / avian / big_space / DEM
+Builds on `lunco-terrain-core`'s projection-agnostic LOD spine and adds the
+bevy / avian / big_space / DEM
 layers the core deliberately omits. The complement to `lunco-terrain-globe`
 (orbit scale).
 
@@ -12,7 +12,7 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 
 | Module | Role |
 |--------|------|
-| `dem`, `bake` | **re-exported from [`lunco-terrain-bake`](../lunco-terrain-bake/README.md)** — the pure bevy/avian-free bake pipeline (GeoTIFF decode, crop/resample, crater stamp) lives there so the wasm DEM Web Worker runs the same code. `crate::dem` / `crate::bake` paths and the public API surface are unchanged. |
+| `lunco-terrain-bake` | The pure bevy/avian-free bake pipeline (GeoTIFF decode, crop/resample, crater stamp) is owned by [`lunco-terrain-bake`](../lunco-terrain-bake/README.md) so the wasm DEM Web Worker runs the same code. |
 | `tile_mesh` | per-tile mesh baking (`bake_tile_mesh`, `TileMesh`) |
 | `collider_ring` | resident avian heightfield collider ring around the focus (`TerrainColliderRing`, `ColliderTiles`) |
 | `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`, `TerrainShaderMode`) |
