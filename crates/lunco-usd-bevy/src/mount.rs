@@ -97,15 +97,6 @@ fn compose(a: Transform, b: Transform) -> Transform {
     Transform::from_matrix(a.to_matrix() * b.to_matrix())
 }
 
-fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
-    let root = root.trim_end_matches('/');
-    path.as_str() == root
-        || path
-            .as_str()
-            .strip_prefix(root)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
 /// Read a local frame while distinguishing USD's identity-for-unauthored
 /// transform from a malformed authored transform.
 fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<Transform> {
@@ -134,7 +125,7 @@ pub fn frame_in_body(
 ) -> Option<Transform> {
     let body_root = body_root.trim_end_matches('/');
     let body_root_path = SdfPath::new(body_root).ok()?;
-    if !is_descendant_or_self(mount_prim, body_root) {
+    if !crate::is_descendant_or_self(mount_prim, body_root) {
         bevy::log::warn!(
             "mount frame {} is outside body root {}; mount rejected",
             mount_prim.as_str(),
@@ -234,7 +225,7 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
                     );
                     continue;
                 };
-                if !is_descendant_or_self(&path, host) {
+                if !crate::is_descendant_or_self(&path, host) {
                     bevy::log::warn!(
                         "mount socket {} points outside host {}; socket rejected",
                         child.as_str(),

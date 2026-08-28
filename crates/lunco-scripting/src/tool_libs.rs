@@ -2,7 +2,7 @@
 //!
 //! The tool abstraction itself is runtime-agnostic ([`lunco_tools`]); its rhai
 //! binding lives in [`lunco_tools_rhai`]. This module is the thin layer that
-//! (a) seeds the built-in tools, (b) bridges registration/refresh into the
+//! (a) seeds the built-in tools, (b) bridges registration and engine binding into the
 //! scripting plugin, and (c) exposes tools on the API (discovery queries; the
 //! `RegisterToolLibrary` command lives in `commands.rs`). Keeping the API/Bevy
 //! deps here keeps the two tool crates lean and reusable.
@@ -269,15 +269,16 @@ pub fn wind_down_tools_on_twin_closed(
     }
 }
 
-/// Registry generation (changes on every registration) — drives hot-reload.
+/// Registry generation (changes when a tool is registered, replaced, or
+/// unregistered) — drives hot-reload.
 pub fn generation() -> u64 {
     lunco_tools::generation()
 }
 
 /// Bind every registered tool into `engine` as a static module (`name::fn`),
 /// logging any that fail (one bad tool never blocks the rest).
-pub fn refresh(engine: &mut Engine) {
-    for (name, err) in lunco_tools_rhai::refresh(engine) {
+pub fn bind_registered_tools(engine: &mut Engine) {
+    for (name, err) in lunco_tools_rhai::bind_registered_tools(engine) {
         error!("[rhai] tool '{name}' failed to bind: {err}");
     }
 }

@@ -40,7 +40,8 @@ pub struct AssetFile {
     /// Loadable Bevy asset path. Engine-relative (`vessels/rovers/skid_rover.usda`,
     /// served by the default source) or Twin-scoped (`twin://moonbase/structures/habitat_fsh.usda`).
     pub asset_path: String,
-    /// File stem (`skid_rover`, `regolith`) — a stable id for catalogs.
+    /// File stem (`skid_rover`, `regolith`) — the default display/id stem for
+    /// catalogs. Catalog owners disambiguate collisions using `asset_path`.
     pub stem: String,
     /// Path relative to its own root (`vessels/rovers/skid_rover.usda`,
     /// `shaders/regolith.wgsl`). Use for category heuristics, and as the URL

@@ -18,14 +18,7 @@
 //!   web is an HTTP fetch. That is not a build-time fact: it is the content of a
 //!   file we ship, and it can be read from the file we ship.
 //!
-//! The web build used to answer the second question from a `build.rs` table
-//! (`BAKED_SPAWN_META`, `BAKED_DESCRIPTIONS`) — the assets' contents *copied into
-//! the binary*, along with the weaker line-scan parser needed to produce them (a
-//! build script cannot use the crate's own USD stack). A copy that could go stale
-//! against the very files it described, and a second parser that had already
-//! drifted from the real one.
-//!
-//! So the read is async now, on both platforms, and the parse is openusd's. See
+//! The read is asynchronous on both platforms, and the parse is openusd's. See
 //! [`crate::spawn_meta`] for the full account, and [`lunco_assets::asset_read`]
 //! for the bytes.
 //!
@@ -121,13 +114,35 @@ pub fn register_query(app: &mut App) {
 }
 
 impl SpawnCatalog {
-    /// Add `entry` only if no entry with the same `id` exists yet. Returns
-    /// `true` if inserted. Used by dynamic discovery so re-scanning is
-    /// idempotent and never shadows a hand-tuned built-in entry.
-    pub fn add_unique(&mut self, entry: SpawnableEntry) -> bool {
-        if self.entries.iter().any(|e| e.id == entry.id) {
+    /// Add `entry` while keeping catalog IDs unique. Re-scanning the same source
+    /// is idempotent; two different sources with the same display stem receive a
+    /// deterministic source-derived suffix instead of one silently disappearing.
+    pub fn add_unique(&mut self, mut entry: SpawnableEntry) -> bool {
+        let Some(existing) = self.entries.iter().find(|e| e.id == entry.id) else {
+            self.entries.push(entry);
+            return true;
+        };
+        if same_source(existing, &entry) {
             return false;
         }
+
+        let base = entry.id.clone();
+        let source_key = match &entry.source {
+            SpawnSource::UsdFile(path) => sanitize_id_component(path),
+        };
+        let mut candidate = format!("{base}__{source_key}");
+        let mut suffix = 2;
+        loop {
+            match self.entries.iter().find(|e| e.id == candidate) {
+                None => break,
+                Some(existing) if same_source(existing, &entry) => return false,
+                Some(_) => {
+                    candidate = format!("{base}__{source_key}_{suffix}");
+                    suffix += 1;
+                }
+            }
+        }
+        entry.id = candidate;
         self.entries.push(entry);
         true
     }
@@ -150,6 +165,24 @@ impl SpawnCatalog {
         cats.dedup();
         cats
     }
+}
+
+fn same_source(a: &SpawnableEntry, b: &SpawnableEntry) -> bool {
+    match (&a.source, &b.source) {
+        (SpawnSource::UsdFile(a), SpawnSource::UsdFile(b)) => a == b,
+    }
+}
+
+fn sanitize_id_component(source: &str) -> String {
+    let mut component = String::new();
+    for c in source.chars() {
+        if c.is_ascii_alphanumeric() {
+            component.push(c.to_ascii_lowercase());
+        } else if !component.ends_with('_') {
+            component.push('_');
+        }
+    }
+    component.trim_matches('_').to_string()
 }
 
 /// A single spawnable thing in the catalog.
@@ -301,10 +334,9 @@ use lunco_assets::discovery::AssetFile;
 /// What every project `*.usda` says about itself, keyed by its asset path.
 ///
 /// The catalogue's *source*, and the Scenarios menu's tooltip source — one store
-/// for one fact. These used to be two: [`SpawnCatalog`] scanned the files for
-/// `lunco:spawnable`, and the sandbox UI kept its own
-/// `SceneDescCache` that re-parsed the *same default prim of the same files*
-/// for the standard USD `doc` metadata.
+/// for one fact. The catalog and Scenarios menu both consume this store, so
+/// the same default prim is not parsed again for the standard USD `doc`
+/// metadata.
 ///
 /// **Eventually complete.** Filled by the async scan below — on the web each
 /// entry costs an HTTP fetch, so it lands over some frames rather than all at
@@ -506,6 +538,23 @@ pub fn drain_usd_scan(
         catalog.entries.clear();
         scan.replace_on_publish = false;
     }
+    // Completion order is nondeterministic because each asset is read by its
+    // own async task. Sort the complete batch by canonical source identity
+    // before assigning stem-collision IDs; otherwise the first task to finish
+    // would win the unsuffixed ID and the same catalog could differ by run.
+    // Keep the default library source ahead of named schemes to preserve the
+    // catalog's existing unsuffixed stem IDs for shipped assets.
+    scan.staged.sort_unstable_by(|a, b| {
+        let a_key = (
+            lunco_assets::asset_path::split_scheme(&a.asset.asset_path).is_some(),
+            &a.asset.asset_path,
+        );
+        let b_key = (
+            lunco_assets::asset_path::split_scheme(&b.asset.asset_path).is_some(),
+            &b.asset.asset_path,
+        );
+        a_key.cmp(&b_key)
+    });
     let mut added = 0;
     for Scanned { asset, meta } in scan.staged.drain(..) {
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
@@ -705,6 +754,76 @@ mod tests {
     }
 
     #[test]
+    fn test_add_unique_disambiguates_different_sources() {
+        let mut c = SpawnCatalog {
+            entries: Vec::new(),
+        };
+        let entry = |source: &str| SpawnableEntry {
+            id: "rover".into(),
+            display_name: "Rover".into(),
+            category: "Rovers".into(),
+            source: SpawnSource::UsdFile(source.into()),
+            default_transform: Transform::default(),
+        };
+
+        assert!(c.add_unique(entry("vessels/rovers/rover.usda")));
+        assert!(c.add_unique(entry("twin://moonbase/vessels/rovers/rover.usda")));
+        assert_eq!(c.entries.len(), 2);
+        assert_eq!(c.entries[0].id, "rover");
+        assert_eq!(
+            c.entries[1].id,
+            "rover__twin_moonbase_vessels_rovers_rover_usda"
+        );
+        assert!(!c.add_unique(entry("twin://moonbase/vessels/rovers/rover.usda")));
+        assert_eq!(c.entries.len(), 2);
+    }
+
+    #[test]
+    fn drain_assigns_collision_ids_by_source_order_not_completion_order() {
+        let scanned = |source: &str| Scanned {
+            asset: AssetFile {
+                asset_path: source.into(),
+                stem: "rover".into(),
+                rel: "vessels/rovers/rover.usda".into(),
+                abs_path: source.into(),
+                twin: None,
+            },
+            meta: SpawnMeta {
+                spawnable: true,
+                description: None,
+            },
+        };
+        let mut scan = CatalogScan::default();
+        scan.batch_remaining = 2;
+        // Deliberately deliver the Twin result first, as an async completion
+        // race would. The drain's source sort must still give the library
+        // source the stable unsuffixed ID.
+        scan.tx
+            .send(scanned("twin://moonbase/vessels/rovers/rover.usda"))
+            .unwrap();
+        scan.tx.send(scanned("vessels/rovers/rover.usda")).unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(scan);
+        app.insert_resource(AssetMetaStore::default());
+        app.insert_resource(SpawnCatalog::default());
+        app.add_systems(Update, drain_usd_scan);
+        app.update();
+
+        let catalog = app.world().resource::<SpawnCatalog>();
+        assert_eq!(catalog.entries.len(), 2);
+        assert_eq!(catalog.entries[0].id, "rover");
+        assert!(matches!(
+            &catalog.entries[0].source,
+            SpawnSource::UsdFile(path) if path == "vessels/rovers/rover.usda"
+        ));
+        assert_eq!(
+            catalog.entries[1].id,
+            "rover__twin_moonbase_vessels_rovers_rover_usda"
+        );
+    }
+
+    #[test]
     fn test_default_catalog_is_empty() {
         // Nothing hardcoded — every spawnable is discovered from project USD.
         assert!(SpawnCatalog::default().entries.is_empty());
@@ -789,11 +908,9 @@ mod tests {
     /// A scene missing the attribute would silently show no tooltip — this
     /// test fails loud instead, the moment a scene is added without one.
     ///
-    /// Reads the shipped files through the SAME parser the app uses. It used to
-    /// go through a `read_usd_description(path)` helper that no longer exists,
-    /// because reading a file is now [`lunco_assets::asset_read`]'s job and
-    /// understanding it is [`parse_spawn_meta`]'s — this test is about the
-    /// *data*, so it does its own read and asserts on the meaning.
+    /// Reads the shipped files through the same parser the app uses. Reading
+    /// is [`lunco_assets::asset_read`]'s job and understanding the metadata is
+    /// [`parse_spawn_meta`]'s; this test asserts the shipped data itself.
     #[test]
     fn test_every_sandbox_scene_has_description() {
         let scenes_dir =

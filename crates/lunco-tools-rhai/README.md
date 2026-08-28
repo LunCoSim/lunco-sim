@@ -14,11 +14,14 @@ anywhere — including task closures and event/lifecycle hooks.
 - **`NativeRhaiTool`** — a tool backed by **native Rust** functions (a builder
   closure registers bridge functions). A tool authored in another runtime
   (Python, …) is exposed to rhai as a `NativeRhaiTool`.
-- **`refresh(&mut Engine)`** — binds every registered tool into the engine as a
-  **static module** (script-level `import` aliases are invisible to rhai's pure
-  hook functions; static modules are not). Returns the `(name, source)` pairs.
+- **`bind_registered_tools(&mut Engine)`** — binds every currently registered tool into the
+  supplied engine as a **static module** (script-level `import` aliases are
+  invisible to rhai's pure hook functions; static modules are not). The scenario
+  runtime builds a fresh engine when the registry generation changes, and this
+  binding runs during construction because static modules cannot be removed from
+  an existing Rhai engine.
 - **`register_rhai_tool(name, source)` / `register_native_tool(...)`** —
   convenience registration into the global `lunco-tools` registry.
 
-So `refresh` only ever handles "source-defined" or "native" — every backend
+So `bind_registered_tools` only ever handles "source-defined" or "native" — every backend
 funnels through one of those two paths.

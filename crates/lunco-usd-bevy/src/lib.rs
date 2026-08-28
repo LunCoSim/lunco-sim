@@ -3092,8 +3092,8 @@ pub fn stage_default_prim(reader: &StageView<'_>) -> Option<String> {
 /// A single USD layer's source text, parsed once, positioned on the stage's
 /// `defaultPrim` — with **typed** reads of the attributes authored there.
 ///
-/// For metadata that lives on the root prim (a scene's `lunco:description`, an
-/// asset's `lunco:spawnable`) this is a cheap, composition-free alternative to
+/// For data that lives on the root prim (a scene's `doc` metadata, an asset's
+/// `lunco:spawnable`) this is a cheap, composition-free alternative to
 /// [`compose_file`] / the async `AssetServer` loader — referenced sub-layers are
 /// not consulted, which is correct for root-prim metadata but NOT for attributes
 /// that a reference might override.
@@ -3211,6 +3211,16 @@ pub fn has_api_schema(reader: &UsdData, path: &SdfPath, schema_name: &str) -> bo
             .any(|s| s.as_str() == schema_name),
         _ => false,
     }
+}
+
+/// Whether `path` is `root` or is below it in the USD namespace.
+pub fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    path.as_str() == root
+        || path
+            .as_str()
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 /// First target path of relationship `rel_name` on `prim_path`, as a
@@ -8310,9 +8320,8 @@ def Xform "World"
 
 #[cfg(test)]
 mod default_prim_attr_tests {
-    //! [`DefaultPrim`] — openusd-parse a single layer and read a
-    //! `string`/`token` attribute off its `defaultPrim` (the path the scene
-    //! `lunco:description` tooltip uses).
+    //! [`DefaultPrim`] — parse a single layer and read a `string`/`token`
+    //! attribute off its `defaultPrim`.
     use super::*;
 
     fn attr(text: &str, name: &str) -> Option<String> {
@@ -8326,14 +8335,14 @@ mod default_prim_attr_tests {
         )\n\
         def Xform \"SandboxScene\"\n{\n\
             custom bool lunco:spawnable = false\n\
-            custom string lunco:description = \"Two cubes joined together.\"\n\
+            custom string lunco:testLabel = \"Two cubes joined together.\"\n\
             def Cube \"Ground\"\n{\n}\n\
         }\n";
 
     #[test]
     fn reads_string_attr_off_default_prim() {
         assert_eq!(
-            attr(SCENE, "lunco:description").as_deref(),
+            attr(SCENE, "lunco:testLabel").as_deref(),
             Some("Two cubes joined together.")
         );
     }
@@ -8348,13 +8357,13 @@ mod default_prim_attr_tests {
         // Layer with no `defaultPrim` metadata — even if the attribute exists
         // on a prim, we don't know which prim is the root.
         let src =
-            "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:description = \"x\"\n}\n";
-        assert!(attr(src, "lunco:description").is_none());
+            "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:testLabel = \"x\"\n}\n";
+        assert!(attr(src, "lunco:testLabel").is_none());
     }
 
     #[test]
     fn unparseable_text_is_none() {
-        assert!(attr("this is not USDA", "lunco:description").is_none());
+        assert!(attr("this is not USDA", "lunco:testLabel").is_none());
     }
 }
 

@@ -30,17 +30,11 @@
 //!
 //! ## Adding New Spawn Types
 //!
-//! Add entries to `SpawnCatalog::default()` in `catalog.rs`:
-//!
-//! ```ignore
-//! catalog.add(SpawnableEntry {
-//!     id: "my_rover".into(),
-//!     display_name: "My Rover".into(),
-//!     category: SpawnCategory::Rover,
-//!     source: SpawnSource::UsdFile("vessels/rovers/my_rover.usda".into()),
-//!     default_transform: Transform::default(),
-//! });
-//! ```
+//! Author a USD asset with `lunco:spawnable = true` and place it under the
+//! project asset roots. The catalog discovers it asynchronously and exposes it
+//! through `ListSpawnCatalog`; no Rust catalog entry is required. If two sources
+//! share a file stem, the catalog keeps both and suffixes the later ID with its
+//! source path.
 
 pub mod catalog;
 pub mod commands;

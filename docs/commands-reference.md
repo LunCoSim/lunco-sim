@@ -670,10 +670,12 @@ actually call, with the fields the deserializer actually accepts. See the
  journal one entry per op: an undo peeled off a single op and left the object
  half-attached.)
 
- If any op is rejected (e.g. the host prim doesn't exist), the rest are still
- attempted and each logs its own rejection — the partial result stays visible
- rather than silently half-applied behind a rollback the journal can't see — but
- it is now undone as a whole. Validate the host exists before dispatching.
+ The complete lowered sequence is validated against a document clone before
+ the live document is touched. If any op is rejected (for example because the
+ host prim does not exist), no op is authored and the command logs the
+ rejection. A valid sequence is then committed as one journal change set and
+ undone as one unit. Socket-specific validation also rejects stale or
+ incompatible requests before lowering.
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 

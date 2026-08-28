@@ -649,6 +649,11 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// `Engine::new()` ships rhai's `FileModuleResolver`, which reads arbitrary files
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
+///
+/// # Panics
+///
+/// Panics if the embedded prelude cannot compile or cannot be installed as the
+/// global module. An engine without its prelude is not a valid runtime.
 pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
@@ -1514,20 +1519,16 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // Load the embedded prelude as a global module so its helpers are callable
     // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
     // so the wrappers can reach the native verbs above.
-    match compile_prelude(&engine) {
-        Ok(ast) => match rhai::Module::eval_ast_as_new(rhai::Scope::new(), &ast, &engine) {
-            Ok(module) => {
-                engine.register_global_module(module.into());
-            }
-            Err(e) => error!("[rhai] prelude module build failed: {e}"),
-        },
-        Err(e) => error!("[rhai] prelude compile failed: {e}"),
-    }
+    let prelude = compile_prelude(&engine)
+        .unwrap_or_else(|error| panic!("embedded Rhai prelude must compile: {error}"));
+    let module = rhai::Module::eval_ast_as_new(rhai::Scope::new(), &prelude, &engine)
+        .unwrap_or_else(|error| panic!("embedded Rhai prelude must build: {error}"));
+    engine.register_global_module(module.into());
 
     // Register the importable tool libraries as static modules (callable as
     // `libname::fn`). AFTER the prelude global module so their functions can
     // resolve prelude helpers at run time.
-    crate::tool_libs::refresh(&mut engine);
+    crate::tool_libs::bind_registered_tools(&mut engine);
 
     engine
 }
@@ -1755,9 +1756,9 @@ struct RhaiScenarioState {
 /// `ScenarioDriver<RhaiScenarioRuntime>` (which owns the neutral lifecycle FSM).
 pub struct RhaiScenarioRuntime {
     /// `Arc` so the native task-tree ctx (which must be `'static` — see
-    /// `task_tree::TaskCtx`) can own a handle for closure calls; the runtime
-    /// is single-threaded per access, so `Arc::get_mut` for tool hot-reload
-    /// always succeeds (no ctx outlives its tick).
+    /// `task_tree::TaskCtx`) can own a handle for closure calls. Tool hot-reload
+    /// normally mutates this uniquely-owned engine; if a task context still
+    /// holds a clone, maintenance defers the rebuild until the next tick.
     engine: std::sync::Arc<Engine>,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
     /// Content-addressed memo of compile *outcomes*, keyed by `fnv1a64(source)`.
@@ -1783,7 +1784,7 @@ pub struct RhaiScenarioRuntime {
     /// own body executes.
     prelude_ast: AST,
     /// Tool-library generation the engine's static modules were built from; a
-    /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
+    /// mismatch rebuilds the engine so removed modules stop being callable too.
     tool_gen: u64,
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
@@ -2124,7 +2125,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     }
 
     fn maintain(&mut self) {
-        // Hot-reload tool libraries if any were (re)registered since last pass.
+        // Rebuild the static tool-module set if any libraries were
+        // (re)registered since the last pass. Rhai has no unregister operation
+        // for static modules, so refreshing the existing Engine would leave a
+        // removed library callable indefinitely.
         let cur = crate::tool_libs::generation();
         if self.tool_gen == cur {
             return;
@@ -2135,19 +2139,24 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // `Arc` clone, and script input is untrusted. This used to
         // `.expect("engine Arc must be unique outside a task tick")`, i.e. a
         // script could **take down the whole application**. It must not: a
-        // contended refresh is deferred, never fatal.
+        // contended rebuild is deferred, never fatal.
         match std::sync::Arc::get_mut(&mut self.engine) {
             Some(engine) => {
-                crate::tool_libs::refresh(engine);
+                let mut rebuilt = build_world_engine(self.sources.clone());
+                rebuilt.on_print(|s| info!("[rhai] {s}"));
+                let prelude_ast = compile_prelude(&rebuilt)
+                    .unwrap_or_else(|e| panic!("prelude must compile: {e}"));
+                *engine = rebuilt;
+                self.prelude_ast = prelude_ast;
                 self.tool_gen = cur;
             }
             None => {
                 // `tool_gen` is deliberately NOT advanced — the next `maintain`
                 // (once the borrow is gone) still sees the generation mismatch and
-                // performs the refresh. Worst case a hot-reloaded tool library
+                // performs the rebuild. Worst case a hot-reloaded tool library
                 // lands one tick late.
                 bevy::log::warn_once!(
-                    "[rhai] tool-library hot-reload deferred: the engine is still borrowed by a \
+                    "[rhai] tool-library rebuild deferred: the engine is still borrowed by a \
                      live task/re-entrant script call. Retrying next tick."
                 );
             }
@@ -2572,17 +2581,16 @@ pub fn eval_with_world_as(
 mod tests {
     //! Syntax-validate the embedded prelude + shipped example scenarios. Rust's
     //! `cargo check` can't see inside the `.rhai` files (they're `include_str!`),
-    //! so a parse error would otherwise only surface at runtime as a logged
-    //! "prelude compile failed". `compile` checks syntax (unresolved function
+    //! so a parse error would otherwise only surface when the engine is built.
+    //! `compile` checks syntax (unresolved function
     //! calls resolve at runtime, so calling prelude verbs here is fine).
 
     /// **H6** — a re-entrant call into the bridge must not take down the app.
     ///
-    /// `maintain()` used to `.expect("engine Arc must be unique outside a task
-    /// tick")`. A live `RhaiTaskCtx` (or any script/REPL call that re-enters the
-    /// bridge) holds an `Arc<Engine>` clone, so that expectation is violable from
-    /// **script input** — and violating it panicked the whole application. It must
-    /// now degrade: skip the hot-reload, keep the stale generation, retry later.
+    /// A live `RhaiTaskCtx` (or any script/REPL call that re-enters the bridge)
+    /// can hold an `Arc<Engine>` clone while maintenance runs. In that case the
+    /// rebuild is deferred, the current generation remains authoritative, and
+    /// maintenance retries on the next tick.
     #[test]
     fn reentrant_engine_borrow_defers_reload_instead_of_panicking() {
         use crate::scenario::ScenarioRuntime;
@@ -2600,7 +2608,8 @@ mod tests {
             "registering a library must bump the generation"
         );
 
-        // The line under test. Before the fix: panic → app down.
+        // A contended maintain must return without panicking or advancing the
+        // generation until the engine can be rebuilt.
         let deferred_generation = rt.tool_gen;
         rt.maintain();
 
@@ -2610,16 +2619,40 @@ mod tests {
         );
         assert_ne!(
             rt.tool_gen, bumped,
-            "the deferred refresh must NOT mark itself done — it has to retry"
+            "the deferred rebuild must NOT mark itself done — it has to retry"
         );
 
         // Once the re-entrant borrow is gone, the very next maintain performs the
-        // refresh it deferred: degraded, not dropped.
+        // rebuild it deferred: degraded, not dropped.
         drop(borrowed);
         rt.maintain();
         assert_eq!(
             rt.tool_gen, bumped,
-            "the deferred hot-reload lands on the next tick"
+            "the deferred tool rebuild lands on the next tick"
+        );
+    }
+
+    #[test]
+    fn removed_tool_is_not_callable_after_engine_maintenance() {
+        use crate::scenario::ScenarioRuntime;
+
+        let name = "h6_removed_tool_probe";
+        crate::tool_libs::register_tool_library(name, "fn ping() { 42 }");
+        let mut rt = super::RhaiScenarioRuntime::default();
+        let before: i64 = rt
+            .engine
+            .eval(&format!("{name}::ping()"))
+            .expect("registered tool must be callable");
+        assert_eq!(before, 42);
+
+        assert!(lunco_tools::unregister(name).is_some());
+        let removed_generation = crate::tool_libs::generation();
+        assert_ne!(rt.tool_gen, removed_generation);
+        rt.maintain();
+
+        assert!(
+            rt.engine.eval::<i64>(&format!("{name}::ping()")).is_err(),
+            "removing a tool must remove its static module from the scenario engine"
         );
     }
 
@@ -2655,7 +2688,7 @@ mod tests {
     fn prelude_and_examples_parse() {
         // Use the SAME raised expr-depth the scenario engine uses at runtime — the
         // prelude's sequencer legitimately needs it; a stock engine's lower default
-        // rejects it (this test used to fail on that pre-existing mismatch).
+        // rejects it.
         let mut engine = rhai::Engine::new();
         crate::rhai_limits::apply(&mut engine);
         super::compile_prelude(&engine).expect("prelude must parse");

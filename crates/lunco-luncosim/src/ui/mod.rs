@@ -1200,11 +1200,10 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        // Each scene's `lunco:description`, straight from the catalogue's
+        // Each scene's standard USD `doc` metadata, straight from the catalogue's
         // metadata store — the scan already read and parsed every project
         // `*.usda`, so re-reading them here would be a second parse of the
-        // same default prim of the same file. (It used to be exactly that:
-        // a `SceneDescCache` that lazily re-parsed on first hover.)
+        // same default prim of the same file.
         //
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.

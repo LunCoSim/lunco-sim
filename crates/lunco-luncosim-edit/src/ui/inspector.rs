@@ -116,6 +116,7 @@ pub(crate) struct MountSnapRequested {
 pub(crate) struct AttachAtSocketRequested {
     entity: Entity,
     host_path: String,
+    socket_path: String,
     name: String,
     asset: String,
     accepts: String,
@@ -337,6 +338,10 @@ pub(crate) fn on_usd_variant_edit_requested(
 pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        let Some(doc) = resolve_doc_for_entity(world, request.entity) else {
+            return;
+        };
+        let label = format!("Snap mount {}", request.part);
         let ops = lunco_usd::attach::realign_component_ops(
             LayerId::root(),
             request.part,
@@ -344,7 +349,7 @@ pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut comma
             request.placement,
             request.rotate,
         );
-        apply_usd_ops(world, request.entity, ops);
+        lunco_usd::commands::apply_ops_as_change_set(world, doc, label, ops);
     });
 }
 
@@ -359,6 +364,7 @@ pub(crate) fn on_attach_at_socket_requested(
             world,
             request.entity,
             request.host_path,
+            request.socket_path,
             request.name,
             request.asset,
             request.accepts,
@@ -1589,8 +1595,10 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
         .default_open(true)
         .show(ui, |ui| {
             let mut snap: Option<(String, String, [f64; 3], [f64; 3])> = None;
-            // (asset, child name, host, accepted plug kind, joint token, axis, socket frame)
+            // (asset, child name, host, socket path, accepted plug kind,
+            //  joint token, axis, socket frame)
             let mut attach: Option<(
+                String,
                 String,
                 String,
                 String,
@@ -1657,6 +1665,7 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                                         asset.clone(),
                                         item.socket.clone(),
                                         host_path.clone(),
+                                        item.socket_path.clone(),
                                         item.accepts.clone(),
                                         item.joint.clone(),
                                         item.axis.clone(),
@@ -1687,11 +1696,14 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 });
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some((asset, name, host, accepts, joint_tok, axis, socket_frame)) = attach {
+            if let Some((asset, name, host, socket_path, accepts, joint_tok, axis, socket_frame)) =
+                attach
+            {
                 if let Some(joint) = attach_joint_from(&joint_tok, axis.as_deref()) {
                     ctx.trigger(AttachAtSocketRequested {
                         entity,
                         host_path: host,
+                        socket_path,
                         name,
                         asset,
                         accepts,
@@ -1716,6 +1728,7 @@ fn attach_component_at_socket(
     world: &mut World,
     entity: Entity,
     host_path: String,
+    socket_path: String,
     name: String,
     asset: String,
     accepts: String,
@@ -1780,6 +1793,7 @@ fn attach_component_at_socket(
     };
     let spec = AttachSpec::from_mount(
         LayerId::root(),
+        socket_path,
         host_path,
         name,
         asset,
@@ -1787,6 +1801,13 @@ fn attach_component_at_socket(
         socket_frame,
         plug.frame,
     );
+    let spec = match spec {
+        Ok(spec) => spec,
+        Err(error) => {
+            report_inspector_error(world, format!("Mount frame is unsupported: {error}"));
+            return;
+        }
+    };
     world.trigger(lunco_usd::commands::AttachComponent { doc, spec });
 }
 
@@ -3204,18 +3225,6 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
             }
         });
     ui.separator();
-}
-
-/// Apply a sequence of typed [`UsdOp`]s to `entity`'s backing document, in order —
-/// each journals and inverts on its own. Used by the mount snap, which re-authors a
-/// part's transform + joint anchor as four ops.
-fn apply_usd_ops(world: &mut World, entity: Entity, ops: Vec<UsdOp>) {
-    let Some(doc) = resolve_doc_for_entity(world, entity) else {
-        return;
-    };
-    for op in ops {
-        world.trigger(ApplyUsdOp { doc, op });
-    }
 }
 
 fn apply_usd_path_attribute_change(

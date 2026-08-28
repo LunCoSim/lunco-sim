@@ -14,7 +14,7 @@ To ensure the simulation is a true digital twin, the engine performs a direct 1:
 | **`part`** | **Link** (Entity with `f64` Transform) | A structural component (e.g., chassis, wheel). |
 | **`port`** | **Port** Component (`Digital` / `Physical`) | An interaction point for signals or physical flows. |
 | **`connection`** | **`SimConnection`** (Signal) or **Joint** (Spatial) | The logical or physical link between two ports or parts. |
-| **`interface`** | **PortType** & **Unit** Metadata | Defines the "Contract" of what a port can send/receive. |
+| **`interface`** | Authored domain-kind & **Unit** metadata | Defines the "Contract" of what a port can send/receive. |
 | **`attribute`** | **Component Data** (e.g., `Mass`, `MaxTorque`) | Numerical attributes of a part or port. |
 | **`requirement`**| **Verifier Rule** (from Spec `000` / `005`) | Verification logic (e.g., `Rover.Mass < 50kg`). |
 | **`ItemFlow`** | **Resource Logic** (Spec `014` / `025`) | The transfer of mass/energy over time (Modelica). |

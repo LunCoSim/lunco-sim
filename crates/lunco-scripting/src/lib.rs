@@ -405,7 +405,7 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(feature = "rhai")]
         {
             // Seed built-in tool libraries (formation + the native mathx example)
-            // BEFORE the runtime engine is built, so build_world_engine's refresh
+            // BEFORE the runtime engine is built, so build_world_engine's binding
             // binds them immediately.
             tool_libs::register_builtins();
             // Built-in `policy→rhai` hooks: register each `assets/scripting/policy/

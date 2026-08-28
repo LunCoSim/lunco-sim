@@ -4575,13 +4575,14 @@ fn render_layout(
                 let tabs = perspective_switcher_tabs(&layout);
                 if tabs.len() > 1 {
                     for (id, title, is_active) in tabs {
-                        let label = egui::RichText::new(title.as_str())
-                            .color(if is_active {
-                                theme.colors.text
-                            } else {
-                                theme.colors.subtext1
-                            })
-                            .strong(is_active);
+                        let mut label = egui::RichText::new(title.as_str()).color(if is_active {
+                            theme.colors.text
+                        } else {
+                            theme.colors.subtext1
+                        });
+                        if is_active {
+                            label = label.strong();
+                        }
                         let mut button = egui::Button::new(label)
                             .corner_radius(theme.rounding.button)
                             .selected(is_active);

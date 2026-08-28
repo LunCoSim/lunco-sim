@@ -19,6 +19,18 @@ fn catalog_has(catalog, entry_id) {
     false
 }
 
+fn catalog_ids_are_unique(catalog) {
+    if catalog == () || catalog.entries == () { return false; }
+    let ids = [];
+    for entry in catalog.entries {
+        for id in ids {
+            if id == entry.entry_id { return false; }
+        }
+        ids.push(entry.entry_id);
+    }
+    true
+}
+
 fn on_tick(me) {
     if this.done { return; }
     this.elapsed += dt();
@@ -27,6 +39,12 @@ fn on_tick(me) {
     // successful command dispatch is not an acknowledgement that the entry
     // exists, so wait for the same public catalog the command consumes.
     let catalog = query("ListSpawnCatalog");
+    if catalog != () && !catalog_ids_are_unique(catalog) {
+        this.done = true;
+        report_verdict(["spawn catalog published duplicate entry ids"],
+                       "WIFI LINKS", "WIFI_LINKS");
+        return;
+    }
     if !catalog_has(catalog, "ackermann_rover") ||
        !catalog_has(catalog, "skid_rover") {
         if this.elapsed > 30.0 {

@@ -19,17 +19,9 @@
 //!
 //! ## Adding New Spawn Types
 //!
-//! Add entries to `SpawnCatalog::default()` in `catalog.rs`:
-//!
-//! ```ignore
-//! catalog.add(SpawnableEntry {
-//!     id: "my_rover".into(),
-//!     display_name: "My Rover".into(),
-//!     category: SpawnCategory::Rover,
-//!     source: SpawnSource::UsdFile("vessels/rovers/my_rover.usda".into()),
-//!     default_transform: Transform::default(),
-//! });
-//! ```
+//! Author a USD asset with `lunco:spawnable = true` and place it under the
+//! project asset roots. `lunco-scene-commands` discovers it asynchronously and
+//! publishes it through `ListSpawnCatalog`; no Rust catalog entry is required.
 
 // The headless-safe half — `catalog` (spawn registry), `commands`
 // (SpawnCommandPlugin = runtime spawn/move + NetReplicate tagging), `spawn_meta`,

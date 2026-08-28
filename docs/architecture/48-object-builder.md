@@ -82,7 +82,8 @@ The attach flow is:
 2. Resolve the plug-to-socket placement and rotation in the host's local frame.
 3. Lower `AttachComponent` to `AddPrim`/reference, transforms, the typed joint,
    and authored joint relationships.
-4. Apply the complete operation set through `ApplyUsdOps`.
+4. Apply the complete operation set through the USD command's one journal change
+   set (`apply_ops_as_change_set`).
 
 Program attachment follows the same author-once rule. `AttachProgram` validates a
 complete `ProgramAttachSpec` and lowers it to one USD change set. An empty port
@@ -92,15 +93,19 @@ value exchange. The palette, Rhai prelude, HTTP API, and future editor all call
 this same command.
 
 `AttachSpec::from_mount` and `resolve_mount_placement` own the frame math;
-`attach_component_ops` owns the USD lowering. An authored joint anchor wins. An
-   implicit anchor is derived only when the authoritative USD input is omitted
-   and the component contract defines that default. The editor must never copy a
-   transform number into a second joint field.
+`attach_component_ops` owns the USD lowering. `AttachSpec` has no independent
+joint-anchor input: the lowering always derives `physics:localPos0` from the
+single placement and authors `physics:localPos1` at the part origin. Direct and
+socket attaches therefore share one author-once rule; the editor must never
+copy a transform number into a second joint field.
 
 The same frame contract supports retrofit snap for an already referenced part:
 the inspector re-authors its transform and joint anchor without re-referencing
-the asset. Invalid socket kinds, axes, relationships, or frames fail closed and
-are reported to the author.
+the asset. The command owner validates the host body, socket schema, accepted
+kind, joint/axis contract, relationship, asset plug, and occupancy; invalid
+frames fail closed in the frame resolver and are reported to the author. Socket occupancy is authored as
+`lunco:mount:part` in the same attach change set, and a stale request is rejected
+before any child is lowered.
 
 ## Physics invariants
 

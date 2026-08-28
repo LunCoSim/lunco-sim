@@ -2,14 +2,14 @@
 //!
 //! Provides the two concrete [`Tool`] impls scenarios use today —
 //! [`RhaiTool`] (rhai source) and [`NativeRhaiTool`] (native Rust functions) —
-//! and [`refresh`], which binds every registered tool into a rhai [`Engine`] as
+//! and [`bind_registered_tools`], which binds every registered tool into a rhai [`Engine`] as
 //! a **static module** so it is callable as `name::fn(...)` from anywhere,
 //! including inside `on_tick` (script-level `import` aliases are invisible to
 //! rhai's pure hook functions; static modules are not).
 //!
 //! Extensibility: a tool authored in another runtime (Python, …) is exposed to
 //! rhai as a [`NativeRhaiTool`] whose builder closure registers bridge functions
-//! — so `refresh` only ever needs to handle "source-defined" or "native", and
+//! — so `bind_registered_tools` only ever needs to handle "source-defined" or "native", and
 //! every backend funnels through one of those two paths.
 
 use std::any::Any;
@@ -148,7 +148,7 @@ fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Option<Module>,
 /// bind — one bad tool never blocks the others. Call AFTER the prelude global
 /// module is registered, so tools can resolve prelude helpers + host verbs.
 #[must_use]
-pub fn refresh(engine: &mut Engine) -> Vec<(String, String)> {
+pub fn bind_registered_tools(engine: &mut Engine) -> Vec<(String, String)> {
     let mut errors = Vec::new();
     for tool in lunco_tools::all() {
         match build_module(&tool, engine) {
@@ -196,7 +196,7 @@ mod tests {
         register_rhai_tool("lib", "fn quad(x) { nat::square(x) * 2 }");
 
         let mut engine = Engine::new();
-        let errs = refresh(&mut engine);
+        let errs = bind_registered_tools(&mut engine);
         assert!(errs.is_empty(), "binding errors: {errs:?}");
 
         // native directly
@@ -240,7 +240,7 @@ mod tests {
         lunco_tools::register(Arc::new(BtOnlyTool));
 
         let mut engine = Engine::new();
-        let errs = refresh(&mut engine);
+        let errs = bind_registered_tools(&mut engine);
         assert!(
             !errs.iter().any(|(n, _)| n == "bt_only"),
             "a BT-only tool must not be reported as a bind failure: {errs:?}"
