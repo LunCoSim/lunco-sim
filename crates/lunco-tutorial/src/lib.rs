@@ -1323,6 +1323,7 @@ fn draw_advance_prompt(
     mut egui_ctx: EguiContexts,
     mut pending: ResMut<PendingAdvance>,
     registry: Res<TutorialRegistry>,
+    anchors: Res<lunco_workbench::HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
 ) {
@@ -1340,17 +1341,44 @@ fn draw_advance_prompt(
     let mut proceed = false;
     let mut dismiss = false;
     let screen = ctx.content_rect();
-    // Render at `Order::Tooltip` so the prompt paints above every overlay.
-    egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
-        .order(egui::Order::Tooltip)
-        .fixed_pos(screen.min)
-        .interactable(true)
-        .show(ctx, |ui| {
-            ui.painter().rect_filled(screen, 0.0, theme.tokens.scrim);
-            ui.allocate_rect(screen, egui::Sense::click());
-        });
+    // Keep the application titlebar outside the modal blocker. It contains the
+    // menu and the window-close control, both of which must remain available
+    // while a completion prompt is open. The workbench publishes this rect, so
+    // the modal follows the real titlebar height instead of duplicating it.
+    let blocked = anchors
+        .get("menu.bar")
+        .map(|menu| {
+            egui::Rect::from_min_max(
+                egui::pos2(
+                    screen.left(),
+                    menu.bottom().clamp(screen.top(), screen.bottom()),
+                ),
+                screen.max,
+            )
+        })
+        .filter(|rect| rect.height() > 0.0);
+
+    // Keep the blocking scrim above the workbench background but below
+    // foreground menus and the prompt. The prompt is the only surface that
+    // should own clicks in the blocked content area; menu popups remain usable
+    // because egui renders them at Foreground. Until the workbench publishes
+    // its bar rect, leave out the blocker rather than guessing its bounds.
+    if let Some(blocked) = blocked {
+        egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(blocked.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                ui.painter().rect_filled(blocked, 0.0, theme.tokens.scrim);
+                ui.allocate_rect(blocked, egui::Sense::click());
+            });
+    }
+    // Tooltip is the highest egui order, so the modal controls remain the
+    // topmost interactive surface even though the scrim blocks the rest of
+    // the application.
     egui::Area::new(egui::Id::new("tutorial_advance_prompt"))
         .order(egui::Order::Tooltip)
+        .interactable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {

@@ -21,7 +21,8 @@ downstream crates**.
     domain (electrical, mechanical, signal, thermal, fluid, …), class-
     kind badge backgrounds (model, block, package, …), schematic-
     panel text (muted / heading).
-  - `spacing: SpacingScale` — `window_padding`, `item_spacing`, `button_padding`.
+  - `spacing: SpacingScale` — `window_padding`, `item_spacing`, `button_padding`,
+    and the shared merged-titlebar height/control size.
   - `rounding: RoundingScale` — `window`, `button`, `panel`.
   - `overrides: HashMap<(u64, u64), Color32>` — **user-customisation
     slot**: `register_override(domain, token, colour)` pins a value

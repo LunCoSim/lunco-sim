@@ -44,7 +44,9 @@ decision guide for *where* colors/spacing come from in this repo.
    `ThemeMode`.** Overrides survive the toggle automatically.
 6. **Spacing and rounding come from `theme.spacing` and
    `theme.rounding`**, not ad-hoc `4.0` / `6.0` / `Margin::same(8.0)`
-   literals.
+   literals. The merged workbench title bar uses
+   `theme.spacing.titlebar_height` and
+   `theme.spacing.titlebar_control_size` for one shared alignment contract.
 
 ### Runtime-authored HTML/CSS surfaces
 

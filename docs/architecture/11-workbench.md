@@ -80,9 +80,7 @@ the side panels for tabbed dock trees.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ File  Edit  View  Window  Help        [Cmd+P: search anything]      │ ← menu bar
-├─────────────────────────────────────────────────────────────────────┤
-│ [🏗️ Build] [🎮 Sim] [📊 Analyze] [🗓️ Plan] [🎬 Observe] ⏮▶⏸ 00:14:32│ ← workspace tabs + transport
+│ File  Edit  View  Window  Help   [Cmd+P]   [title]   ⏮▶⏸  [tabs]   │ ← merged title bar
 ├───┬─────────────────────────────────────────────────────┬───────────┤
 │   │                                                     │           │
 │ A │                                                     │           │
@@ -104,13 +102,14 @@ the side panels for tabbed dock trees.
 
 **Layout regions (from outside in):**
 
-1. **Menu bar (top)** — File / Edit / View / Window / Help menus +
-   right-aligned command-palette search bar.
-2. **Transport bar (top, below menu)** — switcher tabs for perspectives that
-   opt into everyday navigation on the left, transport controls (play / pause /
-   step / time scrubber / speed) on the right. Registered authoring
-   perspectives may remain available to tutorials and `ActivatePerspective`
-   without occupying this strip.
+1. **Merged menu/title bar (top)** — File / Edit / View / Window / Help menus,
+   the centered application title, transport pause/resume, perspective tabs,
+   and native window controls. All controls share one full-height row and the
+   title-bar height/control-size tokens from `lunco-theme`; the title remains a
+   visual centre marker and never owns input.
+2. **Workbench body (below the title bar)** — activity bar, side browser,
+   viewport, properties/inspector, and the toggleable bottom panel are arranged
+   around the persistent central viewport.
 3. **Activity bar (far left)** — vertical strip of icons for primary
    navigation (Scene / Subsystems / Assets / Console / Search / Settings).
    Click an icon to open its browser in a slide-in panel.

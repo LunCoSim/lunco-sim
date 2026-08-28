@@ -297,7 +297,21 @@ fn icon_drawing_rect(rect: egui::Rect) -> egui::Rect {
 
 /// Allocate and paint a compact icon-only button with an accessible tooltip.
 pub fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
+    icon_button_sized(ui, icon, tooltip, egui::vec2(28.0, 24.0))
+}
+
+/// Allocate and paint an icon-only button with an explicit hit-area size.
+///
+/// The generic [`icon_button`] keeps its compact size for panels and dialogs.
+/// The merged title bar uses this variant so all of its controls can share the
+/// title-bar design metric without changing unrelated widgets.
+pub fn icon_button_sized(
+    ui: &mut egui::Ui,
+    icon: UiIcon,
+    tooltip: &str,
+    size: egui::Vec2,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if response.hovered() {
         ui.painter()
             .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);

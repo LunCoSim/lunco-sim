@@ -63,7 +63,7 @@ use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
 pub mod icons;
-pub use icons::{icon_button, icon_text_button, paint_icon, UiIcon};
+pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
 
 mod editor_tabs;
 mod menu;
@@ -3633,14 +3633,28 @@ fn render_layout(
             .max_rect(ctx.viewport_rect()),
     );
 
+    let titlebar_height = theme.spacing.titlebar_height;
+    let titlebar_control_size = egui::vec2(
+        theme.spacing.titlebar_control_size.x,
+        theme.spacing.titlebar_control_size.y,
+    );
+
     egui::Panel::top("lunco_workbench_menu_bar")
         // Match the dock tab-bar height so the merged title-bar
         // doesn't read as a thin sliver above thicker rows below.
-        // 30px is roughly egui_dock's default tab strip height with
-        // our font scale.
-        .exact_size(30.0)
+        .exact_size(titlebar_height)
         .show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals.clone_from(visuals);
+        // egui::MenuBar normally creates an 18px compact row of its own.
+        // Make that row use the whole title-bar height before constructing
+        // any menu or control, so every response is centred against the same
+        // rectangle instead of each widget being centred against a different
+        // implicit row height.
+        ui.spacing_mut().interact_size.y = titlebar_height;
+        ui.spacing_mut().item_spacing = egui::vec2(
+            theme.spacing.item_spacing,
+            theme.spacing.item_spacing,
+        );
 
         // Drag region must be registered BEFORE the menu buttons so
         // egui's last-wins hit-testing lets buttons capture clicks
@@ -4505,7 +4519,7 @@ fn render_layout(
                 } else {
                     (UiIcon::Pause, "Pause simulation")
                 };
-                let btn_resp = icon_button(ui, icon, hover);
+                let btn_resp = icon_button_sized(ui, icon, hover, titlebar_control_size);
                 anchor_rects.push(("toolbar.run".to_owned(), btn_resp.rect));
                 if btn_resp.clicked() {
                     world.trigger(lunco_time::SetTimeTransport {
@@ -4532,7 +4546,9 @@ fn render_layout(
                         .get_resource::<window_command::WindowMaximized>()
                         .map(|s| s.0)
                         .unwrap_or(false);
-                    if icon_button(ui, UiIcon::Close, "Close").clicked() {
+                    if icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size)
+                        .clicked()
+                    {
                         world.trigger(window_command::CloseWindow {});
                     }
                     let max_icon = if is_max {
@@ -4541,10 +4557,17 @@ fn render_layout(
                         UiIcon::Maximize
                     };
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
-                    if icon_button(ui, max_icon, max_hover).clicked() {
+                    if icon_button_sized(ui, max_icon, max_hover, titlebar_control_size).clicked() {
                         world.trigger(window_command::MaximizeWindow { maximized: None });
                     }
-                    if icon_button(ui, UiIcon::Minimize, "Minimize").clicked() {
+                    if icon_button_sized(
+                        ui,
+                        UiIcon::Minimize,
+                        "Minimize",
+                        titlebar_control_size,
+                    )
+                    .clicked()
+                    {
                         world.trigger(window_command::MinimizeWindow {});
                     }
                     ui.separator();
@@ -4552,7 +4575,21 @@ fn render_layout(
                 let tabs = perspective_switcher_tabs(&layout);
                 if tabs.len() > 1 {
                     for (id, title, is_active) in tabs {
-                        let button = egui::Button::new(title.as_str()).selected(is_active);
+                        let label = egui::RichText::new(title.as_str())
+                            .color(if is_active {
+                                theme.colors.text
+                            } else {
+                                theme.colors.subtext1
+                            })
+                            .strong(is_active);
+                        let mut button = egui::Button::new(label)
+                            .corner_radius(theme.rounding.button)
+                            .selected(is_active);
+                        if is_active {
+                            button = button
+                                .fill(theme.tokens.surface_raised)
+                                .stroke(egui::Stroke::new(1.0, theme.tokens.accent));
+                        }
                         let response = ui.add(button);
                         anchor_rects.push((perspective_help_anchor(id), response.rect));
                         if response.clicked() && !is_active {
@@ -4667,32 +4704,42 @@ fn render_layout(
         // washed out and active tabs lose contrast against the bar.
         // Bind every interaction state to the theme so tabs read
         // consistently in both modes.
-        // The tab labels themselves remain transparent: the selected state is
-        // communicated by text colour, not by a black rectangle.
+        // The selected tab is a raised, accented surface; inactive tabs stay
+        // quiet until hovered. egui_dock uses `focused` for the active tab in
+        // the focused leaf, so the active treatment must be applied to both
+        // states or the selection disappears as soon as the pane is focused.
         let palette = &theme.colors;
         style.tab.tab_body.bg_fill = if transparent_tab_content {
             egui::Color32::TRANSPARENT
         } else {
             palette.mantle
         };
-        style.tab.active.bg_fill = egui::Color32::TRANSPARENT;
-        style.tab.active.text_color = palette.text;
-        style.tab.active.outline_color = egui::Color32::TRANSPARENT;
+        let active_fill = theme.tokens.surface_raised;
+        let active_outline = theme.tokens.accent;
+        let active_corner_radius = theme.rounding.button;
+        for tab in [
+            &mut style.tab.active,
+            &mut style.tab.focused,
+            &mut style.tab.active_with_kb_focus,
+            &mut style.tab.focused_with_kb_focus,
+        ] {
+            tab.bg_fill = active_fill;
+            tab.text_color = palette.text;
+            tab.outline_color = active_outline;
+            tab.corner_radius = active_corner_radius.into();
+        }
         style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.inactive.text_color = palette.subtext1;
         style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.hovered.bg_fill = egui::Color32::TRANSPARENT;
+        style.tab.inactive.corner_radius = active_corner_radius.into();
+        style.tab.hovered.bg_fill = palette.surface1;
         style.tab.hovered.text_color = palette.text;
-        style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.focused.bg_fill = egui::Color32::TRANSPARENT;
-        style.tab.focused.text_color = palette.mauve;
-        style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
+        style.tab.hovered.outline_color = palette.surface2;
+        style.tab.hovered.corner_radius = active_corner_radius.into();
+        style.tab.inactive_with_kb_focus.bg_fill = palette.surface1;
         style.tab.inactive_with_kb_focus.text_color = palette.text;
-        style.tab.active_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
-        style.tab.active_with_kb_focus.text_color = palette.mauve;
-        style.tab.focused_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
-        style.tab.focused_with_kb_focus.text_color = palette.mauve;
+        style.tab.inactive_with_kb_focus.outline_color = active_outline.linear_multiply(0.6);
+        style.tab.inactive_with_kb_focus.corner_radius = active_corner_radius.into();
         // TODO(egui_dock 0.18 bug — remove when fixed/updated upstream):
         // egui_dock writes a NaN split fraction into the tree from inside its
         // own `show()` every frame a pane is squeezed to zero width — see

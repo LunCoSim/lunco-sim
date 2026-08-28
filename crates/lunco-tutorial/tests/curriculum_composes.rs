@@ -91,6 +91,18 @@ fn the_app_layer_composes_the_tracks_it_offers() {
     }
 }
 
+#[test]
+fn luncosim_offers_the_workbench_navigation_tutorial() {
+    let c = compose_app("luncosim");
+    let lesson = c
+        .lessons
+        .iter()
+        .find(|lesson| lesson.path == "/Perspectives/Overview")
+        .expect("luncosim tutorial catalog includes the perspective tour");
+    assert_eq!(lesson.title, "View, Build & Lunica");
+    assert_eq!(lesson.format, curriculum::LessonFormat::Tour);
+}
+
 /// The retired Object Builder curriculum must not reappear through an app
 /// layer. Its source assets may remain available for lower-level authoring
 /// work, but no shipped app may compose its track or lesson.
