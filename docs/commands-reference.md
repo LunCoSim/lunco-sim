@@ -2312,7 +2312,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Stop the current tutorial: clear the HUD, synchronously stop its host, and
  clear a world declared by that lesson through the normal scene lifecycle.
- A UI-only lesson leaves an unrelated loaded world alone.
+ A UI-only lesson leaves the currently loaded world alone.
  `cmd("SkipTutorial")`.
 
 - *defined in:* `crates/lunco-tutorial/src/lib.rs`

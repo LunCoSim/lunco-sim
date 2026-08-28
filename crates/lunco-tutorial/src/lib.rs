@@ -711,9 +711,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         };
 
         // The outgoing lesson owns its declared world until this boundary. A
-        // replacement lesson that has no world must explicitly release that
-        // ownership; otherwise a UI-only lesson would leave the previous
-        // lesson's simulation alive under a new tutorial host.
+        // replacement lesson that declares another world must release that
+        // ownership before the new mount. A UI-only lesson deliberately keeps
+        // the current scene: its absent payload is the authored contract that
+        // it teaches the world already on screen.
         let outgoing_world = world
             .resource::<TutorialSession>()
             .world
@@ -802,15 +803,6 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             } else {
                 world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
             }
-        } else if outgoing_world.is_some() {
-            world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
-                id,
-                source,
-                world: None,
-                clear_before_load: true,
-                elapsed_secs: 0.0,
-            });
-            world.trigger(lunco_core::SceneTransitionIntent::clear());
         } else {
             start_tutorial_scenario(world, id, source, None);
         }
@@ -2364,7 +2356,7 @@ mod tests {
     }
 
     #[test]
-    fn switching_from_world_lesson_to_ui_lesson_waits_for_clear_completion() {
+    fn switching_from_world_lesson_to_ui_lesson_keeps_current_scene() {
         #[derive(Resource, Default)]
         struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
 
@@ -2425,23 +2417,6 @@ mod tests {
             id: "/Test/UI".into(),
         });
         app.update();
-        assert!(app.world().resource::<TutorialProgress>().current.is_none());
-        assert_eq!(
-            app.world().resource::<TransitionsSeen>().0,
-            vec![
-                lunco_core::SceneTransitionRequest::load(
-                    "lunco://tutorials/sandbox/first_drive.usda",
-                    "",
-                ),
-                lunco_core::SceneTransitionRequest::Clear,
-            ]
-        );
-
-        app.world_mut()
-            .trigger(lunco_core::SceneTransitionCompleted {
-                transition: lunco_core::SceneTransition::Clear,
-            });
-        app.update();
         assert_eq!(
             app.world()
                 .resource::<TutorialProgress>()
@@ -2451,13 +2426,10 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<TransitionsSeen>().0,
-            vec![
-                lunco_core::SceneTransitionRequest::load(
-                    "lunco://tutorials/sandbox/first_drive.usda",
-                    "",
-                ),
-                lunco_core::SceneTransitionRequest::Clear,
-            ]
+            vec![lunco_core::SceneTransitionRequest::load(
+                "lunco://tutorials/sandbox/first_drive.usda",
+                "",
+            )]
         );
     }
 

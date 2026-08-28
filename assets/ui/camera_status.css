@@ -3,9 +3,9 @@
 
 #camera-status-root {
   display: flex;
-  flex-direction: column;
-  row-gap: 4px;
-  padding: 9px 12px;
+  align-items: center;
+  column-gap: 6px;
+  padding: 6px 9px;
   border-width: 1px;
   border-color: var(--panel-border);
   border-radius: 8px;
@@ -16,7 +16,7 @@
 
 #camera-status-label {
   color: var(--accent-color);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -24,7 +24,7 @@
 #camera-status-name {
   overflow: hidden;
   color: var(--text-color);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;

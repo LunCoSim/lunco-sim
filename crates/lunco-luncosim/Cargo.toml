@@ -149,9 +149,6 @@ openusd = { workspace = true }
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
-# The UI diagnostics surface reads the shared authoring report directly. Keep
-# the report's owner explicit instead of reaching through a transitive crate.
-lunco-lint = { path = "../lunco-lint" }
 # The in-scene EDITOR (gizmo, selection, inspector, physics-viz, spawn ghost).
 # Optional + `ui`-only: the server used to link a crate called "edit" purely to get
 # `SpawnEntity`, which now lives in `lunco-scene-commands` above. A `--no-ui` build
