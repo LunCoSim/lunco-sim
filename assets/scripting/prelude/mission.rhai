@@ -71,7 +71,7 @@ fn __obj_ready(m, requires) {
 fn __advance_objective(me, o, now, doc) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
-        mission_checkpoint(me, doc, "objective:" + o.id, "failed");
+        mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "failed");
         emit("OBJECTIVE_FAILED", o.id);
         return o;
     }
@@ -83,7 +83,7 @@ fn __advance_objective(me, o, now, doc) {
         if (now - o.t0) < o.dwell { return o; }
     }
     o.state = "complete";
-    mission_checkpoint(me, doc, "objective:" + o.id, "complete");
+    mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "complete");
     emit("OBJECTIVE_COMPLETE", o.id);
     if o.on_complete != () { o.on_complete.call(me); }
     o

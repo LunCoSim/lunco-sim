@@ -664,11 +664,9 @@ actually call, with the fields the deserializer actually accepts. See the
  joint anchor from the placement so it is authored once, not twice. Lowers to
  the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`].
 
- The whole lowering is applied inside **one journal change set**
- ([`apply_ops_as_change_set`]), so the attach is **one undo unit** — undo removes
- the part, its placement, its joint and the joint's anchors together. (It used to
- journal one entry per op: an undo peeled off a single op and left the object
- half-attached.)
+The whole lowering is applied inside **one journal change set**
+([`apply_ops_as_change_set`]), so the attach is **one undo unit** — undo removes
+the part, its placement, its joint and the joint's anchors together.
 
  The complete lowered sequence is validated against a document clone before
  the live document is touched. If any op is rejected (for example because the
@@ -683,6 +681,26 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: AttachSpec` |  The attachment to perform. |
+
+`AttachSpec` requires an explicit `joint_name`. The component records the exact
+generated joint in `lunco:mount:attachmentJoint`; no consumer derives a joint
+path from the component name.
+
+#### `DetachComponent`
+
+Remove one authored component attachment as one journal/undo unit. The exact
+component path, joint path, and optional occupied socket path are required in
+`crate :: attach :: DetachSpec`. The command clears socket occupancy, removes
+the joint, and removes the component subtree together. It rejects inherited or
+cross-layer ownership and external incoming relationships instead of silently
+cascading their deletion.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` | Target document. |
+| `spec` | `crate :: attach :: DetachSpec` | Explicit component/joint/socket identities and edit target. |
 
 #### `AttachProgram`
 

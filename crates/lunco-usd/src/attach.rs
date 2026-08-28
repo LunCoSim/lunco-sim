@@ -17,8 +17,9 @@
 //!
 //! Socket/plug frame matching (`lunco:mount:*`) computes a placement and calls
 //! the same lowering. The lowering also persists the selected socket's
-//! `lunco:mount:part` relationship, so the composed stage retains the mating
-//! identity instead of having to infer it from transforms.
+//! `lunco:mount:part` relationship and the child's exact generated-joint
+//! relationship, so the composed stage retains the mating identity instead of
+//! having to infer it from transforms or names.
 //!
 //! The lowering is a **pure function** returning `Vec<UsdOp>`; the command in
 //! `commands.rs` applies the complete sequence through one journal change set.
@@ -80,6 +81,9 @@ pub struct AttachSpec {
     pub host_path: String,
     /// Leaf name of the new child prim (e.g. `Wheel_FL`).
     pub name: String,
+    /// Explicit leaf name of the generated joint prim. This is an identity
+    /// supplied by the authoring policy; no reader may derive it from `name`.
+    pub joint_name: String,
     /// The component asset path — the **raw** path, no `@…@` delimiters (those are
     /// USDA syntax, not part of the path), exactly like [`UsdOp::AddPrim`]'s
     /// `reference` field: e.g. `components/mobility/wheel.usda` or
@@ -98,6 +102,58 @@ pub struct AttachSpec {
     pub joint: AttachJoint,
 }
 
+/// Exact authored identity needed to remove one attached component.
+///
+/// The component path, generated-joint path, and optional occupied socket are
+/// supplied by the authoring policy (normally Rhai after a composed query). The
+/// lowering only turns that explicit plan into one compound USD edit; it never
+/// discovers or derives a related prim by name.
+#[derive(Debug, Clone, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+pub struct DetachSpec {
+    /// Layer receiving the complete detach edit.
+    pub edit_target: LayerId,
+    /// Root of the component subtree to remove.
+    pub component_path: String,
+    /// Exact joint prim generated for this component.
+    pub joint_path: String,
+    /// Occupied socket to clear, when this component was socket-attached.
+    pub socket_path: Option<String>,
+}
+
+impl Default for DetachSpec {
+    fn default() -> Self {
+        Self {
+            edit_target: LayerId::root(),
+            component_path: String::new(),
+            joint_path: String::new(),
+            socket_path: None,
+        }
+    }
+}
+
+/// Lower an explicit detach plan to one ordered USD change set.
+pub fn detach_component_ops(spec: &DetachSpec) -> Vec<UsdOp> {
+    let edit_target = spec.edit_target.clone();
+    let mut ops = Vec::new();
+    if let Some(socket_path) = &spec.socket_path {
+        ops.push(UsdOp::SetRelationship {
+            edit_target: edit_target.clone(),
+            path: socket_path.clone(),
+            name: "lunco:mount:part".into(),
+            targets: Vec::new(),
+        });
+    }
+    ops.push(UsdOp::RemovePrim {
+        edit_target: edit_target.clone(),
+        path: spec.joint_path.clone(),
+    });
+    ops.push(UsdOp::RemovePrim {
+        edit_target,
+        path: spec.component_path.clone(),
+    });
+    ops
+}
+
 impl Default for AttachSpec {
     // `Reflect`/`#[Command(default)]` need a Default. Like `UsdOp::default`, this
     // is the never-dispatched identity placeholder — real callers always fill it.
@@ -107,6 +163,7 @@ impl Default for AttachSpec {
             socket_path: None,
             host_path: String::new(),
             name: String::new(),
+            joint_name: String::new(),
             asset: String::new(),
             placement: [0.0; 3],
             rotate_deg: [0.0; 3],
@@ -123,6 +180,7 @@ impl AttachSpec {
         edit_target: LayerId,
         host_path: impl Into<String>,
         name: impl Into<String>,
+        joint_name: impl Into<String>,
         asset: impl Into<String>,
         placement: [f64; 3],
         joint: AttachJoint,
@@ -132,6 +190,7 @@ impl AttachSpec {
             socket_path: None,
             host_path: host_path.into(),
             name: name.into(),
+            joint_name: joint_name.into(),
             asset: asset.into(),
             placement,
             rotate_deg: [0.0; 3],
@@ -158,6 +217,7 @@ impl AttachSpec {
         socket_path: impl Into<String>,
         host_path: impl Into<String>,
         name: impl Into<String>,
+        joint_name: impl Into<String>,
         asset: impl Into<String>,
         joint: AttachJoint,
         socket: bevy::prelude::Transform,
@@ -169,6 +229,7 @@ impl AttachSpec {
             socket_path: Some(socket_path.into()),
             host_path: host_path.into(),
             name: name.into(),
+            joint_name: joint_name.into(),
             asset: asset.into(),
             placement,
             rotate_deg,
@@ -182,9 +243,9 @@ impl AttachSpec {
 
     fn joint_path(&self) -> String {
         format!(
-            "{}/{}_Joint",
+            "{}/{}",
             self.host_path.trim_end_matches('/'),
-            self.name
+            self.joint_name
         )
     }
 
@@ -213,92 +274,99 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
     let joint = spec.joint_path();
     let et = spec.edit_target.clone();
 
-    let mut ops = vec![
-        // 1. Reference the component in as a child of the host body.
-        UsdOp::AddPrim {
+    // Keep the ordered plan explicit: the child exists before its metadata and
+    // transform, and the joint exists before any relationship targets it.
+    let mut ops = vec![UsdOp::AddPrim {
+        edit_target: et.clone(),
+        parent_path: spec.host_path.clone(),
+        name: spec.name.clone(),
+        type_name: None,
+        reference: Some(spec.asset.clone()),
+    }];
+
+    // Persist socket occupancy in the same change set as the child and joint.
+    if let Some(socket_path) = &spec.socket_path {
+        ops.push(UsdOp::SetRelationship {
             edit_target: et.clone(),
-            parent_path: spec.host_path.clone(),
-            name: spec.name.clone(),
-            type_name: None,
-            reference: Some(spec.asset.clone()),
-        },
-        // 2. Place it. This is the ONE authored placement.
-        UsdOp::SetTranslate {
+            path: socket_path.clone(),
+            name: "lunco:mount:part".into(),
+            targets: vec![child.clone()],
+        });
+    }
+
+    // Detach reads this exact component relation; it never reconstructs a name.
+    ops.push(UsdOp::SetApiSchemas {
+        edit_target: et.clone(),
+        path: child.clone(),
+        schemas: vec!["LunCoMountAttachmentAPI".into()],
+    });
+
+    // Rotation is optional, but when present it is authored before translation
+    // to preserve the existing xform-op order.
+    if spec.rotate_deg != [0.0, 0.0, 0.0] {
+        ops.push(UsdOp::SetRotate {
             edit_target: et.clone(),
             path: child.clone(),
-            value: spec.placement,
-        },
-        // 3. The joint prim, typed by the requested kind.
-        UsdOp::AddPrim {
-            edit_target: et.clone(),
-            parent_path: spec.host_path.clone(),
-            name: format!("{}_Joint", spec.name),
-            type_name: Some(spec.joint_type_name().to_string()),
-            reference: None,
-        },
-        // 4/5. Relate the two bodies.
-        UsdOp::SetRelationship {
-            edit_target: et.clone(),
-            path: joint.clone(),
-            name: "physics:body0".into(),
-            targets: vec![spec.host_path.clone()],
-        },
-        UsdOp::SetRelationship {
-            edit_target: et.clone(),
-            path: joint.clone(),
-            name: "physics:body1".into(),
-            targets: vec![child.clone()],
-        },
-        // 6. The anchor — DERIVED from the placement, not typed again. `localPos0`
-        //    is the part's origin in the host frame (== its translate); `localPos1`
-        //    is the part's own origin.
-        UsdOp::SetAttribute {
-            edit_target: et.clone(),
-            path: joint.clone(),
-            name: "physics:localPos0".into(),
-            type_name: "point3f".into(),
-            value: vec3_literal(spec.placement),
-        },
-        UsdOp::SetAttribute {
-            edit_target: et.clone(),
-            path: joint.clone(),
-            name: "physics:localPos1".into(),
-            type_name: "point3f".into(),
-            value: vec3_literal([0.0, 0.0, 0.0]),
-        },
-    ];
-
-    // Persist the mating relation, not only the derived transform. The socket
-    // reader uses this relationship to distinguish an occupied socket from an
-    // empty one, so omitting it would make a successful attach disappear from
-    // the next composed read and allow a duplicate attach.
-    if let Some(socket_path) = &spec.socket_path {
-        ops.insert(
-            1,
-            UsdOp::SetRelationship {
-                edit_target: et.clone(),
-                path: socket_path.clone(),
-                name: "lunco:mount:part".into(),
-                targets: vec![child.clone()],
-            },
-        );
+            value: spec.rotate_deg,
+        });
     }
 
-    // 2b. Orientation, only when the placement carries one (a mount that rotates
-    //     the part). Authored right after the translate so the placement stays one
-    //     unit; the joint anchor is a point (`localPos*`), unaffected by rotation.
-    if spec.rotate_deg != [0.0, 0.0, 0.0] {
-        ops.insert(
-            2,
-            UsdOp::SetRotate {
-                edit_target: et.clone(),
-                path: child,
-                value: spec.rotate_deg,
-            },
-        );
-    }
+    // This is the ONE authored placement.
+    ops.push(UsdOp::SetTranslate {
+        edit_target: et.clone(),
+        path: child.clone(),
+        value: spec.placement,
+    });
 
-    // 7. The moving axis, for the non-fixed joints.
+    // The joint prim, typed by the requested kind.
+    ops.push(UsdOp::AddPrim {
+        edit_target: et.clone(),
+        parent_path: spec.host_path.clone(),
+        name: spec.joint_name.clone(),
+        type_name: Some(spec.joint_type_name().to_string()),
+        reference: None,
+    });
+    // Relate the two bodies.
+    ops.push(UsdOp::SetRelationship {
+        edit_target: et.clone(),
+        path: joint.clone(),
+        name: "physics:body0".into(),
+        targets: vec![spec.host_path.clone()],
+    });
+    ops.push(UsdOp::SetRelationship {
+        edit_target: et.clone(),
+        path: joint.clone(),
+        name: "physics:body1".into(),
+        targets: vec![child.clone()],
+    });
+    // The anchor is derived from the placement, not typed again. `localPos0`
+    // is the part's origin in the host frame; `localPos1` is the part's origin.
+    ops.push(UsdOp::SetAttribute {
+        edit_target: et.clone(),
+        path: joint.clone(),
+        name: "physics:localPos0".into(),
+        type_name: "point3f".into(),
+        value: vec3_literal(spec.placement),
+    });
+    ops.push(UsdOp::SetAttribute {
+        edit_target: et.clone(),
+        path: joint.clone(),
+        name: "physics:localPos1".into(),
+        type_name: "point3f".into(),
+        value: vec3_literal([0.0, 0.0, 0.0]),
+    });
+
+    // The generated joint now exists, so the component can safely point at its
+    // exact identity. Keep this relation in the same compound change set as the
+    // child, joint, and socket occupancy.
+    ops.push(UsdOp::SetRelationship {
+        edit_target: et.clone(),
+        path: child,
+        name: "lunco:mount:attachmentJoint".into(),
+        targets: vec![joint.clone()],
+    });
+
+    // The moving axis, for the non-fixed joints.
     let axis = match spec.joint {
         AttachJoint::Fixed => None,
         AttachJoint::Revolute { axis } | AttachJoint::Prismatic { axis } => Some(axis),
@@ -447,6 +515,7 @@ mod tests {
             socket_path: None,
             host_path: "/RockerBogie/RockerL".into(),
             name: "Wheel_FL".into(),
+            joint_name: "constraint_47".into(),
             asset: "components/mobility/wheel.usda".into(),
             placement: [-0.25, -0.4, -1.2],
             rotate_deg: [0.0, 0.0, 0.0],
@@ -529,7 +598,7 @@ mod tests {
                 .iter()
                 .filter(|op| matches!(op, UsdOp::SetRelationship { .. }))
                 .count(),
-            2
+            3
         );
     }
 
@@ -550,7 +619,7 @@ mod tests {
             let ops = attach_component_ops(&wheel_spec(joint));
             assert!(ops.iter().any(|op| matches!(op,
                 UsdOp::AddPrim { type_name: Some(t), name, .. }
-                    if t == ty && name == "Wheel_FL_Joint")));
+                    if t == ty && name == "constraint_47")));
         }
     }
 
@@ -597,7 +666,7 @@ mod tests {
         let ops = realign_component_ops(
             LayerId::root(),
             "/RockerBogie/RockerL/Wheel_FL",
-            "/RockerBogie/RockerL/Wheel_FL_Joint",
+            "/RockerBogie/RockerL/constraint_47",
             [0.1, -0.2, 0.3],
             [0.0, 90.0, 0.0],
         );
@@ -626,7 +695,7 @@ mod tests {
         let ops = realign_component_ops(
             LayerId::root(),
             "/A/Part",
-            "/A/Part_Joint",
+            "/A/constraint_47",
             [0.0, 0.0, 0.0],
             [0.0, 0.0, 0.0],
         );
@@ -693,9 +762,10 @@ mod tests {
         // (via `new`) does not (the common axis-aligned case stays translate-only).
         let rotated = AttachSpec::from_mount(
             LayerId::root(),
-            "/RockerBogie/RockerL/Mounts/wheel_fl",
+            "/RockerBogie/RockerL/Interfaces/wheel_fl",
             "/RockerBogie/RockerL",
             "Wheel_FL",
+            "constraint_47",
             "components/mobility/wheel.usda",
             AttachJoint::Fixed,
             Transform::from_rotation(Quat::from_rotation_z(30f32.to_radians())),
@@ -713,6 +783,7 @@ mod tests {
             LayerId::root(),
             "/RockerBogie/RockerL",
             "Wheel_FL",
+            "constraint_47",
             "components/mobility/wheel.usda",
             [1.0, 0.0, 0.0],
             AttachJoint::Fixed,
@@ -729,9 +800,10 @@ mod tests {
     fn socket_attach_records_occupancy_relationship() {
         let spec = AttachSpec::from_mount(
             LayerId::root(),
-            "/Rig/Chassis/Mounts/wheel_fl",
+            "/Rig/Chassis/Interfaces/wheel_fl",
             "/Rig/Chassis",
             "Wheel",
+            "constraint_47",
             "components/mobility/wheel.usda",
             AttachJoint::Fixed,
             Transform::IDENTITY,
@@ -741,10 +813,42 @@ mod tests {
         assert!(attach_component_ops(&spec).iter().any(|op| matches!(
             op,
             UsdOp::SetRelationship { path, name, targets, .. }
-                if path == "/Rig/Chassis/Mounts/wheel_fl"
+                if path == "/Rig/Chassis/Interfaces/wheel_fl"
                     && name == "lunco:mount:part"
                     && targets == &["/Rig/Chassis/Wheel".to_string()]
         )));
+        assert!(attach_component_ops(&spec).iter().any(|op| matches!(
+            op,
+            UsdOp::SetRelationship { path, name, targets, .. }
+                if path == "/Rig/Chassis/Wheel"
+                    && name == "lunco:mount:attachmentJoint"
+                    && targets == &["/Rig/Chassis/constraint_47".to_string()]
+        )));
+    }
+
+    #[test]
+    fn detach_lowering_clears_occupancy_before_removing_topology() {
+        let ops = detach_component_ops(&DetachSpec {
+            edit_target: LayerId::root(),
+            component_path: "/Rig/Chassis/Wheel".into(),
+            joint_path: "/Rig/Chassis/constraint_47".into(),
+            socket_path: Some("/Rig/Chassis/Interfaces/wheel_fl".into()),
+        });
+        assert!(matches!(
+            &ops[0],
+            UsdOp::SetRelationship { path, name, targets, .. }
+                if path == "/Rig/Chassis/Interfaces/wheel_fl"
+                    && name == "lunco:mount:part"
+                    && targets.is_empty()
+        ));
+        assert!(matches!(
+            &ops[1],
+            UsdOp::RemovePrim { path, .. } if path == "/Rig/Chassis/constraint_47"
+        ));
+        assert!(matches!(
+            &ops[2],
+            UsdOp::RemovePrim { path, .. } if path == "/Rig/Chassis/Wheel"
+        ));
     }
 
     #[test]

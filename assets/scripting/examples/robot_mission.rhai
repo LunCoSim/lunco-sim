@@ -27,7 +27,7 @@ fn task(me) {
             step(|m| nav_to(m, BASE, SPEED, RADIUS),
                  |m| arrived(m, BASE, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, doc, "phase", "complete");
+                mission_checkpoint(m, doc, "@root@", "phase", "complete");
                 emit("ROBOT_MISSION_COMPLETE", true);
             }),
         ]);
@@ -38,13 +38,13 @@ fn task(me) {
             step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
                  |m| arrived(m, SITE_B, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, doc, "phase", "site_b");
+                mission_checkpoint(m, doc, "@root@", "phase", "site_b");
                 emit("ROBOT_SITE_B_REACHED", true);
             }),
             step(|m| nav_to(m, BASE, SPEED, RADIUS),
                  |m| arrived(m, BASE, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, doc, "phase", "complete");
+                mission_checkpoint(m, doc, "@root@", "phase", "complete");
                 emit("ROBOT_MISSION_COMPLETE", true);
             }),
         ]);
@@ -54,19 +54,19 @@ fn task(me) {
         step(|m| nav_to(m, SITE_A, SPEED, RADIUS),
              |m| arrived(m, SITE_A, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, doc, "phase", "site_a");
+            mission_checkpoint(m, doc, "@root@", "phase", "site_a");
             emit("ROBOT_SITE_A_REACHED", true);
         }),
         step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
              |m| arrived(m, SITE_B, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, doc, "phase", "site_b");
+            mission_checkpoint(m, doc, "@root@", "phase", "site_b");
             emit("ROBOT_SITE_B_REACHED", true);
         }),
         step(|m| nav_to(m, BASE, SPEED, RADIUS),
              |m| arrived(m, BASE, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, doc, "phase", "complete");
+            mission_checkpoint(m, doc, "@root@", "phase", "complete");
             emit("ROBOT_MISSION_COMPLETE", true);
         }),
     ])

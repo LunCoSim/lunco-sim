@@ -653,10 +653,11 @@ def Xform "SandboxScene" (
     # --- Mount-frame demo: snap a child part onto the socket it declares ---
     #
     # The Object Builder retrofit (doc 48 §3.1). `Base` (blue, kinematic) is a
-    # host body advertising ONE socket under its `Mounts` group; `Arm` (yellow) is
+    # host body explicitly advertising ONE socket; `Arm` (yellow) is
     # a CHILD body carrying a plug frame, deliberately authored off to the side so
     # its transform DISAGREES with the socket. Select `Base` → Inspector "🔩 Mount"
-    # → "⟳ Snap Arm" re-derives Arm's `xformOp:translate` + the `Arm_Joint` anchor
+    # → "⟳ Snap Arm" re-derives Arm's `xformOp:translate` + the explicitly linked
+    # joint anchor
     # from the two mount frames, so the part and its constraint both jump onto the
     # socket. "Move the socket, the part follows" — the joint anchor is derived,
     # never a second hand-typed number.
@@ -665,9 +666,10 @@ def Xform "SandboxScene" (
     # authors a host-LOCAL placement, so the part's transform has to be in the host
     # body's frame.
     def Cube "Base" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountHostAPI"]
     )
     {
+        rel lunco:mount:sockets = [</SandboxScene/Base/Interfaces/arm>, </SandboxScene/Base/Interfaces/probe>]
         double size = 1.0
         double3 xformOp:translate = (5.0, 6.0, 5.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -679,9 +681,9 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
         string lunco:net:authority = "opaque"
 
-        # The socket group. A socket is a `kind = "subcomponent"` Xform whose
+        # The socket interface group. A socket is a `kind = "subcomponent"` Xform whose
         # `xformOp:*` IS the socket frame (here 2.5 m above the Base origin).
-        def Xform "Mounts"
+        def Xform "Interfaces"
         {
             def Xform "arm" (
                 kind = "subcomponent"
@@ -713,7 +715,7 @@ def Xform "SandboxScene" (
         }
 
         def Cube "Arm" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI"]
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI", "LunCoMountAttachmentAPI"]
         )
         {
             double size = 1.0
@@ -725,9 +727,10 @@ def Xform "SandboxScene" (
             float physics:mass = 2.0
             string lunco:net:authority = "opaque"
             uniform token lunco:mount:plug = "arm"
-            rel lunco:mount:frame = </SandboxScene/Base/Arm/Mounts/hub>
+            rel lunco:mount:frame = </SandboxScene/Base/Arm/Interfaces/hub>
+            rel lunco:mount:attachmentJoint = </SandboxScene/Base/constraint_arm>
 
-            def Xform "Mounts"
+            def Xform "Interfaces"
             {
                 # Plug at the part origin (identity) → the snap lands Arm's origin
                 # exactly on the socket.
@@ -741,10 +744,10 @@ def Xform "SandboxScene" (
             }
         }
 
-        # The existing joint — the ONE piece the retrofit re-anchors. Named
-        # `<part>_Joint` (the attach convention the snap targets). `localPos0`
-        # currently matches Arm's wrong position; snapping re-derives it.
-        def PhysicsFixedJoint "Arm_Joint"
+        # The existing joint — the ONE piece the retrofit re-anchors. It is the
+        # exact joint linked by Arm's `lunco:mount:attachmentJoint` relation.
+        # `localPos0` currently matches Arm's wrong position; snapping re-derives it.
+        def PhysicsFixedJoint "constraint_arm"
         {
             rel physics:body0 = </SandboxScene/Base>
             rel physics:body1 = </SandboxScene/Base/Arm>

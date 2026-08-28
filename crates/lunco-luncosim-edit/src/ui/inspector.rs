@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::ports::PortRegistry;
+use lunco_core::OpId;
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
@@ -111,6 +112,14 @@ pub(crate) struct MountSnapRequested {
     rotate: [f64; 3],
 }
 
+#[derive(Event, Clone, Debug)]
+pub(crate) struct MountDetachRequested {
+    entity: Entity,
+    component_path: String,
+    joint_path: String,
+    socket_path: Option<String>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Event, Clone, Debug)]
 pub(crate) struct AttachAtSocketRequested {
@@ -118,6 +127,7 @@ pub(crate) struct AttachAtSocketRequested {
     host_path: String,
     socket_path: String,
     name: String,
+    joint_name: String,
     asset: String,
     accepts: String,
     joint: lunco_usd::attach::AttachJoint,
@@ -339,11 +349,24 @@ pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut comma
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_for_entity(world, request.entity) else {
+            report_inspector_error(world, "Selected mount host is not document-backed");
+            return;
+        };
+        let Some(edit_target) =
+            mount_attachment_edit_target(world, doc, &request.part, &request.joint)
+        else {
+            report_inspector_error(
+                world,
+                format!(
+                    "Mount attachment {} and {} are not authored in one editable layer",
+                    request.part, request.joint
+                ),
+            );
             return;
         };
         let label = format!("Snap mount {}", request.part);
         let ops = lunco_usd::attach::realign_component_ops(
-            LayerId::root(),
+            edit_target,
             request.part,
             request.joint,
             request.placement,
@@ -351,6 +374,67 @@ pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut comma
         );
         lunco_usd::commands::apply_ops_as_change_set(world, doc, label, ops);
     });
+}
+
+pub(crate) fn on_mount_detach_requested(trigger: On<MountDetachRequested>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = resolve_doc_for_entity(world, request.entity) else {
+            report_inspector_error(world, "Selected mount host is not document-backed");
+            return;
+        };
+        let Some(edit_target) =
+            mount_attachment_edit_target(world, doc, &request.component_path, &request.joint_path)
+        else {
+            report_inspector_error(
+                world,
+                format!(
+                    "Mount attachment {} and {} are not authored in one editable layer",
+                    request.component_path, request.joint_path
+                ),
+            );
+            return;
+        };
+        world.trigger(lunco_usd::commands::DetachComponent {
+            doc,
+            spec: lunco_usd::attach::DetachSpec {
+                edit_target,
+                component_path: request.component_path,
+                joint_path: request.joint_path,
+                socket_path: request.socket_path,
+            },
+        });
+    });
+}
+
+/// Choose the layer that owns an attachment's topology. Mount actions are
+/// authored into the same layer as the component and its exact joint; they do
+/// not guess from a prim name or blindly write the document root. Runtime
+/// attachments are preferred because that overlay is the active authoring
+/// opinion for generated component assemblies.
+fn mount_attachment_edit_target(
+    world: &World,
+    doc: lunco_doc::DocumentId,
+    component_path: &str,
+    joint_path: &str,
+) -> Option<LayerId> {
+    let registry =
+        world.resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>();
+    let document = registry.host(doc)?.document();
+    let paths = [
+        lunco_usd_bevy::SdfPath::new(component_path).ok()?,
+        lunco_usd_bevy::SdfPath::new(joint_path).ok()?,
+    ];
+    [LayerId::runtime(), LayerId::root()]
+        .into_iter()
+        .find(|layer| {
+            let data = if layer.is_runtime() {
+                document.runtime_data()
+            } else {
+                document.data()
+            };
+            paths.iter().all(|path| data.spec(path).is_some())
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -366,6 +450,7 @@ pub(crate) fn on_attach_at_socket_requested(
             request.host_path,
             request.socket_path,
             request.name,
+            request.joint_name,
             request.asset,
             request.accepts,
             request.joint,
@@ -1584,9 +1669,12 @@ fn attach_joint_from(joint: &str, axis: Option<&str>) -> Option<lunco_usd::attac
 /// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    let (host_path, items) = match ctx.resource::<crate::ui::usd_mount::UsdMountView>() {
-        Some(v) if v.entity == Some(entity) && !v.items.is_empty() => {
-            (v.host_path.clone(), v.items.clone())
+    let (host_path, items, diagnostics) = match ctx.resource::<crate::ui::usd_mount::UsdMountView>()
+    {
+        Some(v)
+            if v.entity == Some(entity) && (!v.items.is_empty() || !v.diagnostics.is_empty()) =>
+        {
+            (v.host_path.clone(), v.items.clone(), v.diagnostics.clone())
         }
         _ => return,
     };
@@ -1594,7 +1682,11 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     egui::CollapsingHeader::new("Mount")
         .default_open(true)
         .show(ui, |ui| {
+            for diagnostic in &diagnostics {
+                ui.label(format!("⚠ {}: {}", diagnostic.path, diagnostic.message));
+            }
             let mut snap: Option<(String, String, [f64; 3], [f64; 3])> = None;
+            let mut detach: Option<(String, String, Option<String>)> = None;
             // (asset, child name, host, socket path, accepted plug kind,
             //  joint token, axis, socket frame)
             let mut attach: Option<(
@@ -1615,42 +1707,57 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                     };
                     ui.label(format!("{} ({}, {joint})", item.socket, item.accepts));
                 });
-                match (
-                    &item.part_path,
-                    &item.part_leaf,
-                    item.placement,
-                    item.rotate_deg,
-                ) {
-                    (Some(part), Some(leaf), Some(placement), Some(rotate)) => {
+                match (&item.part_path, &item.part_leaf) {
+                    (Some(part), Some(leaf)) => {
                         ui.horizontal(|ui| {
-                            let resp = ui
-                                .add_enabled_ui(!item.aligned, |ui| {
-                                    lunco_workbench::icon_text_button(
-                                        ui,
-                                        lunco_workbench::UiIcon::Refresh,
-                                        &format!("Snap {leaf}"),
-                                        "Align this part to its socket",
-                                    )
-                                })
-                                .inner
-                                .on_disabled_hover_text(
-                                    "This part is already aligned to its socket",
-                                );
-                            if resp.clicked() {
-                                snap = Some((
-                                    part.clone(),
-                                    item.joint_path.clone(),
-                                    placement,
-                                    rotate,
-                                ));
-                            }
-                            if item.aligned {
-                                ui.weak("aligned");
+                            if let Some(joint_path) = item.joint_path.as_deref() {
+                                if let (Some(placement), Some(rotate)) =
+                                    (item.placement, item.rotate_deg)
+                                {
+                                    let resp = ui
+                                        .add_enabled_ui(!item.aligned, |ui| {
+                                            lunco_workbench::icon_text_button(
+                                                ui,
+                                                lunco_workbench::UiIcon::Refresh,
+                                                &format!("Snap {leaf}"),
+                                                "Align this part to its socket",
+                                            )
+                                        })
+                                        .inner
+                                        .on_disabled_hover_text(
+                                            "This part is already aligned to its socket",
+                                        );
+                                    if resp.clicked() {
+                                        snap = Some((
+                                            part.clone(),
+                                            joint_path.to_string(),
+                                            placement,
+                                            rotate,
+                                        ));
+                                    }
+                                    if item.aligned {
+                                        ui.weak("aligned");
+                                    } else {
+                                        ui.weak(format!(
+                                            "→ ({:.2}, {:.2}, {:.2})",
+                                            placement[0], placement[1], placement[2]
+                                        ));
+                                    }
+                                } else {
+                                    ui.weak("invalid mount frame or plug metadata");
+                                }
+                                if ui.button(format!("Remove {leaf}")).clicked() {
+                                    detach = Some((
+                                        part.clone(),
+                                        joint_path.to_string(),
+                                        Some(item.socket_path.clone()),
+                                    ));
+                                }
                             } else {
-                                ui.weak(format!(
-                                    "→ ({:.2}, {:.2}, {:.2})",
-                                    placement[0], placement[1], placement[2]
-                                ));
+                                ui.weak("invalid attachment metadata");
+                                if item.placement.is_none() || item.rotate_deg.is_none() {
+                                    ui.weak("invalid mount frame or plug metadata");
+                                }
                             }
                         });
                     }
@@ -1705,6 +1812,10 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                         host_path: host,
                         socket_path,
                         name,
+                        // This is only a valid USD leaf identity. The attached
+                        // component relation is authoritative; no later reader
+                        // relies on this generated spelling.
+                        joint_name: format!("constraint_{}", OpId::new().0),
                         asset,
                         accepts,
                         joint,
@@ -1713,6 +1824,14 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 } else {
                     warn!("mount socket `{name}` has invalid joint metadata; attach skipped");
                 }
+            }
+            if let Some((component_path, joint_path, socket_path)) = detach {
+                ctx.trigger(MountDetachRequested {
+                    entity,
+                    component_path,
+                    joint_path,
+                    socket_path,
+                });
             }
             #[cfg(target_arch = "wasm32")]
             let _ = &attach;
@@ -1730,6 +1849,7 @@ fn attach_component_at_socket(
     host_path: String,
     socket_path: String,
     name: String,
+    joint_name: String,
     asset: String,
     accepts: String,
     joint: lunco_usd::attach::AttachJoint,
@@ -1796,6 +1916,7 @@ fn attach_component_at_socket(
         socket_path,
         host_path,
         name,
+        joint_name,
         asset,
         joint,
         socket_frame,

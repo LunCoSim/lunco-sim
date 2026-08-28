@@ -480,6 +480,7 @@ impl Plugin for SceneEditUiPlugin {
             .add_observer(inspector::on_usd_attribute_edit_requested)
             .add_observer(inspector::on_usd_variant_edit_requested)
             .add_observer(inspector::on_mount_snap_requested)
+            .add_observer(inspector::on_mount_detach_requested)
             .add_observer(inspector::on_shader_swap_requested)
             .add_observer(inspector::on_shader_create_requested)
             .add_observer(inspector::on_shader_import_requested)

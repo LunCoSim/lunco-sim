@@ -42,16 +42,17 @@ fn on_tick(me) {
             doc: this.doc,
             spec: #{
                 edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Mounts/occupied",
+                socket_path: "/SocketAttachRejection/Chassis/Interfaces/occupied",
                 host_path: "/SocketAttachRejection/Chassis",
                 name: "SecondProbe",
+                joint_name: "constraint_second_probe",
                 asset: "lunco://components/mounting/demo_probe.usda",
                 placement: [0.0, 0.0, 0.0],
                 rotate_deg: [0.0, 0.0, 0.0],
                 joint: "Fixed",
             },
         });
-        if !result.ok { fail("AttachComponent command dispatch failed: " + result.error); return; }
+        if result.ok { fail("occupied socket accepted a second component"); return; }
         this.sent_occupied = true;
         return;
     }
@@ -61,16 +62,17 @@ fn on_tick(me) {
             doc: this.doc,
             spec: #{
                 edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Mounts/incompatible",
+                socket_path: "/SocketAttachRejection/Chassis/Interfaces/incompatible",
                 host_path: "/SocketAttachRejection/Chassis",
                 name: "IncompatibleProbe",
+                joint_name: "constraint_incompatible_probe",
                 asset: "lunco://components/mounting/demo_probe.usda",
                 placement: [0.0, 0.0, 0.0],
                 rotate_deg: [0.0, 0.0, 0.0],
                 joint: "Fixed",
             },
         });
-        if !result.ok { fail("incompatible AttachComponent command dispatch failed: " + result.error); return; }
+        if result.ok { fail("incompatible socket accepted a mismatched plug"); return; }
         this.sent_incompatible = true;
         return;
     }
@@ -80,16 +82,17 @@ fn on_tick(me) {
             doc: this.doc,
             spec: #{
                 edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Mounts/wrong_joint",
+                socket_path: "/SocketAttachRejection/Chassis/Interfaces/wrong_joint",
                 host_path: "/SocketAttachRejection/Chassis",
                 name: "WrongJointProbe",
+                joint_name: "constraint_wrong_joint_probe",
                 asset: "lunco://components/mounting/demo_probe.usda",
                 placement: [0.0, 0.0, 0.0],
                 rotate_deg: [0.0, 0.0, 0.0],
                 joint: "Fixed",
             },
         });
-        if !result.ok { fail("wrong-joint AttachComponent command dispatch failed: " + result.error); return; }
+        if result.ok { fail("socket accepted an incompatible joint"); return; }
         this.sent_wrong_joint = true;
         return;
     }

@@ -10,7 +10,7 @@
 # `Probe` is the `defaultPrim` — what an `AttachSpec`/`AttachComponent` references
 # in. It advertises a PLUG (`lunco:mount:plug` + `rel lunco:mount:frame`) so a host
 # socket that `accepts = "probe"` can snap it on: the Object Builder composes this
-# asset, reads the plug frame off `Mounts/hub`, and computes the placement that
+# asset, reads the plug frame off `Interfaces/hub`, and computes the placement that
 # makes the plug coincide with the socket. The plug sits 0.4 m above the part origin
 # on purpose, so the snap must CANCEL that offset — the visible proof mount frames
 # derive placement rather than trusting a hand-typed transform.
@@ -30,7 +30,7 @@ def Xform "Probe" (
     string lunco:net:authority = "opaque"
 
     uniform token lunco:mount:plug = "probe"
-    rel lunco:mount:frame = </Probe/Mounts/hub>
+    rel lunco:mount:frame = </Probe/Interfaces/hub>
 
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -41,7 +41,7 @@ def Xform "Probe" (
         bool physics:collisionEnabled = true
     }
 
-    def Xform "Mounts"
+    def Xform "Interfaces"
     {
         def Xform "hub" (
             kind = "subcomponent"

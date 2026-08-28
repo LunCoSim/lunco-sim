@@ -41,13 +41,84 @@ The process was not running at the final post-check. Therefore this is startup/r
 
 LunCoSim already has a substantial USD-native object-builder foundation. Do not rebuild the editor from zero.
 
-The next work should add:
+The post-merge priority is to finish the assembly contract before adding broad
+source-format integrations:
 
-1. A formal importer/adaptor pipeline for Blender, CAD, OBJ, STL, and similar sources.
-2. A native procedural builder for primitives, components, and parameterized assemblies.
-3. Automated generation and validation of collision, mass, units, sockets, joints, ports, and provenance metadata.
+1. Roll the existing explicit socket/plug metadata out to real reusable assets.
+2. Add a positive production Rhai acceptance path for catalog, attach, inspect,
+   save, reload, and undo/redo.
+3. Normalize supported glTF/GLB inputs into a validated semantic USD package.
+
+OBJ/STL conversion, Blender export, CAD conversion, and procedural templates
+remain later work. They should consume the same package and assembly contracts,
+not create parallel authoring or runtime paths.
 
 The canonical runtime representation remains a validated USD asset package. External formats are converted into that package before simulation.
+
+## Post-merge assessment
+
+The merge at `c753a0ae0` already landed several items from the original plan:
+
+- `SpawnCatalog` discovers USD files dynamically and calls `ValidateAsset` during
+  native spawnable-asset scanning. Catalog preflight is therefore an existing
+  gate, not a new feature to duplicate.
+- `AttachComponent` has typed lowering, composed socket validation, occupancy,
+  and one journal change set. The existing `socket_attach_rejection` scenario is
+  the negative production gate.
+- `DetachComponent` now clears socket occupancy and removes the exact joint and
+  component subtree through the same validated journal boundary. The
+  `component_detach` scenario is the positive detach gate.
+- Rhai tools and shared scene commands are already usable from the public
+  scripting/API surface. Do not add a second Rust assembly builder or a second
+  tool registry just to support the report's proposed UI.
+
+The remaining work that is justified by the report is narrower:
+
+### Add next
+
+- **Author real interfaces as USD data.** The schemas and readers exist, but
+  among the 64 USD files under `assets/components` and `assets/vessels`, only
+  `assets/components/mounting/demo_probe.usda` currently applies the mount
+  schemas. The sandbox and rejection fixture are examples, not a reusable
+  production catalog. Add explicit sockets/plugs to selected wheels, motors,
+  gearboxes, sensors, lander payloads, and other reusable parts as data-only
+  changes. Do not infer accepted topology from names or geometry.
+- **Prove the positive path in Rhai.** Add one authored production scenario that
+  discovers a catalog entry, attaches it to a compatible socket, observes the
+  composed relationship and joint, exercises undo/redo, saves and reloads, and
+  verifies one child/body with the socket still occupied. Keep Rust tests for
+  lowering and generic lifecycle seams only.
+
+### Add after that contract is stable
+
+- A typed, read-only interface/assembly inspection query for Rhai and HTML. It
+  should report paths, interface kinds, frames, compatibility, and diagnostics;
+  a candidate may carry explicit/derived/heuristic confidence and reasons.
+  Heuristics may rank or explain candidates, but only an explicit validated
+  command may author a relation. Ambiguous candidates remain unresolved.
+- A glTF/GLB normalization path that produces the existing USD wrapper and
+  explicit units, axes, collision, physics, mount, port, and provenance facts.
+  Current glTF support is a visual-asset bridge, not a complete
+  simulation-ready package importer.
+- Provenance only at the existing asset-pipeline owner. A package manifest may
+  be a delivery artifact, but `manifest.json` must not become an internal
+  change-detection or second source-of-truth mechanism; reuse the established
+  `lunco-assets` ownership and format when implementation starts.
+
+### Do not pull in yet
+
+- A universal connector enum or a Rust `Connectable` registry. Mechanical
+  mounts, electrical/data ports, actuator interfaces, and Modelica acausal
+  connectors have different semantics and should remain typed separately.
+- Geometry/name heuristics that silently author sockets, joints, ports, or
+  topology; direct ECS authoring; or opaque `ToolInvocation.args` as the primary
+  assembly protocol.
+- Replacing the native Object Builder with HTML. Existing runtime HTML is
+  retained Bevy UI, not a browser DOM; use it for lightweight authored surfaces,
+  and keep a rich editor in the existing workbench or choose an intentional
+  WebView when DOM behavior is actually required.
+- Blender live synchronization, mesh editing, and a CAD kernel before the
+  deterministic import/package path has a production acceptance test.
 
 ## Already implemented
 
@@ -98,7 +169,7 @@ Use these documents as the assembly conventions:
 
 ```text
 docs/architecture/55-building-vessels-rovers-and-landers.md
-docs/architecture/60-clean-architecture-and-usd-standards.md
+docs/architecture/clean-architecture-and-usd-standards.md
 ```
 
 ## Current format boundary
@@ -304,7 +375,7 @@ docs/architecture/40-asset-io.md
 docs/architecture/41-axes-and-units.md
 docs/architecture/55-building-vessels-rovers-and-landers.md
 docs/architecture/56-asset-resolution-and-cache.md
-docs/architecture/60-clean-architecture-and-usd-standards.md
+docs/architecture/clean-architecture-and-usd-standards.md
 specs/021-asset-pipeline/spec.md
 crates/lunco-luncosim-edit/
 crates/lunco-scene-commands/src/catalog.rs
@@ -316,7 +387,7 @@ crates/lunco-assets/
 
 ## Handover warnings
 
-- The older Object Builder architecture document still has a `Status: Design` header even though later sections document landed implementation phases. Verify against source/runtime behavior.
-- Earlier specifications describe historical gaps and may be stale.
-- The source checkout contains many untracked local files. Inspect `git status` before committing or removing anything.
+- The full catalog, save/reload, and undo/redo acceptance path remains pending;
+  inspect source and runtime evidence before treating it as complete.
+- Inspect `git status` before committing or removing anything.
 - Do not add a second direct-ECS authoring path.

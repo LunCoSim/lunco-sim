@@ -1108,6 +1108,24 @@ pub fn authorable_prim(
     owned.then(|| (doc, prim.path.clone()))
 }
 
+/// A generic delete may not remove a mounted component. The mount command owns
+/// the coordinated removal of its component, exact joint, and socket
+/// occupancy; this guard keeps the generic entity verb from bypassing that
+/// invariant. It deliberately checks the applied schema, not a path spelling.
+fn is_mount_component(
+    registry: &DocumentRegistry<UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    path: &str,
+) -> bool {
+    let Ok(path) = lunco_usd_bevy::SdfPath::new(path) else {
+        return false;
+    };
+    registry.host(doc).is_some_and(|host| {
+        let composed = host.document().composed();
+        lunco_usd_bevy::has_api_schema(&composed, &path, "LunCoMountAttachmentAPI")
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // DeleteEntity — removal, authored
 // ─────────────────────────────────────────────────────────────────────
@@ -1140,9 +1158,24 @@ pub struct DeleteEntity {
 pub fn on_delete_entity(
     trigger: On<DeleteEntity>,
     mut selected: ResMut<crate::SelectedEntities>,
+    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
-    let _ = trigger;
+    let cmd = trigger.event();
+    if let Some(registry) = usd_registry.as_deref() {
+        let attachment = authorable_prim(cmd.target, &q_prim, registry, workspace.as_deref());
+        if let Some((doc, path)) = attachment {
+            if is_mount_component(registry, doc, &path) {
+                warn!(
+                    "DELETE_ENTITY rejected for attached component {}; use DetachComponent",
+                    path
+                );
+                return;
+            }
+        }
+    }
     commands.entity(cmd.target).try_despawn();
     selected.entities.retain(|e| *e != cmd.target);
 }
@@ -1165,6 +1198,13 @@ pub fn persist_delete_to_runtime_layer(
     else {
         return;
     };
+    if is_mount_component(&usd_registry, doc, &path) {
+        warn!(
+            "DELETE_ENTITY persistence rejected for attached component {}; use DetachComponent",
+            path
+        );
+        return;
+    }
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::RemovePrim {

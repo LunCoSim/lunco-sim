@@ -755,8 +755,8 @@ impl JournalResource {
     /// undoes as a whole.
     ///
     /// This is the seam a multi-op command handler wraps itself in.
-    /// `AttachComponent` lowers to seven base `UsdOp`s plus optional socket,
-    /// rotation, and axis ops; without this, each journal entry would be its
+    /// `AttachComponent` and `DetachComponent` lower to multiple `UsdOp`s plus
+    /// optional socket, rotation, and axis ops; without this, each journal entry would be its
     /// own undo unit and one undo could leave the object half-attached. With
     /// it, the complete lowering is one unit.
     ///
