@@ -34,6 +34,11 @@ def Xform "PredictedLandingMarker" (
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
+                # The marker is an emissive annotation.  Explicitly zero the
+                # lit channels so changing the scene light cannot change it.
+                color3f inputs:diffuseColor = (0, 0, 0)
+                color3f inputs:specularColor = (0, 0, 0)
+                float inputs:useSpecularWorkflow = 1
                 color3f inputs:emissiveColor = (0.08, 2.4, 4.0)
                 token outputs:surface
             }
@@ -52,6 +57,7 @@ def Xform "PredictedLandingMarker" (
             double3 xformOp:scale = (0.38, 0.05, 0.10)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool primvars:doNotCastShadows = true
             bool physics:collisionEnabled = false
         }
         def Cube "NX" {
@@ -60,6 +66,7 @@ def Xform "PredictedLandingMarker" (
             double3 xformOp:scale = (0.38, 0.05, 0.10)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool primvars:doNotCastShadows = true
             bool physics:collisionEnabled = false
         }
         def Cube "PZ" {
@@ -68,6 +75,7 @@ def Xform "PredictedLandingMarker" (
             double3 xformOp:scale = (0.10, 0.05, 0.38)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool primvars:doNotCastShadows = true
             bool physics:collisionEnabled = false
         }
         def Cube "NZ" {
@@ -76,6 +84,7 @@ def Xform "PredictedLandingMarker" (
             double3 xformOp:scale = (0.10, 0.05, 0.38)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool primvars:doNotCastShadows = true
             bool physics:collisionEnabled = false
         }
         def Cylinder "Center" (
@@ -86,6 +95,7 @@ def Xform "PredictedLandingMarker" (
             double radius = 0.12
             double height = 0.12
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
+            bool primvars:doNotCastShadows = true
             bool physics:collisionEnabled = false
         }
     }

@@ -301,6 +301,64 @@ fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
     app.world().get::<PbrLook>(entity).cloned()
 }
 
+#[test]
+fn marker_assets_are_emissive_and_shadowless() {
+    const WAYPOINT: &str = include_str!("../../../assets/vessels/markers/waypoint.usda");
+    const LANDING_LOCATION: &str =
+        include_str!("../../../assets/vessels/markers/landing_location.usda");
+    const PREDICTED_LANDING: &str =
+        include_str!("../../../assets/vessels/markers/predicted_landing.usda");
+    let markers = [
+        (
+            "waypoint",
+            WAYPOINT,
+            "/WaypointMarker/Dome",
+        ),
+        (
+            "landing location",
+            LANDING_LOCATION,
+            "/LandingLocationMarker/Dome",
+        ),
+        (
+            "predicted landing PX",
+            PREDICTED_LANDING,
+            "/PredictedLandingMarker/Brackets/PX",
+        ),
+        (
+            "predicted landing NX",
+            PREDICTED_LANDING,
+            "/PredictedLandingMarker/Brackets/NX",
+        ),
+        (
+            "predicted landing PZ",
+            PREDICTED_LANDING,
+            "/PredictedLandingMarker/Brackets/PZ",
+        ),
+        (
+            "predicted landing NZ",
+            PREDICTED_LANDING,
+            "/PredictedLandingMarker/Brackets/NZ",
+        ),
+        (
+            "predicted landing center",
+            PREDICTED_LANDING,
+            "/PredictedLandingMarker/Brackets/Center",
+        ),
+    ];
+
+    for (name, usda, prim_path) in markers {
+        let look = material_for(usda, prim_path);
+        assert!(look.no_shadow_cast, "{name} must not cast shadows");
+        assert_eq!(look.base_color.red, 0.0, "{name} must have no diffuse red");
+        assert_eq!(look.base_color.green, 0.0, "{name} must have no diffuse green");
+        assert_eq!(look.base_color.blue, 0.0, "{name} must have no diffuse blue");
+        assert_eq!(look.specular_tint.red, 0.0, "{name} must have no specular red");
+        assert_eq!(look.specular_tint.green, 0.0, "{name} must have no specular green");
+        assert_eq!(look.specular_tint.blue, 0.0, "{name} must have no specular blue");
+        assert!(look.emissive != LinearRgba::BLACK, "{name} must emit light");
+    }
+}
+
 const OPACITY_STAGE: &str = r#"#usda 1.0
 ( defaultPrim = "World" )
 def Xform "World"

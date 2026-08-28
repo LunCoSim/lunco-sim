@@ -33,6 +33,12 @@ def Xform "LandingLocationMarker" (
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
+                # This marker is a visual annotation, not a lit surface.  Keep
+                # the standard Preview Surface channels explicit so its colour
+                # comes from emission rather than scene lights or normals.
+                color3f inputs:diffuseColor = (0, 0, 0)
+                color3f inputs:specularColor = (0, 0, 0)
+                float inputs:useSpecularWorkflow = 1
                 color3f inputs:emissiveColor = (0.85, 0.12, 0.12)
                 token outputs:surface
             }
@@ -55,6 +61,8 @@ def Xform "LandingLocationMarker" (
         rel material:binding = </LandingLocationMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.95, 0.2, 0.2)]
         float[] primvars:displayOpacity = [0.5]
+        # Navigation annotation: never participate in scene shadow maps.
+        bool primvars:doNotCastShadows = true
         bool physics:collisionEnabled = false
     }
 
