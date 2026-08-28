@@ -14,10 +14,11 @@ change sink fires, and `live_consume::project_stage_changes` reconciles the ECS.
 [`21-domain-usd.md`](21-domain-usd.md) § "Op-driven
 projection". Spawn / remove / reference are USD-first through this path.
 
-*Also built — the gizmo authors USD.* Drag-end fires `MoveEntity`, whose
-`persist_move_to_runtime_layer` observer authors `UsdOp::SetTranslate` into the
-runtime layer. A drag therefore **survives a reload**, and Ctrl+Z goes through the
-Twin journal like every other edit.
+*Also built — the gizmo authors USD.* Drag-end fires `TransformEntity`, whose
+live leg seats the complete active-frame pose and whose persistence observer
+authors translation plus rotation as one runtime-layer USD change set. A drag
+therefore **survives a reload**, and Ctrl+Z goes through the Twin journal as one
+compound edit.
 
 > **Current boundary.** The gizmo and scene-edit commands author USD operations;
 > they do not rely on a private in-memory undo history. If you add a new

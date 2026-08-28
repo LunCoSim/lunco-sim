@@ -2002,6 +2002,11 @@ fn validate_attach_component(
     Ok(())
 }
 
+/// Attach one component asset to a host body as one journalled USD change set.
+///
+/// The spec contains the explicit child identity, generated joint identity,
+/// placement, and optional socket occupancy. Validation and lowering happen at
+/// the USD authoring boundary, so the attach is atomic and undoable.
 #[Command(default)]
 pub struct AttachComponent {
     /// Target document.

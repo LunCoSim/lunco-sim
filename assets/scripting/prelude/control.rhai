@@ -60,12 +60,11 @@ fn set_world_pos(id, p)        { cmd("MoveEntity", #{ entity_id: id, translation
 /// same form `world_rotation(id)` returns. A degenerate quaternion is refused.
 fn set_world_rotation(id, q)   { cmd("RotateEntity", #{ entity_id: id, rotation: q }) }
 
-/// Write both halves of a pose at once. Two commands, not one: they are
-/// separately useful and separately meaningful, and ordering them here keeps
-/// the "position then orientation" convention in one place.
+/// Write both halves of a pose as one scene edit. The runtime converts the
+/// complete active-frame pose to the entity's actual parent/cell storage and
+/// journals one compound USD change set.
 fn set_world_pose(id, p, q) {
-    set_world_pos(id, p);
-    set_world_rotation(id, q);
+    cmd("TransformEntity", #{ entity_id: id, translation: p, rotation: q })
 }
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }

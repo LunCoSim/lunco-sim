@@ -61,9 +61,8 @@ pub(crate) fn on_select_entity_target(
 /// no selection.
 #[Command(default)]
 pub struct SelectEntity {
-    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the
-    /// observer via `ApiEntityRegistry` (same as `FocusEntityById`). `0`
-    /// clears the selection.
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`. `0` clears the selection.
     pub entity_id: u64,
     /// If true, maintains the previous selection and adds this entity to it (like Shift-click)
     pub extend: bool,

@@ -1271,9 +1271,8 @@ fn author_marker_ops(
         type_name: Some("Xform".to_string()),
         reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
     });
-    // The picked point is grid-absolute, the frame authored translates are in
-    // (`persist_move_to_runtime_layer` writes a world position straight into
-    // `SetTranslate`).
+    // The picked point is grid-absolute and is the authored placement value for
+    // this marker, matching the frame used by the live route projection.
     ops.push(UsdOp::SetTranslate {
         edit_target: LayerId::root(),
         path: marker_path.clone(),

@@ -1,15 +1,16 @@
 //! Transform gizmo integration.
 //!
-//! Uses `transform-gizmo-bevy` which **automatically applies transforms** to
-//! entities with `GizmoTarget`. This module handles:
+//! Uses `transform-gizmo-bevy` for render-space picking and manipulation. The
+//! gizmo never owns a scene transform: this module translates its proxy pose
+//! through the active BigSpace frame and the scene-command boundary. It also handles:
 //! - Making bodies kinematic during gizmo drag
 //! - Holding physics integration during manual dragging
 //! - Disabling physics interpolation during manual dragging
 //! - Restoring dynamic bodies when drag ends
 //!
-//! **Architectural Note**: This module provides the "Golden Path" for
-//! high-precision manual editing. It ensures the coordinate system
-//! remains stable by temporarily pausing origin re-centering.
+//! **Architectural Note**: a drag is a transaction over one semantic f64 pose.
+//! Render `Transform` values are only a frontend representation; BigSpace cell
+//! storage and Avian pose state remain owned by their existing adapters.
 
 use std::collections::HashSet;
 
@@ -21,7 +22,26 @@ use bevy::camera::RenderTarget;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_render::SceneCamera;
-use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
+use transform_gizmo_bevy::{
+    GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
+};
+
+/// Configure the standard transform-gizmo frontend to expose only operations
+/// backed by the scene command contract. Scale is deliberately absent until
+/// authored scale and runtime projection have an owner.
+pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
+    for mode in [
+        GizmoMode::ScaleX,
+        GizmoMode::ScaleY,
+        GizmoMode::ScaleZ,
+        GizmoMode::ScaleUniform,
+        GizmoMode::ScaleXY,
+        GizmoMode::ScaleXZ,
+        GizmoMode::ScaleYZ,
+    ] {
+        options.gizmo_modes.remove(mode);
+    }
+}
 
 /// The authoritative lifecycle of a gizmo edit.
 ///
@@ -38,6 +58,14 @@ pub struct GizmoDragSession {
 /// Captures the pre-drag body state for drag lifecycle restoration.
 #[derive(Component)]
 pub struct GizmoDragState {
+    /// The active semantic frame captured at drag start.
+    pub active_frame: Entity,
+    /// The pose before the drag, in `active_frame`.
+    pub original_position: DVec3,
+    pub original_rotation: bevy::math::DQuat,
+    /// The latest valid pose proposed by the gizmo, in `active_frame`.
+    pub current_position: DVec3,
+    pub current_rotation: bevy::math::DQuat,
     /// Original RigidBody type before drag started, or `None` if the entity had
     /// no `RigidBody` at all. `None` must stay `None` on restore: inserting a
     /// `Dynamic` body onto a prim that never had one gives avian a body with no
@@ -89,12 +117,6 @@ pub struct GizmoSelected;
 pub struct GizmoProxy {
     /// The real entity this proxy edits.
     pub target: Entity,
-    /// Proxy pose at the last sync, to diff the gizmo's edit against.
-    last_translation: Vec3,
-    /// Proxy rotation at the last sync.
-    last_rotation: Quat,
-    /// The target parent's render-frame rotation, to map deltas back to local.
-    parent_rotation: Quat,
 }
 
 /// Back-reference so a selection can't spawn two proxies.
@@ -110,19 +132,16 @@ pub fn spawn_gizmo_proxies(
     mut commands: Commands,
 ) {
     for (target, global) in &q_new {
-        let (_, rotation, translation) = global.to_scale_rotation_translation();
+        let (scale, rotation, translation) = global.to_scale_rotation_translation();
         let proxy = commands
             .spawn((
                 Name::new("GizmoProxy"),
-                Transform::from_translation(translation).with_rotation(rotation),
+                Transform::from_translation(translation)
+                    .with_rotation(rotation)
+                    .with_scale(scale),
                 GlobalTransform::default(),
                 GizmoTarget::default(),
-                GizmoProxy {
-                    target,
-                    last_translation: translation,
-                    last_rotation: rotation,
-                    parent_rotation: Quat::IDENTITY,
-                },
+                GizmoProxy { target },
             ))
             .id();
         commands.entity(target).try_insert(HasGizmoProxy { proxy });
@@ -143,98 +162,159 @@ pub fn despawn_gizmo_proxies(
     }
 }
 
-/// Parks each idle proxy on its target's render-frame pose, so the gizmo draws on
-/// the object. Skipped while dragging — then the gizmo owns the proxy.
+/// Parks each proxy on the pose owned by its current side of the transaction.
+///
+/// Idle proxies use the target's propagated render pose. During a drag the
+/// transaction owns an active-frame f64 pose, which is projected back through
+/// BigSpace every frame. That re-projection is what keeps the handle attached
+/// when a cell or floating origin changes between interaction steps.
 ///
 /// Runs after `TransformSystems::Propagate` (big_space's propagation is in that
 /// set), so the `GlobalTransform` read here is this frame's.
 pub fn sync_gizmo_proxies(
-    mut q_proxies: Query<(&mut Transform, &mut GizmoProxy, &GizmoTarget)>,
-    q_targets: Query<(&GlobalTransform, &Transform), Without<GizmoProxy>>,
+    mut q_proxies: Query<(&mut Transform, &GizmoProxy, &GizmoTarget)>,
+    q_targets: Query<&GlobalTransform, Without<GizmoProxy>>,
+    q_drag: Query<&GizmoDragState, Without<GizmoProxy>>,
+    q_grids: Query<&big_space::prelude::Grid>,
 ) {
-    for (mut tf, mut link, gizmo_target) in &mut q_proxies {
-        if gizmo_target.is_active() {
+    for (mut tf, link, _gizmo_target) in &mut q_proxies {
+        if let Ok(state) = q_drag.get(link.target) {
+            let Ok(grid) = q_grids.get(state.active_frame) else {
+                continue;
+            };
+            let (render_position, render_rotation) =
+                lunco_core::coords::grid_absolute_pose_to_render(
+                    grid,
+                    lunco_core::coords::GridPos(state.current_position),
+                    lunco_core::coords::GridRot(state.current_rotation),
+                );
+            tf.translation = render_position.0.as_vec3();
+            tf.rotation = render_rotation.0.as_quat();
+            // Scale editing is intentionally disabled until it has a scene
+            // command and an authored contract of its own.
+            tf.scale = Vec3::ONE;
             continue;
         }
-        let Ok((global, local)) = q_targets.get(link.target) else {
+        let Ok(global) = q_targets.get(link.target) else {
             continue;
         };
-        let (_, rotation, translation) = global.to_scale_rotation_translation();
+        let (scale, rotation, translation) = global.to_scale_rotation_translation();
         tf.translation = translation;
         tf.rotation = rotation;
-        link.last_translation = translation;
-        link.last_rotation = rotation;
-        // Recovered from the pair, so a target parented under a rotated prim maps
-        // its deltas back correctly. Identity for a grid-direct entity.
-        link.parent_rotation = rotation * local.rotation.inverse();
+        tf.scale = scale;
     }
 }
 
-/// Transfers a drag from the proxy onto the real entity as a **delta**.
+/// Transfers the proxy's complete render pose into the real entity.
 ///
-/// A translation delta is frame-invariant (up to the parent's rotation), so this
-/// never converts an absolute pose between the render frame and the grid — the
-/// mistake that produces unbounded cell-drift when a driver writes a render-frame
-/// value into a cell-local field and big_space re-bins it every frame.
-///
-/// Runs in [`lunco_time::InteractionSchedule`]. The gizmo crate updates its
-/// proxy in `Last`, so this consumes that completed render-frame edit on the
-/// next authoritative cycle without making the real entity compete with the
-/// gizmo crate for its `Transform`.
+/// This is deliberately an absolute conversion, never a render-space delta:
+/// render → active-frame f64 → actual parent-local `(CellCoord, Transform)`.
+/// The same active pose also drives Avian through `KinematicDrive`; the
+/// BigSpace physics bridge remains the sole Position/Rotation adapter.
 pub fn apply_gizmo_proxy_drag(
-    mut q_proxies: Query<(&Transform, &mut GizmoProxy, &GizmoTarget)>,
-    mut q_targets: Query<&mut Transform, Without<GizmoProxy>>,
-) {
-    for (tf, mut link, gizmo_target) in &mut q_proxies {
-        if !gizmo_target.is_active() {
-            continue;
-        }
-        let d_translation = tf.translation - link.last_translation;
-        let d_rotation = link.last_rotation.inverse() * tf.rotation;
-        if d_translation.length_squared() < 1e-12 && d_rotation.is_near_identity() {
-            continue;
-        }
-        let inv_parent = link.parent_rotation.inverse();
-        if let Ok(mut target_tf) = q_targets.get_mut(link.target) {
-            target_tf.translation += inv_parent * d_translation;
-            target_tf.rotation = (inv_parent * tf.rotation).normalize();
-        }
-        link.last_translation = tf.translation;
-        link.last_rotation = tf.rotation;
-    }
-}
-
-/// Converts the edited floating-origin pose into the Avian global pose held by
-/// the drag drive.
-///
-/// This is intentionally part of the unpaused interaction schedule. A gizmo
-/// edit is an interface operation, not a physics integration step; it must
-/// continue to update the physics pose while `Time<Physics>` is held.
-pub fn drive_gizmo_kinematic_pose(
-    gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform), Without<GizmoProxy>>,
-    q_parents: Query<&ChildOf>,
+    q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
+    mut world: ParamSet<(
+        Query<(Option<&big_space::prelude::CellCoord>, &Transform), Without<GizmoProxy>>,
+        Query<&mut Transform, Without<GizmoProxy>>,
+        Query<&mut lunco_physics::KinematicDrive, (With<GizmoDragState>, Without<GizmoProxy>)>,
+        Query<&mut GizmoDragState, Without<GizmoProxy>>,
+    )>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
-    mut q_drives: Query<
-        &mut lunco_physics::KinematicDrive,
-        (With<GizmoDragState>, Without<GizmoProxy>),
-    >,
+    q_parents: Query<&ChildOf>,
+    mut commands: Commands,
 ) {
-    for (link, gizmo_target) in &gizmo_targets {
+    for (tf, link, gizmo_target) in &q_proxies {
         if !gizmo_target.is_active() {
             continue;
         }
-        let entity = link.target;
-        let Ok((cell, tf)) = q_spatial.get(entity) else {
+        if !tf.translation.is_finite()
+            || !tf.rotation.is_finite()
+            || tf.rotation.length_squared() < 1.0e-12
+        {
+            continue;
+        }
+
+        let Ok(state_snapshot) = world.p3().get(link.target).map(|state| {
+            (
+                state.active_frame,
+                state.original_position,
+                state.original_rotation,
+            )
+        }) else {
             continue;
         };
-        let Ok((position, rotation)) = lunco_core::coords::world_pose_seeded(
-            entity, cell, tf, &q_parents, &q_grids, &q_spatial,
-        ) else {
+        // A BigSpace handoff invalidates the transaction. Do not reinterpret a
+        // proxy pose captured in the old semantic frame through the new frame
+        // for even one interaction update; Last-stage cleanup will discard it.
+        if state_snapshot.0 != active_frame.0 {
+            continue;
+        }
+        let Ok(grid) = q_grids.get(state_snapshot.0) else {
             continue;
         };
-        if let Ok(mut drive) = q_drives.get_mut(entity) {
+        let (position, rotation) = lunco_core::coords::render_pose_to_grid_absolute(
+            grid,
+            lunco_core::coords::RenderPos::from_render_f32(tf.translation),
+            lunco_core::coords::GridRot::from_render_rotation(tf.rotation),
+        );
+        if !position.0.is_finite() || !rotation.0.is_finite() {
+            continue;
+        }
+
+        let (old_cell, new_cell, new_translation, new_rotation) = {
+            let q_spatial = world.p0();
+            let Ok((old_cell, _)) = q_spatial.get(link.target) else {
+                continue;
+            };
+            let Some((new_cell, new_translation)) =
+                lunco_core::coords::position_in_grid_to_parent_local(
+                    link.target,
+                    position.0,
+                    state_snapshot.0,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                )
+            else {
+                continue;
+            };
+            let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+                link.target,
+                rotation.0,
+                state_snapshot.0,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                continue;
+            };
+            (old_cell.copied(), new_cell, new_translation, new_rotation)
+        };
+
+        if let Ok(mut target_tf) = world.p1().get_mut(link.target) {
+            target_tf.translation = new_translation;
+            target_tf.rotation = new_rotation.as_quat();
+        } else {
+            continue;
+        }
+        match (new_cell, old_cell) {
+            (Some(cell), _) => {
+                commands.entity(link.target).try_insert(cell);
+            }
+            (None, Some(_)) => {
+                commands
+                    .entity(link.target)
+                    .try_remove::<big_space::prelude::CellCoord>();
+            }
+            (None, None) => {}
+        }
+        if let Ok(mut drive) = world.p2().get_mut(link.target) {
             drive.set_pose(position.0, rotation.0);
+        }
+        if let Ok(mut state) = world.p3().get_mut(link.target) {
+            state.current_position = position.0;
+            state.current_rotation = rotation.0;
         }
     }
 }
@@ -272,14 +352,13 @@ pub fn sync_gizmo_dragging_marker(
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
 pub fn capture_gizmo_start(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    simulation_pose: lunco_physics::SimulationPoseQuery,
     q_rigid_bodies: Query<&RigidBody>,
     q_kinematic_state: Query<(
         Has<CustomPositionIntegration>,
         Option<&lunco_physics::KinematicDrive>,
     )>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
     mut session: ResMut<GizmoDragSession>,
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
@@ -298,8 +377,21 @@ pub fn capture_gizmo_start(
             continue;
         }
 
-        // 2. DISABLE INTERPOLATION
-        // Remove interpolation components so the visual mesh doesn't "fight" the gizmo.
+        let original_body = q_rigid_bodies.get(entity).copied().ok();
+        let (had_custom_position_integration, original_drive) = q_kinematic_state
+            .get(entity)
+            .map_or((false, None), |(had_custom, drive)| {
+                (had_custom, drive.copied())
+            });
+
+        // Physical entities come from Avian's exact f64 pose; nonphysical
+        // entities come from the active-frame BigSpace hierarchy.
+        let Some((position, rotation)) = simulation_pose.pose(entity) else {
+            continue;
+        };
+
+        // Disable interpolation only after the authoritative pose has been
+        // captured. A failed pose lookup leaves the entity untouched.
         let (had_translation, had_rotation) = q_interpolation.get(entity).unwrap_or((false, false));
         if had_translation {
             commands.entity(entity).remove::<TranslationInterpolation>();
@@ -308,26 +400,8 @@ pub fn capture_gizmo_start(
             commands.entity(entity).remove::<RotationInterpolation>();
         }
 
-        let original_body = q_rigid_bodies.get(entity).copied().ok();
-        let (had_custom_position_integration, original_drive) = q_kinematic_state
-            .get(entity)
-            .map_or((false, None), |(had_custom, drive)| {
-                (had_custom, drive.copied())
-            });
-
-        // Resolve the initial global pose for the drive. `Transform` is the
-        // cell-local render remainder; the drive speaks Avian's global frame.
-        let Ok((cell, tf)) = q_spatial.get(entity) else {
-            continue;
-        };
         captured_any = true;
         session.targets.insert(entity);
-        let Ok((position, rotation)) = lunco_core::coords::world_pose_seeded(
-            entity, cell, tf, &q_parents, &q_grids, &q_spatial,
-        ) else {
-            session.targets.remove(&entity);
-            continue;
-        };
 
         info!(
             "GIZMO: drag started for {:?}, global_pos={:?}",
@@ -341,6 +415,11 @@ pub fn capture_gizmo_start(
                 CustomPositionIntegration,
                 lunco_physics::KinematicDrive::new(position.0, rotation.0),
                 GizmoDragState {
+                    active_frame: active_frame.0,
+                    original_position: position.0,
+                    original_rotation: rotation.0,
+                    current_position: position.0,
+                    current_rotation: rotation.0,
                     original_body,
                     original_drive,
                     had_custom_position_integration,
@@ -360,42 +439,24 @@ pub fn capture_gizmo_start(
     }
 }
 
-/// Restores dynamic state and re-enables origin tracking when gizmo drag ends —
-/// and **authors the completed move into USD**.
-///
-/// USD is the source of truth for *authored* state, so a gizmo drag must end up
-/// as a document op, not just an ECS `Transform` write (which is lost on reload
-/// and never reaches the Twin journal / networked peers). Before this, a gizmo drag
-/// was invisible to USD: it never saved, never journaled, never replicated, and
-/// Ctrl+Z could not touch it — the same class of gap the old editor-side undo stack
-/// was papering over.
-///
-/// The op-authoring path already exists — [`lunco_scene_commands::commands::MoveEntity`] is observed
-/// by `persist_move_to_runtime_layer`, which authors `UsdOp::SetTranslate` into the
-/// active document's runtime layer (ownership-guarded: a non-document entity simply
-/// doesn't author). The drag itself is deliberately ECS-only, so drag-end fires
-/// exactly ONE `MoveEntity` per completed drag — not one per frame, which would flood
-/// the journal with a thousand ops for a single drag. (That is what
-/// `EditIntent::Interactive` means elsewhere.)
-///
-/// No fight with re-projection: `SetTranslate` lands as an `InfoOnly` change and
-/// `live_consume::apply_translates_live` writes the entity's `Transform` to the
-/// value we just authored (identical to where the drag left it), with no
-/// structural rebuild. The drag is over by then, so the gizmo has nothing to
-/// fight.
+/// Finish or cancel the active gizmo transactions and restore their pre-drag
+/// physics state. A completed transaction emits exactly one
+/// [`lunco_scene_commands::commands::TransformEntity`] command; the command
+/// layer owns the live and USD persistence legs together.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_tf: Query<&Transform>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    mut spatial: ParamSet<(
+        Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+        Query<&mut Transform>,
+    )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
-    q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
-    usd_registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut session: ResMut<GizmoDragSession>,
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
@@ -404,6 +465,9 @@ pub fn restore_gizmo_dynamic(
     let released = mouse
         .as_deref()
         .is_some_and(|buttons| buttons.just_released(MouseButton::Left));
+    let cancelled = keys
+        .as_deref()
+        .is_some_and(|buttons| buttons.just_pressed(KeyCode::Escape));
     for (entity, drag) in q_drag.iter() {
         if !session.targets.contains(&entity) {
             continue;
@@ -416,57 +480,64 @@ pub fn restore_gizmo_dynamic(
         let active = gizmo_targets
             .iter()
             .any(|(link, gt)| link.target == entity && gt.is_active());
-        if active && !released {
+        if active && !released && !cancelled {
             continue;
         }
+
+        let frame_changed = active_frame.0 != drag.active_frame;
+        let cancel_transaction = cancelled || frame_changed;
 
         info!(
             "GIZMO: drag ended for {:?}, restoring coordinate systems",
             entity
         );
 
-        // The pose to author is GRID-ABSOLUTE — the frame `xformOp:translate`
-        // means on a grid-direct prim (spawn plants its whole value at cell 0
-        // and lets big_space re-split it). `tf.translation` is what's LEFT after
-        // that split, so authoring it raw published a position short by
-        // `cell × edge`: at the moonbase the next projection of the prim
-        // re-seated the panel 2 km under the site and it disappeared. In the
-        // luncosim everything sits in cell 0, where the two agree — which is why
-        // this survived until a twin with real cells.
-        let abs = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial);
-
-        // Author the released pose. Same guard every other edit path uses, so a prim
-        // the active document doesn't own is left alone.
-        if let (Some(reg), Ok(tf), Some(abs)) = (usd_registry.as_deref(), q_tf.get(entity), abs) {
-            if let Some((doc, path)) = lunco_scene_commands::commands::authorable_prim(
-                entity,
-                &q_prim,
-                reg,
-                workspace.as_deref(),
-            ) {
-                commands.trigger(lunco_usd::commands::ApplyUsdOp {
-                    doc,
-                    op: lunco_usd::document::UsdOp::SetTranslate {
-                        edit_target: lunco_usd::document::LayerId::runtime(),
-                        path: path.clone(),
-                        value: [abs.0.x, abs.0.y, abs.0.z],
-                    },
-                });
-                // The gizmo rotates as well as translates, so the rotation is part of
-                // the authored pose — `xformOp:rotateXYZ`, Euler degrees.
-                let (rx, ry, rz) = tf.rotation.to_euler(EulerRot::XYZ);
-                commands.trigger(lunco_usd::commands::ApplyUsdOp {
-                    doc,
-                    op: lunco_usd::document::UsdOp::SetRotate {
-                        edit_target: lunco_usd::document::LayerId::runtime(),
-                        path,
-                        value: [
-                            rx.to_degrees() as f64,
-                            ry.to_degrees() as f64,
-                            rz.to_degrees() as f64,
-                        ],
-                    },
-                });
+        if cancel_transaction && !frame_changed {
+            let rollback = {
+                let q_spatial = spatial.p0();
+                q_spatial.get(entity).ok().and_then(|(old_cell, _)| {
+                    let (new_cell, new_translation) =
+                        lunco_core::coords::position_in_grid_to_parent_local(
+                            entity,
+                            drag.original_position,
+                            drag.active_frame,
+                            &q_parents,
+                            &q_grids,
+                            &q_spatial,
+                        )?;
+                    let new_rotation = lunco_core::coords::rotation_in_grid_to_parent_local(
+                        entity,
+                        drag.original_rotation,
+                        drag.active_frame,
+                        &q_parents,
+                        &q_grids,
+                        &q_spatial,
+                    )?;
+                    Some((old_cell.copied(), new_cell, new_translation, new_rotation))
+                })
+            };
+            if let Some((old_cell, new_cell, new_translation, new_rotation)) = rollback {
+                if let Ok(mut tf) = spatial.p1().get_mut(entity) {
+                    tf.translation = new_translation;
+                    tf.rotation = new_rotation.as_quat();
+                    match (new_cell, old_cell) {
+                        (Some(cell), _) => {
+                            commands.entity(entity).try_insert(cell);
+                        }
+                        (None, Some(_)) => {
+                            commands
+                                .entity(entity)
+                                .try_remove::<big_space::prelude::CellCoord>();
+                        }
+                        (None, None) => {}
+                    }
+                }
+            } else {
+                warn!(
+                    ?entity,
+                    active_frame = ?drag.active_frame,
+                    "GIZMO: could not restore cancelled pose; completing physics cleanup without reinterpretation"
+                );
             }
         }
 
@@ -515,20 +586,24 @@ pub fn restore_gizmo_dynamic(
         }
         commands.entity(entity).try_remove::<GizmoDragState>();
 
-        // AUTHOR THE MOVE. Queued AFTER the `original_body` insert above, so the
-        // `MoveEntity` observer captures the pre-drag body kind (not the
-        // Kinematic the drag forced) into `JustMovedKinematic.restore` and
-        // `clear_kinematic_pulse_velocity` hands it back one tick later. An
-        // entity without a `GlobalEntityId` isn't API/USD-addressable, so there
-        // is nothing to author for it.
-        // Grid-absolute, same as the op above — `MoveEntity::translation` is that
-        // frame, not the raw `Transform`.
-        if let (Ok(gid), Some(abs)) = (q_gid.get(entity), abs) {
-            commands.trigger(lunco_scene_commands::commands::MoveEntity {
-                entity_id: gid.get(),
-                translation: abs.0.to_array(),
-            });
+        // The active frame can change during a scene handoff. The old pose is
+        // then intentionally not reinterpreted in the new frame; dropping the
+        // transaction is safer than inventing a cross-frame restore.
+        //
+        // Queue the commit after the original body/drive state above. When the
+        // deferred commands flush, TransformEntity must see the pre-drag body
+        // kind so its JustMovedKinematic marker preserves the same one-tick
+        // restoration contract as TransformEntity.
+        if !cancel_transaction {
+            if let Ok(gid) = q_gid.get(entity) {
+                commands.trigger(lunco_scene_commands::commands::TransformEntity {
+                    entity_id: gid.get(),
+                    translation: drag.current_position.to_array(),
+                    rotation: drag.current_rotation.to_array(),
+                });
+            }
         }
+
         restored_entities.push(entity);
     }
 
@@ -537,7 +612,7 @@ pub fn restore_gizmo_dynamic(
     }
     // A scene reload can despawn a target before the deferred restore runs. Do
     // not leave a dead entity holding the physics transaction open forever.
-    session.targets.retain(|entity| q_tf.get(*entity).is_ok());
+    session.targets.retain(|entity| q_drag.get(*entity).is_ok());
     let session_empty = session.targets.is_empty();
 
     // Resume only after every released drag has authored its root teleport and
@@ -560,11 +635,13 @@ pub fn restore_gizmo_dynamic(
 pub fn drive_gizmo_drag_no_shift(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     q_targets: Query<&GizmoTarget>,
     mut drag_started: MessageWriter<GizmoDragStarted>,
     mut dragging: MessageWriter<GizmoDragging>,
 ) {
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+    if egui_focus.wants_pointer
+        || keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
         || !q_targets.iter().any(|target| target.is_focused())
     {
         // Selection and gizmo interaction are two edges: the first click
@@ -625,6 +702,11 @@ mod tests {
     #[test]
     fn test_gizmo_drag_state_component() {
         let state = GizmoDragState {
+            active_frame: Entity::PLACEHOLDER,
+            original_position: DVec3::ZERO,
+            original_rotation: bevy::math::DQuat::IDENTITY,
+            current_position: DVec3::ZERO,
+            current_rotation: bevy::math::DQuat::IDENTITY,
             original_body: Some(RigidBody::Dynamic),
             original_drive: None,
             had_custom_position_integration: false,
@@ -645,6 +727,11 @@ mod tests {
         // the system fail param validation instead of running the case under test.
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.init_resource::<GizmoDragSession>();
+        let active_frame = app
+            .world_mut()
+            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let vessel = app
@@ -656,6 +743,11 @@ mod tests {
                 lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
                 GizmoDragState {
+                    active_frame,
+                    original_position: DVec3::ZERO,
+                    original_rotation: bevy::math::DQuat::IDENTITY,
+                    current_position: DVec3::ZERO,
+                    current_rotation: bevy::math::DQuat::IDENTITY,
                     original_body: Some(RigidBody::Dynamic),
                     original_drive: None,
                     had_custom_position_integration: false,
@@ -716,6 +808,11 @@ mod tests {
         // the system fail param validation instead of running the case under test.
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.init_resource::<GizmoDragSession>();
+        let active_frame = app
+            .world_mut()
+            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let prop = app
@@ -728,6 +825,11 @@ mod tests {
                 lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
                 GizmoDragState {
+                    active_frame,
+                    original_position: DVec3::ZERO,
+                    original_rotation: bevy::math::DQuat::IDENTITY,
+                    current_position: DVec3::ZERO,
+                    current_rotation: bevy::math::DQuat::IDENTITY,
                     original_body: None,
                     original_drive: None,
                     had_custom_position_integration: false,
@@ -760,116 +862,5 @@ mod tests {
             .get::<lunco_physics::KinematicDrive>(prop)
             .is_none());
         assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
-    }
-
-    /// A2: the gizmo is not an authority — a completed drag authors USD.
-    /// Drag-end fires `MoveEntity`, whose `persist_move_to_runtime_layer`
-    /// observer writes `xformOp:translate` into the document's RUNTIME layer, so
-    /// the move survives a reload instead of living only in ECS.
-    #[test]
-    fn drag_end_authors_the_move_into_the_runtime_layer() {
-        use lunco_doc_bevy::DocumentRegistry;
-        use lunco_usd::document::UsdDocument;
-        use lunco_usd_bevy::usd_data::UsdDataExt;
-        use lunco_usd_bevy::UsdPrimPath;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        // Provides `DocumentRegistry<UsdDocument>` + the `ApplyUsdOp` handler the
-        // persister dispatches into.
-        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
-        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
-        // Same reason as the tests above: `restore_gizmo_dynamic` writes the
-        // physics hold, so the resource must exist for the system to run at all.
-        app.init_resource::<lunco_physics::PhysicsHolds>();
-        app.init_resource::<GizmoDragSession>();
-        app.add_observer(lunco_scene_commands::commands::persist_move_to_runtime_layer);
-        app.add_systems(Update, restore_gizmo_dynamic);
-        let active_frame = app
-            .world_mut()
-            .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
-                Transform::default(),
-            ))
-            .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
-
-        let doc = {
-            let mut reg = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
-                lunco_doc::PathlessOrigin::untitled("Scene.usda"),
-            )
-        };
-        let mut ws = lunco_workspace::Workspace::default();
-        ws.active_document = Some(doc);
-        app.insert_resource(lunco_workspace::WorkspaceResource(ws));
-
-        // An entity mid-drag (has `GizmoDragState`) whose drag just ended (no
-        // active `GizmoTarget`), sitting where the drag left it.
-        let dragged = app
-            .world_mut()
-            .spawn((
-                Transform::from_translation(Vec3::new(3.0, 4.0, 5.0)),
-                RigidBody::Kinematic,
-                CustomPositionIntegration,
-                lunco_physics::KinematicDrive::new(
-                    DVec3::new(3.0, 4.0, 5.0),
-                    bevy::math::DQuat::IDENTITY,
-                ),
-                LinearVelocity::default(),
-                UsdPrimPath {
-                    stage_handle: Handle::default(),
-                    path: "/World".to_string(),
-                },
-                ChildOf(active_frame),
-                lunco_core::GlobalEntityId::from_raw(42),
-                GizmoDragState {
-                    original_body: Some(RigidBody::Dynamic),
-                    original_drive: None,
-                    had_custom_position_integration: false,
-                    had_translation_interpolation: false,
-                    had_rotation_interpolation: false,
-                },
-            ))
-            .id();
-        app.world_mut()
-            .resource_mut::<GizmoDragSession>()
-            .targets
-            .insert(dragged);
-        app.world_mut()
-            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
-            .assign(dragged, lunco_core::GlobalEntityId::from_raw(42));
-
-        for _ in 0..3 {
-            app.update();
-        }
-
-        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        let docu = reg.host(doc).expect("doc alive").document();
-        let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
-        assert_eq!(
-            docu.runtime_data()
-                .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
-            Some([3.0, 4.0, 5.0]),
-            "drag-end must author the move into the runtime layer"
-        );
-        // Save stays base-only: the runtime move never dirties the .usda.
-        assert!(
-            !docu.source().contains("xformOp:translate"),
-            "base layer untouched by a runtime move"
-        );
-        // Drag bookkeeping still completes (body restored, marker cleared).
-        assert!(app.world().get::<GizmoDragState>(dragged).is_none());
-        assert!(app
-            .world()
-            .get::<lunco_physics::KinematicDrive>(dragged)
-            .is_none());
-        assert!(app
-            .world()
-            .get::<CustomPositionIntegration>(dragged)
-            .is_none());
     }
 }

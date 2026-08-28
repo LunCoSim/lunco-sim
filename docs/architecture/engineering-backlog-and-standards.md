@@ -162,7 +162,9 @@ edit.
 **Why:** `UsdDocument` holds `sdf::Data` layers, and `apply()` authors by calling
 `open_doc_stage`, which does `data_to_usda(data)` → parse → `Stage` → author →
 `extract_root_layer_data`. That is a full serialize-and-reparse of the ENTIRE
-document per edit — dragging a gizmo pays it once per frame. It is also the last
+document per edit — a direct document edit pays it once per command. Interactive
+gizmo dragging now commits one compound command at release rather than
+authoring once per frame. It is also the last
 place `sdf::Data` is load-bearing: the read path already retired its flattened
 reader in favour of the composed `StageView`, because a flattened layer sees no
 PCP composition.

@@ -30,7 +30,7 @@
 //! `attrs` are the **authored** values in the prim's own space — that is the
 //! point; an invariant check wants what the file says. `world_position` is in
 //! the semantic active physics frame, matching [`QueryEntity`](crate::entity_query)
-//! and what `MoveEntity` accepts, and is present only when the prim spawned an
+//! and what `TransformEntity` accepts, and is present only when the prim spawned an
 //! entity.
 //!
 //! ## Request

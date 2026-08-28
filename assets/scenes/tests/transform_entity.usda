@@ -1,0 +1,47 @@
+#usda 1.0
+(
+    defaultPrim = "TransformCommandTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production/headless acceptance fixture for the complete active-frame pose
+# command used by the editor's transform gizmo.
+def Xform "TransformCommandTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "TransformEntity must convert a complete active-frame pose through a rotated nested parent and persist one runtime USD change set."
+)
+{
+    def Xform "Assembly"
+    {
+        double3 xformOp:translate = (10.0, 20.0, -30.0)
+        double3 xformOp:rotateXYZ = (0.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def Xform "Target"
+        {
+            double3 xformOp:translate = (5.0, 2.0, -3.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Visual"
+            {
+                double size = 1.0
+                color3f[] primvars:displayColor = [(0.2, 0.8, 0.4)]
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "transform-entity"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/transform_entity.rhai@
+        }
+    }
+}

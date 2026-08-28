@@ -1903,10 +1903,8 @@ pub fn settle_grounded_assemblies(
 /// `Position` next step), so poses must be written through `Position`.
 #[Command(default)]
 pub struct RecoverVessel {
-    /// API-stable global entity id (the `api_id` from `ListEntities`) of the
-    /// vessel to right. `u64` rather than `Entity` for the same reason
-    /// `MoveEntity` uses one: `#[Command(default)]` derives `Default`, and
-    /// `Entity` has none.
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// vessel by `ApiEntityRegistry`.
     pub entity_id: u64,
 }
 

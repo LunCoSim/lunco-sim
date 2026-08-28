@@ -1199,12 +1199,11 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
     // ── Transform component ──────────────────────────────────────
     // The sliders author a **document op**, they do not poke ECS: a committed
-    // edit fires `MoveEntity`, whose observers both move the body (physics
-    // seat + kinematic pulse — the old hand-copied CQ-510 block, now in ONE
-    // place) and author `UsdOp::SetTranslate` into the runtime layer. So an
-    // Inspector move survives reload, journals, syncs, and is undone by the
-    // same Ctrl+Z as a gizmo drag. Committed = drag released or value typed —
-    // per-frame firing during a drag would push one op per frame.
+    // edit fires `MoveEntity`, whose observers seat the body and author
+    // `UsdOp::SetTranslate` into the runtime layer. So an Inspector move
+    // survives reload, journals, syncs, and is undone by the same Ctrl+Z as a
+    // gizmo drag. Committed = drag released or value typed — per-frame firing
+    // during a drag would push one op per frame.
     if ctx.get::<Transform>(entity).is_some() {
         egui::CollapsingHeader::new("Transform")
             .default_open(true)
