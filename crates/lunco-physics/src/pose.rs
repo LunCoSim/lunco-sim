@@ -302,6 +302,7 @@ mod tests {
             .spawn(lunco_core::WorldGridConfig::default().grid())
             .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.register_component::<CellCoord>();
         world.init_resource::<ApiEntityRegistry>();
         let exact = DVec3::new(12.123_456_789, -1_900.987_654_321, -4.0);
         let body = world

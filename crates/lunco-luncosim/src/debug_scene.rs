@@ -87,7 +87,7 @@
 //! |------|---------|
 //! | 0    | a verdict arrived and it was `PASS` |
 //! | 1    | a verdict arrived and it was `FAIL` |
-//! | 2    | `--max-ticks` was exhausted with NO verdict, the app asked to exit before one, or the CLI was malformed |
+//! | 2    | readiness timed out, `--max-ticks` was exhausted with NO verdict, the app asked to exit before one, or the CLI was malformed |
 //!
 //! A hang is a FAILURE, not a pass. A scene whose scenario never reaches its
 //! verdict (deadlocked wheel build, scene that never loaded, script that threw)
@@ -139,7 +139,7 @@
 //! for the blowup. The reported `ticks` counts UPDATES; `sim` is the summed
 //! simulated time, which stays accurate because the jitter is symmetric.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
@@ -153,6 +153,13 @@ use lunco_usd_sim::cosim::{PendingModelicaSource, UsdSourcedCosim};
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
 /// (~25 s), so hitting it means something is genuinely stuck.
 const DEFAULT_MAX_TICKS: u64 = 20_000;
+
+/// Wall-clock budget for scene materialization and asynchronous participant
+/// readiness. Modelica source compilation and solver preparation are owned by
+/// an async worker, so an update count is not a meaningful startup bound: the
+/// same source can complete after different numbers of `app.update()` calls on
+/// different machines. This is a liveness budget, not a performance target.
+const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 420;
 
 /// Fixed default PRNG seed for `--jitter`. A CONSTANT, never a clock read: the
 /// whole value of jitter-mode is that a failure it finds can be replayed.
@@ -177,6 +184,8 @@ struct Cli {
     jitter: f64,
     /// Seed for the jitter PRNG. Irrelevant when `jitter == 0.0`.
     seed: u64,
+    /// Wall-clock budget for scene and participant readiness.
+    readiness_timeout: Duration,
     /// Optional prim path to select and measure selection AABB bounds for.
     #[cfg(feature = "ui")]
     select_prim: Option<String>,
@@ -240,6 +249,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
+    let mut readiness_timeout = Duration::from_secs(DEFAULT_READINESS_TIMEOUT_SECS);
     #[cfg(feature = "ui")]
     let mut select_prim: Option<String> = None;
 
@@ -305,6 +315,19 @@ fn parse_args() -> Result<Cli, String> {
                     .map_err(|_| format!("--seed expects an unsigned integer, got {v:?}"))?;
                 i += 2;
             }
+            "--readiness-timeout" => {
+                let v = need(i, "--readiness-timeout")?;
+                let seconds: u64 = v.parse().map_err(|_| {
+                    format!(
+                        "--readiness-timeout expects a positive integer seconds value, got {v:?}"
+                    )
+                })?;
+                if seconds == 0 {
+                    return Err("--readiness-timeout must be greater than zero".to_string());
+                }
+                readiness_timeout = Duration::from_secs(seconds);
+                i += 2;
+            }
             #[cfg(feature = "ui")]
             "--select-prim" => {
                 select_prim = Some(need(i, "--select-prim")?);
@@ -332,6 +355,7 @@ fn parse_args() -> Result<Cli, String> {
         threads,
         jitter,
         seed,
+        readiness_timeout,
         #[cfg(feature = "ui")]
         select_prim,
     })
@@ -344,7 +368,7 @@ fn usage() -> String {
 
 USAGE:
     luncosim test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
-               [--threads N] [--jitter FRAC] [--seed U64]
+               [--threads N] [--jitter FRAC] [--seed U64] [--readiness-timeout SECS]
     luncosim test --list
 
     --list                   Print `headless`/`graphics` and every discovered test scene,
@@ -380,6 +404,10 @@ DIAGNOSTIC AXES (defaults reproduce the deterministic gate exactly):
                              bug. Still fully reproducible for a given --seed.
     --seed U64               Seed for the jitter PRNG (default {seed}).
                              Same seed => same dt sequence => same outcome.
+    --readiness-timeout SECS Wall-clock budget for scene materialization and
+                             asynchronous Modelica/physics readiness (default
+                             {readiness_timeout}s). A timeout is a no-verdict
+                             failure; it is independent of simulated max-ticks.
 
 EXIT CODES:
     0  scenario emitted PASS
@@ -387,6 +415,7 @@ EXIT CODES:
     2  no verdict (max ticks exhausted, early app exit, or bad arguments)",
         hz = lunco_core::FIXED_HZ,
         seed = DEFAULT_SEED,
+        readiness_timeout = DEFAULT_READINESS_TIMEOUT_SECS,
     )
 }
 
@@ -810,10 +839,15 @@ pub fn run() -> u8 {
     // failure below. Starting scenario time in that state would make a test
     // verdict depend on wall-clock asset or compiler scheduling.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    // Readiness is asynchronous wall-clock work (asset IO plus Modelica source
+    // compilation/solver preparation). A fixed number of updates makes the
+    // result depend on how quickly this process is scheduled, and is therefore
+    // not a valid liveness contract. One budget covers both startup phases so a
+    // slow scene cannot receive two independent extensions.
+    let readiness_started = Instant::now();
     let load_waits = {
-        const MAX_LOAD_WAIT_UPDATES: u32 = 60 * 60;
         let mut waits = 0u32;
-        while waits < MAX_LOAD_WAIT_UPDATES {
+        while readiness_started.elapsed() < cli.readiness_timeout {
             app.update();
             waits += 1;
             std::thread::yield_now();
@@ -858,7 +892,42 @@ pub fn run() -> u8 {
         }
         waits
     };
-    println!("[test] scene-readiness freeze held {load_waits} updates");
+    let scene_readiness_elapsed = readiness_started.elapsed();
+    println!(
+        "[test] scene-readiness freeze held {load_waits} updates ({:.1}s wall)",
+        scene_readiness_elapsed.as_secs_f64()
+    );
+
+    let scene_ready = app
+        .world()
+        .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+        .is_none()
+        && app
+            .world_mut()
+            .query_filtered::<(), With<lunco_usd::UsdPrimPath>>()
+            .iter(app.world())
+            .next()
+            .is_some()
+        && app
+            .world_mut()
+            .query_filtered::<(), (
+                With<lunco_usd::UsdPrimPath>,
+                Without<lunco_usd::UsdSimProcessed>,
+            )>()
+            .iter(app.world())
+            .next()
+            .is_none()
+        && !app.world().resource::<lunco_usd::GroundColliderPending>().0
+        && modelica_sources_terminal(app.world_mut());
+    if !scene_ready {
+        println!(
+            "luncosim test NO-VERDICT  scene={}  — scene materialization did not complete \
+             within the {:.1}s readiness timeout",
+            cli.scene,
+            cli.readiness_timeout.as_secs_f64()
+        );
+        return 2;
+    }
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
     // Modelica compilation is asynchronous, and a successful compile still
@@ -866,10 +935,9 @@ pub fn run() -> u8 {
     // body's physics hold. Run that exchange with scenario execution disabled;
     // otherwise `on_start` would consume its authored settling interval while
     // its joints are still parked and its force ports do not yet exist.
-    const MAX_PARTICIPANT_WAIT_UPDATES: u32 = 60 * 60;
     let participant_waits = {
         let mut waits = 0u32;
-        while waits < MAX_PARTICIPANT_WAIT_UPDATES {
+        while readiness_started.elapsed() < cli.readiness_timeout {
             if participants_ready(app.world_mut()) {
                 break;
             }
@@ -883,13 +951,17 @@ pub fn run() -> u8 {
         waits
     };
     let participants_are_ready = participants_ready(app.world_mut());
-    println!("[test] participant-readiness warmup held {participant_waits} updates");
+    println!(
+        "[test] participant-readiness warmup held {participant_waits} updates ({:.1}s wall)",
+        readiness_started.elapsed().as_secs_f64()
+    );
     if !participants_are_ready {
         log_participant_readiness_blockers(app.world_mut());
         println!(
             "luncosim test NO-VERDICT  scene={}  — participant readiness did not complete \
-             before the bounded warmup",
-            cli.scene
+             before the {:.1}s readiness timeout",
+            cli.scene,
+            cli.readiness_timeout.as_secs_f64()
         );
         return 2;
     }

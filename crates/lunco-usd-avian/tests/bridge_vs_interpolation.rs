@@ -26,7 +26,7 @@ const EDGE: f32 = 2000.0;
 
 // This regression preserves the high-resolution numerical reproduction that
 // originally exposed the bridge/interpolation ordering bug. It is deliberately
-// separate from the production eight-substep contract.
+// separate from the production solver-resolution contract.
 const INTERPOLATION_REPRODUCTION_SUBSTEPS: u32 = 64;
 
 fn shell(app: &mut App) -> Entity {

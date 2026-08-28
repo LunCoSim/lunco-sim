@@ -1078,6 +1078,7 @@ mod tests {
             "#usda 1.0\n\
              def Scope \"Battery\" ( prepend apiSchemas = [\"LunCoProgramAPI\"] )\n\
              {\n\
+                 uniform token info:implementationSource = \"sourceAsset\"\n\
                  uniform asset info:sourceAsset = @models/Battery.mo@\n\
                  token connectors:p\n\
              }\n",
@@ -1205,7 +1206,10 @@ mod tests {
                 .expect("stage facts"),
             _ => panic!("facts are not a map"),
         };
-        assert_eq!(field(stage, "physics_substeps"), &H::Int(8));
+        assert_eq!(
+            field(stage, "physics_substeps"),
+            &H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64)
+        );
     }
 
     /// A MOUNTED MECHANISM names a plain Xform, because a component referenced

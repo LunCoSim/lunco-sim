@@ -10,7 +10,7 @@ const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.02;
 
 /// This fixture intentionally preserves the high-resolution numerical
 /// reproduction budget. It is not the production solver contract; the
-/// luncosim path gets its eight substeps from `lunco_physics`.
+/// luncosim path gets its authoritative substeps from `lunco_physics`.
 const NUMERICAL_REPRODUCTION_SUBSTEPS: u32 = 32;
 
 fn native_prismatic_drive(stiffness: Scalar, damping: Scalar, max_force: Scalar) -> LinearMotor {

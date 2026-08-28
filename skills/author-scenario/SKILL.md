@@ -182,6 +182,15 @@ target/debug/luncosim test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
 ```
 
+Scene loading and asynchronous Modelica participant readiness are bounded by
+wall time, not update count. Use `--readiness-timeout SECS` when a machine needs
+a different compile budget; the shell gate uses its separate `READINESS_TIMEOUT`
+startup budget. The shell's larger `SCENE_TIMEOUT` wall-clock backstop allows
+valid long-running missions to keep advancing, while `--max-ticks` remains the
+simulated-time liveness bound after readiness. A readiness timeout is a
+no-verdict failure and must be diagnosed at the worker/readiness owner, not
+hidden by increasing an update-count constant.
+
 The generic Rust contract may still compile every embedded script and exercise
 the shared hook seam. Keep it content-agnostic; a lesson's steps, required
 events, and expected command sequence belong in an authored Rhai observer.

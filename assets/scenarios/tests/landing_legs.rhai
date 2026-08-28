@@ -53,6 +53,13 @@ fn ys(ids) {
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 fn on_start(me) {
+    // Pin this diagnostic fixture to Avian's documented default while the
+    // engine-wide contract is being reduced. This is test policy, so it can be
+    // changed and rerun without rebuilding the Rust host.
+    if !set_physics_substeps(6) {
+        print("[legs] unable to set Avian substeps to 6");
+    }
+    print("[legs] avian_substeps=" + physics_substeps());
     this.t = 0.0;
     this.settle_s = 30.0;   // drop + crush + planted-gear ring-down
     this.sample_s = 0.5;
@@ -89,7 +96,6 @@ fn on_start(me) {
         find("/LandingLegsTest/Lander/LegPZ_Spring"),
         find("/LandingLegsTest/Lander/LegNZ_Spring"),
     ];
-
     this.phase = "drop";
     this.y_prev = ();
     this.peak_force = 0.0;
@@ -274,6 +280,7 @@ fn on_tick(me) {
         // An explicit map, NOT `this`: helpers never see `this`, and passing a
         // plain map keeps the verdict a pure function of the measurements.
         verdict(#{
+            substeps: physics_substeps(),
             hull_pos: pos,
             hull_y: y,
             tilt: tilt,
@@ -360,6 +367,8 @@ fn on_tick(me) {
 fn verdict(s) {
     let f = [];
 
+    f.push(t_true(s.substeps == 6,
+        "landing-gear fixture must run at Avian's six-substep default, got " + s.substeps));
     f.push(t_bounded(s.hull_pos, 100.0, "hull"));
     let names = ["PX", "NX", "PZ", "NZ"];
     for i in 0..4 {

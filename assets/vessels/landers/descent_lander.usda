@@ -2967,10 +2967,12 @@ def Xform "DescentLander" (
     # Tuning, per leg: this is an energy-absorbing spring-damper, not a
     # commandable actuator. The authored force coefficients give the 4000 kg
     # vehicle a visible, finite landing stroke at lunar gravity while keeping
-    # the reaction bounded during asymmetric first-foot contact. The native
-    # Avian motor uses the joint's effective mass and true anchor velocity,
-    # including the angular contribution omega × r, in the same substep as the
-    # geometric and contact constraints.
+    # the reaction bounded during asymmetric first-foot contact. Avian solves
+    # this implicit motor together with the geometric and multi-point contact
+    # constraints in its native sequential XPBD pass. LunCo's generic physics
+    # gate repeats that native prismatic solve once in Avian's user-constraint
+    # slot, providing a local joint iteration for the long contact anchors while
+    # retaining Avian's six global substeps.
     # SIGN, and it is the physically natural one: a suspension reaction is POSITIVE
     # when the spring is COMPRESSED. Compression therefore reads as NEGATIVE
     # displacement along the hull→foot axis, the direction the strut EXTENDS.

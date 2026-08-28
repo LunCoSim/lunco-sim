@@ -19,10 +19,11 @@
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
 # Exits non-zero if ANY scene fails, produces no verdict, or hangs past
-# SCENE_TIMEOUT (default 420s) IN THE GATE PASS.  SCENE_MAX_TICKS is the
+# SCENE_TIMEOUT (default 900s) IN THE GATE PASS. READINESS_TIMEOUT is a separate
+# wall-clock budget for asynchronous scene materialization and Modelica startup;
+# it must not shorten a valid long-running mission. SCENE_MAX_TICKS is the
 # simulated-time liveness bound passed to every production scene run; it is
-# deliberately independent of the wall-clock timeout because a valid tutorial
-# route can need more than the binary's small interactive default.
+# deliberately independent of both wall-clock budgets.
 #
 # ── The gate pass vs the --stress pass ──────────────────────────────────────
 #
@@ -62,9 +63,11 @@ BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 #
 # Deliberately GENEROUS: this is a liveness backstop, not a performance budget.
 # Its job is only to stop one wedged scene from taking the whole gate down with
-# it; a scene slow enough to trip it is a finding either way. Override for a
-# slower machine with `SCENE_TIMEOUT=900 ./scripts/run_scene_tests.sh`.
-SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
+# it; a scene slow enough to trip it is a finding either way. Long authored
+# missions are valid, so this is intentionally larger than the startup budget.
+# Override for a slower machine with `SCENE_TIMEOUT=1800 ./scripts/run_scene_tests.sh`.
+SCENE_TIMEOUT="${SCENE_TIMEOUT:-900}"
+READINESS_TIMEOUT="${READINESS_TIMEOUT:-420}"
 SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 
 # ── Arguments ───────────────────────────────────────────────────────────────
@@ -243,7 +246,7 @@ for scene in "${SCENES[@]}"; do
     # the gate's determinism must not silently change if a default ever moves.
     timeout --kill-after=10 "$SCENE_TIMEOUT" \
         "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
-        --threads 1 --jitter 0 >"$log" 2>&1
+        --threads 1 --jitter 0 --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
     code=$?
 
     # The one-line summary `luncosim test` prints last; falls back to the exit code.
@@ -318,7 +321,8 @@ if [[ $STRESS -eq 1 ]]; then
             "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
             --threads "$STRESS_THREADS" \
             --jitter "$STRESS_JITTER" \
-            --seed "$STRESS_SEED" >"$log" 2>&1
+            --seed "$STRESS_SEED" \
+            --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
         code=$?
 
         summary="$(grep -E '^luncosim test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"

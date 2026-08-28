@@ -158,7 +158,7 @@ fn on_tick(me) {
 
     // A force-based drive with stiffness but no driven mass is not the
     // production implicit motor path. The finding must name the drive itself,
-    // include the authoritative eight-substep contract, and remain separate
+    // include the authoritative solver-resolution contract, and remain separate
     // from the geometric sprung-foot finding.
     let unstable_drive = by_rule(findings, "conditionally-stable-joint-drive");
     f.push(t_true(unstable_drive.len() == 1,
@@ -171,8 +171,8 @@ fn on_tick(me) {
         f.push(t_true(unstable_drive[0].severity == "error",
             "conditionally-stable-joint-drive is severity " + unstable_drive[0].severity +
             ", expected error"));
-        f.push(t_true(unstable_drive[0].message.contains("8 substeps"),
-            "conditionally-stable-joint-drive did not report the authoritative 8-substep contract"));
+        f.push(t_true(unstable_drive[0].message.contains("6 substeps"),
+            "conditionally-stable-joint-drive did not report the authoritative 6-substep contract"));
     }
 
     let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");

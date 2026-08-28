@@ -2745,7 +2745,7 @@ impl Plugin for SandboxCorePlugin {
             // (it overrides PhysicsTransformConfig).
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
             // `lunco_physics::PhysicsGatePlugin` owns the single solver-resolution
-            // contract and installs eight Avian substeps for every host. Keeping
+            // contract and installs six Avian substeps for every host. Keeping
             // this choice at the physics owner prevents the GUI, server, and web
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)

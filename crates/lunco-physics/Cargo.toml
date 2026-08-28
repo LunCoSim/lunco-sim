@@ -47,9 +47,8 @@ description = "Physics readiness gate: suspend rigid-body integration (avian's T
 # another body freed — is UNCONFIRMED. `pure_avian_recursive_despawn_of_one_island`
 # in `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs` drives exactly that
 # in pure avian and does NOT panic — nor does any variant tried: flat despawn,
-# recursive despawn, asleep, awake, or with joints in the island. Each
-# precondition was MEASURED (`probe_island_shape_before_despawn`: one shared
-# island, 7 touching pairs, `asleep=4/4` settled vs `0/4` at 30 steps), so the
+# recursive despawn, asleep, awake, or with joints in the island. The retained
+# touching-stack assertions establish the production-shaped precondition, so the
 # greens are not the "precondition never held" trap. The theory predicts a panic
 # in all of those and gets none. Do not repeat it as fact.
 #

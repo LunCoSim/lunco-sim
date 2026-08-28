@@ -257,9 +257,9 @@ fn telemetry_target_missing_finding(path) {
 
 /// Avian's `ForceBased` and `AccelerationBased` spring realizations are
 /// timestep- and effective-mass-dependent. They are not the production
-/// stability contract at the eight-substep fixed step. A force drive with no
-/// authored driven mass is exactly the path that caused the 32-substep native
-/// reproduction fixtures to fail when reduced to eight. Avian's owning mapping
+/// stability contract at the authoritative fixed step. A force drive with no
+/// authored driven mass is exactly the path that caused the native reproduction
+/// fixtures to fail when run at insufficient resolution. Avian's owning mapping
 /// explicitly permits a positive pure ForceBased damper; it has no positional
 /// stiffness to make the spring realization conditional.
 ///

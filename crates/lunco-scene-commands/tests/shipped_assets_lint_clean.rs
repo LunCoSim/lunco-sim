@@ -249,8 +249,16 @@ fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
             H::map([
                 ("meters_per_unit_authored", H::Bool(true)),
                 ("fixed_hz", H::Float(60.0)),
-                ("physics_substeps", H::Int(8)),
-                ("substep_dt", H::Float(1.0 / 480.0)),
+                (
+                    "physics_substeps",
+                    H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
+                ),
+                (
+                    "substep_dt",
+                    H::Float(
+                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
+                    ),
+                ),
             ]),
         ),
         ("bodies", empty()),
@@ -315,8 +323,16 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
             H::map([
                 ("meters_per_unit_authored", H::Bool(true)),
                 ("fixed_hz", H::Float(60.0)),
-                ("physics_substeps", H::Int(8)),
-                ("substep_dt", H::Float(1.0 / 480.0)),
+                (
+                    "physics_substeps",
+                    H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
+                ),
+                (
+                    "substep_dt",
+                    H::Float(
+                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
+                    ),
+                ),
             ]),
         ),
         ("bodies", empty()),
@@ -367,8 +383,16 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
             H::map([
                 ("meters_per_unit_authored", H::Bool(false)),
                 ("fixed_hz", H::Float(60.0)),
-                ("physics_substeps", H::Int(8)),
-                ("substep_dt", H::Float(1.0 / 480.0)),
+                (
+                    "physics_substeps",
+                    H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
+                ),
+                (
+                    "substep_dt",
+                    H::Float(
+                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
+                    ),
+                ),
             ]),
         ),
         ("bodies", empty()),
