@@ -1058,6 +1058,16 @@ class "SquatterAPI" (
             reg.property("lunco:layer:colliderRing").unwrap().type_name,
             "bool"
         );
+        assert_eq!(
+            reg.property("lunco:layer:colliderDepth").unwrap().type_name,
+            "int"
+        );
+        assert_eq!(
+            reg.property("lunco:layer:colliderResolution")
+                .unwrap()
+                .type_name,
+            "int"
+        );
         // `primvars:doNotCastShadows` is deliberately NOT declared here — it is
         // Omniverse's primvar, read by name so their scenes keep their shadow intent
         // (see the note in `schema.usda`). A primvar needs no class; asserting one

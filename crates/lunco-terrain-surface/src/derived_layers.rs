@@ -55,8 +55,9 @@ use lunco_terrain_core::{
 };
 
 use crate::band::SurfaceBand;
+use crate::oracle::DemHeightField;
 use crate::oracle::SurfaceOracle;
-use crate::stream_viz::{DemHeightField, TerrainLodViz};
+use crate::stream_viz::TerrainLodViz;
 use crate::terrain::{DemVisualTargetRes, TERRAIN_WORK_MAX_SECS};
 
 /// Telemetry event emitted when an optional visual bake exceeds its liveness

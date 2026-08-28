@@ -218,6 +218,12 @@ class "LunCoTerrainLayerAPI" (
     int lunco:layer:targetRes = 0 (
         doc = "Target visual heightfield resolution per side; zero keeps native resolution."
     )
+    int lunco:layer:colliderDepth (
+        doc = "Physics-only collider-ring quadtree depth. Omitted uses the terrain physics default; authored values must be in the supported positive range. Independent of visual LOD."
+    )
+    int lunco:layer:colliderResolution (
+        doc = "Physics-only collider-ring heightfield samples per tile side. Omitted uses the terrain physics default; authored values must be in the supported range. Independent of visual LOD."
+    )
     bool lunco:layer:lodViz = true (
         doc = "Whether to build the visual CDLOD mesh."
     )

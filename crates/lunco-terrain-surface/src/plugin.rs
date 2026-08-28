@@ -82,9 +82,9 @@ impl Plugin for TerrainSurfacePlugin {
         // `Assets<ShaderMaterial>` — so the headless server needs no render assets
         // and no `#[cfg]`; it simply never adds `LuncoRenderPlugin`, and the looks
         // sit in the world as inspectable data. See docs/architecture/render-decoupling.md.
-        // Contact tuning is reachable at RUNTIME, not only at compile time: both
-        // types are reflected + registered, so the Inspector derives an editor for
-        // them and the reflection API can set them live.
+        // The active physics support contract is inspectable at RUNTIME: the ring
+        // component is reflected and registered, so the Inspector and reflection
+        // API can inspect or retune the authored physics lattice live.
         app.register_type::<crate::collider_ring::TerrainColliderRing>();
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
@@ -169,16 +169,10 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp)
                     .after(crate::collider_ring::update_physics_support_cache),
-                // Graphics quality is read directly by visual LOD selection;
-                // retune existing collider rings from the same profile before
-                // the Changed<TerrainColliderRing> invalidation runs.
-                crate::collider_ring::sync_ring_quality
-                    .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
-                    .before(crate::collider_ring::invalidate_ring_on_retune),
-                // Quality projection and explicit ring edits both mark resident
-                // tiles stale so the active lattice reaches the ground already
-                // under the wheels. Change-driven — the query is empty on every
-                // frame nobody edits the ring.
+                // Explicit ring edits mark resident tiles stale so the active
+                // physics lattice reaches the ground already under the wheels.
+                // Change-driven — the query is empty on every frame nobody edits
+                // the ring.
                 crate::collider_ring::invalidate_ring_on_retune
                     .before(crate::collider_ring::update_collider_ring),
                 // Change-driven: early-outs unless a `TerrainColliderRing`

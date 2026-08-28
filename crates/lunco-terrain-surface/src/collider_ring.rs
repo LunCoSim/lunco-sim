@@ -12,8 +12,8 @@
 //! screen metric) — so every peer and the headless server pick the identical tile
 //! set and agree on contact (the networking invariant in
 //! [`lunco_terrain_core::quadtree`]). The
-//! collider resolution is fixed (≈ native DEM spacing), independent of how coarse
-//! or fine the visual tiles happen to be.
+//! collider resolution and depth come from the authored terrain physics
+//! contract, independent of how coarse or fine the visual tiles happen to be.
 //!
 //! v1 maintains the canonical-depth tiles covering each free dynamic body or
 //! joint-connected dynamic assembly, plus one tile of build-ahead in every
@@ -38,19 +38,85 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_terrain_core::{quantize, HeightSource};
+use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;
-use crate::oracle::SurfaceOracle;
-use crate::stream_viz::DemHeightField;
+use crate::oracle::{DemHeightField, SurfaceOracle};
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Square};
 
-/// Seed values for the collider ring. Production terrain constructs the ring
-/// from the authoritative Graphics profile; these values remain only for
-/// reflected/test construction that has no terrain profile.
-#[cfg(test)]
-const COLLIDER_DEPTH: u8 = 8;
-#[cfg(test)]
-const COLLIDER_RES: usize = 49;
+/// Smallest and largest supported collider-ring quadtree depth.
+pub const MIN_COLLIDER_DEPTH: u8 = 1;
+pub const MAX_COLLIDER_DEPTH: u8 = 16;
+/// Smallest and largest supported heightfield resolution per collider tile.
+pub const MIN_COLLIDER_RESOLUTION: usize = 2;
+pub const MAX_COLLIDER_RESOLUTION: usize = 1024;
+
+/// Authored physics parameters for a terrain collider ring.
+///
+/// This is a physics contract, not a graphics-quality preset. It is carried by
+/// the DEM generator request and copied into the runtime ring before any async
+/// tile bake starts. Consequently native, worker, GUI, headless, and networked
+/// hosts all construct the same collider lattice from the same authored values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub struct TerrainColliderSettings {
+    /// Quadtree depth at which the ring realizes collider tiles.
+    #[serde(default = "TerrainColliderSettings::default_depth")]
+    pub max_depth: u8,
+    /// Heightfield samples per collider tile side.
+    #[serde(default = "TerrainColliderSettings::default_resolution")]
+    pub tile_resolution: usize,
+}
+
+impl TerrainColliderSettings {
+    pub const DEFAULT_MAX_DEPTH: u8 = 8;
+    pub const DEFAULT_TILE_RESOLUTION: usize = 49;
+
+    const fn default_depth() -> u8 {
+        Self::DEFAULT_MAX_DEPTH
+    }
+
+    const fn default_resolution() -> usize {
+        Self::DEFAULT_TILE_RESOLUTION
+    }
+
+    /// Reject an invalid authored physics contract before a build is queued.
+    pub fn validate(self) -> Result<(), &'static str> {
+        if !(MIN_COLLIDER_DEPTH..=MAX_COLLIDER_DEPTH).contains(&self.max_depth) {
+            return Err("collider max_depth is outside the supported range");
+        }
+        if !(MIN_COLLIDER_RESOLUTION..=MAX_COLLIDER_RESOLUTION).contains(&self.tile_resolution) {
+            return Err("collider tile_resolution is outside the supported range");
+        }
+        Ok(())
+    }
+}
+
+impl Default for TerrainColliderSettings {
+    fn default() -> Self {
+        Self {
+            max_depth: Self::DEFAULT_MAX_DEPTH,
+            tile_resolution: Self::DEFAULT_TILE_RESOLUTION,
+        }
+    }
+}
+
+/// Resolve the signed USD scalar values into the typed physics contract.
+/// Missing USD properties are resolved by the bridge to
+/// [`TerrainColliderSettings::default`]; an authored value of zero or a
+/// negative value is invalid rather than a request for another fallback.
+pub fn resolve_collider_settings(
+    max_depth: i64,
+    tile_resolution: i64,
+) -> Result<TerrainColliderSettings, &'static str> {
+    let settings = TerrainColliderSettings {
+        max_depth: u8::try_from(max_depth)
+            .map_err(|_| "collider max_depth must be a supported positive integer")?,
+        tile_resolution: usize::try_from(tile_resolution)
+            .map_err(|_| "collider tile_resolution must be a supported positive integer")?,
+    };
+    settings.validate()?;
+    Ok(settings)
+}
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle. Anchored in the WORLD
 /// frame (heights are quantized before the tile-local `origin_y` rebase), so
@@ -61,11 +127,11 @@ const COLLIDER_QUANT_STEP: f64 = 1e-3;
 /// static heightfield. Inserted by the DEM build when the request set
 /// `collider_ring`. Needs the retained [`DemHeightField`] to sample tiles from.
 ///
-/// The resolution and contact band are derived from the authoritative Graphics
-/// profile when the terrain is built and when that profile changes. Keeping the
-/// derived values on the terrain makes the active bake contract inspectable;
-/// `invalidate_ring_on_retune` re-bakes resident tiles after a quality edit so
-/// the ground under the wheels follows the newly drawn surface.
+/// The resolution and physics band are derived from the physics-owned lattice
+/// when the terrain is built. Keeping the derived values on the terrain makes
+/// the active contact contract inspectable; `invalidate_ring_on_retune` re-bakes
+/// resident tiles after an explicit ring edit so the ground under the wheels
+/// follows the new authored physics surface.
 #[derive(Component, Reflect, Debug, Clone, PartialEq)]
 #[reflect(Component)]
 pub struct TerrainColliderRing {
@@ -73,36 +139,23 @@ pub struct TerrainColliderRing {
     pub depth: u8,
     /// Heightfield samples per tile side.
     pub res: usize,
-    /// The shared contact-band filter policy — the surface a wheel touches,
-    /// floored so it agrees with what the drawn visual leaf carries. Built from
-    /// the terrain's Graphics profile (see [`Self::for_profile`]), so the
-    /// collider and the visual leaf provably sample one band. See
-    /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
-    pub contact_band: SurfaceBand,
+    /// The physics-band filter policy derived from the authored collider lattice.
+    /// The visual mesh is a presentation product and does not select this band.
+    pub physics_band: SurfaceBand,
 }
 
 impl TerrainColliderRing {
-    /// Construct from the authoritative Graphics profile + half-extent. The
-    /// contact band's floor is the visual leaf's gate: the leaf is at
-    /// `profile.terrain_lod_max_depth` with `profile.terrain_lod_tile_resolution`
-    /// samples, so its step is
-    /// `(2·half_extent) / 2^max_depth / (tile_res − 1)` and its gate is `2·step`.
-    /// The collider's own native gate (`2·collider_step`) is finer, so the floor
-    /// picks the coarser visual gate — what the body touches is what the eye
-    /// sees, not a finer band the mesh flattens out.
-    pub fn for_profile(profile: lunco_render::RenderQualityProfile, half_extent: f64) -> Self {
-        let depth = profile.terrain_lod_max_depth;
-        let res = profile.terrain_lod_tile_resolution;
+    /// Construct the physics ring from the authored terrain contract and the
+    /// terrain half-extent. No graphics resource participates in this path.
+    pub fn from_settings(half_extent: f64, settings: TerrainColliderSettings) -> Self {
+        let depth = settings.max_depth;
+        let res = settings.tile_resolution;
         let tile_side = (2.0 * half_extent) / (1u32 << depth) as f64;
         let step = tile_side / (res - 1) as f64;
         TerrainColliderRing {
             depth,
             res,
-            // The collider and visual tile now sample exactly the same lattice
-            // and therefore use the same band-limit. This is the important
-            // invariant; it also avoids a body riding a finer physics surface
-            // than the mesh currently shown to the user.
-            contact_band: SurfaceBand::contact(step, step),
+            physics_band: SurfaceBand::physics(step),
         }
     }
 }
@@ -154,9 +207,8 @@ pub struct ColliderTileOf(pub Entity);
 /// Sample the composed surface oracle over a tile `region` into Avian's
 /// heightfield layout (`Vec<Vec<f64>>` indexed `[x][z]`, paired with a
 /// `(side, 1, side)` scale — Parry centres it at the entity origin). It samples
-/// the SAME band-limited source as the visual leaf and only quantizes to the
-/// deterministic 1 mm lattice; collision geometry must not silently reshape the
-/// visible terrain.
+/// the physics-owned band and only quantizes to the deterministic 1 mm lattice;
+/// collision geometry is never selected by visual state.
 fn sample_heights_xz(
     oracle: &SurfaceOracle,
     region: Square,
@@ -168,18 +220,16 @@ fn sample_heights_xz(
     let step = region.side() / (res as f64 - 1.0);
     let x0 = region.center[0] - region.half;
     let z0 = region.center[1] - region.half;
-    // The contact band — the shared filter policy floored at the visual leaf's
-    // gate, so what the rover TOUCHES is the band the drawn leaf CARRIES (not a
-    // finer band the mesh flattens out → wheel-sinking). Sub-sample features
-    // below the gate would rasterise as contact-flipping noise anyway, and the
-    // gate rounds the sharp crater rim LIP into a rollable bump — a chassis
+    // The physics band is derived only from the collider lattice. Sub-sample
+    // features below the gate would rasterise as contact-flipping noise anyway,
+    // and the gate rounds a sharp crater rim into a rollable bump — a chassis
     // nosing over an un-rounded lip stopped dead on a ~60° face ("stuck on a
-    // wall inside the crater"). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
+    // wall inside the crater").
     // Scoped to this collider tile's own square (+ a metre of slack): the crater
     // field gathers the placements over the tile once instead of per lattice
     // point. Values inside the region are identical — the contract of
-    // `detail_limited_region` — so the collider still samples exactly the band
-    // the visual leaf carries.
+    // `detail_limited_region` — so the collider still samples exactly its
+    // authored physics band.
     let limited = band.limited_region(oracle, region, 1.0);
     let mut cols = Vec::with_capacity(res);
     for ix in 0..res {
@@ -240,32 +290,6 @@ pub fn invalidate_ring_on_retune(
         let resident: Vec<QuadCoord> = tiles.map.keys().copied().collect();
         for coord in resident {
             tiles.stale.insert(coord);
-        }
-    }
-}
-
-/// Re-project the authoritative Graphics terrain quality onto already-live
-/// collider rings. Visual LOD selection reads the settings resource directly;
-/// without this change-driven projection, an existing ring would keep its old
-/// lattice and contact band after a Graphics edit while newly rendered tiles
-/// used the new one.
-pub fn sync_ring_quality(
-    settings: Res<lunco_render::RenderingQualitySettings>,
-    mut q: Query<(&DemHeightField, &mut TerrainColliderRing)>,
-) {
-    let profile = match settings.validated_profile() {
-        Ok(profile) => profile,
-        Err(reason) => {
-            warn!(
-                "[terrain] invalid Graphics terrain quality; preserving collider-ring quality: {reason}"
-            );
-            return;
-        }
-    };
-    for (height_field, mut ring) in &mut q {
-        let next = TerrainColliderRing::for_profile(profile, height_field.0.half_extent() as f64);
-        if *ring != next {
-            *ring = next;
         }
     }
 }
@@ -1198,7 +1222,7 @@ pub fn update_collider_ring(
             bake_budget -= 1;
             let region = qt.region(*coord);
             let res = ring.res;
-            let band = ring.contact_band;
+            let band = ring.physics_band;
             let oracle_arc: Arc<SurfaceOracle> = hf.0.clone();
             let task = pool.spawn(async move {
                 // Off-thread body → own Tracy zone.
@@ -1285,7 +1309,7 @@ pub fn hold_physics_until_dem_ready(
     building: Query<(), With<crate::terrain::DemTerrainRequest>>,
     rings: Query<(
         Entity,
-        &crate::stream_viz::DemHeightField,
+        &DemHeightField,
         &TerrainColliderRing,
         &ColliderTiles,
     )>,
@@ -1451,11 +1475,7 @@ const SETTLE_CLEARANCE: f64 = 0.05;
 /// fires exactly once per assembly, at activation, and is pure initial PLACEMENT
 /// (the same job the command-spawn rest-depth lift does for GUI spawns).
 pub fn settle_grounded_assemblies(
-    terrains: Query<(
-        Entity,
-        &crate::stream_viz::DemHeightField,
-        &TerrainColliderRing,
-    )>,
+    terrains: Query<(Entity, &DemHeightField, &TerrainColliderRing)>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
     footprints: Query<Option<&lunco_physics::PhysicsSupportFootprint>>,
     pose_seeded: Query<(), With<lunco_physics::PhysicsPoseSeeded>>,
@@ -1520,16 +1540,16 @@ pub fn settle_grounded_assemblies(
         let terrain_up = terrain_rotation.0 * DVec3::Y;
         // Initial placement must query the same surface product that the
         // streamed heightfield collider contains. The collider is intentionally
-        // sampled through the terrain's contact band (the visual/contact
-        // invariant); using the raw DEM here places wheel axles against a
-        // different surface and creates startup spring compression.
-        let contact_oracle = ring.contact_band.limited(&hf.0);
+        // sampled through the terrain's physics band; using the raw DEM here
+        // places wheel axles against a different surface and creates startup
+        // spring compression.
+        let physics_oracle = ring.physics_band.limited(&hf.0);
         Some((
             terrain_world,
             terrain_from_physics,
             terrain_up,
             half,
-            contact_oracle,
+            physics_oracle,
         ))
     });
     if terrains.iter().next().is_some() && terrain_context.is_none() {
@@ -1543,11 +1563,11 @@ pub fn settle_grounded_assemblies(
         .map(|(_, _, terrain_up, _, _)| *terrain_up);
 
     let sample_height = |point: DVec3| {
-        let (terrain_world, terrain_from_physics, _, half, contact_oracle) =
+        let (terrain_world, terrain_from_physics, _, half, physics_oracle) =
             terrain_context.as_ref()?;
         let local = *terrain_from_physics * (point - terrain_world.0);
         (local.x.abs() <= *half && local.z.abs() <= *half)
-            .then(|| (local, contact_oracle.height_at(local.x, local.z)))
+            .then(|| (local, physics_oracle.height_at(local.x, local.z)))
     };
 
     // Pass 1 (read-only): snapshot every body's grid-absolute Position.
@@ -1914,7 +1934,7 @@ pub struct RecoverVessel {
 fn on_recover_vessel(
     trigger: On<RecoverVessel>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    terrains: Query<(Entity, &crate::stream_viz::DemHeightField), With<TerrainColliderRing>>,
+    terrains: Query<(Entity, &DemHeightField), With<TerrainColliderRing>>,
     mut bodies: Query<(
         &RigidBody,
         &mut avian3d::prelude::Position,
@@ -2092,51 +2112,44 @@ mod tests {
     /// any hidden Y-recentering in the heightfield build would show up.
     const BASE_H: f64 = 1945.0;
 
-    /// The collider's native band (`2·step`) for tests that exercise the
-    /// heightfield build in isolation, with no viz config to floor against.
+    /// The collider's physics band (`2·step`) for tests that exercise the
+    /// heightfield build in isolation, with no visual config involved.
     /// Matches the pre-`SurfaceBand` behaviour (`detail_limited(2.0 * step)`).
     fn native_band(region: Square) -> SurfaceBand {
-        let step = region.side() / (COLLIDER_RES as f64 - 1.0);
-        SurfaceBand::visual(step)
+        let step = region.side() / (TerrainColliderSettings::DEFAULT_TILE_RESOLUTION as f64 - 1.0);
+        SurfaceBand::physics(step)
     }
 
     #[test]
-    fn graphics_quality_change_reprojects_existing_ring() {
-        let mut app = App::new();
-        let mut settings = lunco_render::RenderingQualitySettings::default();
-        settings.apply_preset(lunco_render::RenderingQuality::Low);
-        app.insert_resource(settings);
-        app.add_systems(Update, sync_ring_quality);
+    fn production_ring_uses_the_physics_lattice() {
+        let settings = TerrainColliderSettings::default();
+        let ring = TerrainColliderRing::from_settings(100.0, settings);
+        assert_eq!(ring.depth, settings.max_depth);
+        assert_eq!(ring.res, settings.tile_resolution);
+    }
 
-        let oracle = SurfaceOracle::new(
-            std::sync::Arc::new(HeightGrid::new_flat(3, 100.0)),
-            Vec::new(),
+    #[test]
+    fn authored_physics_settings_control_ring_lattice() {
+        let settings = TerrainColliderSettings {
+            max_depth: 7,
+            tile_resolution: 33,
+        };
+        assert!(settings.validate().is_ok());
+        let ring = TerrainColliderRing::from_settings(100.0, settings);
+        assert_eq!(ring.depth, 7);
+        assert_eq!(ring.res, 33);
+        assert_eq!(
+            ring.physics_band.min_wavelength,
+            2.0 * (200.0 / 128.0 / 32.0)
         );
-        let terrain = app
-            .world_mut()
-            .spawn((
-                DemHeightField(std::sync::Arc::new(oracle)),
-                TerrainColliderRing::for_profile(
-                    lunco_render::RenderingQuality::Low.profile(),
-                    100.0,
-                ),
-            ))
-            .id();
-        app.update();
+    }
 
-        app.world_mut()
-            .resource_mut::<lunco_render::RenderingQualitySettings>()
-            .apply_preset(lunco_render::RenderingQuality::High);
-        app.update();
-
-        let ring = app
-            .world()
-            .entity(terrain)
-            .get::<TerrainColliderRing>()
-            .unwrap();
-        let expected =
-            TerrainColliderRing::for_profile(lunco_render::RenderingQuality::High.profile(), 100.0);
-        assert_eq!(ring, &expected);
+    #[test]
+    fn invalid_authored_physics_settings_are_rejected() {
+        assert!(resolve_collider_settings(0, 49).is_err());
+        assert!(resolve_collider_settings(8, 1).is_err());
+        assert!(resolve_collider_settings(17, 49).is_err());
+        assert!(resolve_collider_settings(8, 1025).is_err());
     }
 
     #[test]
@@ -2287,7 +2300,7 @@ mod tests {
     fn collider_small_crater_depth_fidelity() {
         use lunco_terrain_core::HeightSource;
         let h = 4000.0_f64;
-        let depth = COLLIDER_DEPTH;
+        let depth = TerrainColliderSettings::DEFAULT_MAX_DEPTH;
         let qt = Quadtree::new(h, depth, 1.0, h);
         let coord = QuadCoord {
             depth,
@@ -2296,7 +2309,7 @@ mod tests {
         };
         let region = qt.region(coord);
         let side = region.side();
-        let step = side / (COLLIDER_RES as f64 - 1.0);
+        let step = side / (TerrainColliderSettings::DEFAULT_TILE_RESOLUTION as f64 - 1.0);
         println!(
             "\n[collider fidelity] tile side={side:.2} m, step={step:.3} m, detail_limit={:.3} m",
             2.0 * step
@@ -2328,8 +2341,13 @@ mod tests {
             // The datum the runtime bake uses (`update_collider_ring`): the tile-centre
             // surface height — which at this probe point IS `oracle_center`.
             let origin_y = oracle_center;
-            let heights =
-                sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
+            let heights = sample_heights_xz(
+                &oracle,
+                region,
+                TerrainColliderSettings::DEFAULT_TILE_RESOLUTION,
+                origin_y,
+                native_band(region),
+            );
             let collider = heightfield_collider(heights, side);
             let collider_center = surface_y(&collider, 0.0, 0.0, origin_y);
             let collider_bowl = BASE_H - collider_center;
@@ -2352,11 +2370,11 @@ mod tests {
     #[test]
     fn collider_tile_reproduces_offcenter_crater_in_local_frame() {
         // Root region matching a ±4 km DEM; the canonical-depth tile side follows
-        // COLLIDER_DEPTH (15.6 m at depth 9), so all probe geometry below is
+        // the default physics depth (15.6 m at depth 8), so all probe geometry below is
         // derived from `region.half` — hardcoded depth-7 metres put the probes
         // outside the tile when the ring was retuned deeper.
         let h = 4000.0_f64;
-        let depth = COLLIDER_DEPTH;
+        let depth = TerrainColliderSettings::DEFAULT_MAX_DEPTH;
         let mut grid = HeightGrid::new_flat(129, h as f32);
         for v in grid.heights.iter_mut() {
             *v = BASE_H;
@@ -2375,7 +2393,7 @@ mod tests {
         // (+0.32·half in x, −0.58·half in z) so a transposed [z][x] layout puts
         // the bowl at a measurably different spot. Sized so the crater's full
         // 1.6·radius reach stays inside the tile and clear of the corner/far
-        // probes, at any COLLIDER_DEPTH.
+        // probes, at any supported physics depth.
         let (dx, dz) = (0.32 * region.half, -0.58 * region.half);
         let crater = Crater {
             center: [region.center[0] + dx, region.center[1] + dz],
@@ -2396,8 +2414,13 @@ mod tests {
         // EXACTLY the runtime bake: the tile-centre datum, then sample + condition,
         // then the same collider constructor call as `update_collider_ring`.
         let origin_y = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
-        let heights =
-            sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
+        let heights = sample_heights_xz(
+            &oracle,
+            region,
+            TerrainColliderSettings::DEFAULT_TILE_RESOLUTION,
+            origin_y,
+            native_band(region),
+        );
 
         // (c) The rebase itself: sampled heights are LOCAL offsets from `origin_y`.
         // The tile corner is flat base, so it must read ~0 — NOT ~1945. Asserted on
@@ -2438,13 +2461,13 @@ mod tests {
         );
 
         // (b) Collider surface tracks the same band-limited oracle everywhere.
-        let step = side / (COLLIDER_RES as f64 - 1.0);
+        let step = side / (TerrainColliderSettings::DEFAULT_TILE_RESOLUTION as f64 - 1.0);
         // The collider samples the oracle through the same band
         // (`native_band(region)` above, = `2·step`) — compare against that same
         // band-limited surface.
         let gated = native_band(region).limited(&oracle);
-        for iz in (0..COLLIDER_RES).step_by(8) {
-            for ix in (0..COLLIDER_RES).step_by(8) {
+        for iz in (0..TerrainColliderSettings::DEFAULT_TILE_RESOLUTION).step_by(8) {
+            for ix in (0..TerrainColliderSettings::DEFAULT_TILE_RESOLUTION).step_by(8) {
                 let lx = -region.half + ix as f64 * step;
                 let lz = -region.half + iz as f64 * step;
                 let expect =
@@ -2464,7 +2487,7 @@ mod tests {
     #[test]
     fn adjacent_collider_tiles_agree_on_shared_edge() {
         let h = 4000.0_f64;
-        let depth = COLLIDER_DEPTH;
+        let depth = TerrainColliderSettings::DEFAULT_MAX_DEPTH;
         let mut grid = HeightGrid::new_flat(129, h as f32);
         for v in grid.heights.iter_mut() {
             *v = BASE_H;
@@ -2505,12 +2528,27 @@ mod tests {
         // geometry would read as an `origin_a - origin_b` step.
         let oya = HeightSource::height_at(&oracle, ra.center[0], ra.center[1]);
         let oyb = HeightSource::height_at(&oracle, rb.center[0], rb.center[1]);
-        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES, oya, native_band(ra));
-        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES, oyb, native_band(rb));
+        let ha = sample_heights_xz(
+            &oracle,
+            ra,
+            TerrainColliderSettings::DEFAULT_TILE_RESOLUTION,
+            oya,
+            native_band(ra),
+        );
+        let hb = sample_heights_xz(
+            &oracle,
+            rb,
+            TerrainColliderSettings::DEFAULT_TILE_RESOLUTION,
+            oyb,
+            native_band(rb),
+        );
         // Tile A's last x-column and tile B's first x-column sample the same
         // world positions — they must agree once each is lifted back to absolute.
-        for iz in 0..COLLIDER_RES {
-            let (ya, yb) = (ha[COLLIDER_RES - 1][iz] + oya, hb[0][iz] + oyb);
+        for iz in 0..TerrainColliderSettings::DEFAULT_TILE_RESOLUTION {
+            let (ya, yb) = (
+                ha[TerrainColliderSettings::DEFAULT_TILE_RESOLUTION - 1][iz] + oya,
+                hb[0][iz] + oyb,
+            );
             assert!(
                 (ya - yb).abs() < 1e-9,
                 "seam step {:.3} m at iz={iz}: {ya} vs {yb} — invisible wall",
@@ -2538,7 +2576,7 @@ mod tests {
     #[test]
     fn ring_node_is_chosen_in_the_grid_frame_not_the_render_frame() {
         let half = 997.0; // change4's ±997 m crop
-        let depth = COLLIDER_DEPTH;
+        let depth = TerrainColliderSettings::DEFAULT_MAX_DEPTH;
 
         // The rover's grid-absolute position — what avian `Position` holds.
         let rover = DVec3::new(140.0, -5923.1, -660.0);
@@ -2591,7 +2629,7 @@ mod tests {
             (0.0, -1200.0, false),
         ] {
             assert_eq!(
-                ring_node(half, COLLIDER_DEPTH, x, z).is_some(),
+                ring_node(half, TerrainColliderSettings::DEFAULT_MAX_DEPTH, x, z).is_some(),
                 want,
                 "({x}, {z}) coverage"
             );

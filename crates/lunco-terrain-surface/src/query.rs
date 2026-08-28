@@ -38,8 +38,9 @@ use lunco_terrain_core::{
     Square, SurfaceField,
 };
 
+use crate::oracle::DemHeightField;
 use crate::oracle::SurfaceOracle;
-use crate::stream_viz::{DemHeightField, TerrainDetailDemands, TerrainStreamStatus};
+use crate::stream_viz::{TerrainDetailDemands, TerrainStreamStatus};
 
 /// Largest raster a single `TerrainField` query may materialise per side (256×256 =
 /// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the

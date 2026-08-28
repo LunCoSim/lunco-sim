@@ -6,9 +6,11 @@
 //! lattice by bilinear interpolation. The CDLOD vertex shader lerps
 //! `pos = mix(POSITION, MORPH_TARGET, morph)` by a camera-distance morph factor,
 //! so a tile geomorphs smoothly into its parent with no popping and no
-//! texture fetch. The same baked grid also yields the avian collider heights
-//! (`HeightGrid::to_avian_heights`), so one bake feeds visuals *and* physics and
-//! becomes one cached `TerrainTile` (see `docs/architecture/terrain-substrate.md`).
+//! texture fetch. The physics collider ring is deliberately a separate product:
+//! it samples the same oracle through its authored physics lattice and never
+//! consumes visual tile resolution or render assets. Static colliders use the
+//! native materialized product. This module therefore owns visual tile geometry
+//! only (see `docs/architecture/terrain-substrate.md`).
 //!
 //! Pure + Bevy-free → unit-tested and wasm-safe; the plugin runs it off-thread
 //! and assembles the attributes into a Bevy `Mesh`.

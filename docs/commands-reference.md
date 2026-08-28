@@ -2957,6 +2957,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target_res` | `u32` |  Visual-quality downsample target (samples per side). `0` = native (no  decimation). Re-issue the command with a different value to rebuild the  same site at another quality and compare. |
 | `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of  one static mesh; collider/physics unchanged. Production visual path. |
 | `collider_ring` | `bool` |  Stream a canonical-res collider ring around runtime physical support  footprints instead of one static full-DEM collider (replaces it — physics  rides the streamed tiles). |
+| `collider` | `TerrainColliderSettings` |  Physics-only collider-ring lattice (`max_depth` and `tile_resolution`); independent of graphics quality and headless/rendered execution. |
 | `crater_density` | `f32` |  Convenience: add a crater layer at this density (craters per hectare). `0`  (default) = no craters. The USD path instead composes layers as child prims  (see [`crate::terrain_layers`]); this is for the quick command path. |
 
 ## Obstacle fields

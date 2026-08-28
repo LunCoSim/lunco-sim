@@ -3237,6 +3237,7 @@ mod ground_collider_gate_tests {
                 target_res: 0,
                 lod_viz: false,
                 collider_ring: false,
+                collider: lunco_terrain_surface::TerrainColliderSettings::default(),
                 with_default_material: false,
             })
             .id();

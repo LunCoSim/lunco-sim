@@ -12,10 +12,12 @@
 //! The cure is to make a crater a **function you sample**, not pixels you stamp.
 //! [`CraterField`] wraps the source below it (`Craters ∘ Dem ∘ Globe`) and *adds*
 //! each nearby crater's analytic cross-section to it. The visual tile baker and the
-//! avian collider ring both sample this ONE composed source at their own
-//! resolution, so they converge exactly — the crater is as crisp as whatever grid
-//! samples it, unbounded by any DEM mip. Purity is preserved (see [`HeightSource`]),
-//! so derived tiles/colliders stay content-addressable and peer-identical.
+//! avian collider ring both sample this ONE composed source at their independently
+//! owned resolutions, so they agree on terrain facts without requiring equal
+//! detail or a render dependency. The crater is as crisp as whatever product grid
+//! samples it, unbounded by any DEM mip. Purity is preserved (see
+//! [`HeightSource`]), so derived tiles/colliders stay content-addressable and
+//! peer-identical.
 //!
 //! Placement lookup is O(craters-near-the-query) via a deterministic spatial
 //! bucket index, so `height_at` stays cheap even with thousands of craters over a

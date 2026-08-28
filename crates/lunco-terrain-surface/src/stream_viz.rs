@@ -33,9 +33,6 @@
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 #[cfg(test)]
 use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
@@ -49,9 +46,10 @@ use lunco_materials::{
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_terrain_core::{measure_node_error, HeightSource};
+use std::collections::{HashMap, HashSet};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
-use crate::oracle::SurfaceOracle;
+use crate::oracle::{DemHeightField, SurfaceOracle};
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
 /// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
@@ -262,13 +260,6 @@ fn camera_pose_in_terrain(
         grid_to_terrain * (camera_rotation * DVec3::NEG_Z),
     ))
 }
-
-/// The composed surface oracle retained on a terrain entity — the ONE height
-/// truth every consumer samples (LOD tile baker, collider ring, derived-layer
-/// texture bakes, rock scatter, `TerrainHeight` query). `Arc` so off-thread bakes
-/// share it without a copy.
-#[derive(Component)]
-pub struct DemHeightField(pub Arc<SurfaceOracle>);
 
 /// Which shader the streamed LOD tiles draw with — switchable live in the
 /// Inspector (per terrain). Default [`Lit`](TerrainShaderMode::Lit).
