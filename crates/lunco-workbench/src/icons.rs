@@ -49,8 +49,13 @@ pub enum UiIcon {
 
 /// Paint an icon into an already allocated rectangle.
 pub fn paint_icon(painter: &egui::Painter, icon: UiIcon, rect: egui::Rect, color: egui::Color32) {
-    let stroke = egui::Stroke::new((rect.width().min(rect.height()) * 0.075).max(1.2), color);
-    let inset = rect.width().min(rect.height()) * 0.26;
+    // Icon controls are often wider than they are tall (for example the
+    // title-bar buttons). Keep the drawing canvas square so a maximize icon
+    // stays square and all control glyphs share the same visual scale. The
+    // surrounding rectangle remains the full interactive area.
+    let rect = icon_drawing_rect(rect);
+    let stroke = egui::Stroke::new((rect.width() * 0.075).max(1.2), color);
+    let inset = rect.width() * 0.2;
     let left = rect.left() + inset;
     let right = rect.right() - inset;
     let top = rect.top() + inset;
@@ -285,6 +290,11 @@ pub fn paint_icon(painter: &egui::Painter, icon: UiIcon, rect: egui::Rect, color
     }
 }
 
+fn icon_drawing_rect(rect: egui::Rect) -> egui::Rect {
+    let side = rect.width().min(rect.height());
+    egui::Rect::from_center_size(rect.center(), egui::vec2(side, side))
+}
+
 /// Allocate and paint a compact icon-only button with an accessible tooltip.
 pub fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
@@ -341,4 +351,19 @@ pub fn icon_text_button(
         color,
     );
     response.on_hover_text(tooltip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::icon_drawing_rect;
+    use bevy_egui::egui;
+
+    #[test]
+    fn icon_canvas_is_square_and_centered_in_titlebar_button() {
+        let button = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(28.0, 24.0));
+        let canvas = icon_drawing_rect(button.shrink(2.0));
+
+        assert_eq!(canvas.size(), egui::vec2(20.0, 20.0));
+        assert_eq!(canvas.center(), button.center());
+    }
 }
