@@ -1,0 +1,88 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieAntennaTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+    timeCodesPerSecond = 1
+)
+
+# Focused production fixture for the rocker-bogie antenna assembly. The rover
+# asset owns the only antenna instance; this scene supplies the celestial frame
+# so its existing controller remains live while the rover is driven.
+def Xform "RockerBogieAntennaTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "The rocker-bogie antenna support must remain connected to the mast and dish while the rover moves."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RockerBogieAntennaTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    over "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-30.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        float inputs:shadow:distance = 3000.0
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    )
+    {
+        double3 xformOp:translate = (0, 0.9, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The authored local avatar is the single presentation owner for this
+    # fixture. Offscreen capture derives exactly one image camera from this
+    # explicit scene identity, avoiding competing mounted cameras from the
+    # referenced rover.
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (-0.35, 1.0, 0.6)
+        double3 xformOp:translate = (4.0, 3.0, 6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rocker-bogie-antenna"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie_antenna.rhai@
+        }
+    }
+}
