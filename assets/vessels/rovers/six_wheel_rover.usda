@@ -48,6 +48,16 @@ def Xform "SixWheelRover" (
 )
 {
     uniform bool lunco:spawnable = true
+
+    # Six-wheel-specific operator camera: keep the shared forward look and
+    # projection contract, but lower the local eye above the flat chassis so
+    # the onboard view carries more wheel/terrain context without changing
+    # every rover that reuses the camera component.
+    over "FrontCamera"
+    {
+        double3 xformOp:translate = (0.0, 0.55, -1.35)
+    }
+
     float physics:mass = 1400.0
     # The two bank actuator ports, as attributes the wheels CONNECT to. Declaring
     # them here gives each `inputs:drive.connect` a real property to resolve to,

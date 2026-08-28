@@ -34,6 +34,7 @@ fn on_start(me) {
     this.next_sample = 0.0;
 
     this.rover = find("/SixWheelTest/Rover");
+    this.camera = find("/SixWheelTest/Rover/FrontCamera");
 
     this.dist_straight = 0.0;
     this.yaw_straight = 0.0;
@@ -43,13 +44,17 @@ fn on_start(me) {
     // sail through "drove straight" — so the samples are counted, and a run with
     // none is a failure rather than a free pass.
     this.yaw_ok = 0;
+    this.camera_samples = 0;
+    this.camera_gap_error = 0.0;
+    this.camera_fwd_min_dot = 1.0;
+    this.camera_baseline = ();
 
     this.pos_prev = ();
     this.fprev = ();
     this.phase = "settle";
 
     print("[6w] ── authored wheel→port bindings ─────────────────────────");
-    print("[6w] rover gid=" + this.rover);
+    print("[6w] rover gid=" + this.rover + " camera gid=" + this.camera);
 }
 
 fn on_tick(me) {
@@ -62,11 +67,37 @@ fn on_tick(me) {
         return;
     }
 
+    if this.camera == () || this.camera < 0 {
+        fail_fast("mounted front camera not found (gid=" + this.camera + ") — wrong scene or asset?",
+                  "SIX WHEEL", "SIX_WHEEL");
+        this.phase = "done";
+        return;
+    }
+
     this.t += dt();
     let leg = this.t - this.phase_start;
 
     let p = world_pos(this.rover);
     let fwd = world_forward(this.rover);
+    let camera_pos = world_pos(this.camera);
+    let camera_fwd = world_forward(this.camera);
+    if camera_pos == () || camera_fwd == () {
+        fail_fast("mounted front camera has no live pose",
+                  "SIX WHEEL", "SIX_WHEEL");
+        this.phase = "done";
+        return;
+    }
+
+    let camera_gap = vlen(vsub(camera_pos, p));
+    if this.camera_baseline != () {
+        let gap_error = (camera_gap - this.camera_baseline.gap).abs();
+        if gap_error > this.camera_gap_error { this.camera_gap_error = gap_error; }
+    }
+    if fwd != () {
+        let alignment = vdot(vnorm(camera_fwd), vnorm(fwd));
+        if alignment < this.camera_fwd_min_dot { this.camera_fwd_min_dot = alignment; }
+    }
+    this.camera_samples += 1;
     let dyaw = ();
     if this.fprev != () && fwd != () {
         dyaw = yaw_delta_deg(this.fprev, fwd);
@@ -75,6 +106,12 @@ fn on_tick(me) {
 
     if this.phase == "settle" {
         if leg >= this.settle_s {
+            this.camera_baseline = #{
+                rover: p,
+                camera: camera_pos,
+                gap: camera_gap,
+                height: camera_pos[1] - p[1],
+            };
             this.phase = "straight";
             this.phase_start = this.t;
             print("[6w] STRAIGHT leg: throttle 1.0, steer 0.0");
@@ -99,6 +136,10 @@ fn on_tick(me) {
                 yaw_straight: this.yaw_straight,
                 yaw_steer: this.yaw_steer,
                 yaw_ok: this.yaw_ok,
+                camera: this.camera_baseline,
+                camera_samples: this.camera_samples,
+                camera_gap_error: this.camera_gap_error,
+                camera_fwd_min_dot: this.camera_fwd_min_dot,
                 pos: p,
             });
             return;
@@ -153,10 +194,28 @@ fn verdict(s) {
         "produces on a six-wheel layout: both banks get the same average command " +
         "and the rover can only go straight. Negative means the banks are swapped."));
 
+    f.push(t_range(s.camera.height, 0.35, 0.75,
+        "six-wheel camera height above the rover body is " + r2(s.camera.height) +
+        " m; expected a lowered but above-chassis mount"));
+
+    f.push(t_true(s.camera_samples > 100,
+        "the mounted camera produced only " + s.camera_samples + " live pose samples"));
+
+    f.push(t_true(s.camera_gap_error < 0.05,
+        "mounted camera separation changed by " + r4(s.camera_gap_error) +
+        " m during steering instead of following rigidly"));
+
+    f.push(t_true(s.camera_fwd_min_dot > 0.98,
+        "mounted camera forward alignment fell to " + r4(s.camera_fwd_min_dot) +
+        "; the onboard view no longer faces the rover's travel direction"));
+
     print("[6w] ── results ───────────────────────────────────────────");
     print("[6w]   straight travel " + r2(s.dist) + " m");
     print("[6w]   yaw straight    " + r2(s.yaw_straight) + " deg (must be small)");
     print("[6w]   yaw under steer " + r2(s.yaw_steer) + " deg (must be clearly +)");
+    print("[6w]   camera height   " + r2(s.camera.height) + " m");
+    print("[6w]   camera gap err  " + r4(s.camera_gap_error) + " m");
+    print("[6w]   camera fwd dot  " + r4(s.camera_fwd_min_dot));
 
     report_verdict(f, "SIX WHEEL", "SIX_WHEEL");
 }
