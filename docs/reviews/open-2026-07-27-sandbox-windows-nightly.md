@@ -134,7 +134,7 @@ The consequence for the tester is not cosmetic. Shadows are off *for the rest of
   map sizes, cascade count, or select a lower quality preset. The reactive
   recovery ladder remains a separate presentation-safety response after a
   real GPU fault.
-- **Make the degradation visible in the UI, not only in the log.** A workbench status chip ("shadows disabled — GPU memory") costs one line and saves a bug report.
+- **Distinguish configured limits in the UI.** A deliberate Graphics caster limit must read as "shadows limited" (or a settings notice), while a real GPU fault remains "rendering degraded"; both states should stay visible rather than being conflated.
 - **Re-arm on scene unload.** The warning already promises "reload after closing some scene content to get them back", but `Ladder` has no transition back to `Rung::Healthy`. Either implement it or fix the message.
 
 ---
@@ -361,7 +361,7 @@ render evidence.
 | issue | current disposition |
 |---|---|
 | 1 | **Fixed in source.** The lunar balloon uses the authored ambient/gravity contract and the escape diagnostics no longer treat upward motion as an unconditional escape. Production scene execution remains part of the verification pass. |
-| 2 | **Fixed in source.** The explicit `shadow_budget_bytes` setting is the sole pre-extraction admission ceiling; no adapter-class cap or automatic lower preset rewrites the requested map sizes/cascade count. Casters beyond the explicit class limits or byte ceiling are reported as intentionally disabled, and the workbench now logs the admitted estimate versus the ceiling on GPU OOM. Scene teardown re-arms budget suppression; device loss remains terminal. Actual AMD/Vulkan Windows evidence is still unverified locally. |
+| 2 | **Fixed in source.** The explicit `shadow_budget_bytes` setting is the sole pre-extraction admission ceiling; no adapter-class cap or automatic lower preset rewrites the requested map sizes/cascade count. Casters beyond the explicit class limits or byte ceiling are reported as intentionally disabled, and the workbench now distinguishes configured shadow limits from real rendering degradation while logging the admitted estimate versus the ceiling on GPU OOM. Scene teardown re-arms budget suppression; device loss remains terminal. Actual AMD/Vulkan Windows evidence is still unverified locally. |
 | 3 | **Fixed in source.** Python programs check the authoritative interpreter status before binding, publish their declared interface as a terminal error, and emit one scene-level aggregate diagnostic. Terminal participants now retire their derived edges at the binding boundary, so unavailable Python cannot create secondary missing-port or algebraic-loop faults. The interactive sandbox intentionally has no verdict channel; `assets/scenes/tests/sandbox_smoke.usda` is the explicit composed smoke contract and the production thermal scene remains a separate gate. |
 | 4 | **Closed.** Runtime overlays and history are ignored by source control and excluded by the native packaging copier; no sandbox `.lunco` files are tracked. |
 | 5 | **Fixed in source.** The avatar domain owns the possession boundary: click and direct-command resolution accept only a non-`Avatar` writable `InputPorts` endpoint, so the avatar's free-flight surface cannot become the rover target. Resolution walks to the owning endpoint; warnings include the authored identity rather than only an entity id. |

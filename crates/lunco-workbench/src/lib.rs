@@ -102,7 +102,9 @@ pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, LiveHelpSection, LiveHelpSections,
     PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use render_robustness::{RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning};
+pub use render_robustness::{
+    RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning, RenderWarningKind,
+};
 
 /// Register the render-recovery reset at the host application's scene-teardown
 /// boundary. The workbench owns GPU state but deliberately does not depend on

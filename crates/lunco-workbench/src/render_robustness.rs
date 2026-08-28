@@ -235,9 +235,34 @@ fn presentation_is_active(state: Option<Res<PresentationState>>) -> bool {
     state.is_none_or(|state| !state.stopped)
 }
 
+/// Why a persistent presentation warning is being shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderWarningKind {
+    /// The authored or persisted graphics configuration limits or rejects
+    /// shadow resources; rendering itself is still healthy.
+    ConfiguredShadowLimit,
+    /// The requested graphics configuration is invalid or unsupported by the
+    /// current adapter and therefore was not applied.
+    GraphicsSettings,
+    /// The renderer is receiving repeated GPU failures.
+    RuntimeFailure,
+}
+
+impl RenderWarningKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::ConfiguredShadowLimit => "SHADOWS LIMITED",
+            Self::GraphicsSettings => "GRAPHICS SETTINGS",
+            Self::RuntimeFailure => "RENDERING DEGRADED",
+        }
+    }
+}
+
 /// Persistent presentation warning shown while the simulation is still alive.
 #[derive(Resource, Clone, Debug)]
 pub struct RenderWarning {
+    /// The owner/category of the condition shown in the workbench overlay.
+    pub kind: RenderWarningKind,
     /// Human-readable warning shown in the workbench overlay.
     pub message: String,
 }
@@ -263,7 +288,7 @@ pub(crate) fn draw_render_recovery_banner(
     } else if let Some(warning) = warning {
         (
             crate::UiIcon::Warning,
-            "RENDERING DEGRADED",
+            warning.kind.title(),
             warning.message.clone(),
             theme.tokens.warning,
             theme.tokens.overlay_backdrop,
@@ -739,10 +764,11 @@ fn apply_render_quality(
         Err(reason) => {
             if warning.is_none() {
                 commands.insert_resource(RenderWarning {
-                message: format!(
-                    "Invalid graphics shadow settings: {reason}. The requested settings were not applied until corrected."
-                ),
-            });
+                    kind: RenderWarningKind::GraphicsSettings,
+                    message: format!(
+                        "Invalid graphics shadow settings: {reason}. The requested settings were not applied until corrected."
+                    ),
+                });
             }
             return;
         }
@@ -756,6 +782,7 @@ fn apply_render_quality(
         if let Err(reason) = validate_profile_for_capabilities(profile, &capabilities) {
             if warning.is_none() {
                 commands.insert_resource(RenderWarning {
+                    kind: RenderWarningKind::GraphicsSettings,
                     message: format!(
                         "Unsupported graphics shadow settings: {reason}. The requested settings were not applied."
                     ),
@@ -1149,10 +1176,11 @@ fn apply_shadow_caster_policy(
         Err(reason) => {
             if warning.is_none() {
                 commands.insert_resource(RenderWarning {
-                message: format!(
-                    "Invalid graphics shadow settings: {reason}. Shadow caster limits were not changed."
-                ),
-            });
+                    kind: RenderWarningKind::GraphicsSettings,
+                    message: format!(
+                        "Invalid graphics shadow settings: {reason}. Shadow caster limits were not changed."
+                    ),
+                });
             }
             return;
         }
@@ -1333,6 +1361,7 @@ fn apply_shadow_caster_policy(
         }
         if warning.is_none() {
             commands.insert_resource(RenderWarning {
+                kind: RenderWarningKind::GraphicsSettings,
                 message: format!(
                     "Configured shadow caster set requires {} bytes, above the explicit byte ceiling of {} bytes; no caster or quality changes were applied.",
                     required_bytes, admission_budget
@@ -1498,6 +1527,7 @@ fn apply_shadow_caster_policy(
     );
     if limit_shed_count > 0 && warning.is_none() {
         commands.insert_resource(RenderWarning {
+            kind: RenderWarningKind::ConfiguredShadowLimit,
             message: format!(
                 "Configured shadow caster limits: kept {} directional, {} point, and {} spot shadow caster(s); {} caster(s) are disabled by the Graphics settings.",
                 kept_directionals.len(),
@@ -1613,6 +1643,7 @@ fn escalate_render_recovery(
 
     if action.is_none() && ladder.rung == Rung::PersistentFailure && warning.is_none() {
         commands.insert_resource(RenderWarning {
+            kind: RenderWarningKind::RuntimeFailure,
             message: format!(
                 "Rendering is failing because of {}. No automatic quality fallback was applied; presentation will stop if it does not recover.",
                 kind.label()
@@ -1653,6 +1684,7 @@ fn escalate_render_recovery(
                  has stopped. Save your work and restart to render again."
             );
             commands.insert_resource(RenderWarning {
+                kind: RenderWarningKind::RuntimeFailure,
                 message: format!(
                     "Presentation stopped: {reason}. Simulation and API remain available; restart the window to restore rendering."
                 ),
@@ -1671,6 +1703,22 @@ fn escalate_render_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warning_titles_distinguish_configuration_from_render_failure() {
+        assert_eq!(
+            RenderWarningKind::ConfiguredShadowLimit.title(),
+            "SHADOWS LIMITED"
+        );
+        assert_eq!(
+            RenderWarningKind::GraphicsSettings.title(),
+            "GRAPHICS SETTINGS"
+        );
+        assert_eq!(
+            RenderWarningKind::RuntimeFailure.title(),
+            "RENDERING DEGRADED"
+        );
+    }
 
     fn default_give_up_after_secs() -> f64 {
         RenderingQualitySettings::default().render_failure_give_up_after_secs
@@ -1787,6 +1835,7 @@ mod tests {
             reason: "test fault".into(),
         });
         world.insert_resource(RenderWarning {
+            kind: RenderWarningKind::RuntimeFailure,
             message: "test warning".into(),
         });
         let light = world
