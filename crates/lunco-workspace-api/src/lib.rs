@@ -48,6 +48,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
                     "title": entry.title,
                     "kind": entry.kind.to_string(),
                     "origin": origin_to_json(&entry.origin),
+                    "dirty": entry.dirty,
                     "active": Some(entry.id) == active,
                     "context_twin": entry.context_twin.map(|t| t.raw()),
                 })

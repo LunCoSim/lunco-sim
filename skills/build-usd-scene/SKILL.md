@@ -5,7 +5,7 @@ description: >
   move, rotate, scale, tune, or clear them. USE THIS SKILL for requests such as
   "put a lander near that crater", "spawn rovers", "load the Moon scene", "add
   rocks", "move this", "set its mass or material", or "build a scene with X
-  and Y". For the agent mid-code: `LoadScene`, `SpawnEntity`, `MoveEntity`,
+  and Y". For the agent mid-code: `LoadScene`, `SpawnEntity`, `MoveEntity`, `TransformEntity`,
   `SetObjectProperty`, a catalog `entry_id`, a `.usda` file, or a placement/
   lighting issue. Project-specific: USD is the source of truth projected to ECS;
   use the fixed Y-up, right-handed, -Z-forward metre frame, root-qualified
@@ -64,6 +64,7 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 | `RestartScene` | `{}` | Reload/reset the current scene. |
 | `SpawnEntity` | `{target, entry_id, position:[x,y,z], rotation?}` | Instance a catalogued prefab. `entry_id` comes from the **spawn catalog** (`list_bundled` / `ListBundled`). |
 | `MoveEntity` | `{…}` | Reposition an existing entity. |
+| `TransformEntity` | `{entity_id, translation, rotation}` | Set an existing entity's complete active-frame pose as one undoable USD edit. |
 | `SetObjectProperty` | `{entity_id:u64, property, value}` | Set a named property (both strings; value is coerced by property type). |
 | `SelectEntity` | `{…}` | Select (drives the gizmo/inspector). |
 | `SetPorts` | `{target, writes:[[name,val]]}` | Poke an input port (e.g. drive a spawned rover) — see [`author-scenario`](../author-scenario/SKILL.md) for behaviour. |
@@ -78,7 +79,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 2. **What can I spawn?** `list_bundled` → pick an `entry_id`.
 3. **Place it:** `SpawnEntity {entry_id, position:[x,y,z], rotation?}` (Y-up metres).
    The response `data` carries the new entity id.
-4. **Adjust:** `MoveEntity` / `SetObjectProperty` (colour, mass, material, scale) /
+4. **Adjust:** `MoveEntity` or `TransformEntity` / `SetObjectProperty` (colour, mass, material, scale) /
    `SelectEntity` to inspect.
 5. **Confirm:** `CaptureScreenshot` → `/tmp/x.png` → Read it (see
    [`inspect-simulation`](../inspect-simulation/SKILL.md) for reading state back).
@@ -111,7 +112,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 - **Spawns land ON the terrain surface.** Placement samples the terrain **height oracle** (analytic, so it works even before a streamed/CDLOD collider tile bakes) — a spawn over un-baked terrain rests on the ground instead of free-falling. The GUI click path terrain-fits the asset's composed `UsdPhysics` collision footprint (slope-aligned, and it considers a physics obstacle under the chassis). An asset without a `defaultPrim` or collision footprint is rejected visibly; placement never invents dimensions or a lift. The API `SpawnEntity` path uses the explicit position supplied by the caller, so pass a real Y.
 - **One spawn = one entity.** In a single-player (`Standalone`) session a `SpawnEntity` instantiates exactly one rover; it is not also re-projected from the document (that path is suppressed to avoid a double-instantiation / vanish-on-reload).
 - **Gizmo / selection frame:** on a static-USD select, the selectable root is tagged `SelectableRoot` in the **world frame** — not `GridAnchor`. If the gizmo grabs the wrong thing or the wrong frame, that tag is why.
-- **Never `SetDocumentSource` for live scene building** — it replaces the whole source and cancels in-flight work. Apply edits as **individual ops** (`SpawnEntity`/`MoveEntity`/`SetObjectProperty`), one at a time.
+- **Never `SetDocumentSource` for live scene building** — it replaces the whole source and cancels in-flight work. Submit typed scene commands (`SpawnEntity`/`MoveEntity`/`TransformEntity`/`SetObjectProperty`), and let their handlers lower the intent through the existing USD operation path.
 - **USD → ECS is a projection**, so authored changes flow one way — edit the USD (via ops), and the ECS scene reconciles. Don't hand-mutate ECS transforms expecting them to persist.
 - **Behaviour ≠ scene.** Making a spawned rover *do* something (drive, patrol) is a scenario — see [`author-scenario`](../author-scenario/SKILL.md); its self-driving GNC is [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md).
 
@@ -119,6 +120,6 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 
 - ❌ Passing a bare or absolute filesystem path to `LoadScene`.
 - ❌ Guessing an `entry_id` instead of `list_bundled`.
-- ❌ `SetDocumentSource` to build a scene incrementally — use per-object ops.
+- ❌ `SetDocumentSource` to build a scene incrementally — use the typed scene commands and their USD operation path.
 - ❌ Branching placement math on up-axis/units — the frame is fixed; convert only at the importer.
 - ❌ Mutating ECS `Transform` directly and expecting USD to remember it — author the USD.

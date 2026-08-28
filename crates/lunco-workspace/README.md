@@ -52,9 +52,10 @@ ceremonial moves.
   struct.
 - **`TwinId(u64)`** — Workspace-minted stable id. `0` is the
   "unassigned" sentinel; actual ids start at 1.
-- **`DocumentEntry`** — `{ id, kind, origin, context_twin, title }`.
+- **`DocumentEntry`** — `{ id, kind, origin, context_twin, title, dirty }`.
   Workspace-level metadata only; the parsed source + ops + undo stack
-  live in domain registries (e.g. `ModelicaDocumentRegistry`).
+  live in domain registries (e.g. `ModelicaDocumentRegistry`). Domain
+  registries mirror the authoritative dirty state on document events.
 - **`Recents`** — bounded lists (10 twin folders, 20 loose files),
   most-recent-first, dedupe-on-push.
 

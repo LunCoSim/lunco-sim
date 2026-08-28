@@ -2362,7 +2362,11 @@ fn freeflight_system(
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     gravity: Res<LocalGravityField>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
+    if drag_mode.is_some_and(|drag| drag.active) {
+        return;
+    }
     for (mut tf, mut ff, _cell, child_of, surface_mode) in q_avatar.iter_mut() {
         let rot = if surface_mode.is_some() {
             // In surface mode, apply yaw/pitch as incremental rotations.
@@ -2429,7 +2433,11 @@ fn freeflight_scroll_transit_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
+    if drag_mode.is_some_and(|drag| drag.active) {
+        return;
+    }
     // Only meaningful on a site-anchored scene whose solar hierarchy is up.
     let Some((body_ent, radius_m)) = site_body(&q_site, &q_bodies) else {
         return;
@@ -2577,7 +2585,11 @@ fn surface_camera_system(
     // assumption.
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     gravity: Res<LocalGravityField>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
+    if drag_mode.is_some_and(|drag| drag.active) {
+        return;
+    }
     for (mut tf, cam, _cell, child_of) in q_avatar.iter_mut() {
         if q_grids.get(child_of.0).is_err() {
             continue;
@@ -2658,7 +2670,11 @@ fn apply_fly(
     // at render rate in `PostUpdate` — no lockstep needed, free-flight follows nothing.
     time: Res<Time>,
     mut commands: Commands,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
+    if drag_mode.is_some_and(|drag| drag.active) {
+        return;
+    }
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for (
         entity,
@@ -2734,6 +2750,7 @@ fn capture_avatar_intent(
     >,
     world: Option<Res<WorldTime>>,
     egui_focus: Res<lunco_core::EguiFocus>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
     waypoint_menu_open: Option<Res<lunco_core::WaypointMenuOpen>>,
     mut commands: Commands,
 ) {
@@ -2744,8 +2761,9 @@ fn capture_avatar_intent(
     // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
     // goes true once the cursor is already ON the menu, so the camera would spin all
     // the way there and the menu could never be reached comfortably.
-    let pointer_captured =
-        egui_focus.wants_pointer || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
+    let pointer_captured = egui_focus.wants_pointer
+        || waypoint_menu_open.map(|m| m.0).unwrap_or(false)
+        || drag_mode.is_some_and(|drag| drag.active);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
@@ -2794,11 +2812,12 @@ fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
 /// the active camera behavior to consume + reset.
 fn collect_camera_zoom(
     egui_focus: Res<lunco_core::EguiFocus>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
     mut q_avatar: Query<(Entity, &mut CameraZoomInput), (With<Avatar>, With<LocalAvatar>)>,
     mut commands: Commands,
 ) {
-    if egui_focus.wants_pointer {
+    if egui_focus.wants_pointer || drag_mode.is_some_and(|drag| drag.active) {
         return;
     }
     let d = normalized_scroll_delta(&scroll);
@@ -2874,7 +2893,11 @@ fn avatar_behavior_input_system(
     gravity: Res<LocalGravityField>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     q_children: Query<&Children>,
+    drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
+    if drag_mode.is_some_and(|drag| drag.active) {
+        return;
+    }
     let Some((analog, surface_mode)) = q_avatar.single().ok() else {
         return;
     };
@@ -4438,8 +4461,7 @@ fn on_surface_teleport_command(
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
 
-    // Resolve body entity from bits
-    let body_entity = Entity::from_bits(cmd.body_entity);
+    let body_entity = cmd.body_entity;
 
     let (body_entity, body_radius) = if let Ok((e, b)) = q_bodies.get(body_entity) {
         debug!("TELEPORT: found body {:?} radius={:.0}m", e, b.radius_m);

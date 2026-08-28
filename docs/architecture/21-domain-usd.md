@@ -499,11 +499,17 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   placed model root rather than the clicked leaf. This keeps the transform gizmo on
   the object's authored placement transform instead of dropping it at the world
   origin (a glb leaf carries a ~identity parent-local transform).
-- **Manipulation**: The transform gizmo authors `UsdOp::SetTranslate` against the document.
-  The default `transform-gizmo-bevy` `mouse_interaction` driver is disabled (Cargo
-  `default-features = false`, only `gizmo_picking_backend` kept); drags are driven by
-  `drive_gizmo_drag_no_shift`, gated to plain (non-Shift) presses so Shift+click stays
-  *select-only* and never arms a grab on the gizmo rendered over the object.
+- **Manipulation**: `transform-gizmo-bevy` is a render-space frontend on an
+  unparented proxy. `capture_gizmo_start` reads the authoritative
+  `SimulationPoseQuery`; the editor converts the proxy pose through the active
+  BigSpace frame and actual parent storage. Drag completion emits one
+  `TransformEntity` scene command, whose live leg writes `(CellCoord, Transform)`
+  through the canonical parent conversion and whose persistence leg authors
+  translation plus rotation as one runtime-layer USD change set. The default
+  `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
+  `gizmo_picking_backend` kept); `drive_gizmo_drag_no_shift` remains gated to
+  plain, non-Shift presses and egui pointer capture. Scale handles are disabled
+  until scale has an authored command and projection contract.
 - **Undo**: Reverting a `UsdOp` in the document system automatically updates the 3D world.
 
 | Scheme | Purpose | Resolves to |

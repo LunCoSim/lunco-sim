@@ -55,6 +55,16 @@ alignment; do not rebuild thousands of points on a wall-clock cadence. Trajector
 workers are polled without waiting from the main schedule, and their visualization
 must not become a UI-cycle dependency.
 
+For transform gizmos, use `transform-gizmo-bevy` only as a render-space
+frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep
+the proposed pose in the explicit `ActivePhysicsFrame`, convert the complete
+pose back with the canonical render/grid and parent-local helpers, and commit
+through one `TransformEntity` scene command. Never apply render deltas to a
+parent-local `Transform`, read `GlobalTransform` as physics authority, or write
+Avian `Position`/`Rotation` from editor code. Reproject from the active-frame
+transaction pose after BigSpace origin/cell changes; scale handles remain
+disabled until scale has its own authored contract.
+
 For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
 Read the complete composed local transform through the shared USD transform
 decoder, including scale; do not inspect individual `xformOp:*` attributes in a

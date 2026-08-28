@@ -109,7 +109,7 @@ impl Panel for CelestialBodiesPanel {
         // `populate_celestial_bodies_view`, change-gated). Collect the
         // teleport intent during paint; emit it after the `view` borrow
         // ends through the typed command boundary.
-        let mut teleport: Option<(Entity, u64)> = None;
+        let mut teleport: Option<(Entity, Entity)> = None;
         if let Some(view) = ctx.resource::<CelestialBodiesView>() {
             let avatar = view.avatar;
             for row in &view.bodies {
@@ -117,7 +117,7 @@ impl Panel for CelestialBodiesPanel {
                     ui.label(format!("{} ({})", row.name, row.radius_label));
                     if ui.small_button("Surface").clicked() {
                         if let Some(av) = avatar {
-                            teleport = Some((av, row.entity_bits));
+                            teleport = Some((av, row.entity));
                         }
                     }
                 });
@@ -151,8 +151,8 @@ pub struct CelestialBodiesView {
 
 /// Derived per-body row the browser renders.
 struct CelestialBodyRow {
-    /// Raw `Entity::to_bits()` — carried verbatim into `TeleportToSurface`.
-    entity_bits: u64,
+    /// The body entity passed to `TeleportToSurface`.
+    entity: Entity,
     /// Display name.
     name: String,
     /// Pre-formatted radius label, e.g. `"1737 km"`.
@@ -186,7 +186,7 @@ pub fn populate_celestial_bodies_view(
     view.bodies = bodies
         .iter()
         .map(|(e, n, body)| CelestialBodyRow {
-            entity_bits: e.to_bits(),
+            entity: e,
             name: n.as_str().to_string(),
             radius_label: format!("{:.0} km", body.radius_m / 1000.0),
         })

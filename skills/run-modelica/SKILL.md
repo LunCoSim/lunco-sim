@@ -372,7 +372,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `ListBundled` | `{}` | embedded example models (`bundled://` URIs) |
 | `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/MSL/open docs → URIs |
 | `Open` | `{uri}` | open bundled/MSL/path/mem into a tab |
-| `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, active` per tab |
+| `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, dirty, active` per tab |
 | `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs (pre-compile) |
 | `CompileStatus` | `{doc}` | `state, ast_parsed, candidates, picker_pending, drilled_in_class` |
 | `ListCompileCandidates` | `{doc}` | `{candidates:[{qualified,short}]}` — the picker choices |

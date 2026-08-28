@@ -43,14 +43,12 @@ pub enum ApiRequest {
         command: String,
         params: serde_json::Value,
     },
-    // There is no generic entity-query variant. Reading an entity's pose means knowing which
-    // coordinate frame it is in, and that belongs to the crate that owns the
-    // scene verbs, not to the transport: it now lives beside `MoveEntity` in
-    // `lunco-scene-commands` as an `ApiQueryProvider`, reporting the same
-    // semantic active physics frame that command accepts. As a built-in it read
-    // `GlobalTransform` — the render frame — and reported a position that shifted
-    // with the floating origin and could not be fed back. Pose/state reads are
-    // ExecuteCommand calls whose provider owns the coordinate-frame semantics.
+    // There is no generic entity-query variant. Reading an entity's pose requires
+    // a coordinate-frame contract owned by the scene-verb crate, not by the
+    // transport. `QueryEntity` is an `ApiQueryProvider` there and reports the
+    // same active physics frame accepted by `TransformEntity`. Pose/state reads
+    // therefore use the `ExecuteCommand` envelope while the provider owns the
+    // coordinate-frame semantics.
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry {

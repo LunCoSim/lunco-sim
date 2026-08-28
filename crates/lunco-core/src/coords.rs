@@ -1226,6 +1226,50 @@ pub fn render_to_grid_absolute(grid: &Grid, render_point: RenderPos) -> GridPos 
     GridPos(grid_relative + grid.cell_to_float(&local_origin.cell()))
 }
 
+/// Convert a complete floating-origin render pose into the absolute pose of a
+/// BigSpace grid.
+///
+/// [`render_to_grid_absolute`] is intentionally a point-only helper. Gizmos,
+/// cameras, and other rigid tools must use this pose variant so a rotated
+/// local grid transforms orientation as well as position. The affine supplied
+/// by BigSpace is rigid for grid frames; its inverse rotation is therefore the
+/// render-to-grid orientation conversion.
+pub fn render_pose_to_grid_absolute(
+    grid: &Grid,
+    render_position: RenderPos,
+    render_rotation: GridRot,
+) -> (GridPos, GridRot) {
+    let local_origin = grid.local_floating_origin();
+    let inverse = local_origin.grid_transform().inverse();
+    let grid_relative = inverse.transform_point3(render_position.0);
+    let rotation = DQuat::from_mat3(&inverse.matrix3) * render_rotation.0;
+    (
+        GridPos(grid_relative + grid.cell_to_float(&local_origin.cell())),
+        GridRot(rotation.normalize()),
+    )
+}
+
+/// Convert a complete absolute BigSpace-grid pose into the floating-origin
+/// render frame used by Bevy's `GlobalTransform` and the transform gizmo.
+///
+/// This is the exact inverse of [`render_pose_to_grid_absolute`]. Keeping both
+/// directions here prevents editor code from reconstructing a camera-relative
+/// translation while accidentally leaving the orientation in another frame.
+pub fn grid_absolute_pose_to_render(
+    grid: &Grid,
+    grid_position: GridPos,
+    grid_rotation: GridRot,
+) -> (RenderPos, GridRot) {
+    let local_origin = grid.local_floating_origin();
+    let grid_relative = grid_position.0 - grid.cell_to_float(&local_origin.cell());
+    let transform = local_origin.grid_transform();
+    let rotation = DQuat::from_mat3(&transform.matrix3) * grid_rotation.0;
+    (
+        RenderPos(transform.transform_point3(grid_relative)),
+        GridRot(rotation.normalize()),
+    )
+}
+
 /// Absolute world position of `entity`, seeded with an explicit
 /// `(initial_cell, initial_tf)`. See [`world_pose_seeded`] (returns the full
 /// pose); this returns the position only.
@@ -1482,6 +1526,31 @@ mod tests {
             expected,
             "the render-to-grid inverse must recover a cursor hit's cell-absolute position"
         );
+    }
+
+    #[test]
+    fn render_pose_round_trips_position_and_rotation() {
+        let grid = WorldGridConfig::default().grid();
+        let cell = CellCoord::new(4, -3, 2);
+        let local_rotation = DQuat::from_rotation_y(0.37) * DQuat::from_rotation_x(-0.19);
+        let local = Transform::from_translation(Vec3::new(12.5, -4.0, 99.0))
+            .with_rotation(local_rotation.as_quat());
+        let rendered = grid.global_transform(&cell, &local);
+        let (_, render_rotation, render_translation) = rendered.to_scale_rotation_translation();
+
+        let (position, rotation) = render_pose_to_grid_absolute(
+            &grid,
+            RenderPos::from_render_f32(render_translation),
+            GridRot::from_render_rotation(render_rotation),
+        );
+
+        assert!((position.0 - grid.grid_position_double(&cell, &local)).length() < 1e-3);
+        assert!(rotation.0.angle_between(local_rotation) < 1e-6);
+
+        let (back_position, back_rotation) =
+            grid_absolute_pose_to_render(&grid, position, rotation);
+        assert!((back_position.0 - render_translation.as_dvec3()).length() < 1e-3);
+        assert!(back_rotation.0.angle_between(render_rotation.as_dquat()) < 1e-6);
     }
 
     /// The `target_grid_world` offset is honoured: decompose against a grid that

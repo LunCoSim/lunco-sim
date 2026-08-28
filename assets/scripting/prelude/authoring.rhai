@@ -26,9 +26,9 @@ fn usd_apply_ops(doc, label, ops) {
 
 /// Add a referenced component or a typed primitive under `parent_path`.
 /// `type_name` and `reference` may be `()` when the field is not needed.
-fn usd_add_prim(doc, parent_path, name, type_name, reference) {
+fn usd_add_prim(doc, edit_target, parent_path, name, type_name, reference) {
     usd_apply(doc, #{ AddPrim: #{
-        edit_target: "@root@",
+        edit_target: edit_target,
         parent_path: parent_path,
         name: name,
         type_name: type_name,
@@ -37,23 +37,23 @@ fn usd_add_prim(doc, parent_path, name, type_name, reference) {
 }
 
 /// Set a prim's semantic USD-frame translation or rotation (degrees).
-fn usd_set_translate(doc, path, value) {
+fn usd_set_translate(doc, edit_target, path, value) {
     usd_apply(doc, #{ SetTranslate: #{
-        edit_target: "@root@", path: path, value: value
+        edit_target: edit_target, path: path, value: value
     }})
 }
 
-fn usd_set_rotate(doc, path, value) {
+fn usd_set_rotate(doc, edit_target, path, value) {
     usd_apply(doc, #{ SetRotate: #{
-        edit_target: "@root@", path: path, value: value
+        edit_target: edit_target, path: path, value: value
     }})
 }
 
 /// Set an arbitrary USD attribute. For `type_name == "string"`, `value` is
 /// raw string content; all other values use USDA literal syntax.
-fn usd_set_attribute(doc, path, name, type_name, value) {
+fn usd_set_attribute(doc, edit_target, path, name, type_name, value) {
     usd_apply(doc, #{ SetAttribute: #{
-        edit_target: "@root@",
+        edit_target: edit_target,
         path: path,
         name: name,
         type_name: type_name,
@@ -61,15 +61,15 @@ fn usd_set_attribute(doc, path, name, type_name, value) {
     }})
 }
 
-fn usd_set_relationship(doc, path, name, targets) {
+fn usd_set_relationship(doc, edit_target, path, name, targets) {
     usd_apply(doc, #{ SetRelationship: #{
-        edit_target: "@root@", path: path, name: name, targets: targets
+        edit_target: edit_target, path: path, name: name, targets: targets
     }})
 }
 
-fn usd_set_connection(doc, path, name, type_name, sources) {
+fn usd_set_connection(doc, edit_target, path, name, type_name, sources) {
     usd_apply(doc, #{ SetConnection: #{
-        edit_target: "@root@",
+        edit_target: edit_target,
         path: path,
         name: name,
         type_name: type_name,
@@ -77,9 +77,9 @@ fn usd_set_connection(doc, path, name, type_name, sources) {
     }})
 }
 
-fn usd_set_api_schemas(doc, path, schemas) {
+fn usd_set_api_schemas(doc, edit_target, path, schemas) {
     usd_apply(doc, #{ SetApiSchemas: #{
-        edit_target: "@root@", path: path, schemas: schemas
+        edit_target: edit_target, path: path, schemas: schemas
     }})
 }
 
@@ -132,9 +132,9 @@ fn program_output(name, connections) {
     }
 }
 
-fn usd_select_variant(doc, path, variant_set, variant) {
+fn usd_select_variant(doc, edit_target, path, variant_set, variant) {
     usd_apply(doc, #{ SetVariantSelection: #{
-        edit_target: "@root@",
+        edit_target: edit_target,
         path: path,
         variant_set: variant_set,
         variant: variant,
@@ -148,14 +148,15 @@ fn spawn_robot(entry_id, position) {
 }
 
 /// Attach a referenced component with one derived joint anchor.
-fn attach_fixed(doc, host_path, name, asset, placement) {
+fn attach_fixed(doc, edit_target, host_path, name, joint_name, asset, placement) {
     if doc == () { return __missing_document("USD"); }
     cmd("AttachComponent", #{
         doc: doc,
         spec: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             host_path: host_path,
             name: name,
+            joint_name: joint_name,
             asset: asset,
             placement: placement,
             rotate_deg: [0.0, 0.0, 0.0],
@@ -164,14 +165,15 @@ fn attach_fixed(doc, host_path, name, asset, placement) {
     })
 }
 
-fn attach_revolute(doc, host_path, name, asset, placement, rotate_deg, axis) {
+fn attach_revolute(doc, edit_target, host_path, name, joint_name, asset, placement, rotate_deg, axis) {
     if doc == () { return __missing_document("USD"); }
     cmd("AttachComponent", #{
         doc: doc,
         spec: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             host_path: host_path,
             name: name,
+            joint_name: joint_name,
             asset: asset,
             placement: placement,
             rotate_deg: rotate_deg,
@@ -180,18 +182,34 @@ fn attach_revolute(doc, host_path, name, asset, placement, rotate_deg, axis) {
     })
 }
 
-fn attach_prismatic(doc, host_path, name, asset, placement, rotate_deg, axis) {
+fn attach_prismatic(doc, edit_target, host_path, name, joint_name, asset, placement, rotate_deg, axis) {
     if doc == () { return __missing_document("USD"); }
     cmd("AttachComponent", #{
         doc: doc,
         spec: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             host_path: host_path,
             name: name,
+            joint_name: joint_name,
             asset: asset,
             placement: placement,
             rotate_deg: rotate_deg,
             joint: #{ Prismatic: #{ axis: axis } },
+        },
+    })
+}
+
+/// Remove one attached component, its exact generated joint, and optional
+/// socket occupancy as one validated USD transaction.
+fn detach_component(doc, edit_target, component_path, joint_path, socket_path) {
+    if doc == () { return __missing_document("USD"); }
+    cmd("DetachComponent", #{
+        doc: doc,
+        spec: #{
+            edit_target: edit_target,
+            component_path: component_path,
+            joint_path: joint_path,
+            socket_path: socket_path,
         },
     })
 }
@@ -243,11 +261,11 @@ fn modelica_set_parameter(class, component, param, value) {
 // through `fn mission_document(me)`. This keeps writes correct for referenced
 // prims and works with the existing typed command surface without a Rust rebuild.
 // Empty string is the logical tombstone used by mission_checkpoint_clear.
-fn mission_checkpoint(me, doc, key, value) {
+fn mission_checkpoint(me, doc, edit_target, key, value) {
     let path = name(me);
     if path == () || doc == () { return false; }
     let result = usd_set_attribute(
-        doc, path, "lunco:mission:checkpoint:" + key, "string", value
+        doc, edit_target, path, "lunco:mission:checkpoint:" + key, "string", value
     );
     result.ok == true
 }
@@ -262,6 +280,6 @@ fn mission_checkpoint_read(me, key) {
     result.attrs[attr]
 }
 
-fn mission_checkpoint_clear(me, doc, key) {
-    mission_checkpoint(me, doc, key, "")
+fn mission_checkpoint_clear(me, doc, edit_target, key) {
+    mission_checkpoint(me, doc, edit_target, key, "")
 }

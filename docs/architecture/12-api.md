@@ -73,7 +73,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | Query | Parameters | Description |
 |---|---|---|
 | `ListBundled` | `{}` | List embedded example models (`bundled://`). |
-| `ListOpenDocuments` | `{}` | List all documents currently open in the workspace. |
+| `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
 | `ListMsl` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list the Modelica Standard Library (MSL). |

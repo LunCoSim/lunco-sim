@@ -307,6 +307,10 @@ struct RefSpawn {
     /// the reference closure is installed; otherwise the edit arrives before
     /// the prim exists on the live stage and the new waypoint stays at origin.
     translate: Option<[f64; 3]>,
+    /// Child-scoped edits that arrive while the referenced root is still
+    /// loading. They are replayed after the reference and its composed
+    /// subtree exist, preserving the original ordered document intent.
+    deferred_ops: Vec<UsdOp>,
     /// Frames this spawn has waited for its closure. Bounded by
     /// [`MAX_REF_SPAWN_ATTEMPTS`] so an asset that never loads fails LOUDLY
     /// instead of being retried forever in silence — see `drain_ref_spawns`.
@@ -786,12 +790,10 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// joint, or any other physical prim) still rebuilds, since hiding a physics prim
 /// must drop its body/collider, which the visual-only refresh cannot express.
 fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
-    // A mission program API only changes how the owning vessel's existing mission
-    // metadata is interpreted; unlike physics APIs it does not add/remove bodies,
-    // colliders or entities. It has a live-stage author below and is refreshed at
-    // the vessel boundary, so never restart the scene merely to create a program.
+    // Metadata-only APIs do not add/remove bodies, colliders, or entities. They
+    // have live-stage authors below, so they can avoid restarting the scene.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
-        return !schemas.iter().all(|schema| schema == "LunCoProgramAPI");
+        return !incremental_api_schemas(schemas);
     }
     // A waypoint-marker hide reconciles incrementally (see the doc comment); any
     // other `SetActive` is a physics-presence change and must rebuild.
@@ -808,6 +810,18 @@ fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
             | UsdOp::SetVariantSelection { .. }
             | UsdOp::SetPayload { .. }
     )
+}
+
+/// Applied schemas with metadata-only runtime consequences. Physical schemas
+/// still take the rebuild path because their ECS body/collider presence cannot
+/// be reconciled by a visual subtree refresh.
+fn incremental_api_schemas(schemas: &[String]) -> bool {
+    schemas.iter().all(|schema| {
+        matches!(
+            schema.as_str(),
+            "LunCoProgramAPI" | "LunCoMountAttachmentAPI"
+        )
+    })
 }
 
 /// Whether `path` is a waypoint marker according to the composed USD stage.
@@ -919,23 +933,58 @@ fn behavior_owner_entity(
 /// instead. Reads/authors the `!Send` stage under short borrows.
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     use lunco_usd_bevy::CanonicalStages;
+
+    // A referenced AddPrim may be waiting on its asset closure. Preserve every
+    // later edit whose owner is inside that not-yet-live subtree; otherwise a
+    // relationship or metadata op would be accepted by the document and then
+    // silently disappear from the live stage. SetTranslate is the one existing
+    // fast path that has a dedicated field because it is applied at materialize.
+    if !matches!(op, UsdOp::AddPrim { .. }) {
+        let owned_path = match op {
+            UsdOp::RemovePrim { path, .. }
+            | UsdOp::SetTranslate { path, .. }
+            | UsdOp::SetRotate { path, .. }
+            | UsdOp::SetAttribute { path, .. }
+            | UsdOp::SetRelationship { path, .. }
+            | UsdOp::SetConnection { path, .. }
+            | UsdOp::SetApiSchemas { path, .. }
+            | UsdOp::SetActive { path, .. } => Some(path.as_str()),
+            _ => None,
+        };
+        if let Some(owned_path) = owned_path {
+            let pending_index =
+                world
+                    .resource::<PendingRefSpawns>()
+                    .items
+                    .iter()
+                    .position(|pending| {
+                        pending.scene_id == scene_id
+                            && (owned_path == pending.prim_path
+                                || owned_path
+                                    .strip_prefix(&pending.prim_path)
+                                    .is_some_and(|suffix| suffix.starts_with('/')))
+                    });
+            if let Some(index) = pending_index {
+                if matches!(op, UsdOp::RemovePrim { .. }) {
+                    world.resource_mut::<PendingRefSpawns>().items.remove(index);
+                    return;
+                }
+                let pending = &mut world.resource_mut::<PendingRefSpawns>().items[index];
+                if let UsdOp::SetTranslate { value, .. } = op {
+                    pending.translate = Some(*value);
+                } else {
+                    pending.deferred_ops.push(op.clone());
+                }
+                return;
+            }
+        }
+    }
+
     match op {
         UsdOp::SetTranslate { path, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            // Referenced prims are authored only after their asset closure is
-            // ready. Capture a transform that arrives before that point so a
-            // newly inserted waypoint is born at its requested location.
-            if let Some(pending) = world
-                .resource_mut::<PendingRefSpawns>()
-                .items
-                .iter_mut()
-                .find(|pending| pending.scene_id == scene_id && pending.prim_path == *path)
-            {
-                pending.translate = Some(*value);
-                return;
-            }
             if let Some(cs) = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
@@ -1264,9 +1313,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 refresh_prim_subtree(world, scene_id, path);
             }
         }
-        UsdOp::SetApiSchemas { path, schemas, .. }
-            if schemas.iter().all(|s| s == "LunCoProgramAPI") =>
-        {
+        UsdOp::SetApiSchemas { path, schemas, .. } if incremental_api_schemas(schemas) => {
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
@@ -1396,6 +1443,7 @@ fn spawn_prim_op(
                     asset_path,
                     ref_handle,
                     translate: None,
+                    deferred_ops: Vec::new(),
                     attempts: 0,
                 });
         }
@@ -1746,6 +1794,13 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 item.prim_path
             );
             continue;
+        }
+        // Replay child-owned metadata and relationships only after the
+        // referenced root exists on the live stage. The document already owns
+        // the complete ordered intent; this is just its delayed live-stage
+        // projection for first-use references.
+        for op in std::mem::take(&mut item.deferred_ops) {
+            apply_incremental_op_to_stage(world, item.scene_id, &op);
         }
         crate::live_consume::reproject_physics_if_needed(world, item.scene_id, &item.prim_path);
     }

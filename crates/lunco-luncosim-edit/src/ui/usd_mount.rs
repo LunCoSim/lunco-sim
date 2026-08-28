@@ -17,8 +17,11 @@
 
 use bevy::prelude::*;
 use lunco_usd::attach::resolve_mount_placement;
-use lunco_usd_bevy::mount::{read_plug, read_sockets};
+use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+
+/// Position and orientation tolerance for the editor's no-op Snap state.
+const MOUNT_ALIGNMENT_TOLERANCE: f32 = 1.0e-3;
 
 /// One socket row, with the snap already resolved when a part is present.
 #[derive(Clone)]
@@ -39,8 +42,9 @@ pub struct MountItem {
     pub part_path: Option<String>,
     /// The part's leaf name, for the button label.
     pub part_leaf: Option<String>,
-    /// The joint prim path (`<part>_Joint`, the attach convention), authored on snap.
-    pub joint_path: String,
+    /// The exact joint prim path recorded by the component, if the attachment
+    /// metadata is valid. No path is derived from the component name.
+    pub joint_path: Option<String>,
     /// For an EMPTY socket: the component asset it's designed to hold
     /// (`lunco:mount:asset`, raw path). `Some` here + `part_path == None` → the row
     /// offers "⊕ Attach", which references the asset in and snaps its plug to the
@@ -66,17 +70,12 @@ pub struct UsdMountView {
     pub entity: Option<Entity>,
     pub host_path: String,
     pub items: Vec<MountItem>,
+    pub diagnostics: Vec<MountDiagnostic>,
 }
 
 /// Leaf name after the last `/`.
 fn leaf(path: &str) -> String {
     path.rsplit('/').next().unwrap_or_default().to_string()
-}
-
-/// The attach-convention joint path for a part: `<host>/<leaf>_Joint`.
-fn joint_path_for(part: &str) -> String {
-    let host = part.rsplit_once('/').map(|(h, _)| h).unwrap_or("");
-    format!("{host}/{}_Joint", leaf(part))
 }
 
 /// View-model producer: resolve each advertised socket's snap for the selected host.
@@ -91,6 +90,7 @@ pub fn produce_usd_mount_view(
     view.entity = entity;
     view.host_path.clear();
     view.items.clear();
+    view.diagnostics.clear();
 
     let Some(entity) = entity else {
         return;
@@ -113,14 +113,15 @@ pub fn produce_usd_mount_view(
     let stage_view = cs.view();
     view.host_path = prim.path.clone();
 
-    for socket in read_sockets(&stage_view, &prim.path) {
+    let sockets = read_sockets(&stage_view, &prim.path);
+    view.diagnostics = sockets.diagnostics;
+    for socket in sockets.sockets {
         let (mut placement, mut rotate_deg, mut aligned) = (None, None, false);
         let part_leaf = socket.part.as_deref().map(leaf);
         let joint_path = socket
             .part
             .as_deref()
-            .map(joint_path_for)
-            .unwrap_or_default();
+            .and_then(|part| read_attachment_joint(&stage_view, part));
 
         if let Some(part) = socket.part.as_deref() {
             if let Some(plug) =
@@ -133,10 +134,19 @@ pub fn produce_usd_mount_view(
                             aligned =
                                 match lunco_usd_bevy::local_transform_at(&stage_view, &pp, 0.0) {
                                     Ok(Some(transform)) => {
-                                        let dt = (transform.translation
+                                        let translation_error = (transform.translation
                                             - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
                                         .length();
-                                        dt < 1.0e-3
+                                        let expected_rotation =
+                                            lunco_usd_bevy::euler_xyz_deg_to_quat(Vec3::new(
+                                                r[0] as f32,
+                                                r[1] as f32,
+                                                r[2] as f32,
+                                            ));
+                                        let rotation_error =
+                                            transform.rotation.angle_between(expected_rotation);
+                                        translation_error < MOUNT_ALIGNMENT_TOLERANCE
+                                            && rotation_error < MOUNT_ALIGNMENT_TOLERANCE
                                     }
                                     Ok(None) => false,
                                     Err(error) => {

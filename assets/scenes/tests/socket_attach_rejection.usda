@@ -14,16 +14,22 @@ def Xform "SocketAttachRejection" (
 )
 {
     def Xform "Chassis" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoMountHostAPI"]
     )
     {
-        def Xform "Mounts"
+        rel lunco:mount:sockets = [
+            </SocketAttachRejection/Chassis/Interfaces/occupied>,
+            </SocketAttachRejection/Chassis/Interfaces/incompatible>,
+            </SocketAttachRejection/Chassis/Interfaces/wrong_joint>
+        ]
+        def Xform "Interfaces"
         {
             def Xform "occupied" (
                 prepend apiSchemas = ["LunCoMountSocketAPI"]
             )
             {
                 uniform token lunco:mount:socket = "probe"
+                uniform token lunco:mount:joint = "fixed"
                 rel lunco:mount:part = </SocketAttachRejection/Chassis/ExistingProbe>
             }
 
@@ -32,6 +38,7 @@ def Xform "SocketAttachRejection" (
             )
             {
                 uniform token lunco:mount:socket = "not_probe"
+                uniform token lunco:mount:joint = "fixed"
                 uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
             }
 

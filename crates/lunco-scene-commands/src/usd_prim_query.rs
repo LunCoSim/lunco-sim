@@ -1,4 +1,5 @@
-//! `QueryUsdPrim` — read composed USD attributes off the live stage.
+//! `QueryUsdPrim` — read composed USD attributes and explicit relationships off
+//! the live stage.
 //!
 //! ## Why this exists
 //!
@@ -29,7 +30,7 @@
 //! `attrs` are the **authored** values in the prim's own space — that is the
 //! point; an invariant check wants what the file says. `world_position` is in
 //! the semantic active physics frame, matching [`QueryEntity`](crate::entity_query)
-//! and what `MoveEntity` accepts, and is present only when the prim spawned an
+//! and what `TransformEntity` accepts, and is present only when the prim spawned an
 //! entity.
 //!
 //! ## Request
@@ -37,6 +38,7 @@
 //! ```json
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "/Hab1/ShieldWall/OuterSurface"}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is
@@ -142,7 +144,8 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-/// `QueryUsdPrim { path, attrs? }` → composed attributes + world pose.
+/// `QueryUsdPrim { path, attrs?, rels?, children? }` → composed attributes,
+/// requested relationships, optional direct children, and world pose.
 pub struct QueryUsdPrimProvider;
 
 impl ApiQueryProvider for QueryUsdPrimProvider {
@@ -172,6 +175,19 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     .filter_map(|v| v.as_str().map(str::to_string))
                     .collect()
             });
+        let requested_relationships: Option<Vec<String>> = params
+            .get("rels")
+            .and_then(serde_json::Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect()
+            });
+        let include_children = params
+            .get("children")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
 
         // Which stage? Prefer the one the prim actually spawned from — a session
         // can hold several (a twin plus referenced assets), and picking the wrong
@@ -191,7 +207,12 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         // Read everything under ONE short borrow: `CanonicalStages` is `!Send`
         // and aliases the world, so it must be dropped before we touch entities.
         // (Same shape as `lunco_usd::live_consume`.)
-        let read: Option<(String, serde_json::Map<String, serde_json::Value>)> = {
+        let read: Option<(
+            String,
+            serde_json::Map<String, serde_json::Value>,
+            serde_json::Map<String, serde_json::Value>,
+            Vec<String>,
+        )> = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                 return ApiResponse::error(
                     ApiErrorCode::InternalError,
@@ -220,11 +241,30 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 for n in names {
                     map.insert(n.clone(), attr_json(&view, &prim, &n));
                 }
-                (type_name, map)
+                let mut relationships = serde_json::Map::new();
+                if let Some(names) = requested_relationships.clone() {
+                    for name in names {
+                        let targets = view
+                            .rel_targets(&prim, &name)
+                            .into_iter()
+                            .map(|path| path.as_str().to_string())
+                            .collect::<Vec<_>>();
+                        relationships.insert(name, serde_json::json!(targets));
+                    }
+                }
+                let children = if include_children {
+                    view.children(&prim)
+                        .into_iter()
+                        .map(|path| path.as_str().to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                (type_name, map, relationships, children)
             })
         };
 
-        let Some((type_name, attrs)) = read else {
+        let Some((type_name, attrs, relationships, children)) = read else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!("QueryUsdPrim: prim `{path}` not found on any loaded stage"),
@@ -239,6 +279,12 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             "attrs": attrs,
             "spawned": spawned.is_some(),
         });
+        if requested_relationships.is_some() {
+            out["relationships"] = serde_json::Value::Object(relationships);
+        }
+        if include_children {
+            out["children"] = serde_json::json!(children);
+        }
 
         if let Some((entity, _)) = spawned {
             let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {

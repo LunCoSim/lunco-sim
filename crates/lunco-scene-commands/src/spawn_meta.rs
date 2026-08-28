@@ -1,36 +1,14 @@
 //! The spawn/catalog metadata a `*.usda` authors on its own default prim —
 //! read with **openusd's real parser**, on every platform.
 //!
-//! # What this used to be
-//!
-//! A hand-rolled line scan (`line.split_once("lunco:spawnable")`), duplicated
-//! three ways, and a `build.rs` that baked the results of that scan into the
-//! binary as `BAKED_SPAWN_META` / `BAKED_DESCRIPTIONS` tables for the web.
-//!
-//! Every part of that existed to work around one thing: **a build script cannot
-//! depend on the crate it builds**, so the bake could not use the USD stack, so
-//! it needed a parser that was not the USD stack — and then native had to use
-//! that same weaker parser too, or the two platforms would disagree about what a
-//! file said about itself. (They already had: the description was once read one
-//! way natively and baked another.)
-//!
-//! # Why it is gone
-//!
-//! We *ship* the assets. The browser can read them — over HTTP, from the same
-//! bundle, at the same URL Bevy's `AssetServer` uses to load the file when it is
-//! spawned. Reading them is [`lunco_assets::asset_read::read_asset_bytes`]; the
-//! only thing the bake ever bought was skipping that read.
-//!
-//! So there is now ONE path: fetch the bytes, hand them to openusd. Which means:
+//! The catalog reads bytes through `lunco-assets` and parses them with the same
+//! USD parser used by native and browser consumers:
 //!
 //! - **One parser** — the real one. `bool lunco:spawnable` is read as a `bool`,
 //!   and a description containing an `=`, a quote, or a newline parses correctly
-//!   instead of being mangled by a scan.
-//! - **No stale table.** The bake was a *copy* of the assets' contents compiled
-//!   into the binary. Edit an asset without rebuilding and the web silently
-//!   served the old metadata; ship an asset the bake never saw and it was, by
-//!   its own fallback, "not spawnable".
-//! - **No `build.rs`** in this crate at all.
+//!   as authored.
+//! - **No generated metadata table.** The catalog always observes the asset
+//!   bytes that it is asked to load.
 //!
 //! # The properties are real USD now
 //!
@@ -39,12 +17,9 @@
 //! an explicit opt-in; placement is derived from standard `UsdPhysics` collision
 //! geometry by the editor.
 //!
-//! `lunco:description` is **deleted**, not declared. USD already has this field: every
-//! prim carries `doc` metadata — the standard "what is this thing" string that usdview
-//! and every other DCC display. Inventing a `lunco:` attribute to hold exactly what
-//! `doc` holds is the same mistake as `inputs:reflectance` (USD had `inputs:ior`) and
-//! `primvars:materialType` (never primvar data). Declaring it would have made the
-//! invention official instead of fixing it. It is now `doc = "..."`.
+//! `lunco:description` is not declared. USD already has this field: every prim
+//! carries `doc` metadata, the standard description shown by usdview and other
+//! USD tools.
 
 use lunco_usd_bevy::DefaultPrim;
 
@@ -54,18 +29,12 @@ pub struct SpawnMeta {
     /// `bool lunco:spawnable` — whether the file is a spawnable part.
     ///
     /// **Opt-in.** Default `false`: a file is offered in the palette only if it
-    /// says it is a part. This used to default to `true`, which meant the
-    /// catalogue offered *every* USD asset in the project and every scene, mission
-    /// and scenario had to remember to disclaim it — and three scenes had silently
-    /// forgotten to, so they showed up as spawnable parts. A default that must be
-    /// disclaimed everywhere is a default that leaks.
+    /// says it is a part.
     pub spawnable: bool,
     /// The prim's **`doc` metadata** — the blurb shown as a palette/Scenarios
     /// tooltip.
     ///
-    /// USD's own field, not ours. This was `custom string lunco:description`: a
-    /// bespoke attribute invented to hold precisely what `doc` already holds, and
-    /// which — being ours — no other tool could see. usdview shows `doc`.
+    /// USD's standard `doc` field, visible to usdview and other USD tools.
     pub description: Option<String>,
 }
 
@@ -88,9 +57,8 @@ pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
         return SpawnMeta::default();
     };
     SpawnMeta {
-        // Typed: `bool`, not the string "true". The scan this replaces accepted
-        // `true` or `1` textually and would equally have accepted `truthy`.
-        // Declared by `LunCoCatalogAPI` (see lunco-usd/schema/schema.usda).
+        // Typed `bool`, declared by `LunCoCatalogAPI` (see
+        // lunco-usd/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
         // USD's `doc` prim metadata — NOT an attribute of ours. See the field doc.
         description: prim.documentation(),
@@ -135,9 +103,7 @@ def Xform "Rover" (
         assert_eq!(parse_spawn_meta("not usd at all"), SpawnMeta::default());
     }
 
-    /// The line scan this replaces split on `=` and took the first quoted run on
-    /// the *line*, so a description containing an `=` came back truncated. A real
-    /// parse treats the value as a value.
+    /// Punctuation in the `doc` value is preserved by USD parsing.
     #[test]
     fn description_survives_an_equals_sign() {
         let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\" (\n    doc = \"Set thrust = 1, then go.\"\n)\n{\n}\n";
@@ -147,10 +113,8 @@ def Xform "Rover" (
         );
     }
 
-    /// A **multi-line** description. The line scan could not represent one at all
-    /// — it read a line at a time, and its own doc said so ("a multi-line string
-    /// value is not supported, which the tests pin rather than leave to be
-    /// discovered"). openusd's parser handles the triple-quoted form natively.
+    /// A **multi-line** description. openusd's parser handles the triple-quoted
+    /// form natively.
     ///
     /// Note openusd's USDA dialect takes NO backslash escapes: the lexer keeps the
     /// raw bytes between the delimiters, and its writer correspondingly never emits

@@ -92,6 +92,12 @@ impl Plugin for SceneEditPlugin {
         );
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
+        // The editor currently has a translation/rotation document contract.
+        // Scale is not a harmless frontend-only mode: exposing it while the
+        // scene command and USD lowering ignore scale creates a visible no-op.
+        // Keep the standard gizmo frontend, but configure only implemented
+        // semantic operations.
+        app.add_systems(Startup, gizmo::configure_gizmo_modes);
         app.add_plugins(commands::SpawnCommandPlugin);
         app.add_plugins(perf_bridge::PerfBridgePlugin);
 
@@ -152,8 +158,9 @@ impl Plugin for SceneEditPlugin {
         selection::register_all_commands(app);
         app.add_systems(Update, selection::draw_selection_bounds);
 
-        // Capture and restore are lifecycle edges. The pose itself is driven in
-        // InteractionSchedule below, which continues to run while physics is held.
+        // Capture and restore are lifecycle edges. The pose itself is converted
+        // in InteractionSchedule below, which continues to run while physics is
+        // held.
         //
         // NOTE: TransformGizmoPlugin is added before this plugin, so its update_gizmos
         // system runs first in the Last schedule (systems run in registration order).
@@ -168,21 +175,16 @@ impl Plugin for SceneEditPlugin {
             lunco_time::InteractionSchedule,
             (
                 gizmo::apply_gizmo_proxy_drag.after(lunco_time::InteractionRestoreSet),
-                gizmo::drive_gizmo_kinematic_pose
-                    .after(gizmo::apply_gizmo_proxy_drag)
-                    .before(lunco_time::InteractionRecordSet),
                 lunco_physics::apply_kinematic_drives
-                    .after(gizmo::drive_gizmo_kinematic_pose)
+                    .after(gizmo::apply_gizmo_proxy_drag)
                     .before(lunco_time::InteractionRecordSet),
             ),
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         // The gizmo crate reads a target's pose from `Transform` but its camera
-        // from `GlobalTransform` — under big_space those differ by a whole cell,
-        // so it drew the handles 2 km off-screen in the twin (and looked fine in
-        // the luncosim only because that scene sits in the origin cell). The
-        // `GizmoTarget` therefore lives on an unparented proxy whose `Transform`
-        // IS its render-frame pose; the drag comes back as a delta.
+        // from `GlobalTransform`. The `GizmoTarget` therefore lives on an
+        // unparented proxy whose `Transform` is render-frame state; every edit
+        // is converted back through the active BigSpace pose boundary.
         app.add_systems(
             Update,
             (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies),
@@ -197,7 +199,7 @@ impl Plugin for SceneEditPlugin {
         app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);
         // Ctrl+Z / Ctrl+Shift+Z → `UndoDocument` / `RedoDocument` on the active
         // document. The editor keeps NO private history: its edits are document
-        // ops (gizmo drag → `MoveEntity` → `UsdOp::SetTranslate`, delete →
+        // ops (gizmo drag → `TransformEntity` → one USD change set, delete →
         // `UsdOp::RemovePrim`, …), so undo is the Twin journal's undo — one
         // history, shared with the Inspector, the journal and every peer.
         app.add_systems(Update, commands::handle_undo_input);

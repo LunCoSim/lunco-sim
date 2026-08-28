@@ -1,14 +1,14 @@
 //! Mount-frame reading — the socket/plug schema behind the Object Builder's
 //! retrofit *snap* (`docs/architecture/48-object-builder.md` §3.1).
 //!
-//! A host body advertises **sockets** under a `Mounts` group; an attached part
-//! advertises the **plug** frame it hangs by. Snapping re-derives the part's
+//! A host body explicitly advertises **sockets** with a relationship; an attached
+//! part advertises the **plug** frame it hangs by. Snapping re-derives the part's
 //! placement so its plug coincides with the socket — `move the socket, the part
 //! and its joint follow` — which is the whole point of declaring mounts instead
 //! of hand-authoring a transform and a joint anchor that nothing reconciles.
 //!
 //! ```usda
-//! def Xform "Mounts" {
+//! def Xform "Interfaces" {
 //!     def Xform "wheel_fl" (
 //!         kind = "subcomponent"
 //!     ) {
@@ -29,13 +29,13 @@
 //! and on the part:
 //! ```usda
 //! uniform token lunco:mount:plug  = "wheel"
-//! rel           lunco:mount:frame = </Wheel/Mounts/hub>   # the plug frame
+//! rel           lunco:mount:frame = </Wheel/Interfaces/hub>   # the plug frame
 //! ```
 //!
 //! This module only *reads* — the frame math ([`resolve_mount_placement`]) and the
 //! op-lowering ([`realign_component_ops`]) live in `lunco-usd`, unit-tested with no
 //! stage. A socket/plug frame is composed relative to its **body root** (the host or
-//! the part), so a non-identity `Mounts` group is handled correctly.
+//! the part), so arbitrary intermediate grouping is handled correctly.
 //!
 //! [`resolve_mount_placement`]: lunco_usd::attach::resolve_mount_placement
 //! [`realign_component_ops`]: lunco_usd::attach::realign_component_ops
@@ -46,18 +46,18 @@ use openusd::sdf::Path as SdfPath;
 use crate::local_transform_at;
 use crate::read::UsdRead;
 
-/// A socket advertised by a host body — `<host>/Mounts/<name>` carrying
-/// `lunco:mount:socket`. What a snap reads to place the part it holds.
+/// A socket explicitly advertised by a host body, carrying `lunco:mount:socket`.
+/// What a snap reads to place the part it holds.
 #[derive(Debug, Clone)]
 pub struct MountSocket {
-    /// The socket prim path (`<host>/Mounts/<name>`).
+    /// The explicitly authored socket prim path.
     pub path: String,
     /// The socket leaf name (`wheel_fl`).
     pub name: String,
     /// What plug kind it accepts (`lunco:mount:socket`, e.g. `"wheel"`).
     pub accepts: String,
-    /// The joint kind the socket implies (`lunco:mount:joint`) — `"fixed"`,
-    /// `"revolute"`, or `"prismatic"`. Defaults to `"fixed"` when unauthored.
+    /// The required joint kind the socket implies (`lunco:mount:joint`) —
+    /// `"fixed"`, `"revolute"`, or `"prismatic"`.
     pub joint: String,
     /// The joint axis token (`lunco:mount:axis`) — `"X"` / `"Y"` / `"Z"`. `None`
     /// for a fixed joint.
@@ -75,9 +75,26 @@ pub struct MountSocket {
     pub asset: Option<String>,
 }
 
-/// The `Mounts` group path under a body root (`<body>/Mounts`).
-fn mounts_group(body_root: &str) -> String {
-    format!("{}/Mounts", body_root.trim_end_matches('/'))
+/// A rejected socket contract that the editor can show without treating it as
+/// an empty socket. The authored USD remains the authority; this is only the
+/// derived diagnostic surface for an invalid advertisement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountDiagnostic {
+    /// Socket path whose contract could not be read.
+    pub path: String,
+    /// Human-readable reason for rejection.
+    pub message: String,
+}
+
+/// Result of reading a host's advertised sockets. Invalid advertisements are
+/// returned as diagnostics so callers can distinguish "no socket" from
+/// "socket authored but invalid".
+#[derive(Debug, Clone, Default)]
+pub struct MountReadout {
+    /// Valid socket contracts.
+    pub sockets: Vec<MountSocket>,
+    /// Rejected socket contracts.
+    pub diagnostics: Vec<MountDiagnostic>,
 }
 
 /// The parent path of `path` as a string, or `None` at the pseudo-root.
@@ -114,10 +131,10 @@ fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Optio
 }
 
 /// The local frame of `mount_prim` expressed in `body_root`'s space — the product
-/// of local transforms from `body_root`'s child down to `mount_prim`, i.e. every
-/// intermediate `Mounts` xform is folded in, but `body_root`'s own placement is
-/// **not** (we want a body-local frame). An unauthored xform reads as USD's
-/// identity; a malformed authored xform rejects the frame.
+/// of local transforms from `body_root`'s child down to `mount_prim`, so every
+/// explicitly authored intermediate grouping is folded in, but `body_root`'s own
+/// placement is **not** (we want a body-local frame). An unauthored xform reads
+/// as USD's identity; a malformed authored xform rejects the frame.
 pub fn frame_in_body(
     reader: &crate::StageView<'_>,
     body_root: &str,
@@ -154,30 +171,66 @@ pub fn frame_in_body(
     Some(acc)
 }
 
-/// Every socket a `host` body advertises under its `Mounts` group. Empty when the
-/// host declares none (the common case today) — the caller shows nothing.
-pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocket> {
-    let Ok(group) = SdfPath::new(&mounts_group(host)) else {
-        return Vec::new();
+/// Every socket a `host` body advertises through `lunco:mount:sockets`. The
+/// relationship is the topology authority; no child/group name is special.
+pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> MountReadout {
+    let Ok(host_path) = SdfPath::new(host.trim_end_matches('/')) else {
+        return MountReadout {
+            sockets: Vec::new(),
+            diagnostics: vec![MountDiagnostic {
+                path: host.to_string(),
+                message: "host path is not a valid USD prim path".to_string(),
+            }],
+        };
     };
+    if !reader.has_api_schema(&host_path, "LunCoMountHostAPI") {
+        return MountReadout::default();
+    }
     let mut out = Vec::new();
-    for child in reader.children(&group) {
+    let mut diagnostics = Vec::new();
+    for child in reader.rel_targets(&host_path, "lunco:mount:sockets") {
+        if child.is_property_path() || !crate::is_descendant_or_self(&child, host) {
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "advertised target is not a descendant prim of the host",
+            );
+            continue;
+        }
         if !reader.has_api_schema(&child, "LunCoMountSocketAPI") {
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "advertised target has no LunCoMountSocketAPI",
+            );
             continue;
         }
         let Some(accepts) = reader
             .text(&child, "lunco:mount:socket")
             .filter(|value| !value.is_empty())
         else {
-            bevy::log::warn!(
-                "mount socket {} applies LunCoMountSocketAPI but has no accepted plug kind",
-                child.as_str()
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "socket has no accepted plug kind",
             );
             continue;
         };
-        let joint = reader
+        let Some(joint) = reader
             .text(&child, "lunco:mount:joint")
-            .unwrap_or_else(|| "fixed".to_string());
+            .filter(|value| !value.is_empty())
+        else {
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "socket has no lunco:mount:joint",
+            );
+            continue;
+        };
         let authored_axis = reader.text(&child, "lunco:mount:axis");
         let axis = match joint.as_str() {
             "fixed" => {
@@ -185,9 +238,11 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
                     .as_deref()
                     .is_some_and(|value| !value.is_empty())
                 {
-                    bevy::log::warn!(
-                        "fixed mount socket {} authors an axis; socket rejected",
-                        child.as_str()
+                    reject_socket(
+                        &mut diagnostics,
+                        host,
+                        child.as_str(),
+                        "fixed socket must not author an axis",
                     );
                     continue;
                 }
@@ -196,40 +251,56 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
             "revolute" | "prismatic" => match authored_axis.as_deref() {
                 Some(axis @ ("X" | "Y" | "Z")) => Some(axis.to_string()),
                 _ => {
-                    bevy::log::warn!(
-                        "{} mount socket {} needs axis X, Y, or Z; socket rejected",
-                        joint,
-                        child.as_str()
+                    reject_socket(
+                        &mut diagnostics,
+                        host,
+                        child.as_str(),
+                        format!("{joint} socket needs axis X, Y, or Z"),
                     );
                     continue;
                 }
             },
             _ => {
-                bevy::log::warn!(
-                    "mount socket {} has unsupported joint token {:?}; socket rejected",
+                reject_socket(
+                    &mut diagnostics,
+                    host,
                     child.as_str(),
-                    joint
+                    format!("unsupported joint token {joint:?}"),
                 );
                 continue;
             }
         };
         let Some(frame) = frame_in_body(reader, host, &child) else {
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "socket frame has an invalid transform",
+            );
             continue;
         };
-        let part = match reader.rel_target(&child, "lunco:mount:part") {
+        let part_targets = reader.rel_targets(&child, "lunco:mount:part");
+        if part_targets.len() > 1 {
+            reject_socket(
+                &mut diagnostics,
+                host,
+                child.as_str(),
+                "socket has multiple lunco:mount:part targets",
+            );
+            continue;
+        }
+        let part = match part_targets.into_iter().next() {
             Some(path) => {
-                let Ok(path) = SdfPath::new(&path) else {
-                    bevy::log::warn!(
-                        "mount socket {} has an invalid part relationship; socket rejected",
-                        child.as_str()
-                    );
-                    continue;
-                };
-                if !crate::is_descendant_or_self(&path, host) {
-                    bevy::log::warn!(
-                        "mount socket {} points outside host {}; socket rejected",
+                if path.is_property_path() || !crate::is_descendant_or_self(&path, host) {
+                    reject_socket(
+                        &mut diagnostics,
+                        host,
                         child.as_str(),
-                        host
+                        if path.is_property_path() {
+                            "part target must be a prim, not a property".to_string()
+                        } else {
+                            format!("part target {} is outside host", path.as_str())
+                        },
                     );
                     continue;
                 }
@@ -257,7 +328,48 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
             asset,
         });
     }
-    out
+    MountReadout {
+        sockets: out,
+        diagnostics,
+    }
+}
+
+fn reject_socket(
+    diagnostics: &mut Vec<MountDiagnostic>,
+    host: &str,
+    path: &str,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    bevy::log::warn!(
+        "mount host {} advertises invalid socket {}: {}; socket rejected",
+        host,
+        path,
+        message
+    );
+    diagnostics.push(MountDiagnostic {
+        path: path.to_string(),
+        message,
+    });
+}
+
+/// Read the exact joint recorded by an attached component. The relationship is
+/// the only supported identity path; callers must not reconstruct a joint name
+/// from the component leaf.
+pub fn read_attachment_joint(reader: &crate::StageView<'_>, part: &str) -> Option<String> {
+    let part_path = SdfPath::new(part).ok()?;
+    if !reader.has_api_schema(&part_path, "LunCoMountAttachmentAPI") {
+        return None;
+    }
+    let targets = reader.rel_targets(&part_path, "lunco:mount:attachmentJoint");
+    if targets.len() != 1 || targets[0].is_property_path() {
+        bevy::log::warn!(
+            "attached component {} must have exactly one prim-valued attachment joint",
+            part
+        );
+        return None;
+    }
+    Some(targets[0].as_str().to_string())
 }
 
 /// The plug advertised by an attached `part`, including its kind and frame in the
@@ -312,15 +424,16 @@ mod mount_reader_tests {
     //! Exercises the socket/plug reader against a **real composed stage** — the
     //! read half of the retrofit snap that unit-testing `resolve_mount_placement`
     //! (in `lunco-usd`, over bare transforms) can't reach: that the frames read
-    //! *body-local* through an intermediate `Mounts` group, and that the mount
+    //! *body-local* through an arbitrary intermediate group, and that the mount
     //! metadata + `part` relationship compose. A wrong frame here is the physics
     //! bug the design deferred the UI for; this pins it deterministically.
 
     use super::{read_plug, read_sockets};
     use crate::canonical::{CanonicalStage, StageRecipe};
 
-    // Base at (5,6,5); a socket 2.5 up under Base/Mounts naming a child Arm; Arm
-    // (off at +2 X) carries a plug frame under Arm/Mounts/hub offset (0.1,0.2,0.3).
+    // Base at (5,6,5); a socket 2.5 up under an arbitrary Interfaces group
+    // naming a child Arm; Arm (off at +2 X) carries a plug frame under
+    // Arm/Interfaces/hub offset (0.1,0.2,0.3).
     const SCENE: &str = r#"#usda 1.0
 (
     defaultPrim = "World"
@@ -328,11 +441,14 @@ mod mount_reader_tests {
 )
 def Xform "World"
 {
-    def Cube "Base"
+    def Cube "Base" (
+        prepend apiSchemas = ["LunCoMountHostAPI"]
+    )
     {
+        rel lunco:mount:sockets = [</World/Base/Interfaces/arm>]
         double3 xformOp:translate = (5, 6, 5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        def Xform "Mounts"
+        def Xform "Interfaces"
         {
             def Xform "arm" (
                 prepend apiSchemas = ["LunCoMountSocketAPI"]
@@ -353,8 +469,8 @@ def Xform "World"
             double3 xformOp:translate = (2, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             uniform token lunco:mount:plug = "arm"
-            rel lunco:mount:frame = </World/Base/Arm/Mounts/hub>
-            def Xform "Mounts"
+            rel lunco:mount:frame = </World/Base/Arm/Interfaces/hub>
+            def Xform "Interfaces"
             {
                 def Xform "hub"
                 {
@@ -378,8 +494,9 @@ def Xform "World"
         let view = cs.view();
 
         let sockets = read_sockets(&view, "/World/Base");
-        assert_eq!(sockets.len(), 1, "one socket under Base/Mounts");
-        let s = &sockets[0];
+        assert_eq!(sockets.sockets.len(), 1, "one explicitly advertised socket");
+        assert!(sockets.diagnostics.is_empty());
+        let s = &sockets.sockets[0];
         assert_eq!(s.name, "arm");
         assert_eq!(s.accepts, "arm");
         assert_eq!(s.joint, "revolute");
@@ -395,7 +512,7 @@ def Xform "World"
     }
 
     #[test]
-    fn reads_plug_frame_part_local_through_mounts_group() {
+    fn reads_plug_frame_part_local_through_explicit_frame_path() {
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
             .expect("stage builds");
         let view = cs.view();
@@ -416,8 +533,8 @@ def Xform "World"
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
             .expect("stage builds");
         let view = cs.view();
-        // The Arm has a plug but no `Mounts` sockets — read_sockets is empty.
-        assert!(read_sockets(&view, "/World/Base/Arm").is_empty());
+        // The Arm has a plug but is not a mount host — read_sockets is empty.
+        assert!(read_sockets(&view, "/World/Base/Arm").sockets.is_empty());
     }
 
     #[test]
@@ -429,7 +546,9 @@ def Xform "World"
             .expect("stage builds");
         let view = cs.view();
 
-        assert!(read_sockets(&view, "/World/Base").is_empty());
+        let result = read_sockets(&view, "/World/Base");
+        assert!(result.sockets.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
         assert!(read_plug(&view, "/World/Base/Arm").is_none());
     }
 
@@ -448,7 +567,9 @@ def Xform "World"
             .expect("stage builds");
         let view = cs.view();
 
-        assert!(read_sockets(&view, "/World/Base").is_empty());
+        let result = read_sockets(&view, "/World/Base");
+        assert!(result.sockets.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
     }
 
     #[test]

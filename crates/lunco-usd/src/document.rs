@@ -2472,6 +2472,7 @@ mod tests {
             LayerId::root(),
             "/Rig/Chassis",
             "Wheel",
+            "constraint_47",
             "components/mobility/wheel.usda",
             [0.5, -0.3, 1.2],
             AttachJoint::Revolute { axis: Axis::X },
@@ -2486,7 +2487,7 @@ mod tests {
             "part referenced in"
         );
         assert_eq!(
-            prim_type(&doc, "/Rig/Chassis/Wheel_Joint").as_deref(),
+            prim_type(&doc, "/Rig/Chassis/constraint_47").as_deref(),
             Some("PhysicsRevoluteJoint"),
             "joint prim defined with the requested type"
         );

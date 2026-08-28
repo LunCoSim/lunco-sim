@@ -2,14 +2,14 @@
 //!
 //! - `SpawnEntity` — spawn from the catalog at a world position.
 //! - `MoveEntity` — teleport an entity to an absolute world position.
-//!   Mirrors what the gizmo does on drag: swap to Kinematic, update
-//!   Transform/Position/LinearVelocity, so joint constraints
-//!   propagate the move to coupled bodies. Lets API clients
-//!   (MCP tools, automated tests) drive entity motion exactly the
-//!   way a human would with the gizmo.
+//! - `TransformEntity` — teleport an entity's complete pose in one command.
+//!   This is the command path used by the gizmo on drag-end: swap to Kinematic,
+//!   update the authoritative Transform/cell pose, and let the BigSpace/Avian
+//!   adapter propagate it to coupled bodies. Lets API clients (MCP tools,
+//!   automated tests) drive entity motion exactly the way a human would with
+//!   the gizmo.
 
-use avian3d::physics_transform::Position;
-use avian3d::prelude::{LinearVelocity, RigidBody};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -153,10 +153,10 @@ fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>
 }
 
 /// Give the CONTROL entity of every control-bound vessel a [`ReleaseActuator`], so
-/// its `release` port is where the control binding actually writes. (A USD prim can
-/// spawn several entities sharing one `UsdPrimPath` — the control/model entity vs the
-/// physics-body entity a joint references; the binding targets the former, so the
-/// actuator must live there. `joint_release_system` bridges to the joint by path.)
+/// its `release` port is where the control binding actually writes. A USD prim can
+/// spawn several entities sharing one `UsdPrimPath`; the control binding targets
+/// the control/model entity, while `joint_release_system` bridges to the physics
+/// body by path.
 fn attach_release_actuator(
     mut commands: Commands,
     q: Query<
@@ -252,11 +252,6 @@ pub fn persist_detach_to_runtime_layer(
 
 /// Lower one document-backed spawn into the single USD mutation that owns its
 /// live entity, journal entry, reload behaviour, and network propagation.
-///
-/// The old path instantiated an ECS object first and then authored another prim
-/// into the live runtime layer. Twin projection correctly instantiated that
-/// authored prim too, producing two overlapping rovers in host mode. A mounted,
-/// doc-backed scene must instead have exactly one producer: its USD document.
 fn runtime_spawn_ops(
     entry_id: &str,
     asset_path: &str,
@@ -553,19 +548,8 @@ pub fn apply_replicated_spawns(
 /// Kinematic until another command (or a gizmo drag-end) restores it.
 #[Command(default)]
 pub struct MoveEntity {
-    /// API-stable global entity ID (the `api_id` from `ListEntities`),
-    /// resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.
-    ///
-    /// Deliberately `u64`, not `Entity` — this is "**Pattern B**". The
-    /// type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)
-    /// auto-converts only `Entity`-typed fields, so a `u64` field opts out and
-    /// is resolved here instead. NOT migrated to `Entity` because this command
-    /// is `#[Command(default)]`, which derives `Default`, and `Entity` has no
-    /// `Default`. Leaving it `u64` is a cleanliness leftover, not a
-    /// names/correctness issue — the codec no longer keys off field names at
-    /// all, so this `u64` is simply ignored by it. (An earlier comment here
-    /// blamed the resolver "dropping the generation"; that was stale — the
-    /// codec preserves index+generation via `Entity::to_bits()`.)
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`.
     pub entity_id: u64,
     /// Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].
     /// The concrete BigSpace grid, the entity's actual parent, and the cell/local
@@ -577,12 +561,27 @@ pub struct MoveEntity {
 
 /// Maximum one-command displacement for a physics body.
 ///
-/// `MoveEntity` is also the gizmo's commit verb, so an input discontinuity must
-/// not turn one frame of pointer movement into a kilometre-scale teleport. Large
-/// deliberate teleports remain available for non-physics scene entities; dynamic
-/// and kinematic bodies use the authored scene bounds and this local continuity
-/// guard.
+/// `MoveEntity` and `TransformEntity` are the scene-edit commit verbs, so an
+/// input discontinuity must not turn one frame of pointer movement into a
+/// kilometre-scale teleport. Large deliberate teleports remain available for
+/// non-physics scene entities; dynamic and kinematic bodies use the authored
+/// scene bounds and this local continuity guard.
 pub const MAX_MOVE_ENTITY_DISPLACEMENT: f64 = 500.0;
+
+/// Return the shortest angular displacement from `previous` to `target`.
+///
+/// Kinematic bodies expose angular velocity to Avian in the same active physics
+/// frame as their rotation. A complete pose edit therefore needs the rotational
+/// counterpart to the linear one-tick pulse used by [`MoveEntity`].
+fn shortest_angular_delta(previous: DQuat, target: DQuat) -> DVec3 {
+    let mut delta = target.normalize() * previous.normalize().inverse();
+    // `q` and `-q` represent the same orientation. Keep the pulse on the
+    // shortest arc so a sign-only wire difference cannot request a full turn.
+    if delta.w < 0.0 {
+        delta = -delta;
+    }
+    delta.to_scaled_axis()
+}
 
 /// Observer for `MoveEntity`.
 #[on_command(MoveEntity)]
@@ -594,11 +593,7 @@ pub fn on_move_entity_command(
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
-        Query<(
-            &mut Transform,
-            Option<&mut Position>,
-            Option<&mut LinearVelocity>,
-        )>,
+        Query<(&mut Transform, Option<&mut LinearVelocity>)>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -697,7 +692,7 @@ pub fn on_move_entity_command(
         }
     }
     let mut writable = spatial.p1();
-    let Ok((mut tf, pos_opt, lin_vel_opt)) = writable.get_mut(target) else {
+    let Ok((mut tf, lin_vel_opt)) = writable.get_mut(target) else {
         warn!(
             "MOVE_ENTITY: entity {:?} (api_id={}) disappeared during move",
             target, cmd.entity_id
@@ -711,15 +706,11 @@ pub fn on_move_entity_command(
         commands.entity(target).try_remove::<CellCoord>();
     }
 
-    // Force the body to Kinematic for the duration of the move so
-    // Avian treats the new pose as authoritative. RigidBody is an
-    // immutable Avian component (no `&mut` access) — `insert`
-    // replaces it. The original kind is stashed on the marker and
-    // restored by `clear_kinematic_pulse_velocity` one tick later —
-    // a move stream (gizmo drag) must keep the FIRST capture, or the
-    // second move would capture the Kinematic we just inserted and
-    // the body would stay Kinematic forever (the pre-2026-07-11 bug:
-    // a moved rover hovered in mid-air permanently).
+    // Force the body to Kinematic for the duration of the move so Avian treats
+    // the new pose as authoritative. The original kind is stashed on the
+    // marker and restored after the one-tick propagation pulse. A repeated
+    // move keeps the first captured kind rather than capturing the temporary
+    // Kinematic state.
     let restore = match q_marker.get(target) {
         Ok(marker) => marker.restore,
         Err(_) => q_rb
@@ -731,19 +722,6 @@ pub fn on_move_entity_command(
     if q_rb.get(target).is_ok() {
         commands.entity(target).try_insert(RigidBody::Kinematic);
     }
-
-    // NO `Position` write here. `Position` lives in the active Avian/BigSpace
-    // physics frame, while `Transform` is parent-local/cell-local storage.
-    // Seating the pose is already owned, in the one place
-    // that knows the whole cell chain: `BigSpacePhysicsBridgePlugin`'s
-    // `pose_to_position` fires on exactly the external `(cell, Transform)` write
-    // we just made and recomputes `Position`/`Rotation` from it (and carries it
-    // to jointed descendants). Without the bridge registered, avian's own
-    // `transform_to_position` does the same job. Either way, a hand-rolled
-    // Position write here can only be a second, wronger opinion — for a
-    // Kinematic body the bridge's writeback then pushes that wrong Position back
-    // into `Transform` and the object jumps a full cell (2 km at the moonbase).
-    let _ = pos_opt;
 
     // **Joint-propagation pulse**: set `LinearVelocity` to a one-tick
     // velocity equal to (delta / dt). Avian's joint constraint solver
@@ -762,9 +740,10 @@ pub fn on_move_entity_command(
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
-    commands
-        .entity(target)
-        .try_insert(JustMovedKinematic { restore });
+    commands.entity(target).try_insert(JustMovedKinematic {
+        restore,
+        angular_pulse: false,
+    });
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -793,12 +772,13 @@ pub fn on_move_entity_command(
 /// jointed descendants); a hand-written `Rotation` is a second, wronger opinion
 /// that the bridge's writeback then undoes. The body is pinned Kinematic for the
 /// move, as `MoveEntity` does, so the solver treats the new pose as
-/// authoritative rather than fighting it.
+/// authoritative rather than fighting it. When `AngularVelocity` is present,
+/// the live handler also publishes a bounded one-tick angular pulse so jointed
+/// bodies receive the rotation; cleanup clears it after the physics step.
 #[Command(default)]
 pub struct RotateEntity {
-    /// API-stable global entity ID (the `api_id` from `ListEntities`). `u64`
-    /// rather than `Entity` for the same reason `MoveEntity` uses one:
-    /// `#[Command(default)]` derives `Default`, and `Entity` has none.
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`.
     pub entity_id: u64,
     /// Target world orientation as `[x, y, z, w]`. Normalised on arrival — a
     /// quaternion that has been interpolated or sampled is unit only to float
@@ -813,12 +793,13 @@ pub struct RotateEntity {
 #[on_command(RotateEntity)]
 pub fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
+    time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
-        Query<&mut Transform>,
+        Query<(&mut Transform, Option<&mut AngularVelocity>)>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -840,11 +821,11 @@ pub fn on_rotate_entity_command(
         );
         return;
     }
-    let local_rotation = {
+    let q_in = q_in.normalize();
+    let (previous_rotation, local_rotation) = {
         let q_spatial = spatial.p0();
-        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        let Some((_, previous_rotation)) = lunco_core::coords::pose_in_grid(
             target,
-            q_in.normalize(),
             active_frame.0,
             &q_parents,
             &q_grids,
@@ -857,10 +838,25 @@ pub fn on_rotate_entity_command(
             );
             return;
         };
-        local_rotation
+        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+            target,
+            q_in,
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "ROTATE_ENTITY: entity is not connected to the active physics frame"
+            );
+            return;
+        };
+        (previous_rotation, local_rotation)
     };
     let mut writable = spatial.p1();
-    let Ok(mut tf) = writable.get_mut(target) else {
+    let Ok((mut tf, angular_velocity)) = writable.get_mut(target) else {
         warn!(
             "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
             target, cmd.entity_id
@@ -868,6 +864,11 @@ pub fn on_rotate_entity_command(
         return;
     };
     tf.rotation = local_rotation.as_quat();
+    if let Some(mut angular_velocity) = angular_velocity {
+        let dt = time.delta_secs().max(1.0 / 240.0) as f64;
+        angular_velocity.0 = (shortest_angular_delta(previous_rotation, q_in) / dt)
+            .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+    }
 
     // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
     // otherwise just an initial condition the solver immediately argues with.
@@ -883,15 +884,315 @@ pub fn on_rotate_entity_command(
     };
     if q_rb.get(target).is_ok() {
         commands.entity(target).try_insert(RigidBody::Kinematic);
-        commands
-            .entity(target)
-            .try_insert(JustMovedKinematic { restore });
+        commands.entity(target).try_insert(JustMovedKinematic {
+            restore,
+            angular_pulse: true,
+        });
     }
 
     info!(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
         cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
     );
+}
+
+/// Set an entity's complete active-frame pose as one scene edit.
+///
+/// This is the compound counterpart to [`MoveEntity`] and [`RotateEntity`].
+/// Interactive editors use it when translation and rotation are produced by
+/// one gesture, so live seating and document persistence share one semantic
+/// command and one undo/change-set boundary.
+/// For physics bodies, the live handler publishes bounded one-tick linear and
+/// angular pulses when the corresponding Avian components are present, allowing
+/// joint constraints to consume the complete pose edit before cleanup.
+#[Command(default)]
+pub struct TransformEntity {
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`.
+    pub entity_id: u64,
+    /// Target translation in the explicit active physics frame.
+    pub translation: [f64; 3],
+    /// Target orientation in the explicit active physics frame, `[x,y,z,w]`.
+    pub rotation: [f64; 4],
+}
+
+/// Live observer for [`TransformEntity`].
+#[on_command(TransformEntity)]
+pub fn on_transform_entity_command(
+    trigger: On<TransformEntity>,
+    time: Res<Time>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    mut commands: Commands,
+    mut spatial: ParamSet<(
+        Query<(Option<&CellCoord>, &Transform)>,
+        Query<(
+            &mut Transform,
+            Option<&mut LinearVelocity>,
+            Option<&mut AngularVelocity>,
+        )>,
+    )>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_rb: Query<&RigidBody>,
+    q_marker: Query<&JustMovedKinematic>,
+    bounds: Option<Res<lunco_physics::WorldBounds>>,
+) {
+    let cmd = trigger.event();
+    if cmd.translation.iter().any(|value| !value.is_finite()) {
+        warn!(
+            "TRANSFORM_ENTITY: rejecting non-finite translation for api_id={}",
+            cmd.entity_id
+        );
+        return;
+    }
+    let rotation = DQuat::from_array(cmd.rotation);
+    if !rotation.is_finite() || rotation.length_squared() < 1.0e-12 {
+        warn!(
+            "TRANSFORM_ENTITY: rejecting degenerate rotation for api_id={}",
+            cmd.entity_id
+        );
+        return;
+    }
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("TRANSFORM_ENTITY: no api_id={}", cmd.entity_id);
+        return;
+    };
+    let target_position = DVec3::from_array(cmd.translation);
+    if q_grids.get(active_frame.0).is_err() {
+        warn!(
+            active_frame = ?active_frame.0,
+            "TRANSFORM_ENTITY: active physics frame is not a BigSpace Grid"
+        );
+        return;
+    }
+
+    let (previous_position, previous_rotation, old_cell, new_cell, new_translation, new_rotation) = {
+        let q_spatial = spatial.p0();
+        let Ok((old_cell, _)) = q_spatial.get(target) else {
+            warn!("TRANSFORM_ENTITY: entity {:?} has no Transform", target);
+            return;
+        };
+        let Some((previous_position, previous_rotation)) = lunco_core::coords::pose_in_grid(
+            target,
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "TRANSFORM_ENTITY: entity is not connected to the active physics frame"
+            );
+            return;
+        };
+        let Some((new_cell, new_translation)) =
+            lunco_core::coords::position_in_grid_to_parent_local(
+                target,
+                target_position,
+                active_frame.0,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+        else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "TRANSFORM_ENTITY: cannot express translation in the entity parent frame"
+            );
+            return;
+        };
+        let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+            target,
+            rotation.normalize(),
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "TRANSFORM_ENTITY: cannot express rotation in the entity parent frame"
+            );
+            return;
+        };
+        (
+            previous_position,
+            previous_rotation,
+            old_cell.copied(),
+            new_cell,
+            new_translation,
+            new_rotation,
+        )
+    };
+
+    let delta = target_position - previous_position;
+    let physics_body = q_rb
+        .get(target)
+        .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
+    if physics_body {
+        if delta.length_squared() > MAX_MOVE_ENTITY_DISPLACEMENT.powi(2) {
+            warn!(
+                "TRANSFORM_ENTITY: rejecting {:.1} m physics-body jump for api_id={} (limit {:.1} m)",
+                delta.length(),
+                cmd.entity_id,
+                MAX_MOVE_ENTITY_DISPLACEMENT,
+            );
+            return;
+        }
+        if bounds
+            .as_deref()
+            .is_some_and(|world| world.escaped(target_position))
+        {
+            warn!(
+                "TRANSFORM_ENTITY: rejecting physics-body target outside world bounds for api_id={} at {:?}",
+                cmd.entity_id, target_position,
+            );
+            return;
+        }
+    }
+
+    {
+        let mut writable = spatial.p1();
+        let Ok((mut tf, lin_vel_opt, angular_vel_opt)) = writable.get_mut(target) else {
+            warn!(
+                "TRANSFORM_ENTITY: entity {:?} disappeared during move",
+                target
+            );
+            return;
+        };
+        tf.translation = new_translation;
+        tf.rotation = new_rotation.as_quat();
+        if let Some(mut lin_vel) = lin_vel_opt {
+            let dt = time.delta_secs().max(1.0 / 240.0) as f64;
+            lin_vel.0 = delta / dt;
+        }
+        if let Some(mut angular_vel) = angular_vel_opt {
+            let dt = time.delta_secs().max(1.0 / 240.0) as f64;
+            angular_vel.0 = (shortest_angular_delta(previous_rotation, rotation.normalize()) / dt)
+                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+        }
+    }
+    match (new_cell, old_cell) {
+        (Some(cell), _) => {
+            commands.entity(target).try_insert(cell);
+        }
+        (None, Some(_)) => {
+            commands.entity(target).try_remove::<CellCoord>();
+        }
+        (None, None) => {}
+    }
+
+    let restore = match q_marker.get(target) {
+        Ok(marker) => marker.restore,
+        Err(_) => q_rb
+            .get(target)
+            .ok()
+            .copied()
+            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
+    };
+    if q_rb.get(target).is_ok() {
+        commands.entity(target).try_insert(RigidBody::Kinematic);
+        commands.entity(target).try_insert(JustMovedKinematic {
+            restore,
+            angular_pulse: true,
+        });
+    }
+
+    // The transform write above is the storage authority. The BigSpace bridge
+    // derives Avian Position/Rotation from it; never create a second Position
+    // writer here.
+    info!(
+        "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",
+        cmd.entity_id, target_position, rotation
+    );
+}
+
+/// Persist [`TransformEntity`] as one runtime-layer USD change set.
+pub fn persist_transform_to_runtime_layer(
+    trigger: On<TransformEntity>,
+    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = api_registry.resolve(&global_id) else {
+        return;
+    };
+    let Some((doc, path)) = authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
+        return;
+    };
+    let Some((cell, local_translation)) = lunco_core::coords::position_in_grid_to_parent_local(
+        target,
+        DVec3::from_array(cmd.translation),
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        warn!(
+            ?target,
+            active_frame = ?active_frame.0,
+            "TRANSFORM_ENTITY: authored entity is disconnected; not persisting"
+        );
+        return;
+    };
+    let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        target,
+        DQuat::from_array(cmd.rotation).normalize(),
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        return;
+    };
+    let Some(parent) = q_parents.get(target).ok().map(ChildOf::parent) else {
+        return;
+    };
+    let authored_translation = match (cell, q_grids.get(parent).ok()) {
+        (Some(cell), Some(grid)) => {
+            grid.grid_position_double(&cell, &Transform::from_translation(local_translation))
+        }
+        (None, None) => local_translation.as_dvec3(),
+        _ => {
+            warn!(
+                ?target,
+                ?parent,
+                "TRANSFORM_ENTITY: inconsistent Grid storage; not persisting"
+            );
+            return;
+        }
+    };
+    let (rx, ry, rz) = local_rotation.to_euler(EulerRot::XYZ);
+    commands.trigger(ApplyUsdOps {
+        doc,
+        label: "Transform entity".to_string(),
+        ops: vec![
+            UsdOp::SetTranslate {
+                edit_target: LayerId::runtime(),
+                path: path.clone(),
+                value: authored_translation.to_array(),
+            },
+            UsdOp::SetRotate {
+                edit_target: LayerId::runtime(),
+                path,
+                value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+            },
+        ],
+    });
 }
 
 /// Persist a runtime move into the active USD document's **runtime** layer
@@ -1084,11 +1385,8 @@ pub fn handle_undo_input(
 /// The preamble EVERY persister repeats: resolve the active USD document, resolve the
 /// entity's prim path, and ownership-guard it against that document.
 ///
-/// Factored out because the duplication was load-bearing: each `persist_*` observer
-/// re-derived this by hand, and the ones that forgot to (the transform gizmo, the
-/// Inspector's delete) simply mutated the ECS and never reached the document — which
-/// is exactly why a gizmo drag used to be invisible to save, undo, the journal and the
-/// network. If an edit path can call this, it has no excuse not to author.
+/// Shared resolution for document-backed scene edits. Callers use the returned
+/// document and prim path to author the corresponding USD operation.
 ///
 /// Returns `None` when there is no active USD document (headless, a Modelica doc, no
 /// scene), when the entity is not USD-backed, or when its prim belongs to some other
@@ -1108,16 +1406,32 @@ pub fn authorable_prim(
     owned.then(|| (doc, prim.path.clone()))
 }
 
+/// A generic delete may not remove a mounted component. The mount command owns
+/// the coordinated removal of its component, exact joint, and socket
+/// occupancy; this guard keeps the generic entity verb from bypassing that
+/// invariant. It deliberately checks the applied schema, not a path spelling.
+fn is_mount_component(
+    registry: &DocumentRegistry<UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    path: &str,
+) -> bool {
+    let Ok(path) = lunco_usd_bevy::SdfPath::new(path) else {
+        return false;
+    };
+    registry.host(doc).is_some_and(|host| {
+        let composed = host.document().composed();
+        lunco_usd_bevy::has_api_schema(&composed, &path, "LunCoMountAttachmentAPI")
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // DeleteEntity — removal, authored
 // ─────────────────────────────────────────────────────────────────────
 
 /// Delete an entity from the scene.
 ///
-/// The typed verb for "remove this", replacing the ad-hoc `world.despawn(entity)` the
-/// Inspector used to do in two places. A bare despawn is invisible to the document:
-/// the prim survives in the layer, so the deletion never journals, never replicates,
-/// never persists, and the next projection can bring the entity straight back.
+/// The typed verb for "remove this" authors a `RemovePrim` in the backing
+/// document, so deletion is journaled, replicated, persisted, and undoable.
 ///
 /// This despawns AND (via [`persist_delete_to_runtime_layer`]) authors a `RemovePrim`
 /// — which is what makes deletion undoable, because the document hands back an
@@ -1140,9 +1454,24 @@ pub struct DeleteEntity {
 pub fn on_delete_entity(
     trigger: On<DeleteEntity>,
     mut selected: ResMut<crate::SelectedEntities>,
+    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
-    let _ = trigger;
+    let cmd = trigger.event();
+    if let Some(registry) = usd_registry.as_deref() {
+        let attachment = authorable_prim(cmd.target, &q_prim, registry, workspace.as_deref());
+        if let Some((doc, path)) = attachment {
+            if is_mount_component(registry, doc, &path) {
+                warn!(
+                    "DELETE_ENTITY rejected for attached component {}; use DetachComponent",
+                    path
+                );
+                return;
+            }
+        }
+    }
     commands.entity(cmd.target).try_despawn();
     selected.entities.retain(|e| *e != cmd.target);
 }
@@ -1165,6 +1494,13 @@ pub fn persist_delete_to_runtime_layer(
     else {
         return;
     };
+    if is_mount_component(&usd_registry, doc, &path) {
+        warn!(
+            "DELETE_ENTITY persistence rejected for attached component {}; use DetachComponent",
+            path
+        );
+        return;
+    }
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::RemovePrim {
@@ -1771,13 +2107,8 @@ pub fn persist_environment_light_to_runtime_layer(
     if let Some(v) = cmd.bloom_intensity {
         env_attrs.push(("lunco:env:bloomIntensity", "float", v.to_string()));
     }
-    // NOTE: ambient is deliberately absent from `env_attrs`. It used to push
-    // `lunco:env:ambientBrightness` here, but the read half of that round trip was
-    // deleted when uniform ambient migrated to standard USD (an untextured
-    // `DomeLight`, summed by `lunco_usd_bevy::light::on_usd_light_added`). The
-    // write outlived its reader: the slider applied live, journalled an attribute
-    // nothing consumed, and the change vanished on reload while the journal
-    // claimed it had persisted. Ambient is authored as a dome below instead.
+    // Ambient is authored through the standard untextured `DomeLight` path
+    // below; it is not an environment scalar.
     // Earthshine is not among them: it has a light prim, so it persists onto it
     // like the sun does. See the earthshine block above.
     // Ambient shares the `Environment` scope but NOT the custom-attribute
@@ -1878,9 +2209,11 @@ pub fn persist_environment_light_to_runtime_layer(
 }
 
 /// Marker inserted on a kinematic body that just received a
-/// `MoveEntity` (or analogous teleport) with a one-tick velocity
-/// pulse. [`clear_kinematic_pulse_velocity`] zeros that velocity
-/// the frame after the pulse so the body doesn't drift.
+/// `MoveEntity` (or analogous teleport) with a one-tick velocity pulse.
+/// Complete pose/rotation edits also set `angular_pulse`, so the cleanup clears
+/// the matching angular velocity after the solver consumes it.
+/// [`clear_kinematic_pulse_velocity`] performs that cleanup the frame after the
+/// pulse so the body doesn't drift.
 #[derive(Component)]
 pub struct JustMovedKinematic {
     /// The body kind to put back after the pulse tick — the Kinematic
@@ -1888,11 +2221,13 @@ pub struct JustMovedKinematic {
     /// the move". `None` = the body was already Kinematic (or has no
     /// RigidBody): restore nothing.
     pub restore: Option<RigidBody>,
+    /// Whether the command also published a one-tick angular velocity pulse.
+    pub angular_pulse: bool,
 }
 
-/// Zeros the `LinearVelocity` of bodies marked with
-/// [`JustMovedKinematic`], **after one physics tick has consumed
-/// the velocity** for joint propagation.
+/// Zeros the `LinearVelocity` and, when requested, `AngularVelocity` of bodies
+/// marked with [`JustMovedKinematic`], **after one physics tick has consumed the
+/// velocity** for joint propagation.
 ///
 /// Schedule: `FixedPostUpdate`. Bevy's main schedule order is
 /// `RunFixedMainLoop` (FixedUpdate cycle) → `Update`. So when a
@@ -1902,7 +2237,7 @@ pub struct JustMovedKinematic {
 /// being zeroed. Running this in `FixedPostUpdate` (which fires
 /// after every `FixedUpdate` step) does exactly that:
 ///
-/// - Frame N `Update`: `MoveEntity` sets velocity + inserts marker.
+/// - Frame N `Update`: a scene pose command sets velocity + inserts marker.
 /// - Frame N+1 `FixedUpdate`: physics runs WITH the velocity;
 ///   Avian's joint solver sees the kinematic body moving and
 ///   propagates the motion through joints to coupled dynamic bodies.
@@ -1912,10 +2247,22 @@ pub struct JustMovedKinematic {
 ///   settled at its new position, no drift.
 pub fn clear_kinematic_pulse_velocity(
     mut commands: Commands,
-    mut q: Query<(Entity, &mut LinearVelocity, &JustMovedKinematic)>,
+    mut q: Query<(
+        Entity,
+        Option<&mut LinearVelocity>,
+        Option<&mut AngularVelocity>,
+        &JustMovedKinematic,
+    )>,
 ) {
-    for (e, mut vel, marker) in q.iter_mut() {
-        vel.0 = DVec3::ZERO;
+    for (e, linear, angular, marker) in q.iter_mut() {
+        if let Some(mut linear) = linear {
+            linear.0 = DVec3::ZERO;
+        }
+        if marker.angular_pulse {
+            if let Some(mut angular) = angular {
+                angular.0 = DVec3::ZERO;
+            }
+        }
         // Put the pre-move body kind back ("for the duration of the move").
         // Re-inserting RigidBody goes through avian's replace hook, which
         // wakes the island — a body released in mid-air falls.
@@ -1961,9 +2308,8 @@ pub fn clear_kinematic_pulse_velocity(
 ///   addressing a wheel-local drive parameter.
 #[Command(default)]
 pub struct SetObjectProperty {
-    /// API-stable global entity ID (the `api_id` from `ListEntities`), same
-    /// resolution path as [`MoveEntity`] — `u64` "Pattern B", resolved in the
-    /// observer; see [`MoveEntity`]'s `entity_id` for why it stays `u64`.
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`.
     pub entity_id: u64,
     /// Property name (see struct docs).
     pub property: String,
@@ -1976,11 +2322,9 @@ pub struct SetObjectProperty {
 ///
 /// These go through the **appearance-intent component**, not a material asset:
 /// mutating `PbrLook` is enough, because `lunco-render-bevy`'s `Changed<PbrLook>`
-/// binder re-materialises the entity. There is no longer an `Assets<StandardMaterial>`
-/// fallback — an in-place asset write would have been actively wrong anyway (the
-/// binder's handles are *shared by look*, so it would bleed onto every other entity
-/// that looks the same), and naming the material would drag `bevy_pbr` (wgpu, naga)
-/// into the headless server that links this file.
+/// binder re-materialises the entity. Keeping material ownership in the render
+/// binder prevents shared handles from leaking edits between entities and keeps
+/// `bevy_pbr` out of the headless command layer.
 const PBR_LOOK_KEYS: &[&str] = &[
     "base_color",
     "emissive",
@@ -2186,9 +2530,8 @@ fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> O
     ParamValue::parse_authoring(field.ty, value)
 }
 
-/// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any params it
-/// already had (so swapping the `.wgsl` keeps tuned values — what cloning the old
-/// `ShaderMaterial` as a template used to do).
+/// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any parameters
+/// it already has so swapping the `.wgsl` keeps tuned values.
 ///
 /// Drops the [`PbrLook`] intent: an entity that carries both draws twice, because
 /// each binder materialises its own. See `lunco-render-bevy`'s caller contract.
@@ -2419,9 +2762,8 @@ pub fn on_set_object_property(
 /// [`MoveEntity`]/[`SetObjectProperty`].
 #[Command(default)]
 pub struct FocusEntityById {
-    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the observer
-    /// via `ApiEntityRegistry`; see [`MoveEntity`]'s `entity_id` for why it
-    /// stays `u64` and isn't auto-converted by the id codec.
+    /// API-stable global entity ID from `ListEntities`, resolved to the live
+    /// Bevy entity by `ApiEntityRegistry`.
     pub entity_id: u64,
     /// Camera distance from the target, metres. `<= 0` → default 6.
     pub distance: f32,
@@ -3203,26 +3545,15 @@ pub fn scan_wgsl_into_catalog(
 /// files appear) — twin-open is async, so a guarded `Update` check is more
 /// robust than racing the `TwinAdded` observer that registers the twin root.
 ///
-/// # Driven by its inputs, not by a "have I run yet" flag
+/// # Driven by its inputs
 ///
 /// This re-enumerates exactly when one of its two inputs changes: the engine-library
 /// [`AssetManifest`](lunco_assets::discovery::AssetManifest), or the set of open
 /// Twins. Every other frame it early-returns on a cheap comparison — no per-frame
 /// walk.
 ///
-/// It used to carry a `did_first_scan: Local<bool>` latch instead. That is a
-/// hand-rolled, *write-once* record of "I have looked" — and it cannot tell whether
-/// the look found anything real. On the web the manifest arrives by `fetch`, so the
-/// first frames have no listing at all; the latch would be set on that empty state
-/// and **never cleared**, leaving a permanently empty palette with no error to
-/// explain it. Guarding the latch against that one input would only hold until the
-/// next not-yet-ready input came along.
-///
-/// So there is no latch. Bevy already tracks whether a resource changed, which is
-/// the actual question — and a manifest that arrives late is simply a manifest that
-/// changed. Re-dispatch is idempotent (`CatalogScan` dedups by asset path, and
-/// `ShaderCatalog::add` dedups by name), so a redundant pass costs a list walk and
-/// re-reads nothing.
+/// The catalog uses resource change detection instead of a write-once scan latch.
+/// This lets a manifest that arrives late trigger its first real scan.
 ///
 /// The two catalogs differ in what they need from a file. Shaders are catalogued by
 /// *name* — enumeration is the whole job, so it finishes here. Spawnables are
@@ -3396,6 +3727,7 @@ register_commands!(
     on_set_usd_connection,
     on_spawn_entity_command,
     on_step_physics,
+    on_transform_entity_command,
 );
 
 impl Plugin for SpawnCommandPlugin {
@@ -3448,6 +3780,7 @@ impl Plugin for SpawnCommandPlugin {
         // C4b: persist authored-scene moves into the active doc's runtime layer.
         app.add_observer(persist_move_to_runtime_layer);
         app.add_observer(persist_rotation_to_runtime_layer);
+        app.add_observer(persist_transform_to_runtime_layer);
         // #4: persist scalar shader-param tunes into the active doc's runtime
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
@@ -3939,6 +4272,90 @@ mod tests {
         assert!(round_trip.as_quat().dot(desired.as_quat()).abs() > 1.0 - 1.0e-6);
     }
 
+    #[test]
+    fn rotate_entity_publishes_a_shortest_angular_pulse() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_rotate_entity_command);
+
+        let active = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active));
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Transform::default(),
+                GlobalTransform::default(),
+                AngularVelocity::default(),
+                ChildOf(active),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, lunco_core::GlobalEntityId::from_raw(13));
+
+        // The negative quaternion names the same quarter-turn as the positive
+        // one. The pulse must follow the short +Y arc, not a nearly full turn.
+        let desired = -DQuat::from_rotation_y(0.25);
+        app.world_mut().trigger(RotateEntity {
+            entity_id: 13,
+            rotation: desired.to_array(),
+        });
+        app.update();
+
+        let angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+        assert!(
+            (angular.y - 60.0).abs() < 1.0e-5,
+            "angular pulse={angular:?}"
+        );
+        assert!(angular.x.abs() < 1.0e-9 && angular.z.abs() < 1.0e-9);
+        assert!(app
+            .world()
+            .get::<JustMovedKinematic>(body)
+            .is_some_and(|marker| marker.angular_pulse));
+    }
+
+    #[test]
+    fn angular_pulse_cleanup_restores_bodies_without_linear_velocity() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, clear_kinematic_pulse_velocity);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                AngularVelocity(DVec3::new(1.0, 2.0, 3.0)),
+                JustMovedKinematic {
+                    restore: Some(RigidBody::Dynamic),
+                    angular_pulse: true,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<RigidBody>(body).copied(),
+            Some(RigidBody::Dynamic)
+        );
+        assert_eq!(
+            app.world().get::<AngularVelocity>(body).unwrap().0,
+            DVec3::ZERO
+        );
+        assert!(app.world().get::<JustMovedKinematic>(body).is_none());
+    }
+
     /// Build a headless app with the runtime-move producer wired and an active
     /// USD document containing `/World`, plus a sim entity bound to `prim_path`
     /// under api id `api_id`. Returns `(app, doc_id)`.
@@ -4094,26 +4511,11 @@ mod tests {
             assert_eq!(row.usd_attr, p.usd_attr);
         }
 
-        // The two names the old split tables disagreed about are now complete.
         for name in ["slip_stiffness", "friction_mu", "mass"] {
             let row = wheel_param(name).expect("wheel param exists");
             assert!(!row.usd_attr.is_empty(), "{name} persists to USD");
         }
         assert!(wheel_param("not_a_wheel_field").is_none());
-        for obsolete in [
-            "drive_torque",
-            "drive_torque_max",
-            "brake_torque_max",
-            "damping_rate",
-            "friction",
-            "moment_of_inertia",
-            "radius",
-        ] {
-            assert!(
-                wheel_param(obsolete).is_none(),
-                "obsolete wheel alias still accepted: {obsolete}"
-            );
-        }
 
         // Setters write the field they claim.
         let mut w = lunco_mobility::WheelRaycast::default();
