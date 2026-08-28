@@ -146,7 +146,8 @@ the Tutorials menu.
 
    The lesson's id is its PRIM PATH, so the chain is a real relationship. The
    launcher mounts the `payload` through `LoadScene` **before** running the
-   script; a lesson with no payload deliberately leaves the viewport alone.
+   script. A lesson with no payload is intentionally UI-only; when it follows
+   a world lesson, the launcher clears the outgoing scene before running it.
 
    Asset paths are **scheme-qualified** (`lunco://`, `twin://`) — a bare path is
    ambiguous once a Twin is open; see

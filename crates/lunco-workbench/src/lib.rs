@@ -3594,16 +3594,21 @@ fn render_layout(
     // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
     // the backdrop because `Camera3d` paints the full window; with no camera
     // that assumption breaks and the *last rendered frame* (stale rovers) would
-    // show through. Treat "empty viewport, no camera" like the Design-mode
-    // inactive-camera case and fill the framebuffer too. Painted here (before
+    // show through. The camera binding is the authoritative no-camera signal,
+    // so cover the framebuffer immediately, even before the domain placeholder
+    // resource catches up after deferred scene teardown. Painted here (before
     // the menu/status panels) so it stays on the background layer *under* the
     // chrome — painting it after the panels would overdraw them.
     let viewport_empty = world
         .get_resource::<viewport::ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
+    let no_active_scene_camera = world
+        .get_resource::<lunco_core::SceneViewport>()
+        .is_some_and(|viewport| viewport.active_camera.is_none());
     let needs_full_backdrop = (!viewport::layout_is_empty(layout)
         && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
-        || viewport_empty;
+        || viewport_empty
+        || no_active_scene_camera;
     if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));

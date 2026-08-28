@@ -35,7 +35,7 @@ the short version is below.
 | Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit `LunCoEpochAPI` and `SolarSystem`. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
 | Ephemeris world | Apply `LunCoEpochAPI`, author `double lunco:time:epochJd = …`, and reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. | Teaching a real lunar day, Earth tracking, orbital motion, or any feature whose result depends on celestial time. |
 | Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
-| UI-only lesson | Omit the payload and leave the current world untouched. | Teaching menus, commands, or workbench concepts. |
+| UI-only lesson | Omit the payload; the tutorial launcher clears an outgoing lesson scene before showing the UI-only lesson. | Teaching menus, commands, or workbench concepts. |
 
 Do not combine a fixed light with an implicit orbital provider. `LunCoEpochAPI`
 without an authored `lunco:time:epochJd` is a lint error (`epoch-api-missing-time`):

@@ -529,7 +529,7 @@ fn open_usd_docs_on_twin_asset_mounted(
 /// The generic hint shown when the viewport is empty and no specific cause
 /// was recorded. Public so tests can assert against it without hardcoding the
 /// string in two places.
-pub const GENERIC_EMPTY_HINT: &str = "Nothing to show — open a scene or a Twin.";
+pub const GENERIC_EMPTY_HINT: &str = "No visual scene is loaded.";
 
 /// Pure decision: given whether a scene is mounted and an optional recorded
 /// [`EmptyViewportReason`], what (if anything) should the placeholder show?

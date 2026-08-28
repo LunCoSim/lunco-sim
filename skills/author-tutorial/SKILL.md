@@ -73,10 +73,11 @@ An applied epoch API without its authored epoch is rejected by the USD rule
 
 **DECLARE THE WORLD, NEVER OPEN IT.** The launcher mounts the `payload` through
 `LoadScene` before running the script. The launcher owns this boundary, which
-means a lesson that HAS no world (a UI
-tour) indistinguishable from one that forgot — and lessons that share a world
-would reload it on every switch. Omitting the payload is a statement: this lesson
-leaves the viewport alone.
+means a lesson that HAS no world is intentionally UI-only, not a second scene
+loader. When a UI-only lesson follows a world-owning lesson, the launcher clears
+the outgoing scene before starting the UI-only host; the workbench then shows its
+normal empty-viewport presentation. Omitting the payload is a statement that
+the lesson itself has no visual world to mount.
 
 **A new TRACK** is a new `curriculum.usda` with a `LunCoTutorialTrackAPI` prim
 (`string lunco:track:label = "…"`) — and it appears in an app only when that
