@@ -12,6 +12,7 @@
   background-color: var(--panel-background);
   color: var(--text-color);
   font-family: "LunCo UI";
+  overflow: hidden;
 }
 
 #camera-status-label {
@@ -22,10 +23,15 @@
 }
 
 #camera-status-name {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0px;
+  min-width: 0px;
+  max-width: 100%;
+  width: 120px;
   overflow: hidden;
   color: var(--text-color);
   font-size: 12px;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -bevy-line-break: no-wrap;
 }
