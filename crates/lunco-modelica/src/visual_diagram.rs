@@ -582,12 +582,4 @@ mod tests {
             .any(|entry| entry.short_name() == "Ground"));
     }
 
-    #[test]
-    #[ignore = "requires the external MSL asset bundle and generated index"]
-    fn test_msl_library_not_empty() {
-        let lib = msl_class_library();
-        assert!(!lib.is_empty());
-        assert!(lib.iter().any(|c| c.short_name() == "Resistor"));
-        assert!(lib.iter().any(|c| c.short_name() == "Ground"));
-    }
 }

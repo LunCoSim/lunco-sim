@@ -8,7 +8,7 @@
 //! The solution: the tile shares the body's `ReferenceFrame::BodyFixed` Grid;
 //! BigSpace propagates the grid rotation to every child.
 //!
-//! Run with: cargo test -p lunco-avatar --test rotation_propagation_test -- --nocapture
+//! Run with: scripts/run_rust_tests.sh -p lunco-avatar --module rotation_propagation_test -- --nocapture
 
 use bevy::math::DVec3;
 use bevy::prelude::*;

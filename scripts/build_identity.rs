@@ -41,9 +41,45 @@ pub(crate) fn stamp() {
     println!("cargo:rerun-if-env-changed=LUNCO_REPOSITORY_URL");
     println!("cargo:rerun-if-env-changed=GITHUB_SERVER_URL");
     println!("cargo:rerun-if-env-changed=GITHUB_REPOSITORY");
-    // Re-stamp when the checked-out revision moves. Without this, the build
-    // can report the revision from an earlier checkout.
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/index");
+    // Re-stamp when the checked-out revision moves. Resolve these through Git:
+    // in a worktree, `../../.git/HEAD` is a gitfile rather than the real HEAD,
+    // so watching that guessed path makes Cargo rebuild the package on every
+    // invocation because the path does not exist. `HEAD` alone is not enough
+    // on a branch: commits update `refs/heads/<branch>` while `HEAD` stays
+    // unchanged. Packed refs cover repositories that have compacted that ref.
+    for name in ["HEAD", "index", "packed-refs"] {
+        emit_git_watch_path(name);
+    }
+    if let Some(reference) = git_output(&["symbolic-ref", "--quiet", "HEAD"]) {
+        if let Some(path) = git_metadata_path(&reference) {
+            emit_existing_git_watch_path(&path);
+        }
+    }
     println!("cargo:rerun-if-changed=../../scripts/build_identity.rs");
+}
+
+fn emit_git_watch_path(name: &str) {
+    if let Some(path) = git_metadata_path(name) {
+        emit_existing_git_watch_path(&path);
+    }
+}
+
+fn emit_existing_git_watch_path(path: &str) {
+    if std::path::Path::new(path).exists() {
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+
+fn git_metadata_path(name: &str) -> Option<String> {
+    git_output(&["rev-parse", "--path-format=absolute", "--git-path", name])
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }

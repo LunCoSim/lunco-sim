@@ -46,6 +46,32 @@ the same scene's routed rover remains the anti-trivial drive control. The
 retained Rust tests cover exact cursor arithmetic and scene teardown; neither
 is replaced by a weaker string-level check.
 
+The same boundary now applies to scene commands and runtime markers. The
+`test_detach_joint_command` unit case moved into `assets/scenarios/tests/joint.rhai`:
+the real scene first proves the fixed joint holds `CubeB`, sends the public
+`DetachJoint` command, and then requires the released body to fall while the
+independent `FreeCube` remains the simulation witness. The two synthetic
+`observer_test` waypoint cases were removed because
+`assets/scenarios/tests/runtime_waypoint.rhai` already spawns a real rover,
+creates two public runtime waypoints, and verifies ordered collision-backed
+arrival events plus `RuntimeWaypointStatus`.
+
+This cleanup also removed tests with no maintained production claim: a
+dump-only USD probe, historical Rumoca emitter round-trip and bisection suites,
+a compile-only Bevy no-op, an intentionally panicking Avian measurement probe,
+and a legacy waypoint JSON-shape check. It also removed a known-failing MSL
+diagnostic and a duplicate external-bundle presence check; the passing
+Modelica demand-load example remains the maintained MSL contract. The two
+selection/drag integration files were also removed because they simulated
+state without invoking the production systems and asserted the retired
+Shift-select/`DragModeActive` contract. Current schema, parser, lifecycle,
+physics, editor-selection, and source-preservation contracts remain covered at
+their owners. Editor selection is intentionally not translated into a headless
+Rhai scene: `SceneEditPlugin` is UI-gated and exposes no production headless
+selection observer. Its owning Rust test now exercises the real shared
+selection observer and verifies toggle/highlight state without entering the
+separate active-gizmo drag mode.
+
 ## Test tiers
 
 1. **Production-owned test discovery.**
@@ -61,16 +87,28 @@ is replaced by a weaker string-level check.
 
    ```bash
    ./scripts/run_scene_tests.sh --no-build
+   ./scripts/run_scene_tests.sh --no-build --exact joint
    ./scripts/run_scene_tests.sh --no-build autopilot
    ```
 
    This reuses `target/debug/luncosim` and runs each authored scene through
    `luncosim test --scene`, with deterministic `--threads 1 --jitter 0` and a
-   real telemetry verdict. The default mode performs one Cargo build first;
+   real telemetry verdict. Scene materialization and asynchronous Modelica
+   participant readiness use a wall-clock liveness budget
+   (`--readiness-timeout`, default 420 seconds), not a fixed update count: an
+   async compile may require different numbers of `app.update()` calls on
+   different machines. The shell gate keeps this startup budget separate from
+   its larger `SCENE_TIMEOUT` wall-clock execution backstop (default 900
+   seconds), because a valid long-running mission must not be killed while it
+   is still advancing. `--max-ticks` remains the simulated-time verdict bound.
+   The default mode performs one Cargo build first;
    `--no-build` is the script/USD iteration path. Discovery still resolves the
    authored scene-to-scenario edge before execution. A scene run is a fresh
    headless test process because the current CLI accepts one scene and exits;
    that is separate from rebuilding the Rust core.
+   Use `--exact <scene-name>` for the smallest edit-loop run; an unqualified
+   argument remains a substring group selector (for example, `joint` also
+   matches `g7_joints`).
 
 3. **Live no-restart Rhai checks.**
 
@@ -96,6 +134,25 @@ is replaced by a weaker string-level check.
    edit. Rust tests must stay content-agnostic when they exercise scripting:
    dispatch, lifecycle, diagnostics, permissions, cache invalidation and
    teardown are valid; a tutorial's route or a rover's expected distance is not.
+
+   Cargo keeps each integration source file as its own target. Use the wrapper
+   to select that target without typing the Cargo target name:
+
+   ```bash
+   ./scripts/run_rust_tests.sh -p lunco-modelica --module ast_mut_topology -- --nocapture
+   ./scripts/run_rust_tests.sh -p lunco-usd --filter integration_asset_loading::test_sandbox_scene_composes
+   ```
+
+   The wrapper maps `--module`/`--file` to `--test <source-file>`, maps a
+   `module::test` filter to that same target, uses four Cargo jobs, and enables
+   `sccache` when available. Use `--check` for compile-only feedback (it does
+   not link or run a test binary); use `--no-run` when linking the actual test
+   binary is part of the check. Add `--lib` for inline library tests; with that
+   selector, `--no-run` compiles the unit-test harness while `--check` checks
+   the library itself. Do not use a bare `cargo test --workspace` as the edit
+   loop. Select the owning crate and module/test instead. Run the production
+   scene gate only when an authored runtime path is affected; run the broad
+   workspace suite at handoff or after a cross-crate change.
 
 ## Migration decision table
 

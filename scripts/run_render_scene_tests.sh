@@ -11,6 +11,7 @@
 #
 #   ./scripts/run_render_scene_tests.sh
 #   ./scripts/run_render_scene_tests.sh hdri
+#   ./scripts/run_render_scene_tests.sh --exact hdri
 #   RENDER_QUALITY=balanced ./scripts/run_render_scene_tests.sh hdri
 #
 # RENDER_FRAMES is intentionally small. The render assertions are about settled
@@ -73,7 +74,32 @@ if ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1
     exit 2
 fi
 
-FILTER="${1:-}"
+FILTER=""
+EXACT=0
+while (($# > 0)); do
+    case "$1" in
+        --exact)
+            EXACT=1
+            shift
+            ;;
+        --*)
+            echo "render scene gate: unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "$FILTER" ]]; then
+                echo "render scene gate: only one scene filter is supported" >&2
+                exit 2
+            fi
+            FILTER="$1"
+            shift
+            ;;
+    esac
+done
+if ((EXACT)) && [[ -z "$FILTER" ]]; then
+    echo "render scene gate: --exact needs a scene name or path" >&2
+    exit 2
+fi
 LIST_OUTPUT="$("$BIN" test --list)" || {
     echo "render scene gate: scene test discovery failed" >&2
     exit 2
@@ -86,7 +112,11 @@ done <<< "$LIST_OUTPUT"
 if [[ -n "$FILTER" ]]; then
     filtered=()
     for scene in "${SCENES[@]}"; do
-        [[ "$scene" == *"$FILTER"* ]] && filtered+=("$scene")
+        if ((EXACT)); then
+            [[ "$(basename "$scene" .usda)" == "$FILTER" || "$scene" == "$FILTER" ]] && filtered+=("$scene")
+        else
+            [[ "$scene" == *"$FILTER"* ]] && filtered+=("$scene")
+        fi
     done
     SCENES=("${filtered[@]}")
 fi

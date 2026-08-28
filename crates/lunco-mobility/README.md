@@ -81,7 +81,7 @@ The numerically-sensitive force laws (`suspension_force_mag`, `tire_patch_force`
 - **In-repo oracle:** `#[cfg(test)] mod oracle` integrates the *same* equations with
   fine-step RK4 (≈ the Modelica answer to many digits, this system being non-stiff)
   and compares against the production law stepped semi-implicitly at `dt = 1/60`.
-  Run: `cargo test -p lunco-mobility --lib oracle -- --nocapture`.
+  Run: `scripts/run_rust_tests.sh -p lunco-mobility --lib --filter oracle -- --nocapture`.
 
 It covers all three force laws (9 tests), each against the same continuous
 reference:

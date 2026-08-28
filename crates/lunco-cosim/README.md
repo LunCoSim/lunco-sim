@@ -127,20 +127,17 @@ at all, the variable would vanish like the algebraics did.
 
 ## Tests
 
-- **`tests/balloon_cosim_test.rs`** — full-stack regression test. Boots a
-  headless Bevy app with `CoSimPlugin` + `ModelicaCorePlugin`, spawns a balloon
-  entity, lets the Modelica worker compile `balloon.mo`, runs 200+ frames, and
-  asserts that:
-  1. `SimComponent.outputs["netForce"]` is positive (rumoca returned it),
-  2. `SimComponent.inputs["force_y"]` is non-zero (wire propagation works),
-  3. `LinearVelocity.y` is non-zero (integration works).
-
-  If this test breaks after a rumoca upgrade or a `balloon.mo` edit, one of
-  the three links in the chain regressed — the assertion tells you which.
+- **`tests/cosim_test.rs`** — the generic cosimulation contract: live Avian
+  ports, SimConnection propagation, force accumulation, and admission rules.
 
 - **`tests/balloon_e2e_test.rs`** — unit-level wire propagation and force
-  application tests with mocked `SimComponent.outputs`. Fast; no Modelica
-  worker involved.
+  application with mocked `SimComponent.outputs`. Fast; no Modelica worker
+  involved.
+
+- **`tests/cross_entity_cosim_test.rs`** — optional Python-feature integration
+  chain: Modelica oscillator → Python amplifier → Avian force. This is the
+  worker-backed end-to-end regression and is intentionally separate from the
+  fast generic port tests.
 
 - **`lunco-modelica/tests/balloon_stepper_test.rs`** — isolates rumoca itself.
   Compiles `balloon.mo` directly and asserts that `stepper.get("netForce")`
@@ -151,8 +148,10 @@ at all, the variable would vanish like the algebraics did.
 Run with:
 
 ```bash
-cargo test -p lunco-cosim
-cargo test -p lunco-modelica --test balloon_stepper_test
+scripts/run_rust_tests.sh -p lunco-cosim --module cosim_test
+scripts/run_rust_tests.sh -p lunco-cosim --module balloon_e2e_test
+scripts/run_rust_tests.sh -p lunco-cosim --features python --module cross_entity_cosim_test
+scripts/run_rust_tests.sh -p lunco-modelica --module balloon_stepper_test
 ```
 
 `lunco-cosim`'s dep graph is small, so these tests recompile in a few seconds

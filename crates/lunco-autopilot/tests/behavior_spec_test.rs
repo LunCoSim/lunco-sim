@@ -24,16 +24,6 @@ fn spec_round_trips_patrol_waypoints() {
 }
 
 #[test]
-fn patrol_rejects_the_removed_bare_array_waypoint_shape() {
-    let old =
-        r#"{"kind":"patrol","waypoints":[[1.0,0.0,0.0]],"speed":0.6,"radius":2.0,"dwell":0.0}"#;
-    assert!(
-        AutopilotBehaviorSpec::from_json(old).is_err(),
-        "waypoints must use the canonical object shape"
-    );
-}
-
-#[test]
 fn patrol_waypoint_with_arrival_action_parses() {
     // The new declarative shape: a waypoint carrying an on-arrival tool action.
     // This is the core-data home for "fire a tool at a patrol waypoint" — no

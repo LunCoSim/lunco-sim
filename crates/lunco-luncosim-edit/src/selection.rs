@@ -701,9 +701,59 @@ mod tests {
     }
 
     #[test]
-    fn test_selected_entities_default() {
-        let selected = SelectedEntities::default();
-        assert!(selected.primary().is_none());
+    fn toggled_selection_updates_highlights_without_starting_drag() {
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>()
+            .insert_resource(lunco_core::DragModeActive::default())
+            .add_observer(on_select_entity_target);
+
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(SelectEntityTarget {
+            target: first,
+            extend: true,
+            toggle: true,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().resource::<SelectedEntities>().entities,
+            vec![first]
+        );
+        assert!(app.world().get::<Selected>(first).is_some());
+        assert!(app
+            .world()
+            .get::<crate::gizmo::GizmoSelected>(first)
+            .is_some());
+
+        app.world_mut().trigger(SelectEntityTarget {
+            target: second,
+            extend: true,
+            toggle: true,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().resource::<SelectedEntities>().entities,
+            vec![first, second]
+        );
+        assert!(app.world().get::<Selected>(second).is_some());
+
+        app.world_mut().trigger(SelectEntityTarget {
+            target: first,
+            extend: true,
+            toggle: true,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().resource::<SelectedEntities>().entities,
+            vec![second]
+        );
+        assert!(app.world().get::<Selected>(first).is_none());
+        assert!(app
+            .world()
+            .get::<crate::gizmo::GizmoSelected>(first)
+            .is_none());
+        assert!(!app.world().resource::<lunco_core::DragModeActive>().active);
     }
 
     #[test]

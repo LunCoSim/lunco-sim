@@ -91,8 +91,9 @@
 //! `JointCollisionDisabled`.
 //!
 //! Diagnostic (asserts at the corrupting mutation, graph-wide, slow):
-//!   cargo test -j2 -p lunco-usd-avian -p lunco-physics \
-//!       --features lunco-physics/avian-validate --test gizmo_body_swap_islands
+//!   scripts/run_rust_tests.sh -p lunco-usd-avian \
+//!       --features lunco-physics/avian-validate \
+//!       --module gizmo_body_swap_islands
 
 use avian3d::prelude::*;
 use bevy::ecs::system::RunSystemOnce;
@@ -591,18 +592,17 @@ fn attach_joint_before_contact_never_forms_a_pair() {
 ///
 /// ⚠ NOT REPRODUCED, ACROSS EVERY SHAPE TRIED. This test tears a multi-body
 /// island down through one recursive `try_despawn` + flush and stays GREEN under
-/// the feature. So did each variant, and each was MEASURED rather than assumed
-/// (`probe_island_shape_before_despawn`):
+/// the feature. So did each variant:
 /// - flat despawn (every body directly, one queue) — green;
 /// - recursive despawn of a scene root — green;
-/// - ASLEEP (probe: `asleep=4/4` at 180 steps) — green;
-/// - AWAKE (probe: `asleep=0/4` at 30 steps; the live app tears down a jittering
+/// - ASLEEP — green;
+/// - AWAKE (at 30 steps; the live app tears down a jittering
 ///   scene, so awake is the honest shape) — green;
 /// - with joints in the island, bodies + joints under one root — green.
 ///
-/// In every case the probe confirms the precondition actually held: one shared
-/// `IslandId(0)`, 7 touching pairs. The theory predicts a panic in all of them.
-/// It does not happen.
+/// The retained touching-stack assertions confirm the precondition for the
+/// production-shaped case. The theory predicts a panic in all of them. It does
+/// not happen.
 ///
 /// So the deferred-check story is CONSISTENT with the backtrace and NOT CONFIRMED
 /// by a repro. Something in the live teardown is still unmodelled.
@@ -671,9 +671,8 @@ fn pure_avian_recursive_despawn_of_one_island() {
     app.cleanup();
 
     // Step to a single island with live touching contacts, but STOP BEFORE the
-    // stack falls asleep — `probe_island_shape_before_despawn` measures 4/4 asleep
-    // at 180 steps and 0/4 at 30, same island either way. The live app tears down
-    // an AWAKE scene (the rig is jittering), so a settled stack is the wrong shape.
+    // stack falls asleep. The live app tears down an AWAKE scene (the rig is
+    // jittering), so a settled stack is the wrong shape.
     for _ in 0..30 {
         app.update();
     }
@@ -684,82 +683,6 @@ fn pure_avian_recursive_despawn_of_one_island() {
     world.flush();
 
     app.update();
-}
-
-/// Diagnostic probe: does the recursive-despawn repro actually satisfy its
-/// precondition — several bodies sharing ONE island? If each body is its own
-/// island, every `on_remove` takes the `island_removed = true` branch, queues no
-/// deferred validate, and the test is green for a reason that has nothing to do
-/// with the bug.
-#[test]
-#[ignore = "diagnostic probe: run explicitly, panics with the measurement"]
-fn probe_island_shape_before_despawn() {
-    let mut app = support::headless_physics_app();
-    app.add_plugins(TransformPlugin);
-    app.insert_resource(Time::<Fixed>::from_hz(60.0));
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-        1.0 / 60.0,
-    )));
-    let bodies: Vec<Entity> = {
-        let world = app.world_mut();
-        world.spawn((
-            RigidBody::Static,
-            Collider::cuboid(50.0, 1.0, 50.0),
-            Transform::from_xyz(0.0, -0.5, 0.0),
-        ));
-        let root = world.spawn(Transform::default()).id();
-        let mut v = vec![];
-        for i in 0..4 {
-            let b = world
-                .spawn((
-                    RigidBody::Dynamic,
-                    Collider::cuboid(1.0, 1.0, 1.0),
-                    Transform::from_xyz(0.0, 0.5 + i as f32 * 1.0, 0.0),
-                    ChildOf(root),
-                ))
-                .id();
-            v.push(b);
-        }
-        v
-    };
-    app.finish();
-    app.cleanup();
-    for _ in 0..30 {
-        app.update();
-    }
-
-    let world = app.world();
-    let graph = world.resource::<ContactGraph>();
-    let touching: usize = bodies
-        .iter()
-        .map(|&b| {
-            graph
-                .contact_pairs_with(b)
-                .filter(|p| p.is_touching())
-                .count()
-        })
-        .sum();
-    let islands: Vec<String> = bodies
-        .iter()
-        .map(|&b| {
-            match world
-                .entity(b)
-                .get::<avian3d::dynamics::solver::islands::BodyIslandNode>()
-            {
-                Some(n) => format!("{:?}", n.island_id()),
-                None => "NO-NODE".into(),
-            }
-        })
-        .collect();
-    let asleep = bodies
-        .iter()
-        .filter(|&&b| world.entity(b).contains::<Sleeping>())
-        .count();
-
-    panic!(
-        "touching_pairs(sum)={touching} islands={islands:?} asleep={asleep}/{}",
-        bodies.len()
-    );
 }
 
 /// Local mirror of what `lunco_usd_avian::attach_joint` installs, so this stays

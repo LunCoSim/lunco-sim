@@ -10,7 +10,7 @@
 //! is continuous, those must agree to within the source's own gradient over that
 //! tiny angular step. A terrace would show up as a large jump.
 //!
-//! Run: cargo test -p lunco-usd-bevy --test dome_projection_continuity
+//! Run: scripts/run_rust_tests.sh -p lunco-usd-bevy --module dome_projection_continuity
 
 use bevy::color::LinearRgba;
 use bevy::math::Vec3;

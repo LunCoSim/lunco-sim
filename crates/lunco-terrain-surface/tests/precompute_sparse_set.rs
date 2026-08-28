@@ -18,7 +18,7 @@
 //! whole tree, so it is a diagnostic you run deliberately:
 //!
 //! ```text
-//! cargo test -j2 -p lunco-terrain-surface --test precompute_sparse_set -- --ignored --nocapture
+//! scripts/run_rust_tests.sh -j 2 -p lunco-terrain-surface --module precompute_sparse_set -- --ignored --nocapture
 //! ```
 
 use std::path::PathBuf;

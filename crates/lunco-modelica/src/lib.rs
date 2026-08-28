@@ -2441,13 +2441,13 @@ mod observables_smoke {
     // MSL demand-driven compile tests
     // ─────────────────────────────────────────────────────────
     //
-    // Run with: `cargo test -p lunco-modelica msl --nocapture`
+    // Run with: `scripts/run_rust_tests.sh -p lunco-modelica --lib --filter msl -- --nocapture`
     //
     // `msl_` tests require the MSL tree at `<cache>/msl/Modelica/`
     // (populated by our indexer). They skip with a stderr notice if
     // absent — CI can run the non-MSL subset unconditionally.
     //
-    // The headline test `msl_compile_with_limpid_is_fast_and_succeeds`
+    // The headline test `msl_compile_pid_controller_example_succeeds`
     // exercises the full iterative demand-load pipeline: alias
     // resolution, rumoca error → missing-class regex, fs::read,
     // update_document, retry loop. A known-good MSL example that
@@ -2500,78 +2500,6 @@ mod observables_smoke {
             .session()
             .class_lookup_query("LunCo.Electrical.Battery")
             .is_some());
-    }
-
-    /// Headline: end-to-end demand-driven compile that pulls MSL
-    /// classes via the iterative loop. A minimal LimPID-using model
-    /// forces the compiler to iteratively resolve Continuous.LimPID
-    /// → Interfaces.SISO → SI types → Icons → etc.
-    ///
-    /// **Asserts**:
-    /// - compile succeeds
-    /// - logs total elapsed time (paste-able into regression tracking)
-    /// - iteration count reasonable (< 20 for a small closure)
-    ///
-    /// Skips with a print if MSL isn't installed locally.
-    /// Known-failing — not a resolver issue. Compiles through the
-    /// resolve phase cleanly (all `SI.*`, `Logical.*` refs are
-    /// resolved via the lazy hook). Fails at DAE (ToDae phase)
-    /// with `unresolved reference: ModelicaServices.Machine.eps`.
-    /// Rumoca hardcodes `ModelicaServices.Machine` + `Modelica.Constants`
-    /// as CONSTANT_PACKAGES
-    /// (rumoca-phase-flatten/src/lib.rs:687-689); its lookup in
-    /// the resolved tree doesn't find `ModelicaServices.Machine`
-    /// even after we `update_document(ModelicaServices/package.mo)`.
-    /// Fetch trace confirms the file lands in the session but
-    /// rumoca's constant-package resolver still errors.
-    ///
-    /// Note: `msl_compile_pid_controller_example_succeeds` passes
-    /// and *also* instantiates LimPID transitively — so the gap
-    /// is specific to this minimal direct-instantiation shape, not
-    /// to LimPID itself. Filed as a rumoca-internal issue.
-    #[test]
-    #[ignore = "rumoca CONSTANT_PACKAGES lookup can't find ModelicaServices.Machine even after the file is loaded"]
-    fn msl_compile_tiny_limpid_model_is_fast() {
-        if !msl_available() {
-            eprintln!(
-                "skipping msl_compile_tiny_limpid_model_is_fast: \
-                       MSL not at {:?}",
-                lunco_assets::msl_source_root_path()
-            );
-            return;
-        }
-        // Tiny model that references one MSL block — drags in the
-        // transitive closure via the iterative loader. Kept inline
-        // so the test doesn't depend on a user file.
-        let src = r#"
-            model TestLimPID
-              import Modelica.Units.SI;
-              parameter SI.Time Ti = 0.1;
-              Modelica.Blocks.Continuous.LimPID ctrl(
-                k = 1.0,
-                Ti = Ti,
-                yMax = 10.0
-              );
-            equation
-              ctrl.u_s = 1.0;
-              ctrl.u_m = 0.0;
-            end TestLimPID;
-        "#;
-        let mut c = ModelicaCompiler::new();
-        let t0 = web_time::Instant::now();
-        let result = c.compile_str("TestLimPID", src, "TestLimPID.mo");
-        let elapsed = t0.elapsed();
-        eprintln!(
-            "msl_compile_tiny_limpid_model_is_fast: elapsed {:.2}s, \
-             result = {}",
-            elapsed.as_secs_f64(),
-            if result.is_ok() {
-                "OK".to_string()
-            } else {
-                format!("ERR: {}", result.as_ref().err().unwrap())
-            }
-        );
-        result.expect("compile must succeed after iterative MSL load");
     }
 
     /// Same shape, against the actual PID_Controller example

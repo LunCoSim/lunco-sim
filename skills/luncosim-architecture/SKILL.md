@@ -251,9 +251,9 @@ Run the smallest relevant checks first, then the production binary:
 ```bash
 python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo test -p lunco-usd --test schema_generation -j 4
-RUSTC_WRAPPER= cargo test -p lunco-modelica --test sensor_contracts -j 4
-RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_derivation -j 4
+scripts/run_rust_tests.sh -p lunco-usd --filter schema_generation:: -j 4
+scripts/run_rust_tests.sh -p lunco-modelica --filter sensor_contracts:: -j 4
+scripts/run_rust_tests.sh -p lunco-usd-sim --filter usd_connection_derivation:: -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 

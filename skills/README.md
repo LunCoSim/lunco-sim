@@ -90,6 +90,13 @@ one directly when doing that kind of task by hand.
   `assets/scenarios/tests/*.rhai` and run them through production
   `luncosim test`; keep Rust tests generic to the scripting/lifecycle seam so
   editing a tutorial does not require rebuilding the core.
+- **Rust tests → the owning target** — use
+  `scripts/run_rust_tests.sh -p <package> --module <source-module>` (or
+  `--filter <module>::<test>`). It selects the large crate's single
+  owning crate's direct `--test <source-module>` target, uses `sccache` when
+  installed, and accepts `--check` for compile-only feedback, `--no-run` to
+  build without running, or `--lib` for inline library tests. Select the owning
+  crate instead of invoking every workspace test target.
 - **Tutorial world/time contract → USD** — choose fixed `DistantLight`, explicit
   ephemeris (`LunCoEpochAPI` plus authored `lunco:time:epochJd`), an existing
   world, or no payload. Do not leave orbital time implicit; the authored

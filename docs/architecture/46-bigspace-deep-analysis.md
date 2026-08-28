@@ -67,9 +67,9 @@ possible.
 ## Focused verification
 
 ```sh
-RUSTC_WRAPPER= cargo test -p lunco-core --lib -j 8
-RUSTC_WRAPPER= cargo test -p lunco-celestial --tests -j 8
-RUSTC_WRAPPER= cargo test -p lunco-usd-avian --tests -j 8
+scripts/run_rust_tests.sh -p lunco-core --lib -j 8
+scripts/run_rust_tests.sh -p lunco-celestial -j 8
+scripts/run_rust_tests.sh -p lunco-usd-avian -j 8
 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
 ```
 

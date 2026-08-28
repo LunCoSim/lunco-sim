@@ -16,7 +16,7 @@
 //! number IS the wasm number, on the main thread.
 //!
 //! ```text
-//! cargo test -j2 --release -p lunco-terrain-surface --test precompute_bake_time -- --ignored --nocapture
+//! scripts/run_rust_tests.sh -j 2 --release -p lunco-terrain-surface --module precompute_bake_time -- --ignored --nocapture
 //! ```
 
 use std::path::PathBuf;

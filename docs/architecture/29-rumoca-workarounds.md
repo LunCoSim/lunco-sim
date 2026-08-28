@@ -212,12 +212,10 @@ multi-modifier + binding declarations. That would let `pretty.rs` (~900 LOC) go,
 but **not** the splice engine: even a perfect emitter can't preserve comments or
 formatting, so re-emitting a class the user authored stays the wrong move.
 
-**Probe.** `tests/ast_roundtrip.rs::component_with_modification` (currently
-`#[ignore]`d with this exact reason). Un-ignore when it passes.
-
-*Note:* three sibling round-trip bugs (`redeclare_short_class`,
-`conditional_component`, `inner_outer_prefix`) WERE fixed in 0.9.20 and are now
-un-ignored and guarding.
+**Verification.** The maintained coverage is the production splice suite in
+`tests/ast_mut_preserves_untouched_source.rs` plus the source chokepoint above.
+The former upstream-emitter probe was removed because the application never
+uses that emitter and the ignored test did not protect a live contract.
 
 ---
 

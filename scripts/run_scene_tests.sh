@@ -13,6 +13,7 @@
 #
 #   ./scripts/run_scene_tests.sh              # all scenes
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
+#   ./scripts/run_scene_tests.sh --exact joint # exactly scenes/tests/joint.usda
 #   ./scripts/run_scene_tests.sh --no-build   # reuse target/debug/luncosim
 #   ./scripts/run_scene_tests.sh --bin /path/to/luncosim --no-build
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
@@ -74,6 +75,7 @@ SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 # core. A binary override is explicit so a caller cannot accidentally validate
 # a stale executable from another worktree.
 FILTER=""
+EXACT=0
 while (($# > 0)); do
     case "$1" in
         --stress)
@@ -86,6 +88,10 @@ while (($# > 0)); do
             ;;
         --build)
             BUILD=1
+            shift
+            ;;
+        --exact)
+            EXACT=1
             shift
             ;;
         --bin)
@@ -119,6 +125,11 @@ while (($# > 0)); do
     esac
 done
 
+if ((EXACT)) && [[ -z "$FILTER" ]]; then
+    echo "--exact needs a scene name or path" >&2
+    exit 2
+fi
+
 # ── The scene list ──────────────────────────────────────────────────────────
 #
 # Paths are relative to `assets/`, exactly as `--scene` wants them.
@@ -139,7 +150,12 @@ done
 # all, which is the fast script/scene iteration path.
 if ((BUILD)); then
     echo "==> building luncosim test runner (one cargo invocation, -j 4)"
-    if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
+    # Reuse the shared compiler cache when present, but keep a clean checkout
+    # usable on hosts that do not have sccache installed.
+    if [[ -z "${RUSTC_WRAPPER+x}" ]] && command -v sccache >/dev/null 2>&1; then
+        export RUSTC_WRAPPER=sccache
+    fi
+    if ! cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
         echo "BUILD FAILED — no scenes run" >&2
         exit 2
     fi
@@ -171,13 +187,21 @@ done <<< "$LIST_OUTPUT"
 if [[ -n "$FILTER" ]]; then
     filtered=()
     for s in "${SCENES[@]}"; do
-        [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        if ((EXACT)); then
+            [[ "$(basename "$s" .usda)" == "$FILTER" || "$s" == "$FILTER" ]] && filtered+=("$s")
+        else
+            [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        fi
     done
     SCENES=("${filtered[@]}")
 
     filtered=()
     for s in "${GRAPHICS_SCENES[@]}"; do
-        [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        if ((EXACT)); then
+            [[ "$(basename "$s" .usda)" == "$FILTER" || "$s" == "$FILTER" ]] && filtered+=("$s")
+        else
+            [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        fi
     done
     GRAPHICS_SCENES=("${filtered[@]}")
 fi
@@ -253,7 +277,12 @@ done
 if [[ ${#GRAPHICS_SCENES[@]} -gt 0 ]]; then
     echo
     echo "==> GPU render pass (production offscreen renderer)"
-    if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "$FILTER"; then
+    if ((EXACT)); then
+        render_args=(--exact "$FILTER")
+    else
+        render_args=("$FILTER")
+    fi
+    if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "${render_args[@]}"; then
         overall=1
     fi
 fi

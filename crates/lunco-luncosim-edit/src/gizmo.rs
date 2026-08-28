@@ -623,18 +623,6 @@ mod tests {
     use lunco_controller::ControllerLink;
 
     #[test]
-    fn test_gizmo_drag_state_component() {
-        let state = GizmoDragState {
-            original_body: Some(RigidBody::Dynamic),
-            original_drive: None,
-            had_custom_position_integration: false,
-            had_translation_interpolation: false,
-            had_rotation_interpolation: false,
-        };
-        assert_eq!(state.original_body, Some(RigidBody::Dynamic));
-    }
-
-    #[test]
     fn test_possessed_entity_gizmo_restoration() {
         use lunco_scene_commands::SelectedEntities;
 

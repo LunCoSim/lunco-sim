@@ -204,7 +204,7 @@ Test commands consume that exact production build; they do not use `cargo run`.
 For USD/Rhai-only iteration, reuse it without rebuilding:
 
 ```bash
-./scripts/run_scene_tests.sh --no-build <scene-substring>
+./scripts/run_scene_tests.sh --no-build --exact <scene-name>
 ```
 
 For a standalone assertion against a running scene, use the live no-restart

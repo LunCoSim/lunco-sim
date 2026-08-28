@@ -286,13 +286,13 @@ solver session.
 ### Generated Modelica and USD projection tests
 
 ```text
-cargo test -p lunco-usd-sim --test hook_synthesizer -j4
+scripts/run_rust_tests.sh -p lunco-usd-sim --module hook_synthesizer -j 4
 15 passed, 0 failed, 0 ignored (baseline before the topology-role edit)
 
-cargo test -p lunco-usd-sim --test domain_projection_reader -j4
+scripts/run_rust_tests.sh -p lunco-usd-sim --module domain_projection_reader -j 4
 6 passed, 0 failed, 0 ignored
 
-cargo test -p lunco-usd-sim --test usd_connection_derivation -j4
+scripts/run_rust_tests.sh -p lunco-usd-sim --module usd_connection_derivation -j 4
 14 passed, 0 failed, 0 ignored
 ```
 
@@ -338,19 +338,19 @@ Rhai so policy changes do not require Rust test rewrites.
 cargo test -p lunco-modelica --lib -j4
 272 passed, 3 ignored, 0 failed
 
-cargo test -p lunco-modelica --test rumoca_chokepoints -j4
+scripts/run_rust_tests.sh -p lunco-modelica --module rumoca_chokepoints -j 4
 3 passed, 0 failed
 
-cargo test -p lunco-modelica --test package_member_compile -j4
+scripts/run_rust_tests.sh -p lunco-modelica --module package_member_compile -j 4
 11 passed, 0 failed
 
-cargo test -p lunco-modelica --test rumoca_api_coverage -j4
+scripts/run_rust_tests.sh -p lunco-modelica --module rumoca_api_coverage -j 4
 5 passed, 0 failed
 
 cargo test -p lunco-hooks-rhai -j4
 7 passed, 0 failed, 0 ignored
 
-cargo test -p lunco-scripting --test rhai_test_harness -j4
+scripts/run_rust_tests.sh -p lunco-scripting --module rhai_test_harness -j 4
 4 passed, 0 failed, 0 ignored
 
 cargo test -p lunco-assets --lib -j4

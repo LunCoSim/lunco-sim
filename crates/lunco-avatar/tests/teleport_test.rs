@@ -1,6 +1,6 @@
 //! Tests that verify the teleport math produces correct surface positions.
 //!
-//! Run with: cargo test -p lunco-avatar --test teleport_test -- --nocapture
+//! Run with: scripts/run_rust_tests.sh -p lunco-avatar --module teleport_test -- --nocapture
 
 use bevy::math::DVec3;
 use big_space::prelude::*;

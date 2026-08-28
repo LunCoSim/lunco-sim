@@ -11,7 +11,7 @@
 //!    - SurfaceCamera mode is active
 //!    - Terrain altitude calculation gives ~50m
 //!
-//! Run with: cargo test -p lunco-avatar --test teleport_integration_test -- --nocapture
+//! Run with: scripts/run_rust_tests.sh -p lunco-avatar --module teleport_integration_test -- --nocapture
 
 use bevy::math::DVec3;
 use bevy::prelude::*;

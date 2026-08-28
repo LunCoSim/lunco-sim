@@ -95,7 +95,7 @@ The crate builds with `rhai`, with `--no-default-features` (script-free), with
 ```bash
 # rhai backend (lib + live end-to-end scenario tests).
 # Note the env var: rhai debug info can stress the linker — line-tables-only avoids it.
-CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p lunco-scripting --lib --test rhai_rover_live_test
+CARGO_PROFILE_TEST_DEBUG=line-tables-only scripts/run_rust_tests.sh -p lunco-scripting --module rhai_rover_live_test
 ```
 
 ## Docs

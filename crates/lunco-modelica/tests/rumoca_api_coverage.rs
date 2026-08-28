@@ -1,88 +1,8 @@
-//! Verifies rumoca's public APIs cover the regex sites we plan to delete.
+//! Verifies the rumoca APIs that the current Modelica runtime depends on.
 //!
-//! Two specific replacements (per `docs/architecture/20-domain-modelica.md`
-//! Commit 1):
-//!
-//! 1. `ClassDef::iter_components()` replaces the regex in
-//!    `ui/panels/canvas_projection.rs` (`scan_component_declarations`).
-//! 2. `Session::navigation_rename_locations_query()` replaces the
-//!    header/footer/end-name-token regex chain in `ui/commands.rs`.
-//!
-//! These tests pin the API contracts. If rumoca changes one and these
-//! still pass, we're fine. If a test breaks, the corresponding refactor
-//! commit is blocked until rumoca is fixed or the replacement strategy
-//! is adjusted.
-
-use std::collections::HashSet;
-
-const RC_SOURCE: &str = "model RC_Circuit\n  Real R = 100;\n  Real C = 0.001;\n  Modelica.Electrical.Analog.Basic.Resistor resistor;\n  Modelica.Electrical.Analog.Basic.Capacitor capacitor;\n  Modelica.Electrical.Analog.Basic.Ground ground;\nend RC_Circuit;\n";
-
-/// Same regex used in
-/// `lunco_modelica::ui::panels::canvas_projection::scan_component_declarations`.
-/// Duplicated here to lock the comparison: when we delete that function,
-/// this test continues to lock rumoca's behavior against the historical
-/// regex output.
-fn reference_regex_scan(source: &str) -> HashSet<(String, String)> {
-    let re = regex::Regex::new(
-        r"(?m)^\s*(?:(?:redeclare|flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
-    ).expect("regex compiles");
-    const KEYWORDS: &[&str] = &[
-        "model",
-        "block",
-        "connector",
-        "package",
-        "function",
-        "record",
-        "class",
-        "type",
-        "extends",
-        "import",
-        "equation",
-        "algorithm",
-        "initial",
-        "protected",
-        "public",
-        "annotation",
-        "connect",
-        "if",
-        "for",
-        "when",
-        "end",
-        "within",
-        "and",
-        "or",
-        "not",
-        "true",
-        "false",
-        "else",
-        "elseif",
-        "elsewhen",
-        "while",
-        "loop",
-        "break",
-        "return",
-        "then",
-        "external",
-        "encapsulated",
-        "partial",
-        "expandable",
-        "operator",
-        "pure",
-        "impure",
-        "redeclare",
-    ];
-    let mut out = HashSet::new();
-    for cap in re.captures_iter(source) {
-        let ty = cap[1].to_string();
-        let inst = cap[2].to_string();
-        let first_segment = ty.split('.').next().unwrap_or(&ty).to_string();
-        if KEYWORDS.contains(&first_segment.as_str()) {
-            continue;
-        }
-        out.insert((ty, inst));
-    }
-    out
-}
+//! These are narrow contract pins for input lowering, simulation horizons, and
+//! AST/token locations. They deliberately do not duplicate the retired regex
+//! component scanner or compare a replacement against historical output.
 
 /// **Chokepoint pin: `compile_str` strips bound-`input` defaults itself.**
 ///
@@ -158,49 +78,7 @@ fn simulation_session_clamps_advance_at_t_end() {
     );
 }
 
-/// Build the same `(type_name, instance)` set from rumoca's typed AST.
-fn rumoca_ast_scan(source: &str, file_name: &str) -> HashSet<(String, String)> {
-    let ast = rumoca_phase_parse::parse_to_ast(source, file_name).expect("parses");
-    let mut out = HashSet::new();
-    for (_class_name, class_def) in &ast.classes {
-        for (name, comp) in class_def.iter_components() {
-            out.insert((format!("{}", comp.type_name), name.to_string()));
-        }
-    }
-    out
-}
-
-/// **Commit 2 gate**: rumoca AST iteration agrees with the regex scan
-/// for a representative `.mo`. If this passes we can delete
-/// `scan_component_declarations` and pull from `ClassDef::iter_components`
-/// instead.
-#[test]
-fn rumoca_components_match_regex_scan() {
-    let ast_pairs = rumoca_ast_scan(RC_SOURCE, "RC_Circuit.mo");
-    let regex_pairs = reference_regex_scan(RC_SOURCE);
-
-    // Regex picks up the parameter declarations (`Real R = 100;`) too,
-    // but so does the AST — both produce the same set.
-    let only_in_ast: Vec<_> = ast_pairs.difference(&regex_pairs).collect();
-    let only_in_regex: Vec<_> = regex_pairs.difference(&ast_pairs).collect();
-
-    assert!(
-        only_in_ast.is_empty() && only_in_regex.is_empty(),
-        "AST and regex disagree.\n  only in AST: {:?}\n  only in regex: {:?}",
-        only_in_ast,
-        only_in_regex
-    );
-    assert!(!ast_pairs.is_empty(), "expected non-empty component set");
-}
-
-// NOTE: the `rumoca_full_span_includes_leading_comments` lock test was removed.
-// It asserted `ClassDef::full_span_with_leading_comments`, an API rumoca dropped
-// in main. Production (document/core.rs, duplicate.rs) now falls back to
-// `class_def.location` (class span without leading comments), so the locked
-// behavior no longer exists to test.
-
-/// **Commit 3 lock**: AST-driven span splicing produces the expected
-/// renamed source. Same input as the old regex-driven version.
+/// AST-driven span splicing produces the expected renamed source.
 #[test]
 fn ast_class_rename_via_token_spans() {
     use rumoca_phase_parse::parse_to_ast;
@@ -233,10 +111,8 @@ fn ast_class_rename_via_token_spans() {
     assert!(out.contains("\"a class\""), "description preserved: {out}");
 }
 
-/// **Commit 3 gate**: `Session::navigation_rename_locations_query`
-/// returns at least the class name's two occurrences (header `model X`
-/// and `end X;`). If this passes we can drop the regex header/footer
-/// rewrites in `commands.rs` for class rename and route through rumoca.
+/// `Session::navigation_rename_locations_query` returns both class-name
+/// occurrences needed by the source-preserving rename path.
 #[test]
 fn rumoca_rename_covers_header_and_end_token() {
     use rumoca_compile::Session;
