@@ -1755,9 +1755,9 @@ struct RhaiScenarioState {
 /// `ScenarioDriver<RhaiScenarioRuntime>` (which owns the neutral lifecycle FSM).
 pub struct RhaiScenarioRuntime {
     /// `Arc` so the native task-tree ctx (which must be `'static` — see
-    /// `task_tree::TaskCtx`) can own a handle for closure calls; the runtime
-    /// is single-threaded per access, so `Arc::get_mut` for tool hot-reload
-    /// always succeeds (no ctx outlives its tick).
+    /// `task_tree::TaskCtx`) can own a handle for closure calls. Tool hot-reload
+    /// normally mutates this uniquely-owned engine; if a task context still
+    /// holds a clone, maintenance defers the rebuild until the next tick.
     engine: std::sync::Arc<Engine>,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
     /// Content-addressed memo of compile *outcomes*, keyed by `fnv1a64(source)`.
@@ -1783,7 +1783,7 @@ pub struct RhaiScenarioRuntime {
     /// own body executes.
     prelude_ast: AST,
     /// Tool-library generation the engine's static modules were built from; a
-    /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
+    /// mismatch rebuilds the engine so removed modules stop being callable too.
     tool_gen: u64,
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
@@ -2124,7 +2124,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     }
 
     fn maintain(&mut self) {
-        // Hot-reload tool libraries if any were (re)registered since last pass.
+        // Rebuild the static tool-module set if any libraries were
+        // (re)registered since the last pass. Rhai has no unregister operation
+        // for static modules, so refreshing the existing Engine would leave a
+        // removed library callable indefinitely.
         let cur = crate::tool_libs::generation();
         if self.tool_gen == cur {
             return;
@@ -2135,19 +2138,24 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // `Arc` clone, and script input is untrusted. This used to
         // `.expect("engine Arc must be unique outside a task tick")`, i.e. a
         // script could **take down the whole application**. It must not: a
-        // contended refresh is deferred, never fatal.
+        // contended rebuild is deferred, never fatal.
         match std::sync::Arc::get_mut(&mut self.engine) {
             Some(engine) => {
-                crate::tool_libs::refresh(engine);
+                let mut rebuilt = build_world_engine(self.sources.clone());
+                rebuilt.on_print(|s| info!("[rhai] {s}"));
+                let prelude_ast = compile_prelude(&rebuilt)
+                    .unwrap_or_else(|e| panic!("prelude must compile: {e}"));
+                *engine = rebuilt;
+                self.prelude_ast = prelude_ast;
                 self.tool_gen = cur;
             }
             None => {
                 // `tool_gen` is deliberately NOT advanced — the next `maintain`
                 // (once the borrow is gone) still sees the generation mismatch and
-                // performs the refresh. Worst case a hot-reloaded tool library
+                // performs the rebuild. Worst case a hot-reloaded tool library
                 // lands one tick late.
                 bevy::log::warn_once!(
-                    "[rhai] tool-library hot-reload deferred: the engine is still borrowed by a \
+                    "[rhai] tool-library rebuild deferred: the engine is still borrowed by a \
                      live task/re-entrant script call. Retrying next tick."
                 );
             }
@@ -2600,7 +2608,7 @@ mod tests {
             "registering a library must bump the generation"
         );
 
-        // The line under test. Before the fix: panic → app down.
+        // The line under test. Before the fix: panic -> app down.
         let deferred_generation = rt.tool_gen;
         rt.maintain();
 
@@ -2610,16 +2618,40 @@ mod tests {
         );
         assert_ne!(
             rt.tool_gen, bumped,
-            "the deferred refresh must NOT mark itself done — it has to retry"
+            "the deferred rebuild must NOT mark itself done — it has to retry"
         );
 
         // Once the re-entrant borrow is gone, the very next maintain performs the
-        // refresh it deferred: degraded, not dropped.
+        // rebuild it deferred: degraded, not dropped.
         drop(borrowed);
         rt.maintain();
         assert_eq!(
             rt.tool_gen, bumped,
-            "the deferred hot-reload lands on the next tick"
+            "the deferred tool rebuild lands on the next tick"
+        );
+    }
+
+    #[test]
+    fn removed_tool_is_not_callable_after_engine_maintenance() {
+        use crate::scenario::ScenarioRuntime;
+
+        let name = "h6_removed_tool_probe";
+        crate::tool_libs::register_tool_library(name, "fn ping() { 42 }");
+        let mut rt = super::RhaiScenarioRuntime::default();
+        let before: i64 = rt
+            .engine
+            .eval(&format!("{name}::ping()"))
+            .expect("registered tool must be callable");
+        assert_eq!(before, 42);
+
+        assert!(lunco_tools::unregister(name).is_some());
+        let removed_generation = crate::tool_libs::generation();
+        assert_ne!(rt.tool_gen, removed_generation);
+        rt.maintain();
+
+        assert!(
+            rt.engine.eval::<i64>(&format!("{name}::ping()")).is_err(),
+            "removing a tool must remove its static module from the scenario engine"
         );
     }
 

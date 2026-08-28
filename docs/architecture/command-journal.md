@@ -218,9 +218,10 @@ to forbid.
   > **half-attached**. A partially-applied edit that the journal cannot undo as a
   > unit is worse than no undo at all.
   >
-  > Rejected ops are logged and skipped rather than rolled back: a partial apply
-  > stays *visible* instead of hiding behind a rollback the journal cannot see.
-  > Headless builds with no `JournalResource` simply apply the ops.
+  > The complete lowered sequence is validated before the live document is
+  > touched. A rejected sequence applies zero ops; a valid sequence is journalled
+  > as one change set. Headless builds with no `JournalResource` retain the same
+  > all-or-nothing validation, without undo grouping.
 - **Phase 3 — Replay / determinism.** Seeds + sim-time in ops; replay `merged_order`
   → spec 020's deterministic Input Log; divergence checks.
 - **Phase 4 — Projection-authoritative.** State = snapshot + replay(log); ECS becomes a

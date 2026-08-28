@@ -29,7 +29,7 @@ The trap the old code fell into: `compile()` *parsed and ran the top-level body*
 
 ### Invalidation
 - **Source edit** bumps the document generation → the driver recompiles with new source → new key → a fresh entry. The old entry is *not* dropped (it's retained for reuse — a replay of the prior version hits it); it goes away only when the whole memo is cleared at the cap (below).
-- **Tool-lib / prelude generation** is *not* in the key: it changes the engine's *runtime* module resolution, not the AST parse, so the cached AST stays valid (tool calls resolve at call-time). `maintain()` refreshes the engine; it does **not** clear the memo. (If a future change hot-reloads the *prelude source* merged into every AST, that path must `compiled.clear()`.)
+- **Tool-lib / prelude generation** is *not* in the key: it changes the engine's *runtime* module resolution, not the AST parse, so the cached AST stays valid (tool calls resolve at call-time). `maintain()` rebuilds the engine and rebinds the current tools; it does **not** clear the memo. (If a future change hot-reloads the *prelude source* merged into every AST, that path must `compiled.clear()`.)
 - **Both outcomes cached.** A miss caches the compiled `Arc` *or* the compile-error `Diagnostic`, so a fleet sharing one broken source parses + logs once, not per entity.
 - **Eviction:** the memo is retained across entity despawns (for replay reuse), so it is **bounded, not GC'd** — a `COMPILED_CACHE_CAP` (512) triggers a full `clear()` when hit (a cold re-parse on the next compile; the distinct-source working set is far below the cap, so this is rare). A finer byte-budget/LRU is a deferral, same status as the precompute cache's eviction.
 

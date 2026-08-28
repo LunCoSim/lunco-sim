@@ -1,0 +1,66 @@
+#usda 1.0
+(
+    defaultPrim = "SocketAttachRejection"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Negative producer-to-consumer test for AttachComponent's socket contract.
+# The Rhai scenario submits an occupied socket, a plug-kind mismatch, and a
+# joint mismatch and must observe that none of the children is projected.
+def Xform "SocketAttachRejection" (
+    kind = "assembly"
+    doc = "An occupied mount socket must reject a second AttachComponent request."
+)
+{
+    def Xform "Chassis" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        def Xform "Mounts"
+        {
+            def Xform "occupied" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "probe"
+                rel lunco:mount:part = </SocketAttachRejection/Chassis/ExistingProbe>
+            }
+
+            def Xform "incompatible" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "not_probe"
+                uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
+            }
+
+            def Xform "wrong_joint" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
+            {
+                uniform token lunco:mount:socket = "probe"
+                uniform token lunco:mount:joint = "revolute"
+                uniform token lunco:mount:axis = "X"
+                uniform asset lunco:mount:asset = @lunco://components/mounting/demo_probe.usda@
+            }
+        }
+
+        def Xform "ExistingProbe"
+        {
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "socket-attach-rejection"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/socket_attach_rejection.rhai@
+        }
+    }
+}

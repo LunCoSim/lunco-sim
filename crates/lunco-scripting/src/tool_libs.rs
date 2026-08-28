@@ -269,7 +269,8 @@ pub fn wind_down_tools_on_twin_closed(
     }
 }
 
-/// Registry generation (changes on every registration) — drives hot-reload.
+/// Registry generation (changes when a tool is registered, replaced, or
+/// unregistered) — drives hot-reload.
 pub fn generation() -> u64 {
     lunco_tools::generation()
 }

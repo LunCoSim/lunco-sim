@@ -15,18 +15,15 @@
 //! exactly the convention every shipped joint already follows
 //! (`localPos1 = (0,0,0)` throughout `rocker_bogie.usda`). One number, one edit.
 //!
-//! ## What this is NOT (yet)
-//!
-//! v1 places by translation only. Rotated mounts and socket/plug frame matching
-//! (`lunco:mount:*`) are the layer above this; they compute a *placement* and then
-//! call the same lowering. Keeping the geometry here trivial and derivable is
-//! deliberate — a wrong frame conversion is a physics bug you can only see with the
-//! renderer running, so this function commits to nothing it can't derive exactly.
+//! Socket/plug frame matching (`lunco:mount:*`) computes a placement and calls
+//! the same lowering. The lowering also persists the selected socket's
+//! `lunco:mount:part` relationship, so the composed stage retains the mating
+//! identity instead of having to infer it from transforms.
 //!
 //! The lowering is a **pure function** returning `Vec<UsdOp>`; the command in
-//! `commands.rs` just applies them through the registry, so each op journals and
-//! inverts on its own. That keeps the geometry unit-testable with no world, no
-//! composition, and no I/O.
+//! `commands.rs` applies the complete sequence through one journal change set.
+//! That keeps the geometry unit-testable with no world, no composition, and no
+//! I/O while keeping attach undo atomic.
 
 use crate::document::{LayerId, UsdOp};
 use bevy::prelude::Reflect;
@@ -69,6 +66,11 @@ impl Axis {
 pub struct AttachSpec {
     /// Layer the edits land in (base or runtime).
     pub edit_target: LayerId,
+    /// The host socket consumed by this attach, when the attach came from a
+    /// socket/plug match. Direct component attachments leave this unset.
+    /// When present, the lowering authors `lunco:mount:part` on this socket
+    /// in the same change set as the child and joint.
+    pub socket_path: Option<String>,
     /// Absolute path of the **host body** prim the part hangs off — a prim that
     /// is (or will be) a `PhysicsRigidBodyAPI` body. The part becomes its child,
     /// which is how nested jointed bodies are authored (`RockerL` under
@@ -102,6 +104,7 @@ impl Default for AttachSpec {
     fn default() -> Self {
         Self {
             edit_target: LayerId::root(),
+            socket_path: None,
             host_path: String::new(),
             name: String::new(),
             asset: String::new(),
@@ -126,6 +129,7 @@ impl AttachSpec {
     ) -> Self {
         Self {
             edit_target,
+            socket_path: None,
             host_path: host_path.into(),
             name: name.into(),
             asset: asset.into(),
@@ -142,29 +146,34 @@ impl AttachSpec {
     /// with the socket, via [`resolve_mount_placement`]. The joint anchor still
     /// derives from the placement, so a bogie reconfiguration is "move the socket".
     ///
+    /// Returns an error when the frame composition contains unsupported scale
+    /// or non-finite values, because the current USD attach representation is
+    /// rigid and cannot author scale or invalid transforms.
     /// Frame *reading* stays with the caller (it needs the composed stage); this
     /// keeps the frame math a pure, unit-tested function of two transforms — a wrong
     /// frame conversion is a physics bug you can only see with the renderer running,
     /// so it is isolated here where it can be checked against hand-computed matrices.
     pub fn from_mount(
         edit_target: LayerId,
+        socket_path: impl Into<String>,
         host_path: impl Into<String>,
         name: impl Into<String>,
         asset: impl Into<String>,
         joint: AttachJoint,
         socket: bevy::prelude::Transform,
         plug: bevy::prelude::Transform,
-    ) -> Self {
-        let (placement, rotate_deg) = resolve_mount_placement(socket, plug);
-        Self {
+    ) -> Result<Self, String> {
+        let (placement, rotate_deg) = resolve_mount_placement(socket, plug)?;
+        Ok(Self {
             edit_target,
+            socket_path: Some(socket_path.into()),
             host_path: host_path.into(),
             name: name.into(),
             asset: asset.into(),
             placement,
             rotate_deg,
             joint,
-        }
+        })
     }
 
     fn child_path(&self) -> String {
@@ -194,7 +203,8 @@ fn vec3_literal(v: [f64; 3]) -> String {
 
 /// Lower an [`AttachSpec`] to the primitive [`UsdOp`] sequence that references the
 /// part in, places it, and joints it — with the joint anchor **derived** from the
-/// placement (`localPos0 = placement`, `localPos1 = origin`).
+/// placement (`localPos0 = placement`, `localPos1 = origin`). A socket-sourced
+/// spec also records the socket occupancy relationship.
 ///
 /// The ops are ordered so each is valid when applied in turn: the child prim
 /// exists before it is placed; both bodies exist before the joint relates them.
@@ -257,6 +267,22 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
             value: vec3_literal([0.0, 0.0, 0.0]),
         },
     ];
+
+    // Persist the mating relation, not only the derived transform. The socket
+    // reader uses this relationship to distinguish an occupied socket from an
+    // empty one, so omitting it would make a successful attach disappear from
+    // the next composed read and allow a duplicate attach.
+    if let Some(socket_path) = &spec.socket_path {
+        ops.insert(
+            1,
+            UsdOp::SetRelationship {
+                edit_target: et.clone(),
+                path: socket_path.clone(),
+                name: "lunco:mount:part".into(),
+                targets: vec![child.clone()],
+            },
+        );
+    }
 
     // 2b. Orientation, only when the placement carries one (a mount that rotates
     //     the part). Authored right after the translate so the placement stays one
@@ -364,25 +390,49 @@ pub fn realign_component_ops(
 /// ```
 ///
 /// Returns `P` decomposed into `(translation, rotateXYZ-degrees)`, the two things
-/// [`attach_component_ops`] authors. Pure and total — no stage, no I/O — so the
-/// frame conversion (a physics bug you'd otherwise only catch in the renderer) is
+/// [`attach_component_ops`] authors. Frames whose resulting placement contains
+/// non-unit scale or non-finite values are rejected: the current attach
+/// representation has no scale operation and must not silently discard invalid
+/// state. Pure and total — no stage, no I/O — so the frame conversion is
 /// unit-tested against hand-computed matrices.
 pub fn resolve_mount_placement(
     socket: bevy::prelude::Transform,
     plug: bevy::prelude::Transform,
-) -> ([f64; 3], [f64; 3]) {
+) -> Result<([f64; 3], [f64; 3]), String> {
     use bevy::math::EulerRot;
     let p = socket.compute_affine() * plug.compute_affine().inverse();
-    let (_scale, rot, trans) = p.to_scale_rotation_translation();
+    let (scale, rot, trans) = p.to_scale_rotation_translation();
+    let scale_error = (scale - bevy::prelude::Vec3::ONE).abs().max_element();
+    if !scale.x.is_finite() || !scale.y.is_finite() || !scale.z.is_finite() || scale_error > 1.0e-4
+    {
+        return Err(format!(
+            "mount frame placement has unsupported scale {:?}; socket/plug frames must compose to a rigid transform",
+            scale
+        ));
+    }
+    if !rot.x.is_finite()
+        || !rot.y.is_finite()
+        || !rot.z.is_finite()
+        || !rot.w.is_finite()
+        || !trans.x.is_finite()
+        || !trans.y.is_finite()
+        || !trans.z.is_finite()
+    {
+        return Err("mount frame placement is non-finite".into());
+    }
     let (rx, ry, rz) = rot.to_euler(EulerRot::XYZ);
-    (
-        [trans.x as f64, trans.y as f64, trans.z as f64],
-        [
-            (rx as f64).to_degrees(),
-            (ry as f64).to_degrees(),
-            (rz as f64).to_degrees(),
-        ],
-    )
+    let placement = [trans.x as f64, trans.y as f64, trans.z as f64];
+    let rotation = [
+        (rx as f64).to_degrees(),
+        (ry as f64).to_degrees(),
+        (rz as f64).to_degrees(),
+    ];
+    if placement.iter().any(|value| !value.is_finite())
+        || rotation.iter().any(|value| !value.is_finite())
+    {
+        return Err("mount frame placement is non-finite".into());
+    }
+    Ok((placement, rotation))
 }
 
 #[cfg(test)]
@@ -394,6 +444,7 @@ mod tests {
     fn wheel_spec(joint: AttachJoint) -> AttachSpec {
         AttachSpec {
             edit_target: LayerId::root(),
+            socket_path: None,
             host_path: "/RockerBogie/RockerL".into(),
             name: "Wheel_FL".into(),
             asset: "components/mobility/wheel.usda".into(),
@@ -594,7 +645,7 @@ mod tests {
 
     #[test]
     fn mount_identity_frames_place_at_origin() {
-        let (t, r) = resolve_mount_placement(Transform::IDENTITY, Transform::IDENTITY);
+        let (t, r) = resolve_mount_placement(Transform::IDENTITY, Transform::IDENTITY).unwrap();
         assert!(close(t, [0.0, 0.0, 0.0]) && close(r, [0.0, 0.0, 0.0]));
     }
 
@@ -603,7 +654,7 @@ mod tests {
         // Socket sits at (1,2,3) on the host, plug at the part origin → the part
         // goes to (1,2,3), no rotation.
         let socket = Transform::from_xyz(1.0, 2.0, 3.0);
-        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
+        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY).unwrap();
         assert!(
             close(t, [1.0, 2.0, 3.0]),
             "translation carried through: {t:?}"
@@ -616,7 +667,7 @@ mod tests {
         // Socket at the host origin; the plug sticks out +Z by 1 from the part
         // origin. To land the plug on the socket, the part origin must go to -Z.
         let plug = Transform::from_xyz(0.0, 0.0, 1.0);
-        let (t, _r) = resolve_mount_placement(Transform::IDENTITY, plug);
+        let (t, _r) = resolve_mount_placement(Transform::IDENTITY, plug).unwrap();
         assert!(
             close(t, [0.0, 0.0, -1.0]),
             "plug offset is cancelled: {t:?}"
@@ -628,7 +679,7 @@ mod tests {
         // A 45° socket rotation about Z (Z is the last XYZ-Euler axis — no gimbal
         // lock) → the part is rotated 45° about Z, at the origin.
         let socket = Transform::from_rotation(Quat::from_rotation_z(45f32.to_radians()));
-        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
+        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY).unwrap();
         assert!(close(t, [0.0, 0.0, 0.0]), "no translation: {t:?}");
         assert!(
             close(r, [0.0, 0.0, 45.0]),
@@ -642,13 +693,15 @@ mod tests {
         // (via `new`) does not (the common axis-aligned case stays translate-only).
         let rotated = AttachSpec::from_mount(
             LayerId::root(),
+            "/RockerBogie/RockerL/Mounts/wheel_fl",
             "/RockerBogie/RockerL",
             "Wheel_FL",
             "components/mobility/wheel.usda",
             AttachJoint::Fixed,
             Transform::from_rotation(Quat::from_rotation_z(30f32.to_radians())),
             Transform::IDENTITY,
-        );
+        )
+        .unwrap();
         assert!(
             attach_component_ops(&rotated)
                 .iter()
@@ -670,5 +723,45 @@ mod tests {
                 .any(|op| matches!(op, UsdOp::SetRotate { .. })),
             "an axis-aligned placement stays translate-only"
         );
+    }
+
+    #[test]
+    fn socket_attach_records_occupancy_relationship() {
+        let spec = AttachSpec::from_mount(
+            LayerId::root(),
+            "/Rig/Chassis/Mounts/wheel_fl",
+            "/Rig/Chassis",
+            "Wheel",
+            "components/mobility/wheel.usda",
+            AttachJoint::Fixed,
+            Transform::IDENTITY,
+            Transform::IDENTITY,
+        )
+        .unwrap();
+        assert!(attach_component_ops(&spec).iter().any(|op| matches!(
+            op,
+            UsdOp::SetRelationship { path, name, targets, .. }
+                if path == "/Rig/Chassis/Mounts/wheel_fl"
+                    && name == "lunco:mount:part"
+                    && targets == &["/Rig/Chassis/Wheel".to_string()]
+        )));
+    }
+
+    #[test]
+    fn mount_placement_rejects_non_rigid_result() {
+        let error = resolve_mount_placement(
+            Transform::from_scale(bevy::prelude::Vec3::new(2.0, 1.0, 1.0)),
+            Transform::IDENTITY,
+        )
+        .expect_err("non-unit placement scale must not be discarded");
+        assert!(error.contains("unsupported scale"), "{error}");
+    }
+
+    #[test]
+    fn mount_placement_rejects_non_finite_result() {
+        let error =
+            resolve_mount_placement(Transform::from_xyz(f32::NAN, 0.0, 0.0), Transform::IDENTITY)
+                .expect_err("non-finite placement must not be authored");
+        assert!(error.contains("non-finite"), "{error}");
     }
 }

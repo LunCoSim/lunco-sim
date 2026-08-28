@@ -25,6 +25,9 @@ use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
 pub struct MountItem {
     /// Socket leaf name (`wheel_fl`).
     pub socket: String,
+    /// Absolute socket path. The attach command must retain the path, not only
+    /// the display name, so it can author the occupancy relationship correctly.
+    pub socket_path: String,
     /// What plug kind it accepts.
     pub accepts: String,
     /// Joint kind token (`fixed` / `revolute` / `prismatic`).
@@ -123,29 +126,36 @@ pub fn produce_usd_mount_view(
             if let Some(plug) =
                 read_plug(&stage_view, part).filter(|plug| plug.kind == socket.accepts)
             {
-                let (t, r) = resolve_mount_placement(socket.frame, plug.frame);
-                // Already there? Compare against the part's authored local transform.
-                if let Ok(pp) = SdfPath::new(part) {
-                    aligned = match lunco_usd_bevy::local_transform_at(&stage_view, &pp, 0.0) {
-                        Ok(Some(transform)) => {
-                            let dt = (transform.translation
-                                - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
-                            .length();
-                            dt < 1.0e-3
+                match resolve_mount_placement(socket.frame, plug.frame) {
+                    Ok((t, r)) => {
+                        // Already there? Compare against the part's authored local transform.
+                        if let Ok(pp) = SdfPath::new(part) {
+                            aligned =
+                                match lunco_usd_bevy::local_transform_at(&stage_view, &pp, 0.0) {
+                                    Ok(Some(transform)) => {
+                                        let dt = (transform.translation
+                                            - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
+                                        .length();
+                                        dt < 1.0e-3
+                                    }
+                                    Ok(None) => false,
+                                    Err(error) => {
+                                        bevy::log::warn!(
+                                            "mount alignment rejected for {}: {}",
+                                            pp.as_str(),
+                                            error
+                                        );
+                                        false
+                                    }
+                                };
                         }
-                        Ok(None) => false,
-                        Err(error) => {
-                            bevy::log::warn!(
-                                "mount alignment rejected for {}: {}",
-                                pp.as_str(),
-                                error
-                            );
-                            false
-                        }
-                    };
+                        placement = Some(t);
+                        rotate_deg = Some(r);
+                    }
+                    Err(error) => {
+                        bevy::log::warn!("mount alignment rejected for {}: {}", part, error);
+                    }
                 }
-                placement = Some(t);
-                rotate_deg = Some(r);
             }
         }
 
@@ -159,6 +169,7 @@ pub fn produce_usd_mount_view(
 
         view.items.push(MountItem {
             socket: socket.name,
+            socket_path: socket.path,
             accepts: socket.accepts,
             joint: socket.joint,
             axis: socket.axis,

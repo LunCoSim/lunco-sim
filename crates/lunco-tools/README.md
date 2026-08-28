@@ -29,4 +29,6 @@ lunco_tools::register(Arc::new(MyNativeTool));
 
 ## Status
 
-Phase 1 done (trait + registry + discovery). Twin persistence is the next phase.
+The registry, discovery surface, Rhai binding, and Twin-scoped persistence are
+implemented. Rhai engines rebuild their static module set when the registry
+generation changes, so a tool removed with its Twin is no longer callable.

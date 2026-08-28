@@ -101,9 +101,9 @@ pub fn unregister(name: &str) -> Option<Arc<dyn Tool>> {
     removed
 }
 
-/// Monotonic registry generation — changes on every [`register`]. A runtime
-/// adapter compares this against its last-bound value to detect new/changed
-/// tools (hot-reload).
+/// Monotonic registry generation — changes whenever the registry is modified
+/// by [`register`] or [`unregister`]. A runtime adapter compares this against
+/// its last-bound value to detect added, replaced, or removed tools.
 pub fn generation() -> u64 {
     generation_cell().load(Ordering::Relaxed)
 }

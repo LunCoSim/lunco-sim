@@ -86,13 +86,13 @@ reader.
 today → the descriptor's synthesizer/editor filter on it). Multi-apply = multi-domain participation.
 
 **(c) The domain network = a USD graph.** **Nodes = component prims; ports = `inputs:`/`outputs:`
-attributes; edges = connections.** *Adopt USD's native connectable-node-graph* (§8.1) rather than a
-bespoke `rel` model: USD already generalized `UsdShadeConnectableAPI` / `NodeGraph` **beyond shading**
-(implemented), so a component is a connectable node, a pin is a namespaced `inputs:`/`outputs:` attribute,
-and an edge is an attribute-to-attribute **connection** — with per-domain legality expressed as a
-`ConnectableAPIBehavior`. (The earlier `rel lunco:electrical:pin` / `lunco:connector:kind` sketch is the
-"do it by hand" fallback; prefer the standard.) This one structure serves editing, synthesis, and
-validation. See §8.
+attributes; edges = connections.** Use USD's typed attribute connections where the current USD/runtime
+surface supports them; do not claim that `UsdShadeConnectableAPI` is a generalized mechanical/domain
+schema. `UsdShade` connectability remains a shading-oriented contract in this codebase. LunCo-specific
+domain membership and connection legality are currently authored/read through `lunco:` data, descriptors,
+and Rhai rules. (The earlier `rel lunco:electrical:pin` / `lunco:connector:kind` sketch is still not a
+dataflow substitute.) This structure can serve editing, synthesis, and validation without putting a
+physical-domain enum in Rust. See §8.
 
 **(d) Network root and separate domain scopes.** A network is owned by the prim that already
 contains its assembled parts. That prim applies `CollectionAPI:components` and exposes its typed
@@ -265,31 +265,31 @@ doc-36 comms descriptor drop in as data. (1) and (6-viz) are independent cleanup
 
 ## 8. Standards alignment — adopt USD-native, don't reinvent
 
-The best validation of this rethink: **USD/Omniverse already provide the canonical mechanism for almost
-every convention above, and USD has actively generalized the key one (connectable node graphs) beyond
-shading.** So the directive sharpens from "invent open `lunco:` conventions" to **"adopt the USD standard
-where it exists; use `lunco:` only for the genuinely LunCo-specific glue."** State as of USD Core Spec 1.0
-(Dec 2025) + Isaac Sim 5.0 (2025). Legend: **PROD** = shipped core USD / Omniverse; **VENDOR** = NVIDIA
-extension schema; **PROPOSED** = AOUSD roadmap / working paper.
+The best validation of this rethink: **USD/Omniverse already provide the canonical mechanism for many
+of the conventions above, especially typed connectable-node structure.** The maintained runtime used by
+this repository does not provide a generic per-domain connection-behavior registry, so the directive is
+**"adopt the USD standard where it exists; use `lunco:` only for genuinely LunCo-specific glue; keep
+legality in descriptors/Rhai until a maintained generic behavior extension is available."** State as of
+USD Core Spec 1.0 (Dec 2025) + Isaac Sim 5.0 (2025). Legend: **PROD** = shipped core USD / Omniverse;
+**VENDOR** = NVIDIA extension schema; **PROPOSED** = AOUSD roadmap / working paper.
 
-### 8.1 Connectable node graphs — **ADOPT (PROD, and already generalized beyond shading)**
+### 8.1 Connectable node graphs — **ADOPT THE SHAPE / TRACK GENERALIZATION**
 
-The working paper *"Generalizing Connectable Nodes Beyond UsdShade"* is **implemented**: node-definition
-was split out of `UsdShadeShader` into an applied API schema **`UsdShadeNodeDefAPI`**, so **any prim type**
-can be a connectable node. A domain connector graph maps *exactly* onto this:
+OpenUSD provides the connectable graph primitives and typed attribute connections, but the maintained
+runtime surface here does not provide a generic per-domain `ConnectableAPIBehavior` registry. Treat the
+following as the target mapping, not as a claim that every item is already implemented:
 
 | our concept (§3c) | USD-native |
 |---|---|
-| component = node | prim with `UsdShadeConnectableAPI` applied |
+| component = node | prim with a domain-owned connectable contract |
 | port / pin | typed attribute in the `inputs:` / `outputs:` namespace (`UsdShadeInput`/`Output`) |
 | edge / wire | an **attribute-to-attribute connection** authored on the consuming input |
 | domain scope container | `UsdShadeNodeGraph` (encapsulates child nodes, exposes public inputs) |
-| connection legality (§4.4, greenfield) | a per-schema **`UsdShadeConnectableAPIBehavior`** — register electrical-pin/thermal-port rules here |
+| connection legality (§4.4, greenfield) | authored descriptor/Rhai rules; a generic USD behavior registry remains a tracked option |
 
-First non-shading adopter in core USD was **UsdLux** (light/light-filter networks) — proof this is a
-general graph substrate, not shading-locked. **Adopt it for the electrical/thermal/comms networks** instead
-of the bespoke `rel lunco:*:pin` sketch; the effort/flow *semantics* still live in Modelica connectors, but
-the USD-level structure is standard, tool-interoperable, and already what OmniGraph persists (§8.5).
+Typed connections are interoperable USD structure, but their domain semantics still live in Modelica
+connectors and authored descriptor/Rhai rules. Keep that separation until a maintained generic behavior
+registry exists; do not make a shading-specific API the authority for mechanical or resource legality.
 
 ### 8.2 Node-editor layout — **ADOPT (PROD): `UsdUINodeGraphNodeAPI`**
 
@@ -350,7 +350,7 @@ models, import them into our USD twin — don't adopt them as a native represent
 
 | # | our convention | USD/Omniverse native | verdict |
 |---|---|---|---|
-| connector graph | `rel`/port sketch (§3c) | `ConnectableAPI` + `NodeGraph` + `NodeDefAPI` + `ConnectableAPIBehavior` (**PROD, generalized**) | **Adopt** |
+| connector graph | `rel`/port sketch (§3c) | typed USD connections; descriptor/Rhai legality rules; generic behavior registry tracked | **Adopt shape; keep current legality owner** |
 | editor layout | `.mo` annot / side table | `UsdUINodeGraphNodeAPI` (**PROD**) | **Adopt** |
 | domain tag | `LunCoElectricalAPI` label | multi-apply / **codeless** applied API schema (**PROD**) | **Adopt** |
 | component/assembly | ad-hoc | `kind` + references/payloads/variants (**PROD**) | **Adopt** |
@@ -405,15 +405,15 @@ radius. Ordered by leverage.
 ### A3 — Delete `PortType` + `classify` (dead taxonomy)
 
 - Remove the enum (`lunco-core/ports.rs:52`) and the `classify` heuristic (`:88`) outright — nothing
-  load-bearing reads them. Any needed typing is the USD attribute's `typeName` + a domain
-  `ConnectableAPIBehavior` (A4), never a Rust enum.
+  load-bearing reads them. Any needed typing is the USD attribute's `typeName` plus the authored domain
+  descriptor/Rhai rule; a future generic `ConnectableAPIBehavior` remains optional, never a Rust enum.
 
-### A4 — Connection legality → `UsdShadeConnectableAPIBehavior` per domain
+### A4 — Connection legality → authored descriptor/Rhai rules (current)
 
-- Fill the greenfield validation slot (canvas `tool.rs:14`, doc 37/38 §4.4) with a registered
-  `ConnectableAPIBehavior` per domain schema: electrical-pin↔electrical-pin, data↔data, reject
-  cross-kind. This replaces both the never-implemented canvas rule *and* the dead `PortType` "connection
-  validation" comment with the **USD-standard** extension point.
+- The current maintained runtime has no generic `ConnectableAPIBehavior` registry. Keep connection
+  legality in the domain descriptor/Rhai rule: electrical-pin↔electrical-pin, data↔data, and reject
+  cross-kind. If a maintained USD behavior extension becomes available, it can replace this rule hook;
+  it is not a current implementation dependency.
 
 ### A5 — Make `apiSchemas` real: codeless applied schemas as domain + component identity
 
@@ -497,7 +497,7 @@ system uses more than one:
 | **Namespace / prim hierarchy** | the scene tree (parent→child prims) | component/assembly containment, per-domain `Scope`s |
 | **Relationships (`rel`)** | untyped, multi-target links; *targeting/binding/membership*, **not** dataflow | material bindings, `SelectableRoot`, non-signal references |
 | **Connections** (attr→attr) | **typed dataflow** links authored on `inputs:`/`outputs:` attributes; an input may have **one or many** sources (`GetConnectedSource` / **`GetConnectedSources`** → vector); `connectability` = `full` \| `interfaceOnly` | the domain wiring graph (electrical/data/cosim) |
-| **Connectable node graph** | `UsdShadeConnectableAPI` + `NodeGraph` + `UsdShadeNodeDefAPI` (**generalized beyond shading — implemented**) + per-schema `ConnectableAPIBehavior`; encapsulation + pass-through rules | components as nodes, the connection legality layer |
+| **Connectable node graph** | typed USD connections and domain descriptors/Rhai rules; generic `ConnectableAPIBehavior` remains a tracked option | components as nodes, the connection legality layer |
 | **`UsdUINodeGraphNodeAPI` / `BackdropAPI`** | editor layout (`ui:nodegraph:node:pos/size/…`) | the generic canvas persistence |
 | **`UsdCollectionAPI`** | membership graph (multi-apply; include/exclude + expansion) | domain/subsystem sets, RBAC scopes, selection groups |
 | **Composition-arc graph** | references/inherits/specializes/payloads/variants = the composition DAG over layers | component reuse, fidelity variants, per-domain layers (§3e) |
@@ -524,11 +524,11 @@ The mapping is near-total (this is why A1–A9 are "choose the standard spelling
 
 - **component** → connectable prim (`kind=component`); **public port** → `inputs:`/`outputs:` attribute;
   **wire** → connection; **domain container** → `NodeGraph` (a `Scope` with connectability); **connection
-  legality** → `ConnectableAPIBehavior`; **layout** → `NodeGraphNodeAPI`; **fidelity** → variants;
+  legality** → authored descriptor/Rhai rules; **layout** → `NodeGraphNodeAPI`; **fidelity** → variants;
   **per-domain sub-model** → a `LunCoProgramAPI` prim in the `Scope`; **runtime values** → PortRegistry
   today, OpenExec-shaped tomorrow; **behavior/rules** → connectable graph persisted, rhai executed.
-- The **two-plane split** we already have (USD authored structure + PortRegistry f64 runtime) is *exactly*
-  USD's own authored-vs-computed split (connections + OpenExec). We independently arrived at USD's model.
+- The **two-plane split** we already have (USD authored structure + PortRegistry f64 runtime) is analogous
+  to USD's authored-vs-computed split, but OpenExec is not the runtime implementation here.
 
 ### 10.3 Port-system divergences — what does NOT map naturally to USD
 
@@ -613,7 +613,7 @@ mechanisms our §9 adopt-plan depends on **already ship in it**:
 | **A6 `kind`/model hierarchy** | **WORKS** — `usd/prim.rs` `kind`/`is_model`/`is_group` | free |
 | **A7 editor layout** | **WORKS** — `schemas/ui/` `NodeGraphNodeAPI` incl. `ui:nodegraph:node:pos` (typed) | free |
 | **A5 domain tags (`apiSchemas`)** | **PARTIAL** — author/read/compose incl. **multiple-apply** WORKS; **codeless schema *registry* is an empty stub** (`schemas/registry.rs`) | tags work now as tokens + hand-written typed views; automatic fallback/allowed-token *validation* would be a light add |
-| **A4 connection legality (`ConnectableAPIBehavior`)** | **ABSENT** (no plugin/Sdr registry) | but we author legality as **rhai/descriptor rules** anyway — not an openusd gap we must fill |
+| **A4 connection legality (`ConnectableAPIBehavior`)** | **ABSENT** (no plugin/Sdr registry) | author legality as **Rhai/descriptor rules** until a maintained registry is available |
 | **runtime value plane (OpenExec)** | **ABSENT** — `ConnectionGraph` gives *topology only*, no computed-value engine | **we don't need it**: PortRegistry + cosim master + `SimulationSession` *are* our execution/value plane. Use `ConnectionGraph` for topology, keep our runtime. |
 
 **The pattern in that table is the whole answer:** everything USD-*structural* we want is already in the
@@ -772,7 +772,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | `lunco:factor` | **SSP LinearTransformation `factor`** | matches SSP exactly (not "gain") |
 | `lunco:offset` | SSP LinearTransformation `offset` | |
 | a model event: `LunCoEvent.inputs:trigger.connect` plus event name/severity | USD connection + engine event projection | physical condition is a Modelica output; USD only wires and names it |
-| attr `typeName` + `ConnectableAPIBehavior` (not a Rust `PortType`/`classify` taxonomy) | USD | connection legality is USD's job |
+| attr `typeName` + authored descriptor/Rhai rule (not a Rust `PortType`/`classify` taxonomy) | USD + Rhai | connection legality stays with the domain contract |
 | Rust `PortDirection {In,Out,InOut}` | FMI causality `input/output` + SysML in/out/inout + the `inputs:`/`outputs:` namespaces (all agree) | **keep** |
 | Rust `SimPort.connector`, `SimConnection.{start,end}_connector` | already SSP `Connector` | **keep** |
 | Rust `SimComponent.{inputs,outputs,parameters}` | already FMI causality | **keep** |
@@ -839,7 +839,7 @@ spellings** — chosen per layer, never invented.
 
 ### 14.6 Rename cheat-sheet (verdict per group)
 
-- **DELETE:** `PortType`/`classify` — connection legality is `ConnectableAPIBehavior`'s job.
+- **DELETE:** `PortType`/`classify` — connection legality is the authored domain descriptor/Rhai rule's job.
 - **NAME AS SSP DOES:** `lunco:factor` (not "gain"); EPS/motor params are the bound program's parameters
   (MSL names where they exist), not bespoke `lunco:` spellings.
 - **PROMOTE:** `LunCo*API` → real codeless applied schemas; author `kind`.
@@ -883,7 +883,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 | current `lunco:` | → USD standard | note |
 |---|---|---|
 | `lunco:cameraLookAt`/`activeCamera` + camera intrinsics | **`UsdGeomCamera`** (prim) + `focalLength`/`clippingRange`/… | the camera *is* a `UsdGeomCamera`; keep `lunco:cameraMode` (follow/orbit = behavior, no USD std) |
-| `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
+| former `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
 | diagram/node positions | **`UsdUINodeGraphNodeAPI`** (`ui:nodegraph:node:pos`) | §14 |
 | EPS/motor params | typed USD **attributes** (the bound program's parameters) | §14.3 |
 | `lunco:placeholder` / `lunco:assetMode` | USD **payloads** + Ar asset resolution | the payload/reference is authoritative; render projection selects the Bevy realization |
