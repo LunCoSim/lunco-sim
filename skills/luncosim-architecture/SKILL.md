@@ -82,6 +82,13 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+The render-side camera binder also owns Bevy's clustered-light policy.
+Use Bevy's `ClusterConfig::None` for automatic cameras while the ECS topology
+has no point lights, spot lights, light probes, or clustered decals, and follow
+those component lifecycle events back to Bevy's normal configuration when one
+appears. Preserve an explicit `ClusterConfig`; do not add a scene-name check,
+per-frame light scan, or alternate lighting implementation.
+
 ## Start with the standard-schema audit
 
 Before creating `LunCo*API` or a `lunco:*` property:

@@ -110,7 +110,7 @@ and known nowhere else. A second backend would remap from the same `ior`. Carryi
 would let a look reflect like diamond and refract like glass, and would need to persist a
 `reflectance` that USD has no attribute for.
 | **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set** — see [shader-layers-and-params.md](shader-layers-and-params.md) |
-| **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question** |
+| **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom + Bevy `ClusterConfig` | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question**; the render binder also disables Bevy's clustered-light grid when no clusterable object exists and follows light lifecycle events |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
 `ShaderLookReady` is the render binder's dependency-presence latch. A shader

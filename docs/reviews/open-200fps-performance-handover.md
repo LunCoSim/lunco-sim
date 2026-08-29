@@ -524,6 +524,28 @@ debounce, policy hooks, and published state are unchanged.
 The next verification gate is the focused celestial suite plus a production
 Apollo run; no FPS gain is claimed until a settled comparison is recorded.
 
+#### 2026-08-30 Bevy clustered-light topology gating
+
+The settled Tracy profile still attributed measurable render work to Bevy's
+cluster preparation. Bevy's maintained `LightPlugin` requires `Clusters` for
+every `Camera3d` and uses the default 4,096-cell `FixedZ` configuration when a
+camera has no explicit `ClusterConfig`. The assignment owner only clusters
+point lights, spot lights, light probes, and clustered decals; Apollo's authored
+sun is directional. The render camera binder now uses Bevy's existing
+`ClusterConfig::None` when the ECS topology contains no clusterable object, and
+tracks those four component lifecycles with observers. A live USD light
+projection therefore restores the normal Bevy configuration automatically.
+Explicit camera `ClusterConfig` components remain untouched.
+
+The focused `lunco-render-bevy` suite passed **50/50**, and a plain production
+build passed in `usd/target/debug`. A clean Apollo smoke run on API port `4227`
+reached `ready=true`, `world_hold=false`, `faulted=false`, and
+`pending_count=0`; typed `Exit` was accepted and the process and port were
+verified gone. Its sampled 20-second tail varied around **93–201 FPS** and
+**5.0–10.7 ms** while another user-owned `main` session was active, so it is
+contended runtime evidence rather than an FPS acceptance comparison. No FPS
+gain is claimed until a clean before/after settled run is available.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

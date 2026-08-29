@@ -8,6 +8,7 @@
 
 use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::{cluster::ClusterConfig, ClusteredDecal, LightProbe, PointLight, SpotLight};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
@@ -15,14 +16,26 @@ use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
 use crate::RenderProfile;
 
 pub(crate) fn build(app: &mut App) {
+    let initial_clusterable_object_count = count_clusterable_objects(app.world_mut());
     app.init_resource::<RenderProfile>()
+        .insert_resource(ClusterableObjectCount(initial_clusterable_object_count))
         .init_resource::<lunco_render::RenderingQualitySettings>()
         .init_resource::<lunco_render::SceneBloomOverride>()
         .add_observer(bind_scene_camera)
+        .add_observer(bind_camera_cluster_config)
+        .add_observer(track_clusterable_object_added::<PointLight>)
+        .add_observer(track_clusterable_object_added::<SpotLight>)
+        .add_observer(track_clusterable_object_added::<LightProbe>)
+        .add_observer(track_clusterable_object_added::<ClusteredDecal>)
+        .add_observer(track_clusterable_object_removed::<PointLight>)
+        .add_observer(track_clusterable_object_removed::<SpotLight>)
+        .add_observer(track_clusterable_object_removed::<LightProbe>)
+        .add_observer(track_clusterable_object_removed::<ClusteredDecal>)
         .add_systems(
             Update,
             (
                 sync_new_scene_camera,
+                sync_auto_cluster_configs.run_if(resource_changed::<ClusterableObjectCount>),
                 apply_graphics_camera_quality.run_if(
                     resource_changed::<lunco_render::RenderingQualitySettings>
                         .or_else(resource_changed::<lunco_render::SceneBloomOverride>),
@@ -41,6 +54,110 @@ fn tonemapping_of(t: ToneMap) -> Tonemapping {
         ToneMap::AcesFitted => Tonemapping::AcesFitted,
         ToneMap::Reinhard => Tonemapping::Reinhard,
     }
+}
+
+/// Bevy's default camera configuration allocates a 4,096-cell clustered-light
+/// grid for every `Camera3d`. Directional lights do not use that grid, and most
+/// LunCoSim scenes have no clusterable objects at all. Keep the decision at the
+/// render camera owner, but drive it from component lifecycle events so a light
+/// added by a live USD projection receives the correct Bevy path automatically.
+#[derive(Resource, Debug, Default, PartialEq, Eq)]
+struct ClusterableObjectCount(usize);
+
+/// Marks a `ClusterConfig` that the render camera binder owns. An explicit Bevy
+/// `ClusterConfig` supplied by a caller is left untouched; only the binder's
+/// automatically selected configuration follows the scene's light topology.
+#[derive(Component, Debug, Clone, Copy, Default)]
+struct AutoClusterConfig;
+
+fn count_clusterable_objects(world: &mut World) -> usize {
+    world
+        .query_filtered::<(), With<PointLight>>()
+        .iter(world)
+        .count()
+        + world
+            .query_filtered::<(), With<SpotLight>>()
+            .iter(world)
+            .count()
+        + world
+            .query_filtered::<(), With<LightProbe>>()
+            .iter(world)
+            .count()
+        + world
+            .query_filtered::<(), With<ClusteredDecal>>()
+            .iter(world)
+            .count()
+}
+
+impl ClusterableObjectCount {
+    fn add(&mut self) {
+        self.0 = self
+            .0
+            .checked_add(1)
+            .expect("clusterable object count overflow");
+    }
+
+    fn remove(&mut self) {
+        self.0 = self
+            .0
+            .checked_sub(1)
+            .expect("clusterable object removal without a matching addition");
+    }
+
+    fn config(&self) -> ClusterConfig {
+        if self.0 == 0 {
+            ClusterConfig::None
+        } else {
+            ClusterConfig::default()
+        }
+    }
+}
+
+fn track_clusterable_object_added<T: Component>(
+    _trigger: On<Add, T>,
+    mut count: ResMut<ClusterableObjectCount>,
+) {
+    count.add();
+}
+
+fn track_clusterable_object_removed<T: Component>(
+    _trigger: On<Remove, T>,
+    mut count: ResMut<ClusterableObjectCount>,
+) {
+    count.remove();
+}
+
+fn sync_auto_cluster_configs(
+    count: Res<ClusterableObjectCount>,
+    mut cameras: Query<&mut ClusterConfig, With<AutoClusterConfig>>,
+) {
+    for mut config in &mut cameras {
+        let desired = count.config();
+        match (&mut *config, desired) {
+            (current, ClusterConfig::None) if !matches!(current, ClusterConfig::None) => {
+                *current = ClusterConfig::None;
+            }
+            (current, ClusterConfig::FixedZ { .. }) if matches!(current, ClusterConfig::None) => {
+                *current = desired;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn bind_camera_cluster_config(
+    add: On<Add, Camera3d>,
+    existing_cluster_configs: Query<(), With<ClusterConfig>>,
+    clusterable_objects: Res<ClusterableObjectCount>,
+    mut commands: Commands,
+) {
+    let e = add.entity;
+    if existing_cluster_configs.get(e).is_ok() {
+        return;
+    }
+    commands
+        .entity(e)
+        .try_insert((clusterable_objects.config(), AutoClusterConfig));
 }
 
 fn msaa_of(m: MsaaLevel) -> Msaa {
@@ -229,6 +346,82 @@ mod tests {
             a.world().entity(e).get::<Tonemapping>(),
             Some(&Tonemapping::AgX)
         );
+    }
+
+    #[test]
+    fn scene_camera_disables_unused_cluster_grid() {
+        let mut a = app();
+        let e = a.world_mut().spawn(SceneCamera::default()).id();
+        a.update();
+
+        assert!(matches!(
+            a.world().entity(e).get::<ClusterConfig>(),
+            Some(ClusterConfig::None)
+        ));
+        assert!(a.world().entity(e).contains::<AutoClusterConfig>());
+    }
+
+    #[test]
+    fn direct_render_camera_uses_the_same_cluster_policy() {
+        let mut a = app();
+        let e = a.world_mut().spawn(Camera3d::default()).id();
+        a.update();
+
+        assert!(matches!(
+            a.world().entity(e).get::<ClusterConfig>(),
+            Some(ClusterConfig::None)
+        ));
+        assert!(a.world().entity(e).contains::<AutoClusterConfig>());
+    }
+
+    #[test]
+    fn automatic_cluster_config_tracks_light_lifecycle() {
+        let mut a = app();
+        let camera = a.world_mut().spawn(SceneCamera::default()).id();
+        a.update();
+        let point_light = a.world_mut().spawn(PointLight::default()).id();
+        a.update();
+
+        assert!(matches!(
+            a.world().entity(camera).get::<ClusterConfig>(),
+            Some(ClusterConfig::FixedZ { .. })
+        ));
+
+        a.world_mut().despawn(point_light);
+        a.update();
+        assert!(matches!(
+            a.world().entity(camera).get::<ClusterConfig>(),
+            Some(ClusterConfig::None)
+        ));
+    }
+
+    #[test]
+    fn cluster_policy_covers_entities_spawned_before_first_update() {
+        let mut a = app();
+        a.world_mut().spawn(PointLight::default());
+        let camera = a.world_mut().spawn(Camera3d::default()).id();
+        a.update();
+
+        assert!(matches!(
+            a.world().entity(camera).get::<ClusterConfig>(),
+            Some(ClusterConfig::FixedZ { .. })
+        ));
+    }
+
+    #[test]
+    fn explicit_cluster_config_is_not_rewritten() {
+        let mut a = app();
+        let camera = a
+            .world_mut()
+            .spawn((SceneCamera::default(), ClusterConfig::Single))
+            .id();
+        a.update();
+
+        assert!(matches!(
+            a.world().entity(camera).get::<ClusterConfig>(),
+            Some(ClusterConfig::Single)
+        ));
+        assert!(!a.world().entity(camera).contains::<AutoClusterConfig>());
     }
 
     /// **R4, half one.** MSAA was never configured anywhere, so Bevy ran its

@@ -64,6 +64,16 @@ Only use unconditional-every-frame systems for genuinely continuous
 work: the renderer, physics stepping, tool animation ticks, smooth
 camera easing. Everything else is reactive.
 
+The render camera binder applies the same rule to Bevy's clustered-light
+infrastructure. `Camera3d` requires a `Clusters` component, but directional
+lights do not use it and Bevy's default allocates a 4,096-cell grid even when
+the world has no point lights, spot lights, light probes, or clustered decals.
+Automatic render-camera bindings select Bevy's `ClusterConfig::None` in that
+topology, and lifecycle observers restore the normal Bevy configuration when a
+clusterable object appears. An explicit `ClusterConfig` remains authoritative.
+This is a renderer-owned topology decision; it is not an Apollo scene or name
+heuristic and it does not add an alternate lighting path.
+
 ## 2. The UI must stay responsive
 The user types, drags, and right-clicks into the same event queue
 the physics solver empties. Never block that queue:
