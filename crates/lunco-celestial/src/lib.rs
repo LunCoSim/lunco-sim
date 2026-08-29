@@ -502,6 +502,7 @@ fn teardown_celestial_scene(
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     mut registry: ResMut<MissionRegistry>,
+    mut orbital_pin: ResMut<placement::OrbitalViewPin>,
     curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
 ) {
     // `attach_site_scene_to_surface_grid` selects a celestial surface Grid as
@@ -530,6 +531,11 @@ fn teardown_celestial_scene(
     }
 
     registry.missions.clear();
+    // The pin is a scene-scoped presentation fact. The avatar that owned the
+    // orbit transaction is about to be retired with the outgoing scene, so
+    // retaining the pin would make the replacement scene look orbital without
+    // a valid `OrbitViewReturn` to restore its authored surface camera.
+    *orbital_pin = placement::OrbitalViewPin::default();
     if curvature.is_some() {
         commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
     }
@@ -552,6 +558,7 @@ mod scene_teardown_tests {
     fn replacement_declarations_cannot_suppress_celestial_teardown() {
         let mut app = App::new();
         app.init_resource::<MissionRegistry>();
+        app.init_resource::<placement::OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
         let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
@@ -584,6 +591,7 @@ mod scene_teardown_tests {
     fn teardown_frame_reset_cannot_overwrite_replacement_frame() {
         let mut app = App::new();
         app.init_resource::<MissionRegistry>();
+        app.init_resource::<placement::OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
         let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
@@ -605,6 +613,29 @@ mod scene_teardown_tests {
         assert_ne!(
             app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
             world_grid
+        );
+    }
+
+    #[test]
+    fn scene_teardown_clears_the_outgoing_orbital_presentation_pin() {
+        let mut app = App::new();
+        app.init_resource::<MissionRegistry>();
+        app.insert_resource(placement::OrbitalViewPin {
+            active: true,
+            body: ephemeris_id::EARTH,
+            dir: DVec3::X,
+            distance: 42.0,
+        });
+        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
+
+        let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(world_grid));
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert_eq!(
+            *app.world().resource::<placement::OrbitalViewPin>(),
+            placement::OrbitalViewPin::default()
         );
     }
 }
