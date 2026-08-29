@@ -22,8 +22,73 @@ use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
 use lunco_usd_bevy::camera_switch::camera_display_labels;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+/// Generic Twin setting key for the entity tree's grid visibility.
+pub const ENTITY_LIST_GRID_SCOPE_SETTING: &str = "ui.entity_list.grid_scope";
+
+/// Which BigSpace grid the entity tree includes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum EntityGridScope {
+    /// Only entities under the live [`lunco_core::ActivePhysicsFrame`].
+    #[default]
+    Current,
+    /// Entities from every grid in the mounted scene.
+    All,
+}
+
+impl EntityGridScope {
+    fn setting_value(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::All => "all",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Current => "Current grid only",
+            Self::All => "All grids",
+        }
+    }
+}
+
+fn parse_entity_grid_scope(
+    value: &lunco_workspace::TwinSettingValue,
+) -> Result<EntityGridScope, String> {
+    match value {
+        lunco_workspace::TwinSettingValue::Text(value) => match value.as_str() {
+            "current" => Ok(EntityGridScope::Current),
+            "all" => Ok(EntityGridScope::All),
+            _ => Err(format!(
+                "`{ENTITY_LIST_GRID_SCOPE_SETTING}` must be `current` or `all`, got `{value}`"
+            )),
+        },
+        other => Err(format!(
+            "`{ENTITY_LIST_GRID_SCOPE_SETTING}` must be text (`current` or `all`), got {other:?}"
+        )),
+    }
+}
+
+fn entity_grid_scope(workspace: Option<&WorkspaceResource>) -> Result<EntityGridScope, String> {
+    let Some(workspace) = workspace else {
+        return Ok(EntityGridScope::Current);
+    };
+    let Some(twin_id) = workspace.active_twin else {
+        return Ok(EntityGridScope::Current);
+    };
+    let Some(twin) = workspace.twin(twin_id) else {
+        return Err(format!("active Twin {twin_id:?} is no longer registered"));
+    };
+    let Some(manifest) = twin.manifest.as_ref() else {
+        return Ok(EntityGridScope::Current);
+    };
+    manifest
+        .setting(ENTITY_LIST_GRID_SCOPE_SETTING)
+        .map_or(Ok(EntityGridScope::Current), parse_entity_grid_scope)
+}
 
 /// Persisted view prefs for the Entity list.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
@@ -61,6 +126,53 @@ pub(crate) fn register_settings_menu(world: &mut World) {
         if next != current {
             ctx.set_resource(EntityListSettings { show_system: next });
         }
+
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Grid scope (active Twin)")
+                .weak()
+                .small(),
+        );
+        let Some((scope_result, can_persist)) =
+            ctx.resource::<WorkspaceResource>().map(|workspace| {
+                let can_persist = workspace
+                    .active_twin
+                    .and_then(|id| workspace.twin(id))
+                    .is_some_and(|twin| twin.manifest.is_some());
+                (entity_grid_scope(Some(workspace)), can_persist)
+            })
+        else {
+            ui.label("No workspace session is available.");
+            return;
+        };
+        match scope_result {
+            Ok(current_scope) => {
+                let mut next_scope = current_scope;
+                ui.add_enabled_ui(can_persist, |ui| {
+                    ui.radio_value(
+                        &mut next_scope,
+                        EntityGridScope::Current,
+                        EntityGridScope::Current.label(),
+                    );
+                    ui.radio_value(
+                        &mut next_scope,
+                        EntityGridScope::All,
+                        EntityGridScope::All.label(),
+                    );
+                });
+                if !can_persist {
+                    ui.weak("Open a manifest-backed Twin to persist this choice.");
+                } else if next_scope != current_scope {
+                    ctx.trigger(SetTwinSetting {
+                        key: ENTITY_LIST_GRID_SCOPE_SETTING.into(),
+                        value: TwinSettingInput::Text(next_scope.setting_value().into()),
+                    });
+                }
+            }
+            Err(error) => {
+                ui.label(format!("Grid scope error: {error}"));
+            }
+        }
     });
 }
 
@@ -97,8 +209,108 @@ pub struct EntityTreeView {
     parents: HashMap<Entity, Entity>,
     /// The filter value used for the cached tree.
     show_system: bool,
+    /// The active Twin's grid-scope choice used for the cached tree.
+    grid_scope: EntityGridScope,
+    /// The active Twin that supplied [`grid_scope`](Self::grid_scope).
+    active_twin: Option<lunco_workspace::TwinId>,
+    /// The live physics grid when one was available during the build.
+    current_grid: Option<Entity>,
+    /// An invalid setting or missing current frame prevents a misleading tree.
+    scope_error: Option<String>,
+    /// Named entities eligible for the current system-entity preference. This
+    /// lets the gate notice a hidden entity moving into the current grid.
+    scope_entities: HashSet<Entity>,
+    /// Unnamed ancestors whose reparenting can change an entity's grid scope.
+    scope_ancestors: HashSet<Entity>,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridScopeState {
+    scope: EntityGridScope,
+    active_twin: Option<lunco_workspace::TwinId>,
+    current_grid: Option<Entity>,
+}
+
+fn grid_scope_state(
+    workspace: Option<&WorkspaceResource>,
+    current_grid: Option<Entity>,
+    active_frame_bound: bool,
+) -> (GridScopeState, Option<String>) {
+    let scope_result = entity_grid_scope(workspace);
+    let scope = scope_result.as_ref().copied().unwrap_or_default();
+    let active_twin = workspace.and_then(|workspace| workspace.active_twin);
+    let error = scope_result.err().or_else(|| {
+        if scope == EntityGridScope::Current {
+            match current_grid {
+                None if !active_frame_bound => {
+                    Some("current grid is unavailable: no ActivePhysicsFrame is bound".into())
+                }
+                None => Some(
+                    "current grid is unavailable: ActivePhysicsFrame is not a live Grid".into(),
+                ),
+                Some(_) => None,
+            }
+        } else {
+            None
+        }
+    });
+    (
+        GridScopeState {
+            scope,
+            active_twin,
+            current_grid,
+        },
+        error,
+    )
+}
+
+fn nearest_grid(
+    entity: Entity,
+    child_of: &HashMap<Entity, Entity>,
+    grids: &HashSet<Entity>,
+) -> Option<Entity> {
+    let mut current = entity;
+    for _ in 0..64 {
+        if grids.contains(&current) {
+            return Some(current);
+        }
+        let Some(parent) = child_of.get(&current).copied() else {
+            return None;
+        };
+        current = parent;
+    }
+    None
+}
+
+fn collect_scope_ancestors(
+    entity: Entity,
+    child_of: &HashMap<Entity, Entity>,
+    ancestors: &mut HashSet<Entity>,
+) {
+    let mut current = entity;
+    for _ in 0..64 {
+        if !ancestors.insert(current) {
+            return;
+        }
+        let Some(parent) = child_of.get(&current).copied() else {
+            return;
+        };
+        current = parent;
+    }
+}
+
+fn in_scope(
+    entity: Entity,
+    state: GridScopeState,
+    child_of: &HashMap<Entity, Entity>,
+    grids: &HashSet<Entity>,
+) -> bool {
+    match state.scope {
+        EntityGridScope::All => true,
+        EntityGridScope::Current => nearest_grid(entity, child_of, grids) == state.current_grid,
+    }
 }
 
 fn stable_key(name: &Name, path: Option<&lunco_usd_bevy::UsdPrimPath>) -> String {
@@ -167,6 +379,8 @@ fn compute_shown(
 pub(crate) fn populate_entity_tree_view(
     mut view: ResMut<EntityTreeView>,
     settings: Res<EntityListSettings>,
+    workspace: Option<Res<WorkspaceResource>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     named_q: Query<(
         Entity,
         &Name,
@@ -177,6 +391,7 @@ pub(crate) fn populate_entity_tree_view(
     )>,
     system_q: Query<Entity, With<lunco_core::SystemManaged>>,
     child_q: Query<(Entity, &ChildOf)>,
+    grid_q: Query<Entity, With<big_space::prelude::Grid>>,
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
 ) {
@@ -190,22 +405,49 @@ pub(crate) fn populate_entity_tree_view(
     } else {
         system_q.iter().collect()
     };
+    // The active physics frame is the authoritative meaning of "current grid".
+    // The tree never infers it from render transforms or from whichever Grid
+    // happens to be first in query order.
+    let grids: HashSet<Entity> = grid_q.iter().collect();
+    let (scope_state, scope_error) = grid_scope_state(
+        workspace.as_deref(),
+        active_frame
+            .as_ref()
+            .map(|frame| frame.0)
+            .filter(|grid| grids.contains(grid)),
+        active_frame.is_some(),
+    );
+    let child_of: HashMap<Entity, Entity> = child_q.iter().map(|(e, c)| (e, c.parent())).collect();
+    let mut scope_entities = HashSet::new();
+    let mut scope_ancestors = HashSet::new();
     let named: Vec<(Entity, String, String)> = named_q
         .iter()
-        .filter(|(e, _, _, _, _, _)| !system.contains(e))
-        .map(|(e, name, callsign, catalog_id, path, _)| {
-            (
+        .filter_map(|(e, name, callsign, catalog_id, path, _)| {
+            if system.contains(&e) {
+                return None;
+            }
+            scope_entities.insert(e);
+            collect_scope_ancestors(e, &child_of, &mut scope_ancestors);
+            if scope_error.is_some() || !in_scope(e, scope_state, &child_of, &grids) {
+                return None;
+            }
+            Some((
                 e,
                 lunco_core::entity_display_name(Some(name), callsign, catalog_id),
                 stable_key(name, path),
-            )
+            ))
         })
         .collect();
     let named_set: HashSet<Entity> = named.iter().map(|(e, _, _)| *e).collect();
 
     let camera_identities: Vec<(Entity, String)> = named_q
         .iter()
-        .filter(|(entity, _, _, _, _path, is_camera)| *is_camera && !system.contains(entity))
+        .filter(|(entity, _, _, _, _path, is_camera)| {
+            *is_camera
+                && !system.contains(entity)
+                && scope_error.is_none()
+                && in_scope(*entity, scope_state, &child_of, &grids)
+        })
         .map(|(entity, name, _, _, path, _)| {
             (
                 entity,
@@ -226,10 +468,6 @@ pub(crate) fn populate_entity_tree_view(
         .map(|((entity, _), label)| (entity, label))
         .collect();
     let camera_entities: HashSet<Entity> = camera_labels.keys().copied().collect();
-
-    // Parent of each entity (full graph, not just named) so unnamed grid/wrapper
-    // entities can be skipped over when finding an entity's display parent.
-    let child_of: HashMap<Entity, Entity> = child_q.iter().map(|(e, c)| (e, c.parent())).collect();
 
     // "Interesting" = something a user would edit: a selectable object or any
     // mesh-bearing part. Everything else (cosim wires, ports, empty transform
@@ -345,6 +583,12 @@ pub(crate) fn populate_entity_tree_view(
         })
         .collect();
     view.show_system = settings.show_system;
+    view.grid_scope = scope_state.scope;
+    view.active_twin = scope_state.active_twin;
+    view.current_grid = scope_state.current_grid;
+    view.scope_error = scope_error;
+    view.scope_entities = scope_entities;
+    view.scope_ancestors = scope_ancestors;
     view.built = true;
 }
 
@@ -367,6 +611,10 @@ pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
+    workspace: Option<Res<WorkspaceResource>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    grids: Query<Entity, With<big_space::prelude::Grid>>,
+    changed_unnamed_parents: Query<Entity, (Changed<ChildOf>, Without<Name>)>,
     changed: Query<
         (
             Entity,
@@ -375,6 +623,7 @@ pub(crate) fn scene_topology_changed(
             Option<&lunco_core::CatalogEntryId>,
             Option<&lunco_usd_bevy::UsdPrimPath>,
             Option<&ChildOf>,
+            Option<&lunco_core::SystemManaged>,
         ),
         (
             With<Name>,
@@ -384,53 +633,10 @@ pub(crate) fn scene_topology_changed(
                 Changed<lunco_core::markers::Callsign>,
                 Changed<lunco_core::CatalogEntryId>,
                 Changed<lunco_usd_bevy::UsdPrimPath>,
+                Added<Mesh3d>,
+                Added<lunco_core::SelectableRoot>,
+                Added<SceneCamera>,
             )>,
-            Without<lunco_core::SystemManaged>,
-        ),
-    >,
-    added_cameras: Query<
-        Entity,
-        (
-            With<Name>,
-            Added<SceneCamera>,
-            Without<lunco_core::SystemManaged>,
-        ),
-    >,
-    changed_system: Query<
-        (
-            Entity,
-            &Name,
-            Option<&lunco_core::markers::Callsign>,
-            Option<&lunco_core::CatalogEntryId>,
-            Option<&lunco_usd_bevy::UsdPrimPath>,
-            Option<&ChildOf>,
-        ),
-        (
-            With<Name>,
-            Or<(
-                Changed<Name>,
-                Changed<ChildOf>,
-                Changed<lunco_core::markers::Callsign>,
-                Changed<lunco_core::CatalogEntryId>,
-                Changed<lunco_usd_bevy::UsdPrimPath>,
-            )>,
-            With<lunco_core::SystemManaged>,
-        ),
-    >,
-    added: Query<
-        Entity,
-        (
-            With<Name>,
-            Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
-            Without<lunco_core::SystemManaged>,
-        ),
-    >,
-    added_system: Query<
-        Entity,
-        (
-            With<Name>,
-            Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
-            With<lunco_core::SystemManaged>,
         ),
     >,
     mut rm_name: RemovedComponents<Name>,
@@ -442,6 +648,20 @@ pub(crate) fn scene_topology_changed(
     mut rm_usd_path: RemovedComponents<lunco_usd_bevy::UsdPrimPath>,
     mut rm_camera: RemovedComponents<SceneCamera>,
 ) -> bool {
+    let live_grids: HashSet<Entity> = grids.iter().collect();
+    let (scope_state, scope_error) = grid_scope_state(
+        workspace.as_deref(),
+        active_frame
+            .as_ref()
+            .map(|frame| frame.0)
+            .filter(|grid| live_grids.contains(grid)),
+        active_frame.is_some(),
+    );
+    let scope_changed = view.grid_scope != scope_state.scope
+        || view.active_twin != scope_state.active_twin
+        || view.current_grid != scope_state.current_grid
+        || view.scope_error != scope_error;
+
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed. A removed entity can no longer be
     // queried, so "was it system-owned?" is answered by the view itself: if the
@@ -462,10 +682,10 @@ pub(crate) fn scene_topology_changed(
             acc | view.camera_entities.contains(&entity)
         });
     // The raw ECS graph contains many named but visibility-pruned implementation
-    // entities (telemetry channel holders, transform wrappers, etc.).  They are
-    // not inputs to this view. A change to a node the current view does not show
-    // therefore cannot justify rebuilding the entire tree. New mesh/selectable
-    // nodes still enter through `added`, then become visible on this rebuild.
+    // entities (telemetry channel holders, transform wrappers, etc.). A change
+    // to an entity outside the cached scope is ignored unless it is a newly
+    // eligible named entity. Unnamed ancestors are handled separately below,
+    // because their reparenting can change a descendant's grid membership.
     let value_changed = |(entity, name, callsign, catalog_id, path, parent): (
         Entity,
         &Name,
@@ -484,20 +704,35 @@ pub(crate) fn scene_topology_changed(
                 .is_none_or(|cached| stable_key(name, path) != *cached)
             || view.parents.get(&entity).copied() != parent.map(|p| p.parent())
     };
-    let visible_changed = changed.iter().any(value_changed);
-    let visible_added = !added.is_empty();
-    let camera_added = !added_cameras.is_empty();
-    let system_churn = settings.show_system
-        && (changed_system.iter().any(value_changed) || !added_system.is_empty());
+    let named_changed = changed.iter().any(
+        |(entity, name, callsign, catalog_id, path, parent, system)| {
+            let eligible =
+                view.scope_entities.contains(&entity) || system.is_none() || settings.show_system;
+            eligible
+                && (view.scope_entities.contains(&entity)
+                    || value_changed((entity, name, callsign, catalog_id, path, parent)))
+        },
+    );
+    let unnamed_parent_changed = changed_unnamed_parents
+        .iter()
+        .any(|entity| view.scope_ancestors.contains(&entity));
     let run = !*first
         || view.show_system != settings.show_system
-        || visible_changed
-        || visible_added
-        || camera_added
-        || system_churn
+        || scope_changed
+        || named_changed
+        || unnamed_parent_changed
         || removed;
     *first = true;
     run
+}
+
+/// Retire the derived tree as soon as its active Twin closes. The next Twin's
+/// scene repopulates it from its own manifest and grid frame; no old scope or
+/// rows remain visible during the transition.
+pub(crate) fn on_twin_closed(trigger: On<TwinClosed>, mut view: ResMut<EntityTreeView>) {
+    if trigger.event().was_active {
+        *view = EntityTreeView::default();
+    }
 }
 
 #[cfg(test)]
@@ -534,6 +769,96 @@ mod tests {
 
         assert_eq!(labels[&visible], "Antenna");
         assert!(!labels.contains_key(&hidden));
+    }
+
+    #[test]
+    fn missing_grid_scope_uses_the_documented_current_default() {
+        assert_eq!(entity_grid_scope(None), Ok(EntityGridScope::Current));
+    }
+
+    #[test]
+    fn grid_scope_accepts_only_the_canonical_values() {
+        assert_eq!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("current".into())),
+            Ok(EntityGridScope::Current)
+        );
+        assert_eq!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("all".into())),
+            Ok(EntityGridScope::All)
+        );
+        assert!(parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Bool(true)).is_err());
+        assert!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("other".into()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn nearest_grid_walks_through_unnamed_wrappers() {
+        let grid = Entity::from_raw_u32(1).unwrap();
+        let other_grid = Entity::from_raw_u32(4).unwrap();
+        let wrapper = Entity::from_raw_u32(2).unwrap();
+        let entity = Entity::from_raw_u32(3).unwrap();
+        let other_entity = Entity::from_raw_u32(5).unwrap();
+        let parents = HashMap::from([(wrapper, grid), (entity, wrapper)]);
+        let other_parents = HashMap::from([(other_entity, other_grid)]);
+        let grids = HashSet::from([grid, other_grid]);
+
+        assert_eq!(nearest_grid(entity, &parents, &grids), Some(grid));
+        assert!(in_scope(
+            entity,
+            GridScopeState {
+                scope: EntityGridScope::Current,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &parents,
+            &grids,
+        ));
+        assert!(!in_scope(
+            other_entity,
+            GridScopeState {
+                scope: EntityGridScope::Current,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &other_parents,
+            &grids,
+        ));
+        assert!(in_scope(
+            other_entity,
+            GridScopeState {
+                scope: EntityGridScope::All,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &other_parents,
+            &grids,
+        ));
+    }
+
+    #[test]
+    fn active_twin_close_clears_derived_scope_state() {
+        let mut app = App::new();
+        app.init_resource::<EntityTreeView>()
+            .add_observer(on_twin_closed);
+        {
+            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
+            view.built = true;
+            view.active_twin = Some(lunco_workspace::TwinId::new(7));
+            view.scope_error = Some("stale".into());
+        }
+
+        app.world_mut().trigger(TwinClosed {
+            twin: lunco_workspace::TwinId::new(7),
+            root: std::path::PathBuf::from("/outgoing"),
+            was_active: true,
+        });
+
+        let view = app.world().resource::<EntityTreeView>();
+        assert!(!view.built);
+        assert_eq!(view.active_twin, None);
+        assert_eq!(view.scope_error, None);
     }
 }
 
@@ -650,6 +975,15 @@ fn select_label(
 
 fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.label("Click to select. Expand > to reach sub-parts (wheels, body).");
+    if let Some((scope, error)) = ctx
+        .resource::<EntityTreeView>()
+        .map(|view| (view.grid_scope, view.scope_error.clone()))
+    {
+        match error {
+            Some(error) => ui.label(format!("Grid scope error: {error}")),
+            None => ui.label(format!("Grid scope: {}", scope.label())),
+        };
+    }
     ui.separator();
 
     // Authoritative selection — read directly (small, cheap); never shadowed.
@@ -680,6 +1014,13 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     render_node(ui, root, view, &selected, &mut to_select, &mut to_focus);
                 }
             });
+        if selected
+            .entities
+            .iter()
+            .any(|entity| !view.labels.contains_key(entity))
+        {
+            ui.label("A selected entity is outside the current tree scope.");
+        }
     }
 
     // Route selection through the same `crate::selection::apply_selection` the
