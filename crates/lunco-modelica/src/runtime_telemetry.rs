@@ -137,6 +137,10 @@ struct RuntimeTelemetrySession {
     signals: HashSet<SignalRef>,
     document_id: Option<lunco_doc::DocumentId>,
     document_generation: Option<u64>,
+    /// Last model-time sample attempted for this solver session. The shared
+    /// registry remains the final per-channel authority; this batch cursor
+    /// only avoids rebuilding the same variable list between due samples.
+    last_sample_time: Option<f64>,
     /// Metadata is catalog state, not a per-sample value. Cache it by solver
     /// variable and refresh only when the authored layout or document index
     /// changes, or when a variable is first observed.
@@ -196,6 +200,7 @@ pub fn retain_modelica_runtime_state(
             session.session_id = model.session_id;
             session.document_id = None;
             session.document_generation = None;
+            session.last_sample_time = None;
             session.metadata.clear();
         }
 
@@ -205,6 +210,13 @@ pub fn retain_modelica_runtime_state(
         if metadata_dirty {
             session.document_id = document.map(|(id, _)| id);
             session.document_generation = document.map(|(_, generation)| generation);
+        }
+
+        let sample_due = session.last_sample_time.is_none_or(|last| {
+            model.current_time < last || model.current_time - last >= 1.0 / settings.default_rate_hz
+        });
+        if !sample_due && !metadata_dirty {
+            continue;
         }
 
         let mut retained_any = false;
@@ -257,6 +269,9 @@ pub fn retain_modelica_runtime_state(
 
         if retained_any {
             commands.entity(entity).try_insert(SignalSource);
+        }
+        if sample_due && model.current_time.is_finite() {
+            session.last_sample_time = Some(model.current_time);
         }
     }
 }

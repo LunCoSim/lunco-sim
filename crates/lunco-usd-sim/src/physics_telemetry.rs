@@ -24,6 +24,10 @@ use crate::UsdPrimPath;
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {
     previous: HashMap<Entity, PreviousKinematics>,
+    /// Last physics-time batch sample per source. The shared signal registry
+    /// still applies the final per-channel rate; this owner-level cursor only
+    /// avoids rebuilding the same channel values between due samples.
+    last_sample_times: HashMap<Entity, f64>,
     metadata: HashMap<SignalRef, SignalMeta>,
     metadata_group_paths: HashMap<Entity, String>,
 }
@@ -76,6 +80,7 @@ pub fn retain_physics_telemetry(
 ) {
     let Some(settings) = settings else {
         state.previous.clear();
+        state.last_sample_times.clear();
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
@@ -83,12 +88,14 @@ pub fn retain_physics_telemetry(
     if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
     {
         state.previous.clear();
+        state.last_sample_times.clear();
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
     }
     let Some(signals) = signals.as_deref_mut() else {
         state.previous.clear();
+        state.last_sample_times.clear();
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
@@ -129,15 +136,13 @@ pub fn retain_physics_telemetry(
             .metadata_group_paths
             .get(&entity)
             .is_none_or(|path| path != &prim.path);
-        if metadata_dirty {
-            state.metadata_group_paths.insert(entity, prim.path.clone());
-        }
         let linear_velocity = linear.map(|value| value.0);
         let angular_velocity = angular.map(|value| value.0);
         if linear_velocity.is_some_and(|value| !value.is_finite())
             || angular_velocity.is_some_and(|value| !value.is_finite())
         {
             state.previous.remove(&entity);
+            state.last_sample_times.remove(&entity);
             continue;
         }
 
@@ -155,6 +160,17 @@ pub fn retain_physics_telemetry(
                 None
             }
         };
+
+        let sample_due = state
+            .last_sample_times
+            .get(&entity)
+            .is_none_or(|last| time < *last || time - *last >= 1.0 / settings.default_rate_hz);
+        if !sample_due {
+            continue;
+        }
+        if metadata_dirty {
+            state.metadata_group_paths.insert(entity, prim.path.clone());
+        }
 
         let mut samples = Vec::with_capacity(36);
         if let Some(linear_velocity) = linear_velocity {
@@ -380,13 +396,22 @@ pub fn retain_physics_telemetry(
         ) {
             retained_any.insert(entity);
         }
+        state.last_sample_times.insert(entity, time);
     }
 
     for (entity, prim, wheel, suspension, hits) in &wheels {
+        seen.insert(entity);
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
             .is_none_or(|path| path != &prim.path);
+        let sample_due = state
+            .last_sample_times
+            .get(&entity)
+            .is_none_or(|last| time < *last || time - *last >= 1.0 / settings.default_rate_hz);
+        if !sample_due {
+            continue;
+        }
         if metadata_dirty {
             state.metadata_group_paths.insert(entity, prim.path.clone());
         }
@@ -445,9 +470,13 @@ pub fn retain_physics_telemetry(
         ) {
             commands.entity(entity).try_insert(SignalSource);
         }
+        state.last_sample_times.insert(entity, time);
     }
 
     state.previous.retain(|entity, _| seen.contains(entity));
+    state
+        .last_sample_times
+        .retain(|entity, _| seen.contains(entity));
     state
         .metadata_group_paths
         .retain(|entity, _| seen.contains(entity));
@@ -602,6 +631,17 @@ mod tests {
             .id();
 
         app.update();
+        app.world_mut().resource_mut::<SimTick>().0 = 1;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&SignalRef::new(body, "linear_velocity.x"))
+                .unwrap()
+                .len(),
+            1,
+            "a fixed step before the configured telemetry rate must not rebuild a batch"
+        );
         app.world_mut().resource_mut::<SimTick>().0 = 6;
         app.world_mut().get_mut::<LinearVelocity>(body).unwrap().0 = DVec3::X;
         app.update();
@@ -612,7 +652,7 @@ mod tests {
             .scalar_history(&signal)
             .and_then(|history| history.samples.back())
             .expect("the second physics state has a measurable acceleration");
-        assert!((sample.value - 10.0).abs() < 1.0e-12);
+        assert!((sample.value - 12.0).abs() < 1.0e-12);
         assert!((sample.time - 0.1).abs() < 1.0e-12);
         assert_eq!(
             registry.meta(&signal).unwrap().group_path.as_deref(),

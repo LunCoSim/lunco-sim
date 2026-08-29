@@ -239,6 +239,15 @@ FixedUpdate:
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
+The render/update-side engine synchronizer is separately revision-gated: the
+document registry advances one monotonic revision for document membership or
+source mutations, then the synchronizer compares each document generation
+before parsing or upserting it. Async parse completion remains an explicit
+mutation signal, so a stale completion cannot leave a changed document asleep.
+Runtime Modelica telemetry is sampled from solver model time at the configured
+rate; its cursor only avoids rebuilding the same batch between due samples, and
+the shared signal registry remains the sole channel-history authority.
+
 ### 4.1 Run-state machine + command semantics
 
 Live stepping is gated per-entity by run-state on `ModelicaModel`.

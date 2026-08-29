@@ -70,6 +70,7 @@ use crate::{
     Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, AutopilotExecutionState, BehaviorSpec,
 };
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::ecs::entity::EntityHashSet;
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -122,6 +123,20 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 /// reached legs; route-map/path projections read it to distinguish visited legs.
 #[derive(Component, Debug, Clone, Default)]
 pub struct ReachedWaypoints(pub std::collections::HashSet<String>);
+
+type TargetChangedQuery<'w, 's> = Query<
+    'w,
+    's,
+    (),
+    Or<(
+        Changed<avian3d::prelude::Position>,
+        Changed<avian3d::prelude::Rotation>,
+        Changed<Transform>,
+        Changed<big_space::grid::cell::CellCoord>,
+        Changed<ChildOf>,
+        Changed<big_space::grid::Grid>,
+    )>,
+>;
 
 /// The authored facts the editor needs to present a route.
 ///
@@ -774,11 +789,12 @@ fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
 /// active-frame positions — into the derived [`AutopilotBehaviorSpec`], and hot-swap the running
 /// [`AutopilotBehavior`] so an edit takes effect immediately.
 ///
-/// Change-gated (§7): recompiles when the XML changes, when the bindings change, or
-/// when any entity MOVES — the last is what makes dragging a waypoint pin re-route
-/// the rover. The move gate is deliberately coarse over authoritative `Transform`
-/// `CellCoord` changes: it only costs a rebuild for vessels that actually carry a
-/// tree, and a moving *vessel* re-baking its own static targets is idempotent.
+/// Change-gated (§7): recompiles when the XML, bindings, or reached-leg state
+/// changes, or when a bound target's authoritative pose ancestry changes. The
+/// target walk follows the same local `Transform`/`CellCoord`/`ChildOf`/`Grid`
+/// hierarchy used by [`SimulationPoseQuery`], and also watches Avian's f64 pose
+/// for physical targets. A moving vessel is not a route invalidation: its own
+/// motion never changes the world-space waypoint coordinates it is chasing.
 ///
 /// The derived spec is compared against the LAST DERIVED spec (per-vessel memory in
 /// `last_derived`), NOT the spec currently installed on the vessel. The installed
@@ -788,7 +804,12 @@ fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
 /// waypoint prims added/removed/moved, reached legs stripped) does the derived spec
 /// differ from its previous derivation and take over the vessel again.
 pub fn compile_behavior_xml(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>)>,
+    q_vessels: Query<(
+        Entity,
+        Ref<BehaviorXml>,
+        Option<Ref<TargetBindings>>,
+        Option<Ref<ReachedWaypoints>>,
+    )>,
     q_autopilots: Query<(
         Entity,
         &Autopilot,
@@ -796,27 +817,37 @@ pub fn compile_behavior_xml(
         Option<&AutopilotBehavior>,
         Option<&AutopilotExecutionState>,
     )>,
-    q_reached: Query<&ReachedWaypoints>,
-    moved: Query<
-        Entity,
-        Or<(
-            Changed<BehaviorXml>,
-            Changed<TargetBindings>,
-            Changed<Transform>,
-            Changed<big_space::grid::cell::CellCoord>,
-            Changed<ReachedWaypoints>,
-        )>,
-    >,
+    q_target_changed: TargetChangedQuery<'_, '_>,
+    q_target_parents: Query<&ChildOf>,
+    q_target_entities: Query<()>,
     pose: lunco_physics::SimulationPoseQuery,
     mut last_derived: Local<bevy::ecs::entity::EntityHashMap<BehaviorSpec>>,
     mut commands: Commands,
 ) {
-    if q_vessels.is_empty() || moved.is_empty() {
+    if q_vessels.is_empty() {
         return;
     }
-    for (vessel, xml, bindings) in q_vessels.iter() {
+    for (vessel, xml, bindings, reached) in q_vessels.iter() {
+        let bindings_changed = bindings
+            .as_ref()
+            .is_some_and(|bindings| bindings.is_changed());
         let empty = TargetBindings::default();
-        let bindings = bindings.unwrap_or(&empty);
+        let bindings = bindings.as_deref().unwrap_or(&empty);
+        let target_changed = bindings.0.values().copied().any(|target| {
+            target_pose_ancestry_changed(
+                target,
+                &q_target_changed,
+                &q_target_parents,
+                &q_target_entities,
+            )
+        });
+        if !xml.is_changed()
+            && !bindings_changed
+            && !reached.is_some_and(|reached| reached.is_changed())
+            && !target_changed
+        {
+            continue;
+        }
 
         let mut value = match crate::btcpp_xml::xml_to_value(&xml.0) {
             Ok(v) => v,
@@ -831,7 +862,7 @@ pub fn compile_behavior_xml(
         // compiled BehaviorSpec then only carries active legs so the rover advances,
         // while the on-disk xml.0 keeps every leg. "Reached" is RUNTIME-ONLY, read
         // from the live `ReachedWaypoints` component, never from the document.
-        if let Ok(reached) = q_reached.get(vessel) {
+        if let Some(reached) = reached.as_deref() {
             strip_reached_legs(&mut value, &reached.0);
         }
         // Expand the editor route: per-leg `dwell` → a `wait` leaf, and route-level
@@ -882,9 +913,9 @@ pub fn compile_behavior_xml(
         // Only touch anything when the DERIVED spec actually differs from the last
         // one THIS system derived for the vessel (see the doc comment above — the
         // installed spec is not the reference, a runtime command may own it). This
-        // system is gated on authoritative `Transform`/`CellCoord` changes over
-        // ALL entities, so it
-        // re-runs every frame the rover moves; rebuilding the tree unconditionally
+        // system's invalidation is scoped to this vessel's authored inputs and
+        // target pose ancestry, so moving an unrelated entity never reaches this
+        // parse/bake path; rebuilding the tree unconditionally
         // would hand the actor a FRESH `AutopilotBehavior` each tick and reset all
         // behaviour state with it — the sequence would snap back to leg 0 and,
         // worse, every `WaitNode` timer would restart from zero, so a waypoint
@@ -952,7 +983,118 @@ pub fn compile_behavior_xml(
     // Scene teardown: vessels despawn; drop their last-derived entries so a
     // reloaded scene (stable entity ids across reloads) re-derives fresh instead
     // of inheriting the previous scene's route memory.
-    last_derived.retain(|vessel, _| q_vessels.iter().any(|(e, _, _)| e == *vessel));
+    last_derived.retain(|vessel, _| q_vessels.iter().any(|(e, _, _, _)| e == *vessel));
+}
+
+/// Return whether a bound target or any ancestor can change the active-frame
+/// pose used by [`SimulationPoseQuery`]. Missing hierarchy is treated as a
+/// change so the compiler can produce the canonical unresolved-route brake
+/// instead of retaining stale coordinates.
+fn target_pose_ancestry_changed(
+    target: Entity,
+    q_target_changed: &TargetChangedQuery<'_, '_>,
+    q_target_parents: &Query<&ChildOf>,
+    q_target_entities: &Query<()>,
+) -> bool {
+    let mut current = Some(target);
+    let mut visited = EntityHashSet::default();
+    while let Some(entity) = current {
+        if !visited.insert(entity) {
+            return true;
+        }
+        if !q_target_entities.contains(entity) {
+            return true;
+        }
+        if q_target_changed.get(entity).is_ok() {
+            return true;
+        }
+        current = q_target_parents
+            .get(entity)
+            .ok()
+            .map(|parent| parent.parent());
+    }
+    false
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use super::*;
+
+    #[derive(Resource)]
+    struct Probe {
+        target: Entity,
+        changed: bool,
+    }
+
+    fn probe_target(
+        q_target_changed: TargetChangedQuery<'_, '_>,
+        q_target_parents: Query<&ChildOf>,
+        q_target_entities: Query<()>,
+        mut probe: ResMut<Probe>,
+    ) {
+        let target = probe.target;
+        probe.changed = target_pose_ancestry_changed(
+            target,
+            &q_target_changed,
+            &q_target_parents,
+            &q_target_entities,
+        );
+    }
+
+    #[test]
+    fn unrelated_motion_does_not_recompile_a_route() {
+        let mut app = App::new();
+        let target = app.world_mut().spawn(Transform::default()).id();
+        app.insert_resource(Probe {
+            target,
+            changed: false,
+        })
+        .add_systems(Update, probe_target);
+
+        app.update();
+        assert!(app.world().resource::<Probe>().changed);
+
+        let unrelated = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut()
+            .get_mut::<Transform>(unrelated)
+            .expect("unrelated entity has a transform")
+            .translation
+            .x = 1.0;
+        app.update();
+        assert!(!app.world().resource::<Probe>().changed);
+
+        app.world_mut()
+            .get_mut::<Transform>(target)
+            .expect("bound target has a transform")
+            .translation
+            .x = 2.0;
+        app.update();
+        assert!(app.world().resource::<Probe>().changed);
+    }
+
+    #[test]
+    fn ancestor_motion_invalidates_a_route_target() {
+        let mut app = App::new();
+        let parent = app.world_mut().spawn(Transform::default()).id();
+        let target = app
+            .world_mut()
+            .spawn((Transform::default(), ChildOf(parent)))
+            .id();
+        app.insert_resource(Probe {
+            target,
+            changed: false,
+        })
+        .add_systems(Update, probe_target);
+
+        app.update();
+        app.world_mut()
+            .get_mut::<Transform>(parent)
+            .expect("route parent has a transform")
+            .translation
+            .x = 3.0;
+        app.update();
+        assert!(app.world().resource::<Probe>().changed);
+    }
 }
 
 #[cfg(test)]

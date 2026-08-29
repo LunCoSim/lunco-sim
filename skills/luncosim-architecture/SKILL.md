@@ -69,6 +69,14 @@ signals for dirty-subtree propagation. Guarding an equal write at the producer
 is part of the ownership contract; it is not permission to hide a real dirty
 input or to add an alternate propagation path.
 
+Use the same owner-local revision/cursor shape for other stable projections:
+the Modelica document registry wakes engine sync, telemetry producers pace by
+their authoritative model/fixed time, behavior target paths are cached per
+entity and invalidated by authored XML or active-frame ancestry, terrain
+curvature reacts to its input components, and globe LOD caches pure selection
+until camera/LOD/handoff/residency inputs change. These cursors suppress work;
+they do not become a second data source or a compatibility fallback.
+
 Apply this contract to all camera pose owners, including shared interaction
 easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace

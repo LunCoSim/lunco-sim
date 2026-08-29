@@ -362,6 +362,11 @@ pub struct ModelicaDocumentRegistry {
     /// Docs that were just dropped via [`remove_document`](Self::remove_document).
     /// Drained into [`lunco_doc_bevy::DocumentClosed`] triggers.
     pending_closed: Vec<DocumentId>,
+    /// Monotonic revision of the registered document set and source state.
+    /// Consumers with a per-document cursor use this to avoid scanning every
+    /// host on an unchanged frame. Direct host access must still call
+    /// [`mark_changed`](Self::mark_changed), the existing mutation contract.
+    revision: u64,
 }
 
 impl ModelicaDocumentRegistry {
@@ -377,6 +382,7 @@ impl ModelicaDocumentRegistry {
         self.attach_recorder(id);
         self.pending_opened.push(id);
         self.pending_changes.push(id);
+        self.revision = self.revision.wrapping_add(1);
         id
     }
 
@@ -394,6 +400,7 @@ impl ModelicaDocumentRegistry {
         // plot variable-list refresh, …) still sees the initial source.
         self.pending_opened.push(id);
         self.pending_changes.push(id);
+        self.revision = self.revision.wrapping_add(1);
         id
     }
 
@@ -420,6 +427,7 @@ impl ModelicaDocumentRegistry {
         self.attach_recorder(id);
         self.pending_opened.push(id);
         self.pending_changes.push(id);
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Wire the Twin-journal handle and retro-fit a recorder onto every
@@ -619,6 +627,7 @@ impl ModelicaDocumentRegistry {
         // doesn't apply here).
         host.document_mut().waive_ast_debounce();
         self.pending_changes.push(doc);
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -627,6 +636,7 @@ impl ModelicaDocumentRegistry {
     /// since the registry cannot observe those through a bare `&mut`.
     pub fn mark_changed(&mut self, doc: DocumentId) {
         self.pending_changes.push(doc);
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Apply a **journal op** to `doc` for replay (journal→scene projection —
@@ -662,6 +672,7 @@ impl ModelicaDocumentRegistry {
             Ok(_) => {
                 host.document_mut().waive_ast_debounce();
                 self.pending_changes.push(doc);
+                self.revision = self.revision.wrapping_add(1);
                 true
             }
             Err(e) => {
@@ -733,6 +744,7 @@ impl ModelicaDocumentRegistry {
     pub fn remove_document(&mut self, doc: DocumentId) {
         if self.hosts.remove(&doc).is_some() {
             self.pending_closed.push(doc);
+            self.revision = self.revision.wrapping_add(1);
         }
         self.by_entity.retain(|_, d| *d != doc);
     }
@@ -761,6 +773,15 @@ impl ModelicaDocumentRegistry {
     /// Whether the registry currently tracks any documents.
     pub fn is_empty(&self) -> bool {
         self.hosts.is_empty()
+    }
+
+    /// Revision of the registered document set and source state.
+    ///
+    /// This is a change-detection input, not a replacement for document
+    /// generations: consumers still compare each document generation before
+    /// deciding what to parse or upsert.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Iterate `(DocumentId, &DocumentHost)` for every loaded document.
@@ -931,6 +952,7 @@ mod tests {
     fn checkpoint_no_op_when_source_unchanged() {
         let mut reg = ModelicaDocumentRegistry::default();
         let doc = reg.allocate("same".into());
+        let revision = reg.revision();
 
         let changed = reg.checkpoint_source(doc, "same".into());
         assert!(
@@ -938,6 +960,30 @@ mod tests {
             "re-checkpointing identical source must not bump generation"
         );
         assert_eq!(reg.host(doc).unwrap().generation(), 1); // unchanged fresh gen 1
+        assert_eq!(
+            reg.revision(),
+            revision,
+            "a source no-op must not wake scanners"
+        );
+    }
+
+    #[test]
+    fn revision_tracks_registry_mutations_without_replacing_generations() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        assert_eq!(reg.revision(), 0);
+
+        let doc = reg.allocate("model A end A;".into());
+        let opened = reg.revision();
+        assert_eq!(opened, 1);
+
+        assert!(reg.checkpoint_source(doc, "model B end B;".into()));
+        assert_eq!(reg.revision(), opened + 1);
+
+        reg.mark_changed(doc);
+        assert_eq!(reg.revision(), opened + 2);
+
+        reg.remove_document(doc);
+        assert_eq!(reg.revision(), opened + 3);
     }
 
     #[test]
