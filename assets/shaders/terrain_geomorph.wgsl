@@ -53,6 +53,7 @@
 // screen-space surface footprint and the map's physical texel size. Mesh LOD is
 // deliberately absent, so replacing a tile by its parent cannot change colour.
 //!@default map_texel_size_m 1.0
+//!@default derived_maps_on  0
 //!@default terrain_half_extent 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
@@ -96,6 +97,7 @@ struct Material {
     rough_mix:         f32,
     mottle:            f32,
     map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
+    derived_maps_on:   f32,  // engine-filled: 1 = surface/normal maps are published
     terrain_half_extent: f32, // engine-filled: authored DEM half side in terrain metres
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
     weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
@@ -295,7 +297,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // surface, not of whichever quadtree mesh currently represents it. `pw` is
     // continuous across a CDLOD edge, while an integer tile depth is not.
     let map_footprint = pw / mat.map_texel_size_m;
-    let w = map_weights(map_footprint);
+    // Optional GPU bindings are always populated by the material binder, but
+    // their fallback texels are not terrain data. The CPU presence bit is the
+    // authoritative boundary between procedural material and published maps.
+    let w = map_weights(map_footprint) * mat.derived_maps_on;
     let weight_normal = w.x;
     let weight_ao = w.y;
     let weight_tone = w.z;

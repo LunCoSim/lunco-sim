@@ -118,6 +118,7 @@ impl Plugin for TerrainSurfacePlugin {
                 // after the first tiles exist — restate the resident tiles' looks
                 // (no tile churn, no re-bake).
                 crate::stream_viz::bind_derived_maps_to_tiles,
+                crate::stream_viz::unbind_derived_maps_from_tiles,
                 // Authored maps land later still — the layer binder needs the
                 // composed stage — and re-land on every live weight/map edit.
                 crate::stream_viz::bind_authored_maps_to_tiles,

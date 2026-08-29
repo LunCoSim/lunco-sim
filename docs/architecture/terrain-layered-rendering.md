@@ -29,6 +29,13 @@ This split is also what makes **real-time tuning free**: bake the *data* once (a
 texture), evaluate the *transfer* every frame from **uniforms**. Changing a critical
 slope angle, a colormap, or an opacity is a uniform write — instant, no re-bake.
 
+The streamed terrain material keeps optional derived products explicit: its CPU
+look binder writes a presence uniform alongside the surface/normal texture handles.
+The renderer may need a valid GPU binding before a bake publishes, but those binding
+texels are not terrain data and cannot contribute to shading. Published maps are
+therefore the only state that enables the derived normal, tone, and AO terms; the
+procedural regolith remains the documented material when no product is available.
+
 ## Fields are data; render is one consumer
 
 The single most important rule: **an analysis layer's field is computed CPU-side as

@@ -355,8 +355,8 @@ fn streamed_terrain_map_weights_use_only_fragment_footprint() {
     let kernel = code_only(&read("terrain_surface.wgsl"));
     assert!(
         code.contains("let map_footprint = pw / mat.map_texel_size_m;")
-            && code.contains("let w = map_weights(map_footprint);"),
-        "streamed terrain must derive map detail from screen footprint and physical texel size"
+            && code.contains("let w = map_weights(map_footprint) * mat.derived_maps_on;"),
+        "streamed terrain must derive map detail from the fragment footprint and an explicit map-presence contract"
     );
     assert!(
         !code.contains("map_weights(mat.lod_depth")

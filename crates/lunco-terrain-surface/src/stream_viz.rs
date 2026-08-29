@@ -1522,6 +1522,7 @@ pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMap
     look.textures
         .insert(TextureLayer::Normal, maps.normal.clone());
     set_param(look, "map_texel_size_m", ParamValue::F32(maps.texel_size_m));
+    set_param(look, "derived_maps_on", ParamValue::F32(1.0));
 }
 
 /// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)
@@ -1616,6 +1617,11 @@ fn tile_look(
                 &mut look,
                 "terrain_half_extent",
                 ParamValue::F32(terrain_half_extent),
+            );
+            set_param(
+                &mut look,
+                "derived_maps_on",
+                ParamValue::F32(if maps.is_some() { 1.0 } else { 0.0 }),
             );
             if let Some(maps) = maps {
                 apply_maps_to_look(&mut look, maps);
@@ -3082,6 +3088,31 @@ pub(crate) fn bind_derived_maps_to_tiles(
     }
 }
 
+/// Remove the derived-map contribution from resident tiles when a whole-terrain
+/// recompose invalidates the published product. A bounded edit intentionally
+/// keeps its current maps live while it rebakes; this path is only for the
+/// explicit component removal used when those maps are globally wrong.
+pub(crate) fn unbind_derived_maps_from_tiles(
+    mut removed: RemovedComponents<TerrainDerivedMaps>,
+    terrains: Query<&LodTiles>,
+    mut looks: Query<&mut ShaderLook>,
+) {
+    for terrain in removed.read() {
+        let Ok(tiles) = terrains.get(terrain) else {
+            continue;
+        };
+        for entity in tiles.tile_entities() {
+            let Ok(mut look) = looks.get_mut(entity) else {
+                continue;
+            };
+            look.textures.remove(&TextureLayer::Surface);
+            look.textures.remove(&TextureLayer::Normal);
+            set_param(&mut look, "map_texel_size_m", ParamValue::F32(1.0));
+            set_param(&mut look, "derived_maps_on", ParamValue::F32(0.0));
+        }
+    }
+}
+
 /// The same late-bind for AUTHORED maps. The layer binder needs the composed
 /// stage AND the twin's asset root, so it publishes
 /// [`TerrainAuthoredMaps`] well after the first tiles are already resident —
@@ -3177,6 +3208,10 @@ mod draw_partition_tests {
             near.values.get("map_texel_size_m"),
             Some(&ParamValue::F32(maps.texel_size_m))
         );
+        assert_eq!(
+            near.values.get("derived_maps_on"),
+            Some(&ParamValue::F32(1.0))
+        );
         assert!(!near.values.contains_key("map_ratio"));
 
         let mut near_values = near.values;
@@ -3188,6 +3223,93 @@ mod draw_partition_tests {
         assert_eq!(
             near_values, far_values,
             "physical appearance must not encode quadtree depth"
+        );
+    }
+
+    #[test]
+    fn absent_derived_maps_are_explicitly_disabled() {
+        let look = tile_look(
+            TerrainShaderMode::Lit,
+            7,
+            100.0,
+            200.0,
+            None,
+            512.0,
+            None,
+            None,
+            crate::overlay::OverlayUniforms::OFF,
+        );
+
+        assert_eq!(
+            look.values.get("derived_maps_on"),
+            Some(&ParamValue::F32(0.0))
+        );
+        assert!(!look.textures.contains_key(&TextureLayer::Surface));
+        assert!(!look.textures.contains_key(&TextureLayer::Normal));
+    }
+
+    #[test]
+    fn removed_derived_maps_are_unbound_from_resident_tiles() {
+        let mut app = App::new();
+        app.add_systems(Update, unbind_derived_maps_from_tiles);
+
+        let tile = app
+            .world_mut()
+            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"))
+            .id();
+        let mut tile_entity = app.world_mut().entity_mut(tile);
+        let mut shader_look = tile_entity.get_mut::<ShaderLook>().expect("tile look");
+        shader_look
+            .textures
+            .insert(TextureLayer::Surface, Handle::default());
+        shader_look
+            .textures
+            .insert(TextureLayer::Normal, Handle::default());
+        set_param(&mut shader_look, "map_texel_size_m", ParamValue::F32(7.0));
+        set_param(&mut shader_look, "derived_maps_on", ParamValue::F32(1.0));
+        drop(tile_entity);
+
+        let mut tiles = LodTiles::default();
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        let terrain = app
+            .world_mut()
+            .spawn((
+                tiles,
+                TerrainDerivedMaps {
+                    surface: Handle::default(),
+                    normal: Handle::default(),
+                    res: 1024,
+                    texel_size_m: 7.0,
+                },
+            ))
+            .id();
+
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<TerrainDerivedMaps>();
+        app.update();
+
+        let tile_ref = app.world().entity(tile);
+        let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
+        assert!(!look.textures.contains_key(&TextureLayer::Surface));
+        assert!(!look.textures.contains_key(&TextureLayer::Normal));
+        assert_eq!(
+            look.values.get("map_texel_size_m"),
+            Some(&ParamValue::F32(1.0))
+        );
+        assert_eq!(
+            look.values.get("derived_maps_on"),
+            Some(&ParamValue::F32(0.0))
         );
     }
 
