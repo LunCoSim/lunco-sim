@@ -41,7 +41,12 @@ For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
 `FloatingOrigin`; cameras never receive or transfer that marker. For a
-physical entity, keep it under `ActivePhysicsFrame` and let
+site-anchored scene, celestial placement mounts only the authored site root and
+binds its physical descendants; it does not query or migrate an avatar/camera.
+An authored avatar camera inherits the site's frame through the hierarchy, and
+all explicit camera frame changes stay with the camera subsystem through the
+same atomic migration helper. For a physical entity, keep it under
+`ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
 or connection line, convert both endpoints into one semantic frame before
 generating cell-local geometry. Treat trajectory visibility as a work boundary:

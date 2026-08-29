@@ -45,10 +45,9 @@
 //!
 //! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
 //! asset may not be loaded yet (async loading). The `process_usd_sim_prims` system runs
-//! in the `Update` schedule **after** `sync_usd_visuals` to ensure:
-//! 1. The USD asset is fully loaded
-//! 2. Meshes exist so we can split wheel entities into physics + visual
-//! 3. No duplicate processing or duplicate FSW ports
+//! in the `Update` schedule **after** `sync_usd_visuals` so the canonical stage and
+//! render-free simulation intent are available before physics projection. Visual
+//! products remain owned by the render pipeline and are not a simulation prerequisite.
 
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
@@ -64,6 +63,7 @@ pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageA
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
 use leafwing_input_manager::prelude::ActionState;
+use lunco_autopilot::usd_tree::BehaviorXml;
 use lunco_avatar::{AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, SpringArmCamera};
 use lunco_controller::InputBindingsSettings;
 use lunco_core::architecture::{IntentAnalogState, Port, PortSurface};
@@ -97,7 +97,8 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// 2. `try_wire_wheel` — connects wheel drive ports to FSW digital ports
 ///
 /// The observer `on_add_usd_sim_prim` intentionally does minimal work. All processing
-/// is deferred to the `process_usd_sim_prims` system to ensure assets are loaded first.
+/// is deferred to the `process_usd_sim_prims` system so the canonical stage and
+/// render-free appearance intent are available at the projection boundary.
 ///
 /// # Wheel kind dispatch (no custom schemas)
 ///
@@ -112,23 +113,6 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// - Otherwise → raycast path.
 ///
 /// No custom `lunco:` tokens drive this dispatch.
-/// Marker resource present **only** on a headless build with no GPU renderer
-/// (the `--no-ui` server): "do not wait for visual components before building
-/// wheel physics".
-///
-/// **Largely redundant since the render decoupling.** The things
-/// [`process_usd_sim_prims`] waits on are now `Mesh3d` (`bevy_mesh`) and the
-/// appearance *intent* (`PbrLook` / `ShaderLook`), all of which this crate and
-/// `lunco-usd-bevy` author with plain systems that run headless. The old deadlock
-/// — waiting for a `ShaderMaterial` that only a GPU-side observer could produce —
-/// is structurally gone.
-///
-/// It is kept because it is `pub` and inserted outside this crate
-/// (`lunco-luncosim`'s headless boot, `lunco-usd`'s integration tests), and because
-/// it remains a correct, cheap "don't wait" switch. Removing it is a separate,
-/// cross-crate change.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct NoRenderVisuals;
 
 pub struct UsdSimPlugin;
 
@@ -707,14 +691,6 @@ impl Plugin for UsdSimPlugin {
                 .before(lunco_physics::apply_physics_holds)
                 .run_if(any_with_component::<ShouldBeDynamic>),
         );
-        // Self-healing watchdog: a USD prim that stays unprocessed forever means
-        // an unmet dependency is silently deadlocking setup (historically the
-        // wheel-shader bug: physics deferred until a render-only `ShaderMaterial`
-        // that never arrived headless — structurally impossible now that the waits
-        // are on render-free intent, see `NoRenderVisuals`). This turns that class
-        // of invisible deadlock into a loud `error!` AND recovers by building the
-        // physics without the missing visual.
-        app.add_systems(Update, recover_stuck_usd_prims);
         // Screen-constant markers. `PostUpdate` before transform propagation:
         // the scale is a function of the camera's position THIS frame, and the
         // markers sit on other bodies' grids, which `place_celestial_bound_entities`
@@ -863,72 +839,6 @@ fn any_unprocessed_usd_sim(q: Query<(), (With<UsdPrimPath>, Without<UsdSimProces
     !q.is_empty()
 }
 
-/// Seconds a USD prim may remain unprocessed before the watchdog treats it as a
-/// real deadlock and recovers. Every prim `process_usd_sim_prims` touches is
-/// marked `UsdSimProcessed` in the same frame; the *only* prims that linger are
-/// ones it deliberately defers waiting on a dependency (a wheel waiting for its
-/// `Mesh3d` / `PbrLook` / `ShaderLook`). Async scene loads settle in well under this.
-const STUCK_PRIM_DEADLINE_SECS: f32 = 10.0;
-
-/// Stamped by [`recover_stuck_usd_prims`] on a prim that has been deferred too
-/// long. [`process_usd_sim_prims`] treats it like the headless `NoRenderVisuals`
-/// path for that one prim: stop waiting for the (never-arriving) visual and build
-/// the physics anyway. This is the self-heal — a forgotten `NoRenderVisuals`, or a
-/// future render-coupled gate, can no longer silently freeze a rover forever.
-#[derive(Component)]
-struct ForceBuildNoVisual;
-
-/// Self-healing watchdog (structural guard against the wheel-shader class of bug).
-/// `process_usd_sim_prims` defers a prim by `continue`-ing without marking it
-/// `UsdSimProcessed`; if the awaited dependency never arrives (historically: a
-/// render-only material on the headless server) the prim defers FOREVER and nothing
-/// complains — the rover silently never gets wheels. Once the unprocessed set has
-/// been **stuck (non-decreasing) for [`STUCK_PRIM_DEADLINE_SECS`]**, this:
-/// 1. logs a loud `error!` to the console (the built-in `tracing` system), and
-/// 2. **recovers** — stamps [`ForceBuildNoVisual`] on each stuck prim so the next
-///    `process_usd_sim_prims` builds its physics without the missing visual.
-///
-/// The app keeps running with drivable rovers instead of a silent deadlock. The
-/// query excludes already-recovered prims, and progress (a shrinking set) resets
-/// the timer, so a slow async load never trips it.
-fn recover_stuck_usd_prims(
-    time: Res<Time>,
-    q: Query<(Entity, &UsdPrimPath), (Without<UsdSimProcessed>, Without<ForceBuildNoVisual>)>,
-    mut commands: Commands,
-    mut stuck_for: Local<f32>,
-    mut last_count: Local<usize>,
-) {
-    let count = q.iter().count();
-    if count == 0 {
-        *stuck_for = 0.0;
-        *last_count = 0;
-        return;
-    }
-    if count < *last_count {
-        *stuck_for = 0.0; // progress — a normal async load, not a stall
-    } else {
-        *stuck_for += time.delta_secs();
-    }
-    *last_count = count;
-    if *stuck_for > STUCK_PRIM_DEADLINE_SECS {
-        let sample: Vec<String> = q.iter().take(8).map(|(_, p)| p.path.clone()).collect();
-        error!(
-            "[usd-sim] {count} USD prim(s) stuck unprocessed for >{:.0}s — an unmet \
-             dependency (most likely a render-only visual component that a \
-             headless/no-GPU build never produces) was deadlocking sim setup. \
-             RECOVERING: building physics without the missing visual. Paths: {sample:?}",
-            STUCK_PRIM_DEADLINE_SECS,
-        );
-        for (e, _) in q.iter() {
-            commands.entity(e).try_insert(ForceBuildNoVisual);
-        }
-        // Recovered prims leave the query next frame; reset so any genuinely-new
-        // stuck prim starts its own grace period cleanly.
-        *stuck_for = 0.0;
-        *last_count = 0;
-    }
-}
-
 fn process_usd_sim_prims(
     mut commands: Commands,
     // Appearance INTENT, not materials: the wheel split MOVES the `PbrLook` /
@@ -942,7 +852,6 @@ fn process_usd_sim_prims(
             Option<&Mesh3d>,
             Option<&PbrLook>,
             Option<&ShaderLook>,
-            Option<&ForceBuildNoVisual>,
         ),
         Without<UsdSimProcessed>,
     >,
@@ -963,17 +872,6 @@ fn process_usd_sim_prims(
     // loader still works in a stripped app without `EnvironmentPlugin`.
     active_sun: Option<Res<lunco_environment::LunarSun>>,
     input_bindings: Res<InputBindingsSettings>,
-    // Inserted by a headless (`--no-ui`) boot. When set, do NOT wait for visual
-    // components (`Mesh3d` / `PbrLook` / `ShaderLook`) before building wheel
-    // PHYSICS, and skip the visual-only wheel split.
-    //
-    // Since the render decoupling all three of those ARE authored headless (they
-    // are render-free intent, not GPU handles), so this is no longer load-bearing
-    // against a deadlock — it is a cheap "don't bother with the visual half"
-    // switch. The historical bug it was added for (waiting on a `ShaderMaterial`
-    // only a GPU-side observer could mint) is structurally gone. See
-    // `NoRenderVisuals` and `docs/architecture/render-decoupling.md`.
-    no_render_visuals: Option<Res<NoRenderVisuals>>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let mut authored_diagnostics = Vec::new();
@@ -982,9 +880,6 @@ fn process_usd_sim_prims(
         runtime_diagnostics.replace_producer("usd-sim", std::iter::empty());
         return;
     };
-    // Whether visual components will ever arrive. `false` headless ⇒ build the
-    // physics now and skip the visual-only split.
-    let visuals_coming = no_render_visuals.is_none();
     // Build (or refresh) each involved stage's immutable topology once. The
     // canonical generation is the authored-composition invalidation signal;
     // waiting for a mesh or another sibling no longer re-scans every spec.
@@ -1013,12 +908,7 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
-    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat, force_build) in
-        query.iter()
-    {
-        // Per-prim escape hatch: the recovery watchdog stamped this prim after it
-        // was deferred too long, so stop waiting for its visual (as if headless).
-        let wait_for_visuals = visuals_coming && force_build.is_none();
+    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat) in query.iter() {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
@@ -1062,7 +952,6 @@ fn process_usd_sim_prims(
             maybe_mesh,
             maybe_mat,
             maybe_shader_mat,
-            wait_for_visuals,
             topology,
             &all_prims,
             &q_child_of,
@@ -1470,7 +1359,6 @@ fn process_usd_sim_prim_read(
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
-    wait_for_visuals: bool,
     topology: &StageJointTopology,
     all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     q_child_of: &Query<&ChildOf>,
@@ -2115,8 +2003,10 @@ fn process_usd_sim_prim_read(
         // Keep the camera in the scene's actual frame owner. The nearest Grid
         // was selected above from the authored parent chain, so this is not a
         // second celestial frame and does not detach the camera from the rover
-        // scene during bootstrap or body-surface rebranching.
-        commands.entity(entity).try_insert(ChildOf(grid_entity));
+        // scene during bootstrap or body-surface rebranching. The pose was
+        // already composed in that Grid; commit the complete spatial handoff
+        // through the shared migration boundary.
+        lunco_core::attach::migrate_to_grid(commands, entity, grid_entity, avatar_cell, avatar_tf);
     }
 
     // 1. Detect PhysxVehicleContextAPI (the mobility root)
@@ -2367,38 +2257,16 @@ fn process_usd_sim_prim_read(
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         }
-        // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
-        // this prim. We'll retry next frame (not marking UsdSimProcessed).
-        // Headless (no renderer) or recovered (watchdog): the mesh never
-        // comes, so don't wait — build the physics wheel without a visual
-        // (`setup_raycast_wheel` handles a `None` mesh: it skips the visual child).
-        if maybe_mesh.is_none() && wait_for_visuals {
+        // Appearance is render-free intent. The visual extractor and shader
+        // projector run before this owner, while headless hosts simply leave
+        // the optional visual components absent; neither case is allowed to
+        // delay the authoritative physics projection.
+        let wants_shader = reader.rel_target(&sdf_path, "material:binding").is_some();
+        if wants_shader && maybe_shader_mat.is_none() {
             debug!(
-                "Wheel {} has no mesh yet, skipping until next frame",
+                "Wheel {} has authored shader binding without a projected ShaderLook",
                 prim_path.path
             );
-            return;
-        }
-
-        // Backstop for the USD-authored shader. `apply_usd_shader_materials`
-        // (see shader.rs) is ordered `before` this system, and Bevy's
-        // automatic sync-point insertion normally flushes its `ShaderLook`
-        // insert before we run — so in the default configuration this guard
-        // never fires. It exists to keep the wheel split correct even if that
-        // ordering guarantee is ever weakened (e.g. `auto_insert_apply_deferred`
-        // disabled): without it we'd split the wheel carrying only
-        // the plain `PbrLook` and lose the shader. If a wheel wants
-        // a shader but it hasn't landed, retry next frame (don't mark
-        // UsdSimProcessed).
-        let wants_shader = reader.rel_target(&sdf_path, "material:binding").is_some();
-        // Since the decoupling the `ShaderLook` is authored by a plain system
-        // that runs headless too (it is intent, not a GPU material), so this no
-        // longer deadlocks a `--no-ui` server. The wait is kept because the
-        // ordering backstop above still wants it, and `wait_for_visuals`
-        // (headless / watchdog-recovered) still short-circuits it.
-        if wants_shader && maybe_shader_mat.is_none() && wait_for_visuals {
-            debug!("Wheel {} awaits ShaderLook, deferring", prim_path.path);
-            return;
         }
         info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
@@ -4392,10 +4260,7 @@ fn try_wire_wheel(
             }
             commands.entity(ent).remove::<PendingWheelWiring>();
         } else {
-            debug!(
-                "Wheel {} FSW not found yet, retrying next frame",
-                prim_path.path
-            );
+            debug!("Wheel {} FSW publication is pending", prim_path.path);
         }
     }
 }
@@ -4409,13 +4274,13 @@ fn try_wire_wheel(
 /// `lunco-autopilot` — that crate stays USD-free and merely compiles the bindings it
 /// is handed.
 ///
-/// Re-runs when a tree's XML changes, when any prim spawns, or while a previous
-/// projection is incomplete. Target paths are derived once per entity/XML
-/// change and cached in this resolver; the compiler owns the separate active-
-/// frame pose bake. Unresolved paths produce an explicitly empty binding set:
-/// the compiler then refuses the tree with a dangling target rather than
-/// driving to a guessed origin. The resolver retries until the composed prim
-/// exists; it never keeps a stale map as a compatibility fallback.
+/// Runs when a tree's XML or the USD identity projection changes. Target paths
+/// are derived once per entity/XML change and cached in this resolver; the
+/// compiler owns the separate active-frame pose bake. Unresolved paths produce
+/// an explicitly empty binding set: the compiler then refuses the tree with a
+/// dangling target rather than driving to a guessed origin. A pending route is
+/// re-evaluated by the next authoritative prim/identity publication, never by
+/// a per-frame recovery scan.
 fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,
@@ -4424,43 +4289,40 @@ fn resolve_behavior_targets(
         Option<&lunco_autopilot::usd_tree::TargetBindings>,
     )>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
-    q_new_prims: Query<(), Added<UsdPrimPath>>,
-    q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
+    q_changed_trees: Query<(), Or<(Added<BehaviorXml>, Changed<BehaviorXml>)>>,
+    q_changed_prims: Query<(), Or<(Added<UsdPrimPath>, Changed<UsdPrimPath>)>>,
+    q_changed_ids: Query<
+        (),
+        Or<(
+            Added<lunco_core::GlobalEntityId>,
+            Changed<lunco_core::GlobalEntityId>,
+        )>,
+    >,
+    mut removed_trees: RemovedComponents<BehaviorXml>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut target_cache: Local<bevy::ecs::entity::EntityHashMap<Vec<String>>>,
     mut commands: Commands,
 ) {
-    let alive: bevy::ecs::entity::EntityHashSet = q_trees.iter().map(|(e, ..)| e).collect();
-    target_cache.retain(|vessel, _| alive.contains(vessel));
+    for vessel in removed_trees.read() {
+        target_cache.remove(&vessel);
+    }
     if q_trees.is_empty() {
         return;
     }
+    if q_changed_trees.is_empty() && q_changed_prims.is_empty() && q_changed_ids.is_empty() {
+        return;
+    }
     let mut xml_changed = false;
-    let mut retry_incomplete = false;
-    for (vessel, xml, _, bindings) in q_trees.iter() {
-        let targets = if xml.is_changed() || !target_cache.contains_key(&vessel) {
+    for (vessel, xml, _, _) in q_trees.iter() {
+        if xml.is_changed() || !target_cache.contains_key(&vessel) {
             xml_changed = true;
             let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
             target_cache.insert(vessel, targets);
-            target_cache
-                .get(&vessel)
-                .expect("target cache entry inserted above")
-        } else {
-            target_cache
-                .get(&vessel)
-                .expect("target cache entry exists for unchanged XML")
-        };
-        if bindings.map_or(!targets.is_empty(), |bindings| {
-            targets
-                .iter()
-                .any(|target| !bindings.0.contains_key(target))
-        }) {
-            retry_incomplete = true;
         }
     }
-    if q_new_prims.is_empty() && !xml_changed && q_new_ids.is_empty() && !retry_incomplete {
+    if !xml_changed && q_changed_prims.is_empty() && q_changed_ids.is_empty() {
         return;
     }
     for (vessel, _xml, vessel_path, current_bindings) in q_trees.iter() {

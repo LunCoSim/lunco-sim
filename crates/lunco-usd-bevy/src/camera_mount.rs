@@ -84,11 +84,10 @@ pub fn resolve_camera_mounts(
                 mount: parent,
                 offset: *tf,
             },
-            CellCoord::default(),
             lunco_core::GridAnchor,
-            ChildOf(grid),
             CameraMountResolved,
         ));
+        lunco_core::attach::migrate_to_grid(&mut commands, cam, grid, CellCoord::default(), *tf);
         info!("[camera] {cam:?} mounted on {parent:?} → grid-direct follower");
     }
 }

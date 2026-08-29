@@ -9,14 +9,14 @@
 //! and can mis-tag the entity (the same class of bug that marked rover
 //! chassis as `RigidBody::Static`; see `lunco-usd-bevy::instantiate_usd_prim`).
 //!
-//! `migrate_to_grid` is the only sanctioned way to move a `GridAnchor`
+//! `migrate_to_grid` is the only sanctioned way to move a spatial entity
 //! between Grids. The workspace `clippy.toml` bans raw `add_child` /
 //! `set_parent_in_place` to enforce this.
 
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-/// Atomically re-parent `entity` to `new_grid` with the given grid-local
+/// Atomically re-parent a spatial `entity` to `new_grid` with the given grid-local
 /// `(CellCoord, Transform)`. Writes `(ChildOf, CellCoord, Transform)` in
 /// one `insert` call so no system can observe a partially-migrated state.
 ///

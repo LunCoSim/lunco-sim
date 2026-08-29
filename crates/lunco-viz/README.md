@@ -32,6 +32,12 @@ operation: "plot `thrust` on the main time-series" = create a
 `VisualizationConfig` with kind `LinePlot`, view `Panel2D`, and a
 `SignalBinding { source: (rocket, "thrust"), role: "y" }`.
 
+Persisted bindings are reconciled from stable `GlobalEntityId` identity only
+when the visualization registry or an identity publication changes. Unchanged
+scenes do not rebuild entity lookup maps or rewrite plot bindings; missing
+identities remain explicitly unresolved until the authoritative scene
+projection publishes them.
+
 ## Crate layout
 
 | Module              | Role                                                        |

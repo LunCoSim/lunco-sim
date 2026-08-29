@@ -118,7 +118,6 @@ pub fn attach_site_scene_to_surface_grid(
         &crate::registry::CelestialBody,
         &crate::globe_lod::GlobeLod,
     )>,
-    q_avatars: Query<(Entity, &Transform, Option<&CellCoord>, &ChildOf), With<lunco_core::Avatar>>,
     // Environment probes are physical assembly consumers too: a probe nested
     // under a rigid body samples that body's local environment. Keep the
     // celestial ownership binding on the probe instead of making the
@@ -144,7 +143,6 @@ pub fn attach_site_scene_to_surface_grid(
         ),
     >,
     grid_config: Res<lunco_core::WorldGridConfig>,
-    q_world_grid: Query<(), With<lunco_core::WorldGrid>>,
     active_physics_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     mut commands: Commands,
 ) {
@@ -162,15 +160,7 @@ pub fn attach_site_scene_to_surface_grid(
         return;
     };
     let make_site_grid = || grid_config.grid();
-
-    // Capture the relative avatar pose before changing the root's parent or
-    // making it a Grid. The avatar is grid-direct in the same frame as the
-    // rover/terrain; the persistent OriginAnchor owns FloatingOrigin separately.
-    let scene_root_world_pose =
-        lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial).ok();
-
-    let root_is_site_grid = q_grids.get(scene_root).is_ok();
-    if !root_is_site_grid {
+    if q_grids.get(scene_root).is_err() {
         if child_of.parent() != body_surface_grid {
             let Some((scene_position, scene_rotation)) =
                 direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
@@ -203,74 +193,6 @@ pub fn attach_site_scene_to_surface_grid(
 
     if active_physics_frame.is_none_or(|frame| frame.0 != scene_root) {
         commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
-    }
-
-    // Bootstrap an avatar that is still mounted in the loader's world shell or
-    // has not reached a BigSpace grid yet. Once a camera system has migrated it
-    // to any valid BigSpace grid, that camera system owns the frame handoff. In
-    // particular, the orbital camera deliberately lives in the body's
-    // EclipticJ2000 grid; reclaiming it here would fight `orbit_system` on the
-    // next celestial solve and dirty the entire high-precision propagation tree.
-    // The site placement owner must never infer a camera mode or write over a
-    // valid camera-owned frame.
-    //
-    // The conversion for the bootstrap case is relative to the root sampled
-    // above; ancestor translation/rotation cancels and no body-fixed vector is
-    // ever mistaken for ENU.
-    for (avatar, _avatar_transform, _avatar_cell, avatar_child) in &q_avatars {
-        if avatar_child.parent() == scene_root {
-            commands
-                .entity(avatar)
-                .try_insert(lunco_environment::GravityBody { body_entity });
-            continue;
-        }
-
-        let current_parent = avatar_child.parent();
-        let is_world_shell = q_world_grid.get(current_parent).is_ok();
-        let is_valid_grid = q_grids.get(current_parent).is_ok();
-        if is_valid_grid && !is_world_shell {
-            continue;
-        }
-
-        let site_pose = if root_is_site_grid {
-            lunco_core::coords::pose_in_grid(avatar, scene_root, &q_parents, &q_grids, &q_spatial)
-        } else {
-            let Some((scene_world_position, scene_world_rotation)) = scene_root_world_pose else {
-                continue;
-            };
-            let Some((avatar_world_position, avatar_world_rotation)) =
-                lunco_core::coords::world_pose(avatar, &q_parents, &q_grids, &q_spatial).ok()
-            else {
-                continue;
-            };
-            let inverse = scene_world_rotation.0.inverse();
-            Some((
-                inverse * (avatar_world_position.0 - scene_world_position.0),
-                inverse * avatar_world_rotation.0,
-            ))
-        };
-        let Some((site_position, site_rotation)) = site_pose else {
-            continue;
-        };
-        let (cell, translation) = make_site_grid().translation_to_grid(site_position);
-        lunco_core::attach::migrate_to_grid(
-            &mut commands,
-            avatar,
-            scene_root,
-            cell,
-            Transform::from_translation(translation).with_rotation(site_rotation.as_quat()),
-        );
-        // A site-anchored avatar is physically associated with the authored
-        // body even before it possesses a rover.  The avatar plugin consumes
-        // this authoritative binding to enter surface-relative camera mode;
-        // no altitude/name heuristic is needed.
-        commands
-            .entity(avatar)
-            .try_insert(lunco_environment::GravityBody { body_entity });
-        info!(
-            "[celestial] site avatar {:?} attached to ENU physics grid {:?}",
-            avatar, scene_root
-        );
     }
 
     // Surface gravity is a property of every physical body mounted under the
@@ -471,16 +393,18 @@ pub fn place_celestial_bound_entities(
         };
 
         let (new_cell, new_translation) = grid.translation_to_grid(local);
-        commands.entity(entity).try_insert((
+        commands.entity(entity).try_insert(lunco_core::GridAnchor);
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            entity,
+            grid_entity,
             new_cell,
             Transform {
                 translation: new_translation,
                 rotation,
                 ..default()
             },
-            lunco_core::GridAnchor,
-            ChildOf(grid_entity),
-        ));
+        );
         // The reparent above turns THIS prim into a high-precision cell entity
         // (CellCoord + ChildOf(grid)), but its USD-spawned descendants (mesh /
         // material / shader children) are untouched: they keep their plain
@@ -966,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn site_scene_avatar_and_physics_share_the_authored_surface_grid() {
+    fn site_scene_and_physics_share_the_authored_surface_grid() {
         let mut app = App::new();
         app.insert_resource(lunco_core::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
@@ -1038,17 +962,6 @@ mod tests {
                 ChildOf(site),
             ))
             .id();
-        let avatar = app
-            .world_mut()
-            .spawn((
-                lunco_core::Avatar,
-                CellCoord::ZERO,
-                Transform::from_xyz(0.0, 4.0, 8.0),
-                GlobalTransform::default(),
-                ChildOf(world_grid),
-            ))
-            .id();
-
         app.update();
         app.update();
 
@@ -1056,15 +969,7 @@ mod tests {
         assert_eq!(world.resource::<lunco_core::ActivePhysicsFrame>().0, site);
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
         assert!(world.get::<Grid>(site).is_some());
-        assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), site);
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
-        assert_eq!(
-            world
-                .get::<lunco_environment::GravityBody>(avatar)
-                .unwrap()
-                .body_entity,
-            body
-        );
         assert_eq!(
             world
                 .get::<lunco_environment::GravityBody>(rigid_body)
@@ -1075,8 +980,6 @@ mod tests {
 
         let site_cell = *world.get::<CellCoord>(site).unwrap();
         let site_transform = *world.get::<Transform>(site).unwrap();
-        let avatar_cell = *world.get::<CellCoord>(avatar).unwrap();
-        let avatar_transform = *world.get::<Transform>(avatar).unwrap();
         app.world_mut()
             .get_mut::<Transform>(body_fixed_grid)
             .unwrap()
@@ -1086,12 +989,10 @@ mod tests {
         let world = app.world();
         assert_eq!(*world.get::<CellCoord>(site).unwrap(), site_cell);
         assert_eq!(*world.get::<Transform>(site).unwrap(), site_transform);
-        assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), avatar_cell);
-        assert_eq!(*world.get::<Transform>(avatar).unwrap(), avatar_transform);
     }
 
     #[test]
-    fn site_placement_does_not_reclaim_a_camera_owned_grid() {
+    fn site_placement_leaves_camera_frame_ownership_alone() {
         let mut app = App::new();
         app.insert_resource(lunco_core::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);

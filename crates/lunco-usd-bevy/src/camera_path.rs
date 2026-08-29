@@ -444,6 +444,7 @@ pub fn resolve_camera_paths(
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut commands: Commands,
 ) {
     let Some(clocks) = clocks else { return };
@@ -817,6 +818,25 @@ pub fn resolve_camera_paths(
         else {
             continue;
         };
+        let Ok(grid_ref) = q_grids.get(grid) else {
+            error!(
+                "[camera-path] {} resolves to a missing Grid {:?}",
+                prim.path, grid
+            );
+            continue;
+        };
+        let Some((camera_position, camera_rotation)) =
+            lunco_core::coords::pose_in_grid(camera, grid, &q_parents, &q_grids, &q_spatial)
+        else {
+            error!(
+                "[camera-path] {} camera {:?} has no complete pose in its path Grid {:?}",
+                prim.path, camera, grid
+            );
+            continue;
+        };
+        let (camera_cell, camera_translation) = grid_ref.translation_to_grid(camera_position);
+        let camera_transform = Transform::from_translation(camera_translation)
+            .with_rotation(camera_rotation.as_quat());
 
         // The shot hangs off its real clock through a GATE domain, frozen at birth
         // (`scale = 0`). A driven clock advances by its PARENT's delta, so a frozen
@@ -886,9 +906,7 @@ pub fn resolve_camera_paths(
             .remove::<crate::camera_mount::MountedCamera>()
             .try_insert((
                 crate::camera::UsdCameraPose::Path,
-                CellCoord::default(),
                 lunco_core::GridAnchor,
-                ChildOf(grid),
                 // Bind the camera to THIS path's clock, not the shared preview.
                 TimeBinding { domain },
                 CameraPathDriven {
@@ -907,6 +925,13 @@ pub fn resolve_camera_paths(
                 // avatar side honours it at every mode-transition boundary.
                 lunco_core::CinematicCameraLock,
             ));
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            camera,
+            grid,
+            camera_cell,
+            camera_transform,
+        );
         // `InteractionEased` is a second Transform owner: it interpolates
         // stepped avatar poses in PostUpdate. A path owns the complete pose and
         // must remove that history atomically when the lock is installed, or

@@ -180,6 +180,25 @@ Rust harness. That still requires a rebuild and only changes the syntax. The
 Rhai test must be an authored asset or a live `RunRhai` source evaluated by the
 production binary.
 
+### Rover loader boundary
+
+The rover loader tests follow the same split. `allocation_spec.rhai`,
+`drivetrain_parity.rhai`, and `ackermann_parity.rhai` already own the public
+runtime outcomes: control-surface allocation, wheel-realization parity,
+steering, and real motion. Adding another Rhai copy of those assertions would
+duplicate the acceptance gate.
+
+The Rust tests in `crates/lunco-usd/tests/rover_structure.rs` and
+`integration_asset_loading.rs` therefore retain only the projection claims that
+the production Rhai surface cannot observe precisely: composed USD paths and
+schema edges, Avian compound-shape lowering, render-free physics projection,
+appearance intent (`Mesh3d`/`PbrLook`), and asynchronous observer ordering. They
+select wheel entities through the reflected `WheelRaycast` component and the
+canonical `UsdPrimPath`/`visual_entity` links; Bevy `Name` is presentation data,
+not an identity selector. If a future public query exposes one of these
+mechanism claims end-to-end, move that exact assertion to an authored scene and
+remove the Rust duplicate in the same change.
+
 ## Remaining migration work
 
 The following are intentionally not deleted until their production replacements

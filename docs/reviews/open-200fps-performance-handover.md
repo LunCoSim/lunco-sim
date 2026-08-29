@@ -193,8 +193,11 @@ camera movement.
 
 The dependency-side experiment is not part of the application contract. It was
 never selected by Cargo and did not address the Apollo symptom: the real cause
-was the application placement owner reclaiming a camera-owned grid. The
-canonical fix is therefore at that owner boundary; no local BigSpace fork or
+was mixed ownership in the application, where celestial placement also queried
+and migrated the avatar camera. The canonical fix is to remove that path
+entirely. Site placement now mounts only the authored site root and physical
+descendants; the camera subsystem alone owns explicit camera frame changes
+through the shared atomic migration operation. No local BigSpace fork or
 application shim is retained. Future generic propagation optimization belongs
 upstream in BigSpace and must be adopted only after an upstream revision is
 available and measured against the same production scene.
@@ -355,9 +358,11 @@ production path works, not 200-FPS acceptance.
 The isolated BigSpace propagation experiment was not adopted and has been
 deleted. Cargo still resolves the app to the reviewed upstream Bevy 0.19
 revision `5f255228e9b4…`; the application contains no fork, alias, or alternate
-propagation path. The measured Apollo issue was fixed at its actual owner in
-the application: site placement now bootstraps only a world-shell avatar and
-never reclaims a valid camera-owned BigSpace grid.
+propagation path. The measured Apollo issue is fixed at its actual owner in the
+application: site placement no longer has an avatar/camera path at all, so it
+cannot reclaim a camera-owned BigSpace grid. The authored avatar camera remains
+under the site root and inherits its mounted frame; explicit orbital/surface
+transitions remain in the camera subsystem.
 
 Subsequent local A/B runs were not acceptance data because a separate
 user-owned luncosim session on API port `4139` was active; that process and its

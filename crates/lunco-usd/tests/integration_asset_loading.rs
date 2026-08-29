@@ -11,26 +11,34 @@ use lunco_usd_sim::cosim::spawn_scene_root_with_stage;
 use lunco_usd_sim::*;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
-/// `Collider::compound` from its child colliders (the Chassis cuboid) — a
-/// compound-of-one is NOT `as_cuboid()`. Extract the single cuboid's
-/// half-extents whether the collider is a plain cuboid or that compound.
-fn cuboid_half_extents(col: &Collider) -> [f32; 3] {
+/// `Collider::compound` from its child colliders. A compound is NOT
+/// `as_cuboid()`. Extract the cuboid half-extents whether the collider is plain
+/// or compound. A body may
+/// have several authored collision children (for example a mounted battery), so
+/// callers must select the shape they are asserting rather than assuming the
+/// first compound entry is the chassis.
+fn cuboid_half_extents(col: &Collider) -> Vec<[f32; 3]> {
     let shape = col.shape();
     if let Some(c) = shape.as_cuboid() {
-        return [
+        return vec![[
             c.half_extents.x as f32,
             c.half_extents.y as f32,
             c.half_extents.z as f32,
-        ];
+        ]];
     }
     if let Some(compound) = shape.as_compound() {
-        if let Some(c) = compound.shapes().first().and_then(|(_, s)| s.as_cuboid()) {
-            return [
-                c.half_extents.x as f32,
-                c.half_extents.y as f32,
-                c.half_extents.z as f32,
-            ];
-        }
+        return compound
+            .shapes()
+            .iter()
+            .filter_map(|(_, shape)| shape.as_cuboid())
+            .map(|c| {
+                [
+                    c.half_extents.x as f32,
+                    c.half_extents.y as f32,
+                    c.half_extents.z as f32,
+                ]
+            })
+            .collect();
     }
     panic!(
         "collider is neither a cuboid nor a compound-of-cuboid: {:?}",
@@ -100,31 +108,28 @@ fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAs
 #[test]
 fn test_sandbox_rover_files_compose() {
     let files = [
-        "vessels/rovers/skid_rover.usda",
-        "vessels/rovers/ackermann_rover.usda",
+        ("vessels/rovers/skid_rover.usda", "SkidRover"),
+        ("vessels/rovers/ackermann_rover.usda", "AckermannRover"),
     ];
-    for f in &files {
+    for (f, rover_name) in &files {
         let p = Path::new("../../assets/").join(f);
         let stage = compose_stage_from_file(&p);
         let view = StageView::new(&stage);
-        // Verify the composed reader has rover + 4 wheels
-        let rover_name = if f.contains("ackermann") {
-            "AckermannRover"
-        } else {
-            "SkidRover"
-        };
+        // Verify the composed reader has the rover and its authored suspension
+        // carriers/wheels.
         assert!(
             view.has_prim(&SdfPath::new(&format!("/{}", rover_name)).unwrap()),
             "{f}: /{} must exist after composition",
             rover_name
         );
-        for w in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-            let wp = SdfPath::new(&format!("/{}/{}", rover_name, w)).unwrap();
+        for suffix in &["FL", "FR", "RL", "RR"] {
+            let wheel_name = format!("Wheel_{suffix}");
+            let wp =
+                SdfPath::new(&format!("/{rover_name}/Suspension_{suffix}/{wheel_name}")).unwrap();
             assert!(
                 view.has_prim(&wp),
-                "{f}: /{}/{} must exist after composition (wheel reference broken?)",
-                rover_name,
-                w
+                "{f}: {} must exist after composition (wheel reference broken?)",
+                wp,
             );
         }
     }
@@ -184,10 +189,6 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
     app.init_asset::<bevy::shader::Shader>();
-    // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
-    // mark headless so sim builds wheel physics without waiting (the `--no-ui`
-    // server stand-in). Without it wheels deadlock within the few no-time frames.
-    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file_path);
@@ -294,19 +295,10 @@ fn test_rover_components_via_bevy_pipeline() {
             .unwrap_or_else(|| panic!("{label}: Missing Collider"));
         let he = cuboid_half_extents(col);
         assert!(
-            (he[0] - 1.0).abs() < 0.1,
-            "{label}: Collider hx must be ~1.0 (width/2), got {}",
-            he[0]
-        );
-        assert!(
-            (he[1] - 0.15).abs() < 0.05,
-            "{label}: Collider hy must be ~0.15 (height/2), got {}",
-            he[1]
-        );
-        assert!(
-            (he[2] - 1.75).abs() < 0.1,
-            "{label}: Collider hz must be ~1.75 (depth/2), got {}",
-            he[2]
+            he.iter().any(|[x, y, z]| {
+                (x - 1.0).abs() < 0.1 && (y - 0.15).abs() < 0.05 && (z - 1.75).abs() < 0.1
+            }),
+            "{label}: compound collider is missing the authored chassis cuboid; got {he:?}"
         );
 
         // Visual (Mesh3d + appearance INTENT) — on the Chassis child, not the Xform
@@ -384,7 +376,8 @@ fn test_rover_components_via_bevy_pipeline() {
         );
 
         // --- WHEELS ---
-        // Find children of rover
+        // The rover root owns the suspension carriers and other authored parts.
+        // Keep this as a broad hierarchy sanity check, not as the wheel lookup.
         let children = app
             .world()
             .get::<Children>(rover_ent)
@@ -395,29 +388,29 @@ fn test_rover_components_via_bevy_pipeline() {
             "{label}: Rover must have >= 4 children, got {child_count}"
         );
 
-        // Find wheel children
-        let mut wheel_ents = Vec::new();
-        for child in children.iter() {
-            if let Some(name) = app.world().get::<Name>(child) {
-                if name.as_str().contains("Wheel") {
-                    wheel_ents.push((child, name.as_str().to_string()));
-                }
-            }
-        }
+        // Wheels are nested under their authored suspension carrier. Resolve
+        // them from the mobility API component, not from Bevy names or tree
+        // depth. `WheelRaycast` is the authoritative realization marker.
+        let wheel_ents: Vec<Entity> = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<WheelRaycast>>();
+            query.iter(app.world()).collect()
+        };
         assert_eq!(
             wheel_ents.len(),
             4,
-            "{label}: Must have exactly 4 wheel children, found {} named: {:?}",
+            "{label}: Must have exactly 4 authored raycast wheels, found {}",
             wheel_ents.len(),
-            wheel_ents.iter().map(|(_, n)| n).collect::<Vec<_>>()
         );
 
-        for (w_ent, w_name) in &wheel_ents {
+        for (wheel_index, w_ent) in wheel_ents.iter().enumerate() {
+            let w_name = format!("wheel #{wheel_index}");
             // MUST have WheelRaycast
             let wheel = app
                 .world()
                 .get::<WheelRaycast>(*w_ent)
-                .unwrap_or_else(|| panic!("{label}: {w_name} missing WheelRaycast"));
+                .expect("WheelRaycast query returned an entity without WheelRaycast");
             assert!(
                 (wheel.wheel_radius - 0.4).abs() < 0.01,
                 "{label}: {w_name} radius ~0.4"
@@ -461,22 +454,15 @@ fn test_rover_components_via_bevy_pipeline() {
                 "{label}: {w_name} physics entity must NOT have Mesh3d (mesh is on visual child)"
             );
 
-            // Visual child must have Mesh3d with 90° Z rotation
-            if let Some(children) = app.world().get::<bevy::prelude::Children>(*w_ent) {
-                let found_visual = children.iter().any(|gc| {
-                    app.world()
-                        .get::<Name>(gc)
-                        .map(|n| n.as_str().contains("visual"))
-                        .unwrap_or(false)
-                        && app.world().get::<Mesh3d>(gc).is_some()
-                });
-                assert!(
-                    found_visual,
-                    "{label}: {w_name} must have visual child with Mesh3d"
-                );
-            } else {
-                panic!("{label}: {w_name} must have children (visual child)");
-            }
+            // The mobility API owns the visual link; do not rediscover it by
+            // scanning child names.
+            let visual = wheel
+                .visual_entity
+                .unwrap_or_else(|| panic!("{label}: {w_name} has no visual entity link"));
+            assert!(
+                app.world().get::<Mesh3d>(visual).is_some(),
+                "{label}: {w_name} visual entity must carry Mesh3d"
+            );
         }
     }
 }
@@ -497,7 +483,8 @@ fn test_wheel_mesh_dimensions_after_composition() {
         let view = StageView::new(&stage);
 
         for w_name in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-            let wp = SdfPath::new(&format!("/{}/{}", rover_name, w_name)).unwrap();
+            let suffix = w_name.strip_prefix("Wheel_").expect("wheel name suffix");
+            let wp = SdfPath::new(&format!("/{rover_name}/Suspension_{suffix}/{w_name}")).unwrap();
             assert!(
                 view.has_prim(&wp),
                 "{label}: {w_name} must exist after composition"
@@ -544,10 +531,6 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<Mesh>();
         app.init_asset::<Image>();
         app.init_asset::<bevy::shader::Shader>();
-        // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
-        // mark headless so sim builds wheel physics without waiting (the `--no-ui`
-        // server stand-in). Without it wheels deadlock within the few no-time frames.
-        app.insert_resource(NoRenderVisuals);
         app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
         // Publish the live canonical stage (composed off the ref-carrying file).
@@ -720,10 +703,6 @@ fn test_full_scene_loads_with_rovers() {
     // hook reads avian's `JointGraph` resource — without the physics plugins
     // it panics. (The single-rover tests use raycast wheels, so they don't.)
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
-    // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
-    // mark headless so sim builds wheel physics without waiting (the `--no-ui`
-    // server stand-in). Without it wheels deadlock within the few no-time frames.
-    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
     // PhysicsPlugins is here only so the joint-spawn hooks find avian's resources
     // (JointGraph) — this is a composition/structure test, not a physics-step test.

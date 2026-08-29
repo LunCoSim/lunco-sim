@@ -4081,8 +4081,7 @@ fn bind_terrain_layers(
 /// take: the process exits by itself once the recording drains.
 ///
 /// Contrast with [`SandboxHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
-/// all): offscreen must NOT insert `NoRenderVisuals`, because it owns a real
-/// render world and GPU target.
+/// all): both modes use the same render-free simulation projection contract.
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 pub struct SandboxOffscreenPlugin;
 
@@ -4677,13 +4676,6 @@ impl Plugin for SandboxHeadlessPlugin {
         // (the connect baseline is empty) because nothing marks the rovers. The
         // gizmo/selection/physics-viz halves of `SceneEditPlugin` stay UI-only.
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
-
-        // No GPU renderer here, so the render-side systems that produce visual
-        // components (`Mesh3d`, and the shader-pipeline `ShaderMaterial`) never
-        // run. Tell the USD sim loader NOT to wait for them before building wheel
-        // physics — otherwise raycast rovers defer their drivetrain forever and
-        // the authoritative server can't simulate or replicate a drivable rover.
-        app.insert_resource(lunco_usd::NoRenderVisuals);
 
         // No winit event loop drives updates headless. Realtime mode uses the
         // fixed cadence as the server's wall-clock pacing; max-speed mode feeds

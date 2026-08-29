@@ -107,30 +107,46 @@ impl Plugin for LuncoVizPlugin {
         .add_observer(panel::on_bind_channel_requested)
         .add_observer(telemetry_browser::on_open_visualization_requested)
         // A plot config survives scene replacement; its Bevy entity does not.
-        // Reconcile after the scene has had a chance to publish replacement
-        // content IDs, before the next UI frame reads the config.
+        // Reconcile only when the config or a stable entity identity changes,
+        // before the next UI frame reads the config.
         .add_systems(Update, reconcile_persisted_plot_bindings);
         telemetry_browser::register_all_commands(app);
     }
 }
 
-/// Refresh every live plot source from the stable content-derived identity
-/// captured while it was first bound. A source that is not in the new scene is
+/// Refresh live plot sources from the stable content-derived identity captured
+/// while they were first bound. A source that is not in the current scene is
 /// deliberately left unresolved: the line plot renders an explicit waiting
-/// state and retries every frame, rather than silently plotting a different
-/// entity with a coincidentally similar mnemonic.
+/// state until the scene publishes the matching identity. Bevy change
+/// detection wakes this system for registry edits and identity publication;
+/// an unchanged scene never rebuilds the lookup maps.
 #[cfg(feature = "ui")]
 fn reconcile_persisted_plot_bindings(
-    mut plots: ResMut<VisualizationRegistry>,
-    ids: Query<(Entity, &lunco_core::GlobalEntityId)>,
+    mut registry: ParamSet<(Res<VisualizationRegistry>, ResMut<VisualizationRegistry>)>,
+    ids: Query<
+        (),
+        Or<(
+            Added<lunco_core::GlobalEntityId>,
+            Changed<lunco_core::GlobalEntityId>,
+        )>,
+    >,
+    all_ids: Query<(Entity, &lunco_core::GlobalEntityId)>,
 ) {
+    let registry_changed = registry.p0().is_changed();
+    if !registry_changed && ids.is_empty() {
+        return;
+    }
+
     let mut gid_of = HashMap::new();
     let mut entity_of = HashMap::new();
-    for (entity, gid) in &ids {
+    for (entity, gid) in &all_ids {
         gid_of.insert(entity, *gid);
         entity_of.insert(*gid, entity);
     }
 
+    // `ParamSet` permits the gate to inspect the registry without making the
+    // system's own mutable access look like a new registry edit next frame.
+    let mut plots = registry.p1();
     for config in plots.values_mut() {
         for binding in &mut config.inputs {
             reconcile_persisted_binding(binding, &gid_of, &entity_of);

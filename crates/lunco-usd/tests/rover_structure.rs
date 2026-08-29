@@ -1,6 +1,6 @@
 use avian3d::prelude::*;
 use bevy::asset::AssetPlugin;
-/// Tests that verify USD rover files match the procedural rover definition.
+/// Tests that verify USD rover files project the canonical mobility structure.
 /// ALL tests load REAL files from disk — no inline USD strings.
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
@@ -12,26 +12,34 @@ use lunco_usd_bevy::*;
 use lunco_usd_sim::*;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
-/// `Collider::compound` from its child colliders (the Chassis cuboid) — a
-/// compound-of-one is NOT `as_cuboid()`. Extract the single cuboid's
-/// half-extents whether the collider is a plain cuboid or that compound.
-fn cuboid_half_extents(col: &Collider) -> [f32; 3] {
+/// `Collider::compound` from its child colliders. A compound is NOT
+/// `as_cuboid()`. Extract the cuboid half-extents whether the collider is plain
+/// or compound. A body may
+/// have several authored collision children (for example a mounted battery), so
+/// callers must select the shape they are asserting rather than assuming the
+/// first compound entry is the chassis.
+fn cuboid_half_extents(col: &Collider) -> Vec<[f32; 3]> {
     let shape = col.shape();
     if let Some(c) = shape.as_cuboid() {
-        return [
+        return vec![[
             c.half_extents.x as f32,
             c.half_extents.y as f32,
             c.half_extents.z as f32,
-        ];
+        ]];
     }
     if let Some(compound) = shape.as_compound() {
-        if let Some(c) = compound.shapes().first().and_then(|(_, s)| s.as_cuboid()) {
-            return [
-                c.half_extents.x as f32,
-                c.half_extents.y as f32,
-                c.half_extents.z as f32,
-            ];
-        }
+        return compound
+            .shapes()
+            .iter()
+            .filter_map(|(_, shape)| shape.as_cuboid())
+            .map(|c| {
+                [
+                    c.half_extents.x as f32,
+                    c.half_extents.y as f32,
+                    c.half_extents.z as f32,
+                ]
+            })
+            .collect();
     }
     panic!(
         "collider is neither a cuboid nor a compound-of-cuboid: {:?}",
@@ -86,12 +94,6 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
     app.init_asset::<bevy::shader::Shader>();
-    // No GPU in this harness, so a wheel's render-only `ShaderMaterial` never
-    // arrives — mark the app headless so sim builds wheel PHYSICS without waiting
-    // (the faithful `--no-ui` server stand-in; the visual mesh child still builds
-    // via the visual extractor). Without this the wheels deadlock and never gain
-    // `WheelRaycast` within the test's few no-time-advance frames.
-    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file_path);
@@ -116,24 +118,12 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app
 }
 
-/// HEADLESS-PARITY GUARD — regression test for the wheel-shader deadlock.
+/// Headless simulation projection does not depend on a renderer or a timeout
+/// fallback. This exercises the canonical physics realization without visual
+/// components present.
 ///
-/// The `--no-ui` server never adds `LuncoRenderPlugin`, so **no material of any
-/// kind is ever bound** — `lunco-render-bevy` is the only crate that names one.
-/// The wheel PHYSICS must still build, or the authoritative server can never
-/// simulate or replicate a drivable rover: every wheel would deadlock
-/// `Without<UsdSimProcessed>` forever. That is what once shipped to the server.
-///
-/// This app reproduces the server's shape: **no render plugin, so no material
-/// binder** + `NoRenderVisuals` inserted.
-///
-/// NOTE (post render-decoupling): what `process_usd_sim_prims` waits on is now
-/// `Mesh3d` / `PbrLook` / `ShaderLook` — all render-FREE intent, all authored
-/// headless — so the original deadlock is structurally unreachable rather than
-/// merely fixed. This test is kept as the guard that it stays that way: if
-/// anyone re-couples the physics build to a GPU-side material, it fails here.
 #[test]
-fn headless_server_builds_wheel_physics_without_shader_material() {
+fn headless_server_builds_wheel_physics_without_renderer() {
     let file = Path::new("../../assets/vessels/rovers/skid_rover.usda");
 
     let mut app = App::new();
@@ -146,7 +136,6 @@ fn headless_server_builds_wheel_physics_without_shader_material() {
     // DELIBERATELY no `LuncoRenderPlugin` — that is the ONLY thing that binds a
     // material, so its absence is exactly what makes this app a faithful stand-in
     // for the `--no-ui` server.
-    app.insert_resource(NoRenderVisuals); // the fix under test
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file);
@@ -172,21 +161,24 @@ fn headless_server_builds_wheel_physics_without_shader_material() {
     let n = q.iter(app.world()).count();
     assert_eq!(
         n, 4,
-        "headless server (no ShaderMaterial) must still build 4 WheelRaycast wheels; \
-         got {n} — wheels deadlocked waiting on a render-only material the server never produces"
+        "headless server must build 4 WheelRaycast wheels; got {n}"
     );
 }
 
-/// Verify that ALL rover files loaded through the real pipeline produce
-/// the exact same component structure as the original procedural spawn.
+/// Verify that ALL rover files loaded through the real pipeline produce the
+/// canonical component structure.
 #[test]
-fn test_all_rover_files_match_procedural() {
+fn test_all_rover_files_project_canonical_structure() {
     let files = [
-        ("vessels/rovers/skid_rover.usda", "/SkidRover"),
-        ("vessels/rovers/ackermann_rover.usda", "/AckermannRover"),
+        ("vessels/rovers/skid_rover.usda", "/SkidRover", false),
+        (
+            "vessels/rovers/ackermann_rover.usda",
+            "/AckermannRover",
+            true,
+        ),
     ];
 
-    for (file, prim) in &files {
+    for (file, prim, ackermann) in &files {
         let label = file.to_string();
         let mut app = compose_and_load(&Path::new("../../assets/").join(file), prim);
 
@@ -237,22 +229,18 @@ fn test_all_rover_files_match_procedural() {
             .unwrap_or_else(|| panic!("{label}: missing AngularDamping"));
         assert!((ad.0 - 2.0).abs() < 0.1, "{label}: AngularDamping ~2.0");
 
-        // Collider (compound-of-one cuboid built from the Chassis child)
+        // Collider: the chassis cuboid is one authored member of the body's
+        // compound shape; other authored rigid children may contribute peers.
         let col = app
             .world()
             .get::<Collider>(rover)
             .unwrap_or_else(|| panic!("{label}: missing Collider"));
         let he = cuboid_half_extents(col);
-        assert!((he[0] - 1.0).abs() < 0.1, "{label}: hx ~1.0, got {}", he[0]);
         assert!(
-            (he[1] - 0.15).abs() < 0.05,
-            "{label}: hy ~0.15, got {}",
-            he[1]
-        );
-        assert!(
-            (he[2] - 1.75).abs() < 0.1,
-            "{label}: hz ~1.75, got {}",
-            he[2]
+            he.iter().any(|[x, y, z]| {
+                (x - 1.0).abs() < 0.1 && (y - 0.15).abs() < 0.05 && (z - 1.75).abs() < 0.1
+            }),
+            "{label}: compound collider is missing the authored chassis cuboid; got {he:?}"
         );
 
         // Visual — body mesh + material live on the Chassis child.
@@ -274,7 +262,7 @@ fn test_all_rover_files_match_procedural() {
             .world()
             .get::<DriveMix>(rover)
             .unwrap_or_else(|| panic!("{label}: missing DriveMix"));
-        if file.contains("ackermann") {
+        if *ackermann {
             assert_eq!(
                 mix.kernel, "linear",
                 "{label}: ackermann should use the linear kernel"
@@ -321,24 +309,20 @@ fn test_all_rover_files_match_procedural() {
             "{label}: actuators missing brake"
         );
 
-        // Wheels
-        let children = app
-            .world()
-            .get::<Children>(rover)
-            .unwrap_or_else(|| panic!("{label}: missing Children"));
-        let mut wheels: Vec<(Entity, String)> = Vec::new();
-        for child in children.iter() {
-            if let Some(name) = app.world().get::<Name>(child) {
-                if name.as_str().contains("Wheel") {
-                    wheels.push((child, name.as_str().to_string()));
-                }
-            }
-        }
+        // Wheels are nested under their authored suspension carrier. Resolve
+        // them from the mobility API component, not from Bevy names or tree
+        // depth. `WheelRaycast` is the authoritative realization marker.
+        let wheels: Vec<Entity> = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<WheelRaycast>>();
+            query.iter(app.world()).collect()
+        };
 
         assert_eq!(
             wheels.len(),
             4,
-            "{label}: must have 4 wheel children, got {}",
+            "{label}: must have 4 authored raycast wheels, got {}",
             wheels.len()
         );
 
@@ -347,23 +331,30 @@ fn test_all_rover_files_match_procedural() {
         // the live log shows `Quat(0,0,-0.707,0.707)`).
         let expected_rot = Quat::from_rotation_arc(Vec3::Y, Vec3::X);
         let expected_positions = [
-            ("Wheel_FL", Vec3::new(-1.0, -0.65, -1.225)),
-            ("Wheel_FR", Vec3::new(1.0, -0.65, -1.225)),
-            ("Wheel_RL", Vec3::new(-1.0, -0.65, 1.225)),
-            ("Wheel_RR", Vec3::new(1.0, -0.65, 1.225)),
+            ("Suspension_FL/Wheel_FL", Vec3::new(-1.0, -0.65, -1.225)),
+            ("Suspension_FR/Wheel_FR", Vec3::new(1.0, -0.65, -1.225)),
+            ("Suspension_RL/Wheel_RL", Vec3::new(-1.0, -0.65, 1.225)),
+            ("Suspension_RR/Wheel_RR", Vec3::new(1.0, -0.65, 1.225)),
         ];
 
-        for (w_name, exp_pos) in &expected_positions {
-            let found = wheels
+        for (wheel_index, (relative_path, exp_pos)) in expected_positions.iter().enumerate() {
+            let expected_path = format!("{prim}/{relative_path}");
+            let w_ent = *wheels
                 .iter()
-                .find(|(_, n)| n.contains(w_name))
-                .unwrap_or_else(|| panic!("{label}: missing {w_name}"));
-            let w_ent = found.0;
+                .find(|&&entity| {
+                    app.world()
+                        .get::<UsdPrimPath>(entity)
+                        .is_some_and(|path| path.path == expected_path)
+                })
+                .unwrap_or_else(|| {
+                    panic!("{label}: no WheelRaycast for authored path {expected_path}")
+                });
+            let w_name = format!("wheel #{wheel_index}");
 
             let wheel = app
                 .world()
                 .get::<WheelRaycast>(w_ent)
-                .unwrap_or_else(|| panic!("{label}: {w_name} missing WheelRaycast"));
+                .expect("WheelRaycast query returned an entity without WheelRaycast");
             assert!(
                 (wheel.wheel_radius - 0.4).abs() < 0.01,
                 "{label}: {w_name} radius ~0.4"
@@ -400,20 +391,26 @@ fn test_all_rover_files_match_procedural() {
                 .world()
                 .get::<Transform>(w_ent)
                 .unwrap_or_else(|| panic!("{label}: {w_name} missing Transform"));
-            assert!(
-                (wt.translation.x - exp_pos.x).abs() < 0.01,
-                "{label}: {w_name} x ~{}",
-                exp_pos.x
+            assert_eq!(
+                wt.translation,
+                Vec3::ZERO,
+                "{label}: {w_name} wheel prim must use its authored zero local offset"
             );
+
+            let mount = app
+                .world()
+                .get::<ChildOf>(w_ent)
+                .unwrap_or_else(|| panic!("{label}: {w_name} missing authored suspension parent"))
+                .parent();
+            let mount_tf = app
+                .world()
+                .get::<Transform>(mount)
+                .unwrap_or_else(|| panic!("{label}: {w_name} suspension parent lacks Transform"));
             assert!(
-                (wt.translation.y - exp_pos.y).abs() < 0.01,
-                "{label}: {w_name} y ~{}",
-                exp_pos.y
-            );
-            assert!(
-                (wt.translation.z - exp_pos.z).abs() < 0.01,
-                "{label}: {w_name} z ~{}",
-                exp_pos.z
+                mount_tf.translation.distance_squared(*exp_pos) < 0.0001,
+                "{label}: {w_name} suspension mount {:?}, expected {:?}",
+                mount_tf.translation,
+                exp_pos
             );
 
             // Physics entity must have identity rotation (rays go down, not sideways)
@@ -423,29 +420,20 @@ fn test_all_rover_files_match_procedural() {
                 wt.rotation
             );
 
-            // Visual child must have 90° Z rotation (wheel orientation)
-            let children = app.world().get::<bevy::prelude::Children>(w_ent);
-            let found_visual = children
-                .map(|c| {
-                    c.iter().any(|child_ent| {
-                        app.world()
-                            .get::<Name>(child_ent)
-                            .map(|n| n.as_str().contains("visual"))
-                            .unwrap_or(false)
-                            && app
-                                .world()
-                                .get::<Transform>(child_ent)
-                                .map(|t| {
-                                    let angle_diff = t.rotation.angle_between(expected_rot);
-                                    angle_diff.abs() < 0.01
-                                })
-                                .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
+            // The mobility API owns the visual link; do not rediscover it by
+            // scanning child names.
+            let visual = wheel
+                .visual_entity
+                .unwrap_or_else(|| panic!("{label}: {w_name} has no visual entity link"));
+            let visual_tf = app
+                .world()
+                .get::<Transform>(visual)
+                .unwrap_or_else(|| panic!("{label}: {w_name} visual entity lacks Transform"));
             assert!(
-                found_visual,
-                "{label}: {w_name} must have visual child with 90° Z rotation"
+                visual_tf.rotation.angle_between(expected_rot).abs() < 0.01,
+                "{label}: {w_name} visual rotation is {:?}, expected {:?}",
+                visual_tf.rotation,
+                expected_rot
             );
         }
     }

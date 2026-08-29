@@ -478,15 +478,17 @@ pub fn update_spawn_ghost(
             );
         }
         if let Some((ghost, _)) = q_ghost.iter().next() {
-            commands.entity(ghost).try_insert((
-                ChildOf(grid_ent),
+            lunco_core::attach::migrate_to_grid(
+                &mut commands,
+                ghost,
+                grid_ent,
                 ghost_cell,
                 Transform {
                     translation: ghost_local,
                     rotation,
                     ..default()
                 },
-            ));
+            );
         } else {
             commands.spawn((
                 Name::new("SpawnGhost"),

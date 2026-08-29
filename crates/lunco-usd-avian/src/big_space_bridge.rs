@@ -331,11 +331,11 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // the same exact previous-representation record on them so a BigSpace
         // re-split is distinguishable from a semantic ancestor teleport.
         app.register_required_components::<CellCoord, SpatialBridgeShadow>();
-        // The active Avian frame can be selected after bodies have already been
-        // seeded (scene mount starts in WorldRoot, then adopts the authored
-        // body-fixed site grid).  Keep that handoff transactionally visible to
-        // both bridge registrations; a Local would process it twice because
-        // the same read pass runs in FixedPostUpdate and PhysicsSchedule.
+        // The active Avian frame may change after bodies have been seeded (for
+        // example when a live scene adopts its authored body-fixed site grid).
+        // Keep that handoff transactionally visible to both bridge
+        // registrations; a Local would process it twice because the same read
+        // pass runs in FixedPostUpdate and PhysicsSchedule.
         app.init_resource::<PhysicsFrameTransportState>();
         app.add_systems(
             PhysicsSchedule,
@@ -425,12 +425,6 @@ impl PhysicsFrameTransportState {
         let previous = self.frame.filter(|previous| *previous != current);
         self.frame = Some(current);
         previous
-    }
-
-    fn initialize_from_seeded_frame(&mut self, frame: Entity) {
-        if self.frame.is_none() {
-            self.frame = Some(frame);
-        }
     }
 
     fn request_solver_reset(&mut self) {
@@ -761,28 +755,11 @@ fn pose_to_position(
     if q_grids.get(active_frame).is_err() {
         panic!("ActivePhysicsFrame {active_frame:?} is not a live BigSpace Grid");
     }
-    // The enclosing FixedPostUpdate can be held while the first physics
-    // schedule read is deferred.  In that interval bodies may already be
-    // seeded in the old frame, so the resource cannot use an "unobserved"
-    // sentinel and assume the first read is the initial frame.  Recover the
-    // authoritative previous frame from the bridge provenance exactly once.
-    let mut seeded_frame = None;
-    for (_, _, _, _, _, _, _, shadow, pose_override) in q_bodies.iter() {
-        if pose_override.is_some() || !shadow.is_seeded() {
-            continue;
-        }
-        let frame = shadow.physics_frame;
-        if frame == Entity::PLACEHOLDER {
-            continue;
-        }
-        if seeded_frame.is_some_and(|known| known != frame) {
-            panic!("seeded Avian bodies disagree about their physics frame");
-        }
-        seeded_frame = Some(frame);
-    }
-    if let Some(seeded_frame) = seeded_frame {
-        frame_state.initialize_from_seeded_frame(seeded_frame);
-    }
+    // The first bridge read establishes the active frame. A seeded body at
+    // this point would mean a physics pose was written before the bridge had
+    // observed the frame, which violates the scene lifecycle ordering. Fail at
+    // this owner instead of trying to infer and repair an old coordinate frame.
+    let first_read = frame_state.frame.is_none();
     let previous_frame = frame_state.take_transition(active_frame);
     let handoff = previous_frame.and_then(|previous| {
         // `grid_transform_between_grids(previous, active)` maps a pose in the
@@ -834,6 +811,12 @@ fn pose_to_position(
     for (e, cell, tf, _, _, _, _, shadow, pose_override) in q_bodies.iter() {
         if pose_override.is_some() {
             continue;
+        }
+        if first_read && shadow.is_seeded() && shadow.physics_frame != active_frame {
+            panic!(
+                "body {e:?} was seeded before the BigSpace physics bridge observed the active frame: seeded in {:?}, active is {active_frame:?}; bind ActivePhysicsFrame before the first physics read",
+                shadow.physics_frame
+            );
         }
         let parent_grid = q_parents
             .get(e)

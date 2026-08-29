@@ -62,9 +62,7 @@ pub use lunco_usd_bevy::{
 pub use lunco_usd_compose::compose_file_to_stage;
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
 pub use lunco_usd_sim::UsdSimPlugin;
-pub use lunco_usd_sim::{
-    GroundActivationInFlight, GroundColliderPending, NoRenderVisuals, UsdSimProcessed,
-};
+pub use lunco_usd_sim::{GroundActivationInFlight, GroundColliderPending, UsdSimProcessed};
 
 /// Master plugin that bundles all USD subsystems together.
 ///

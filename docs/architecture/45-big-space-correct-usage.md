@@ -136,6 +136,9 @@ while the diagnostic is present.
 
 - A scene author supplies a geodetic/body anchor or another physical placement
   fact. The engine resolves the body-fixed frame and performs the mount.
+- Site placement mounts only the authored site root. Its camera descendants
+  inherit that frame through the hierarchy; celestial placement does not query,
+  bind, or migrate avatars.
 - A camera request names a target and semantic frame. The camera system resolves
   the target grid and uses the atomic mount operation.
 - A trajectory declares its reference frame. Its samples are converted once
@@ -152,7 +155,8 @@ while the diagnostic is present.
 4. No duplicate semantic frame declaration.
 5. No direct `GlobalTransform` read for authoritative state.
 6. No per-frame repair, fallback frame, or next-frame reparent correction.
-7. No placement system reclaims a valid camera-owned BigSpace grid.
+7. Celestial placement never reads or writes avatar/camera state; the camera
+   subsystem is the sole owner of camera frame migrations.
 8. No physical entity outside `ActivePhysicsFrame`.
 9. Scene replacement invalidates old roots before deferred despawns.
 
