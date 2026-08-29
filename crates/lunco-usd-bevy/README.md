@@ -11,8 +11,8 @@ By separating visuals into this crate, we keep the core integration lightweight 
 
 ### 1. `UsdBevyPlugin`
 The main plugin that sets up the USDA visual synchronization system. Registers the
-`UsdStageAsset` type, the USD asset loader, and the `sync_usd_visuals` system that
-drives USDA visual synchronization.
+`UsdStageAsset` type, the USD asset loader, and the bounded visual projection
+systems that drive USDA visual synchronization.
 
 ### 2. Automatic Visual Mapping
 Maps standard USD types to Bevy primitives:
@@ -33,4 +33,6 @@ Automatically maps the standard USD `primvars:displayColor` attribute to Bevy `S
 *   **`UsdStageAsset`**: Bevy `Asset` carrying the recipe for the live composed `openusd` stage used by runtime lookups.
 
 ## Usage
-Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn entities tagged with `UsdPrimPath`; `sync_usd_visuals` populates meshes, transforms, and materials.
+Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn
+entities tagged with `UsdPrimPath`; the load observer queues them and the
+bounded projection pass populates meshes, transforms, and materials.

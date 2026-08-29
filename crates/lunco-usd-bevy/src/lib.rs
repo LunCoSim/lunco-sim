@@ -8,8 +8,8 @@
 //!
 //! 1. The asset loader (`UsdLoader`) reads a `.usda` file, parses it, and resolves all
 //!    external references (e.g., wheel component files) via `UsdComposer::flatten()`.
-//! 2. The `sync_usd_visuals` system iterates over all entities with `UsdPrimPath` that
-//!    haven't been processed yet (`Without<UsdVisualSynced>`).
+//! 2. The `sync_usd_visuals` system moves loaded prims into a bounded projection queue.
+//!    `process_queued_usd_visuals` drains that queue over multiple frames.
 //! 3. For each prim, it creates a mesh based on the prim type (`Cube`, `Cylinder`, `Sphere`)
 //!    using explicit dimensions from the USD file.
 //! 4. It spawns child entities for each prim child, pre-populating their transforms so
@@ -240,6 +240,7 @@ impl Plugin for UsdBevyPlugin {
             // still has it. Idempotent — a no-op if core already registered it.
             .init_resource::<lunco_core::SceneViewport>()
             .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<UsdVisualProjectionSettings>()
             .init_resource::<lunco_core::TheLocalAvatar>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
@@ -403,9 +404,8 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (
                     // Ph0′: build the live canonical stage from each loaded asset's
-                    // recipe FIRST, so the same-frame `sync_usd_visuals` (and the
-                    // physics observer it triggers via `UsdVisualSynced`) sees the
-                    // `CanonicalStage` and instantiates off the LIVE stage rather
+                    // recipe FIRST, so the same-frame `sync_usd_visuals` can queue
+                    // prims whose later bounded projection reads the LIVE stage
                     // before any visual or physics projection can consume it.
                     canonical::sync_canonical_stages.run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
@@ -419,6 +419,9 @@ impl Plugin for UsdBevyPlugin {
                             >,
                         )
                         .after(canonical::sync_canonical_stages),
+                    process_queued_usd_visuals
+                        .run_if(any_queued_usd_visuals)
+                        .after(sync_usd_visuals),
                     retry_awaiting_usd_visuals_after_quality_change
                         .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
                         // A quality update can coincide with the asset-loaded
@@ -830,10 +833,41 @@ fn is_preview_only(
 }
 
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
-/// referenced `UsdStageAsset` finished loading. `on_stage_loaded`
-/// processes it once the asset becomes available.
+/// referenced `UsdStageAsset` finished loading. `sync_usd_visuals` moves it
+/// into the bounded projection queue once the asset becomes available.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdAwaitingStage;
+
+/// Marker for a prim whose USD stage is available but whose visual projection
+/// is waiting for the bounded projection pass.
+///
+/// Keeping [`UsdAwaitingStage`] until projection is committed makes the
+/// scene-readiness contract honest: a loaded stage is not presentable merely
+/// because its root entity exists. The marker is also the queue ownership
+/// fence; a replacement can discard the entity without a late observer trying
+/// to project it.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualProjectionQueued;
+
+/// Main-thread budget for USD visual projection.
+///
+/// Canonical OpenUSD stages are `!Send` and Bevy render assets are main-thread
+/// resources, so projection cannot be moved wholesale to a worker. This
+/// resource spreads that unavoidable work over multiple frames instead of
+/// monopolising one update. Hosts may tune it for their frame budget; zero is
+/// treated as one prim per frame.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct UsdVisualProjectionSettings {
+    pub prims_per_frame: usize,
+}
+
+impl Default for UsdVisualProjectionSettings {
+    fn default() -> Self {
+        Self {
+            prims_per_frame: 16,
+        }
+    }
+}
 
 /// Seed marker for hierarchical instance identity (gap G2/B.1). Placed
 /// **atomically** (in the same spawn bundle as `UsdPrimPath`) on the root of a
@@ -1956,45 +1990,22 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 }
 
 /// Observer: fires the moment a new `UsdPrimPath` is added to an entity.
-/// If the referenced `UsdStageAsset` is already loaded, the prim is
-/// instantiated immediately. Otherwise the entity is tagged
-/// `UsdAwaitingStage` and waits for `sync_usd_visuals` to drain it once
-/// the asset becomes ready.
+/// If the referenced `UsdStageAsset` is already loaded, the prim is queued for
+/// bounded projection. Otherwise the entity is tagged `UsdAwaitingStage` and
+/// waits for `sync_usd_visuals` to move it once the asset becomes ready.
 ///
 /// This is the **happy path** in steady state — once a scene is loaded,
 /// any newly-spawned `UsdPrimPath` entity (API command, attach
-/// operation, recursive child spawn) is processed in the same frame
-/// without per-frame polling.
+/// operation, recursive child spawn) enters the same bounded queue. The queue
+/// is dormant when no prim is waiting.
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
-    q: Query<
-        (
-            &UsdPrimPath,
-            Option<&Visibility>,
-            Option<&Transform>,
-            Has<UsdInstanceRoot>,
-            Option<&UsdInstanceMember>,
-        ),
-        (Without<UsdVisualSynced>, Without<UsdVisualSyncFailed>),
-    >,
-    q_high_precision: Query<
-        (),
-        Or<(
-            With<big_space::prelude::Grid>,
-            With<big_space::prelude::CellCoord>,
-        )>,
-    >,
-    q_child_of: Query<&ChildOf>,
-    q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    q: Query<&UsdPrimPath, (Without<UsdVisualSynced>, Without<UsdVisualSyncFailed>)>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, vis, tf, is_instance_root, member)) = q.get(entity) else {
+    let Ok(prim_path) = q.get(entity) else {
         return;
     };
 
@@ -2003,37 +2014,15 @@ fn on_usd_prim_added(
         return;
     }
 
-    let is_high_precision_parent = q_high_precision.contains(entity)
-        || q_child_of
-            .get(entity)
-            .ok()
-            .is_some_and(|c| q_high_precision.contains(c.parent()));
-    let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-    let requested_profile = match quality.validated_profile() {
-        Ok(profile) => profile,
-        Err(reason) => {
-            warn!("[usd-bevy] invalid Graphics quality; deferring USD visual projection: {reason}");
-            commands.entity(entity).try_insert(UsdAwaitingStage);
-            return;
-        }
-    };
-
-    instantiate_usd_prim(
-        entity,
-        prim_path,
-        vis,
-        tf,
-        is_instance_root,
-        member,
-        is_high_precision_parent,
-        preview_only,
-        &mut commands,
-        &stages,
-        &mut canonical,
-        &asset_server,
-        &mut meshes,
-        requested_profile,
-    );
+    // Do not perform USD reads, mesh generation, or recursive child spawning
+    // from an Add observer. Child observers run while Bevy applies the
+    // previous projection's command buffer; doing the work here made one
+    // heavy scene occupy the entire update before the window could repaint.
+    // The bounded queue below owns the same projection path for both authored
+    // scene children and runtime-added prims.
+    commands
+        .entity(entity)
+        .try_insert((UsdAwaitingStage, UsdVisualProjectionQueued));
 }
 
 /// Observer: fires when `CellCoord` is added to an entity.
@@ -2066,32 +2055,19 @@ fn on_cell_coord_added(
     }
 }
 
-/// Drains the `UsdAwaitingStage` queue when a stage finishes loading.
-/// Each entity whose `UsdPrimPath.stage_handle` matches the newly-loaded
-/// asset gets processed exactly once.
+/// Moves the `UsdAwaitingStage` queue into bounded visual projection when a
+/// stage finishes loading. Each matching entity remains marked as awaiting
+/// until `process_queued_usd_visuals` commits it.
 pub fn sync_usd_visuals(
     mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
     q: Query<
-        (
-            Entity,
-            &UsdPrimPath,
-            Option<&Visibility>,
-            Option<&Transform>,
-            Has<UsdInstanceRoot>,
-            Option<&UsdInstanceMember>,
-        ),
+        (Entity, &UsdPrimPath),
         (
             With<UsdAwaitingStage>,
+            Without<UsdVisualProjectionQueued>,
             Without<UsdVisualSynced>,
             Without<UsdVisualSyncFailed>,
         ),
-    >,
-    q_high_precision: Query<
-        (),
-        Or<(
-            With<big_space::prelude::Grid>,
-            With<big_space::prelude::CellCoord>,
-        )>,
     >,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
@@ -2099,11 +2075,6 @@ pub fn sync_usd_visuals(
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mount_state: Res<lunco_core::SceneMountState>,
     mut commands: Commands,
-    stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     use bevy::asset::AssetId;
     let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
@@ -2116,17 +2087,7 @@ pub fn sync_usd_visuals(
         return;
     }
 
-    let requested_profile = match quality.validated_profile() {
-        Ok(profile) => profile,
-        Err(reason) => {
-            warn!(
-                "[usd-bevy] invalid Graphics quality; retaining USD prims awaiting visual projection: {reason}"
-            );
-            return;
-        }
-    };
-
-    for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
+    for (entity, prim_path) in q.iter() {
         if !loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
             continue;
         }
@@ -2147,40 +2108,28 @@ pub fn sync_usd_visuals(
             continue;
         }
 
-        {
-            commands.entity(entity).try_remove::<UsdAwaitingStage>();
-            let is_high_precision_parent = q_high_precision.contains(entity)
-                || q_child_of
-                    .get(entity)
-                    .ok()
-                    .is_some_and(|c| q_high_precision.contains(c.parent()));
-
-            instantiate_usd_prim(
-                entity,
-                prim_path,
-                vis,
-                tf,
-                is_instance_root,
-                member,
-                is_high_precision_parent,
-                preview_only,
-                &mut commands,
-                &stages,
-                &mut canonical,
-                &asset_server,
-                &mut meshes,
-                requested_profile,
-            );
-        }
+        // Keep the stage marker until the bounded projection pass commits the
+        // prim. This is what prevents the scene transaction from reporting
+        // success while descendants are still waiting for a frame.
+        commands
+            .entity(entity)
+            .try_insert(UsdVisualProjectionQueued);
     }
 }
 
-/// Retry USD prims that were deliberately parked because Graphics settings were
-/// invalid. The settings UI rejects such values before insertion, but scripts,
-/// tests, and a host may still mutate the resource directly. A corrected value
-/// is therefore a complete recovery event; requiring a scene reload here would
-/// turn a rejected edit into a lifecycle leak.
-fn retry_awaiting_usd_visuals_after_quality_change(
+fn any_queued_usd_visuals(q: Query<(), With<UsdVisualProjectionQueued>>) -> bool {
+    !q.is_empty()
+}
+
+/// Project at most the configured number of USD prims in one frame.
+///
+/// This intentionally uses the same `instantiate_usd_prim` path as the
+/// immediate observer used previously. Only the scheduling boundary changes:
+/// each projected prim may queue children, those children become queued by the
+/// Add observer, and the next frame continues the stage. No reduced-fidelity
+/// loader or alternate ownership path is introduced.
+#[allow(clippy::too_many_arguments)]
+pub fn process_queued_usd_visuals(
     q: Query<
         (
             Entity,
@@ -2191,7 +2140,7 @@ fn retry_awaiting_usd_visuals_after_quality_change(
             Option<&UsdInstanceMember>,
         ),
         (
-            With<UsdAwaitingStage>,
+            With<UsdVisualProjectionQueued>,
             Without<UsdVisualSynced>,
             Without<UsdVisualSyncFailed>,
         ),
@@ -2206,41 +2155,55 @@ fn retry_awaiting_usd_visuals_after_quality_change(
     q_child_of: Query<&ChildOf>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
-    mount_state: Res<lunco_core::SceneMountState>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
-    mut commands: Commands,
+    mount_state: Res<lunco_core::SceneMountState>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
+    settings: Res<UsdVisualProjectionSettings>,
+    mut commands: Commands,
 ) {
     let requested_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
-            warn!(
-                "[usd-bevy] invalid Graphics quality; USD visual projection remains parked: {reason}"
-            );
+            warn!("[usd-bevy] invalid Graphics quality; deferring USD visual projection: {reason}");
             return;
         }
     };
+    let mut remaining = settings.prims_per_frame.max(1);
 
-    for (entity, prim_path, vis, tf, is_instance_root, member) in &q {
+    for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
+        if remaining == 0 {
+            break;
+        }
         if stages.get(&prim_path.stage_handle).is_none() {
             continue;
         }
+
         let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-        let stale_mount = match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
-        {
-            Ok(Some(root)) => !mount_state.contains_root(root),
-            Ok(None) => false,
-            Err(_) => true,
-        };
-        if !preview_only && stale_mount {
-            continue;
+        if !preview_only {
+            let stale_mount =
+                match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities) {
+                    Ok(Some(root)) => !mount_state.contains_root(root),
+                    Ok(None) => false,
+                    Err(_) => true,
+                };
+            if stale_mount {
+                // The replacement already invalidated this root. Reclaim the
+                // queued entity instead of allowing it to instantiate after the
+                // new scene has mounted.
+                commands.entity(entity).try_despawn();
+                remaining -= 1;
+                continue;
+            }
         }
 
-        commands.entity(entity).try_remove::<UsdAwaitingStage>();
+        commands
+            .entity(entity)
+            .try_remove::<UsdVisualProjectionQueued>()
+            .try_remove::<UsdAwaitingStage>();
         let is_high_precision_parent = q_high_precision.contains(entity)
             || q_child_of
                 .get(entity)
@@ -2262,6 +2225,61 @@ fn retry_awaiting_usd_visuals_after_quality_change(
             &mut meshes,
             requested_profile,
         );
+        remaining -= 1;
+    }
+}
+
+/// Retry USD prims that were deliberately parked because Graphics settings were
+/// invalid. The settings UI rejects such values before insertion, but scripts,
+/// tests, and a host may still mutate the resource directly. A corrected value
+/// is therefore a complete recovery event; requiring a scene reload here would
+/// turn a rejected edit into a lifecycle leak.
+fn retry_awaiting_usd_visuals_after_quality_change(
+    q: Query<
+        (Entity, &UsdPrimPath),
+        (
+            With<UsdAwaitingStage>,
+            Without<UsdVisualProjectionQueued>,
+            Without<UsdVisualSynced>,
+            Without<UsdVisualSyncFailed>,
+        ),
+    >,
+    q_child_of: Query<&ChildOf>,
+    q_scene_root: Query<(), With<UsdSceneRoot>>,
+    q_entities: Query<Entity>,
+    mount_state: Res<lunco_core::SceneMountState>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    mut commands: Commands,
+    stages: Res<Assets<UsdStageAsset>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+) {
+    if let Err(reason) = quality.validated_profile() {
+        warn!(
+            "[usd-bevy] invalid Graphics quality; USD visual projection remains parked: {reason}"
+        );
+        return;
+    }
+
+    for (entity, prim_path) in &q {
+        if stages.get(&prim_path.stage_handle).is_none() {
+            continue;
+        }
+        let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
+        let stale_mount = match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
+        {
+            Ok(Some(root)) => !mount_state.contains_root(root),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        if !preview_only && stale_mount {
+            continue;
+        }
+
+        // Quality changes only release the queue. The bounded projection pass
+        // remains the sole owner of USD reads and mesh/material generation.
+        commands
+            .entity(entity)
+            .try_insert(UsdVisualProjectionQueued);
     }
 }
 

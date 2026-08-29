@@ -3741,6 +3741,8 @@ fn report_terrain_generation_status(
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
     awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
+    projecting: Query<(), With<lunco_usd_bevy::UsdVisualProjectionQueued>>,
+    coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
@@ -3748,12 +3750,30 @@ fn report_scene_spawn_status(
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::SCENE_SOURCE;
     let pending = awaiting.iter().count();
+    let projecting = projecting.iter().count();
+    if matches!(
+        coordinator.active(),
+        Some(lunco_core::SceneTransition::Clear)
+    ) {
+        bus.set_progress(SOURCE, "unloading current scene", 0, 0);
+        return;
+    }
     if let Some(g) = in_flight {
-        // `total = 0` is the bus's "indeterminate" encoding — the number of prims
-        // a scene will spawn is not known until it has spawned them.
-        bus.set_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
+        let message = if projecting > 0 {
+            format!("projecting scene {} ({projecting} prims queued)", g.path)
+        } else {
+            format!("loading scene {}", g.path)
+        };
+        // `total = 0` is the bus's "indeterminate" encoding — the number of
+        // descendants can grow as each projected prim exposes its children.
+        bus.set_progress(SOURCE, message, 0, 0);
     } else if pending > 0 {
-        bus.set_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
+        bus.set_progress(
+            SOURCE,
+            format!("projecting scene ({projecting} queued, {pending} pending)"),
+            0,
+            0,
+        );
     } else {
         bus.remove_progress(SOURCE);
     }

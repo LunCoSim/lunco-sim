@@ -3,7 +3,7 @@
 This crate is the **first** plugin in the USD pipeline (Layer 2 / domain). It
 turns USD prims into Bevy entities with meshes, materials, and transforms.
 Everything physics- or sim-related lives in `lunco-usd-avian` and
-`lunco-usd-sim` and runs `.after(sync_usd_visuals)`.
+`lunco-usd-sim` and runs after the bounded visual projection pass.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
 `src/read.rs` (the `UsdRead` read seam), `src/view.rs` / `src/canonical.rs` (the

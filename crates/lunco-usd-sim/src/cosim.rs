@@ -1,8 +1,8 @@
 //! USD → cosim translator.
 //!
 //! Reads `lunco:modelicaModel` / `lunco:pythonModel` and native
-//! `connectionPaths` from USD prims after `sync_usd_visuals` has spawned
-//! the entity, and drives the full cosim lifecycle end-to-end:
+//! `connectionPaths` from USD prims after the bounded USD visual projection
+//! has spawned the entity, and drives the full cosim lifecycle end-to-end:
 //!
 //! - **Modelica**: opens the source file, inserts a `ModelicaModel`
 //!   stub, dispatches `ModelicaCommand::Compile` directly to the
@@ -380,6 +380,15 @@ pub enum SceneStageAssetOutcome {
     },
 }
 
+/// Terminal stage outcomes survive until the bounded USD visual projection has
+/// drained the stage's queued prims. A loaded asset is therefore not allowed to
+/// close the scene transaction while descendants are still being projected.
+#[derive(Resource, Default)]
+struct PendingSceneStageOutcome {
+    stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
+    outcome: Option<SceneStageAssetOutcome>,
+}
+
 /// Queued Modelica source load. Inserted by `process_usd_cosim_prims`;
 /// drained by `dispatch_loaded_modelica_sources` once the
 /// `Handle<ModelicaSource>` has resolved to bytes.
@@ -447,9 +456,9 @@ fn publish_failed_scene_stage_outcomes(
 /// Close the scene transaction from one explicit stage outcome.
 ///
 /// Loaded outcomes arrive after `sync_usd_visuals`; failure outcomes arrive
-/// after the USD asset boundary has retired parked prims. Reaching `Last` with
-/// a matching outcome but an undrained projection queue is an ordering bug and
-/// fails loudly instead of being retried on later frames.
+/// after the USD asset boundary has retired parked prims. A loaded outcome is
+/// retained when the bounded visual projection queue is still draining and is
+/// committed at the first later `Last` edge with no awaiting prims.
 fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
@@ -457,21 +466,32 @@ fn record_scene_load_terminal_outcome(
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
     camera_contract: Option<Res<CameraContractStatus>>,
+    mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
 ) {
     let Some(g) = in_flight else {
         outcomes.read().for_each(drop);
+        pending.stage_id = None;
+        pending.outcome = None;
         return;
     };
-    let matching = outcomes
+    if pending.stage_id != Some(g.stage_id) {
+        pending.stage_id = None;
+        pending.outcome = None;
+    }
+    if let Some(matching) = outcomes
         .read()
         .filter(|outcome| match outcome {
             SceneStageAssetOutcome::Loaded { stage_id }
             | SceneStageAssetOutcome::Failed { stage_id, .. } => *stage_id == g.stage_id,
         })
         .last()
-        .cloned();
-    let Some(outcome) = matching else {
+        .cloned()
+    {
+        pending.stage_id = Some(g.stage_id);
+        pending.outcome = Some(matching);
+    }
+    let Some(outcome) = pending.outcome.clone() else {
         return;
     };
     let Some(transition) = coordinator.active().cloned() else {
@@ -481,6 +501,8 @@ fn record_scene_load_terminal_outcome(
         // panic the process.
         warn!("[scene] ignoring stage outcome without an active scene transaction");
         commands.remove_resource::<SceneLoadInFlight>();
+        pending.stage_id = None;
+        pending.outcome = None;
         return;
     };
     if !matches!(
@@ -492,12 +514,14 @@ fn record_scene_load_terminal_outcome(
         // can proceed instead of leaving the coordinator permanently active.
         let error = "scene load outcome arrived for a non-load transition".to_string();
         warn!("[scene] {error}");
+        pending.outcome = None;
         commands.remove_resource::<SceneLoadInFlight>();
         commands.trigger(SceneTransitionFailed { transition, error });
         return;
     }
 
     if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
+        pending.outcome = None;
         commands.remove_resource::<SceneLoadInFlight>();
         commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
         commands.trigger(SceneTransitionFailed { transition, error });
@@ -508,14 +532,9 @@ fn record_scene_load_terminal_outcome(
         .iter()
         .any(|prim| prim.stage_handle.id() == g.stage_id);
     if still_awaiting {
-        let error = format!(
-            "loaded stage `{}` reached its terminal asset outcome before USD projection finished",
-            g.path
-        );
-        error!("[scene] {error}");
-        commands.remove_resource::<SceneLoadInFlight>();
-        commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
-        commands.trigger(SceneTransitionFailed { transition, error });
+        // The asset is loaded, but visual projection is intentionally paced.
+        // Keep the outcome until the queue has drained; this is a normal
+        // multi-frame phase, not a lifecycle failure.
         return;
     }
 
@@ -528,6 +547,7 @@ fn record_scene_load_terminal_outcome(
             };
             let error = format!("scene `{}` failed camera contract: {detail}", g.path);
             error!("[scene] {error}");
+            pending.outcome = None;
             commands.remove_resource::<SceneLoadInFlight>();
             commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
             commands.trigger(SceneTransitionFailed { transition, error });
@@ -545,6 +565,7 @@ fn record_scene_load_terminal_outcome(
             g.path
         );
     }
+    pending.outcome = None;
     commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
     commands.trigger(SceneTransitionCompleted { transition });
@@ -4322,7 +4343,7 @@ fn on_scene_transition_failed(
 /// `lunco-cosim` to orchestrate a scene swap.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct SceneEntities<'w, 's> {
-    grid: Query<'w, 's, &'static Children, With<WorldGrid>>,
+    grid: Query<'w, 's, (Entity, &'static Children), With<WorldGrid>>,
     origin: Query<'w, 's, Entity, With<OriginAnchor>>,
     /// Every active scene root identifies the USD stage whose generated prims
     /// belong to that scene.  A camera mount is allowed to move a prim directly
@@ -4330,6 +4351,7 @@ pub struct SceneEntities<'w, 's> {
     /// all of these on teardown.
     scene_roots: Query<'w, 's, &'static UsdPrimPath, With<UsdSceneRoot>>,
     prims: Query<'w, 's, (Entity, &'static UsdPrimPath)>,
+    parents: Query<'w, 's, &'static ChildOf>,
     wires: Query<'w, 's, Entity, With<SimConnection>>,
     /// Physics-created joint entities and world-anchor bodies have no USD prim
     /// path, so their explicit scene-ownership marker is the authoritative
@@ -4355,7 +4377,8 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     let mut despawned = 0usize;
 
     // Despawn all children of the WorldGrid (recursively), except the persistent OriginAnchor
-    if let Ok(children) = q_grid.single() {
+    let grid_entity = q_grid.single().ok().map(|(entity, _)| entity);
+    if let Ok((_, children)) = q_grid.single() {
         for child in children.iter() {
             if !q_origin.contains(child) {
                 commands.entity(child).try_despawn();
@@ -4377,7 +4400,20 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         .collect();
     let mut stage_prim_despawns = 0usize;
     for (entity, prim) in q_prims.iter() {
-        if active_stage_ids.contains(&prim.stage_handle.id()) {
+        let already_covered_by_grid = grid_entity.is_some_and(|grid| {
+            let mut current = entity;
+            for _ in 0..1024 {
+                if current == grid {
+                    return true;
+                }
+                let Ok(parent) = scene.parents.get(current) else {
+                    return false;
+                };
+                current = parent.parent();
+            }
+            false
+        });
+        if active_stage_ids.contains(&prim.stage_handle.id()) && !already_covered_by_grid {
             commands.entity(entity).try_despawn();
             stage_prim_despawns += 1;
         }
@@ -4832,6 +4868,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         .init_resource::<crate::domain_projection::SynthesizerRegistry>()
         .init_resource::<UsdTelemetryProjectionIndex>()
+        .init_resource::<PendingSceneStageOutcome>()
         .init_resource::<SceneTransitionCoordinator>();
     app.add_observer(request_binding_epoch::<UsdPrimPath>)
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
@@ -4878,7 +4915,7 @@ pub(crate) fn install(app: &mut App) {
             CosimUpdateSet::Wiring,
         )
             .chain()
-            .after(lunco_usd_bevy::sync_usd_visuals),
+            .after(lunco_usd_bevy::process_queued_usd_visuals),
     );
 
     app.add_systems(
@@ -4911,15 +4948,12 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         Last,
         // The terminal outcome is consumed at the end of the projection frame.
-        // By `Last`, all
-        // USD, simulation, camera, render-binding, transform and physics
-        // projection systems have run. The terminal event is applied by Last's
-        // deferred-command flush; a queued request can therefore be dispatched
-        // only by the following frame's `First` lifecycle boundary.
-        //
-        // This is message-driven: there is no per-frame in-flight/readiness
-        // reconciliation system.
-        record_scene_load_terminal_outcome.run_if(on_message::<SceneStageAssetOutcome>),
+        // By `Last`, all USD, simulation, camera, render-binding, transform and
+        // physics projection systems have run. A loaded outcome is retained by
+        // `PendingSceneStageOutcome` while the bounded visual queue drains, so
+        // this tiny state check is the only multi-frame lifecycle bookkeeping;
+        // no heavyweight readiness scan runs on the UI thread.
+        record_scene_load_terminal_outcome,
     );
 
     app.add_systems(
@@ -5885,6 +5919,7 @@ mod tests {
         let mut app = App::new();
         app.add_message::<SceneStageAssetOutcome>()
             .init_resource::<SceneTransitionCoordinator>()
+            .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<CompletedTransitions>()
             .add_observer(on_scene_transition_completed)
             .add_observer(
@@ -5928,6 +5963,67 @@ mod tests {
             .resource::<SceneTransitionCoordinator>()
             .active()
             .is_none());
+    }
+
+    #[test]
+    fn loaded_stage_outcome_waits_for_bounded_visual_projection() {
+        let transition = SceneTransition::load("scene.usda", "/World");
+        let stage_id = Handle::<UsdStageAsset>::default().id();
+        let mut app = App::new();
+        app.add_message::<SceneStageAssetOutcome>()
+            .init_resource::<SceneTransitionCoordinator>()
+            .init_resource::<PendingSceneStageOutcome>()
+            .init_resource::<CompletedTransitions>()
+            .add_observer(on_scene_transition_completed)
+            .add_observer(
+                |trigger: On<SceneTransitionCompleted>,
+                 mut completed: ResMut<CompletedTransitions>| {
+                    completed.0.push(trigger.event().transition.clone());
+                },
+            )
+            .add_systems(Last, record_scene_load_terminal_outcome);
+
+        {
+            let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
+            assert_eq!(
+                coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
+                SceneTransitionAdmission::Admitted
+            );
+            coordinator
+                .take_admitted()
+                .expect("the first scene request is admitted");
+            coordinator.start(transition.clone());
+        }
+        let awaiting = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World/HeavyMesh".to_owned(),
+                },
+                UsdAwaitingStage,
+            ))
+            .id();
+        app.insert_resource(SceneLoadInFlight {
+            path: "scene.usda".to_owned(),
+            stage_id,
+        });
+        app.world_mut()
+            .write_message(SceneStageAssetOutcome::Loaded { stage_id });
+
+        app.update();
+        assert!(app.world().contains_resource::<SceneLoadInFlight>());
+        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
+
+        app.world_mut()
+            .entity_mut(awaiting)
+            .remove::<UsdAwaitingStage>();
+        app.update();
+        assert!(!app.world().contains_resource::<SceneLoadInFlight>());
+        assert_eq!(
+            app.world().resource::<CompletedTransitions>().0,
+            vec![transition]
+        );
     }
 
     #[test]

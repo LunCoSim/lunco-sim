@@ -38,17 +38,19 @@ UsdOp  ──►  UsdDocumentRegistry::apply   (journals + inverts)
               └── info_only  → attribute-only: translate, rotate, domes …
               │
               ▼
-          on_usd_prim_added  (observer on `Add, UsdPrimPath`)
+          UsdVisualProjectionQueued  (bounded main-thread queue)
               │
               ▼
           instantiate_usd_prim_from_stage  (lunco-usd-bevy/src/lib.rs)
               └── match reader.type_name(path) → components
 ```
 
-Two entry points feed `instantiate_usd_prim_from_stage`: the observer above (live
-edits, runtime spawns) and `sync_usd_visuals` (a stage asset finishing its
-load). Both go through the *same* extractor, which is why a scene loaded from
-disk and a prim authored at runtime produce identical entities.
+The `Add, UsdPrimPath` observer and `sync_usd_visuals` both feed the same
+`UsdVisualProjectionQueued` marker. `process_queued_usd_visuals` drains that
+queue with its configured per-frame budget, then calls the same extractor. A
+scene loaded from disk and a prim authored at runtime therefore produce
+identical entities without one heavy deferred-command flush monopolising the
+window.
 
 ## Law 1 — every edit goes through `ApplyUsdOp`
 

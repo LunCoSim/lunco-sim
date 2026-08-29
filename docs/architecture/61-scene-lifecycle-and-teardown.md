@@ -98,6 +98,21 @@ it. A second request therefore cannot replace an in-flight stage, and consumers
 do not need staging markers, stale-entity guards, retries, or per-frame recovery
 checks.
 
+USD visual projection is the deliberate exception to all-at-once scene
+materialisation. `sync_usd_visuals` only moves loaded prims into its queue;
+`UsdVisualProjectionSettings::prims_per_frame` bounds the main-thread USD read,
+mesh construction, and recursive child scheduling in
+`process_queued_usd_visuals`. `UsdAwaitingStage` remains on queued prims, so the
+authoritative stage outcome is retained until the queue is empty. The workbench
+reports the indeterminate loading/projecting phase, and a clear transaction
+reports unloading, rather than presenting a partially projected scene as ready.
+
+Teardown also avoids duplicate ownership work: the grid hierarchy is despawned
+recursively, while the stage-identity sweep only handles active-scene prims
+that are outside that hierarchy (for example, a detached camera during a
+reparenting window). This keeps the ownership fence required for deferred
+reparenting without queuing the same scene prim twice.
+
 Scene safety state follows the same boundary. `lunco_core::RuntimeFaults` records
 the first terminal physics/runtime failure for the active scene, while
 `PhysicsHolds::SAFETY_FAILURE` stops unsafe stepping. The USD simulation owner
