@@ -10,11 +10,11 @@
 //! grids and the blueprint look.
 //!
 //! Per body, [`GlobeLod`] carries the params + the surface grid + look;
-//! [`GlobeTiles`] tracks the resident tile set; [`update_globe_lod`] diffs the
-//! desired set against it each frame. Tile placement replicates the proven static
-//! pattern verbatim (mesh body-local, entity anchored at the tile centre via the
-//! surface grid's `translation_to_grid`, `set_parent_in_place`) so correctness is
-//! preserved — only *which* tiles exist becomes dynamic.
+//! [`GlobeTiles`] tracks residency, the bounded mesh cache, and the cached
+//! selection inputs; [`update_globe_lod`] reconciles that state with the camera.
+//! Tile placement uses the grid's `translation_to_grid` together with a
+//! centre-relative mesh, so the authoritative BigSpace pose is established at
+//! spawn and remains stable while only tile residency changes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -278,7 +278,8 @@ impl GlobeHandoff {
 /// The cube-sphere tiles currently resident for a body, keyed by quadtree node.
 #[derive(Component, Default)]
 pub struct GlobeTiles {
-    /// Live tiles (in the desired LOD set).
+    /// Live tiles, including temporary coarse cover while desired replacements
+    /// stream in.
     pub resident: HashMap<TileCoord, Entity>,
     /// Hidden tiles retained briefly after an atomic draw-cover handoff.
     ///
@@ -312,6 +313,17 @@ pub struct GlobeTiles {
     /// the desired set, so a site appearing/moving must re-open the gate even if
     /// the camera has not moved a millimetre.
     pub last_solve_handoff: Option<GlobeHandoff>,
+    /// Cached desired leaf set from the last selection pass. Selection depends
+    /// on the camera, LOD parameters, handoff, and resident cover; it does not
+    /// depend on material readiness or the retirement countdown. Keeping the
+    /// result on the owning body lets streaming finish without recursively
+    /// walking the whole globe again every frame.
+    desired: HashSet<TileCoord>,
+    last_selection_cam: Option<DVec3>,
+    last_selection_handoff: Option<GlobeHandoff>,
+    last_selection_resident_revision: u64,
+    resident_revision: u64,
+    last_selection_lod_key: Option<(u64, u32, u64)>,
 }
 
 #[derive(Clone)]
@@ -662,14 +674,18 @@ pub(crate) fn update_globe_lod(
             tiles.mesh_cache.clear();
             tiles.mesh_cache_bytes = 0;
             tiles.last_solve_cam = None;
+            tiles.desired.clear();
+            tiles.last_selection_cam = None;
+            tiles.last_selection_handoff = None;
+            tiles.last_selection_lod_key = None;
+            tiles.resident_revision = tiles.resident_revision.wrapping_add(1);
         }
 
-        // CAMERA-MOTION GATE. Everything below — two `HashSet`s, a `Vec`, a sort,
-        // and six recursive quadtree descents — is a pure function of
-        // (camera_body_local, handoff, the resident set). With the resident set
-        // settled and both inputs unmoved the answer is bit-identical to last
-        // frame's, so a parked view rebuilt ~600 `TileCoord`s per body per frame
-        // to conclude that nothing should change.
+        // CAMERA-MOTION GATE. Resident reconciliation still runs while a
+        // replacement is streaming or retiring. Once it settles, the recursive
+        // selection result is cached and a parked view only performs the cheap
+        // readiness/cover checks below. The selection itself is a pure function
+        // of (camera_body_local, handoff, resident set, and LOD parameters).
         //
         // This is the same shape as the cadence gate the ephemeris cluster uses
         // (`cadence::tracked_needs_solve`) — an error budget rather than a rate —
@@ -695,24 +711,50 @@ pub(crate) fn update_globe_lod(
         // Desired leaf set: recurse all six faces from the root. The resident
         // set feeds the split/merge dead band (no per-frame flapping when the
         // camera parks exactly on a threshold — e.g. the 3.0-radii focus snap).
+        // Once a selection is computed, keep it on the owning body while the
+        // resident set catches up. Material readiness and retirement do not
+        // change the mathematical selection, so they must not force another
+        // full quadtree walk.
+        let lod_key = (
+            lod.radius_m.to_bits(),
+            lod.max_lod,
+            lod.lod_distance_factor.to_bits(),
+        );
+        let selection_needs_rebuild = tiles.last_selection_cam.is_none_or(|previous| {
+            let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
+            let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
+            (camera_body_local - previous).length_squared() >= slack * slack
+        }) || tiles.last_selection_handoff.as_ref() != handoff
+            || tiles.last_selection_resident_revision != tiles.resident_revision
+            || tiles.last_selection_lod_key != Some(lod_key);
         let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
-        let mut desired: HashSet<TileCoord> = HashSet::new();
         let resident_coverage = resident_coverage(&tiles.resident);
-        for face in 0..6u8 {
-            subdivide_face(
-                &mut desired,
-                &resident,
-                body_ent,
-                face,
-                0,
-                0,
-                0,
-                camera_body_local,
-                lod.radius_m,
-                lod.max_lod,
-                lod.lod_distance_factor,
-            );
-        }
+        let desired = if selection_needs_rebuild {
+            let mut desired = HashSet::new();
+            for face in 0..6u8 {
+                subdivide_face(
+                    &mut desired,
+                    &resident,
+                    body_ent,
+                    face,
+                    0,
+                    0,
+                    0,
+                    camera_body_local,
+                    lod.radius_m,
+                    lod.max_lod,
+                    lod.lod_distance_factor,
+                );
+            }
+            tiles.desired = desired.clone();
+            tiles.last_selection_cam = Some(camera_body_local);
+            tiles.last_selection_handoff = handoff.cloned();
+            tiles.last_selection_resident_revision = tiles.resident_revision;
+            tiles.last_selection_lod_key = Some(lod_key);
+            desired
+        } else {
+            tiles.desired.clone()
+        };
 
         // Site DEM handoff is resolved by exact per-triangle clipping in the
         // globe mesh. Keep the quadtree cover intact: a tile's spherical
@@ -723,9 +765,8 @@ pub(crate) fn update_globe_lod(
         // coverage for retirement below), BUDGETED per frame by
         // `GlobeLodBudget`. Coarse-and-near first: a coarse tile covers the
         // most area (unblocks the most retirements), a near tile is what the
-        // viewer is looking at. Placement verbatim from the proven static
-        // path: mesh in body-local (tile_center = ZERO), entity anchored at the
-        // tile centre via the surface grid, reparented in place.
+        // viewer is looking at. Meshes are centre-relative and entities are
+        // anchored at their tile centre through the surface grid.
         let mut missing: HashSet<TileCoord> = desired
             .iter()
             .filter(|c| !tiles.resident.contains_key(c))
@@ -827,15 +868,9 @@ pub(crate) fn update_globe_lod(
                 fresh_bytes = fresh_bytes.saturating_add(tile_bytes);
                 handle
             };
-            // Atomic (ChildOf, CellCoord, Transform) — the authored grid-local
-            // pose IS the placement. `set_parent_in_place` here was the globe
-            // corruption: it OVERWRITES the child Transform from its current
-            // GlobalTransform, which at spawn is `default()` (never propagated),
-            // so every tile's placement was replaced with
-            // `identity.reparented_to(surface_grid_global)` — zero at startup
-            // (all tiles collapsed to the body centre = the long-standing
-            // "globe invisible" TODO above) and camera-distance garbage once
-            // the view moves (exploded tile shards from orbit).
+            // Atomic (ChildOf, CellCoord, Transform): the grid-local pose is
+            // authored at spawn, so no render-derived GlobalTransform is needed
+            // to establish the tile's BigSpace placement.
             let ent = commands
                 .spawn((
                     Mesh3d(mesh_handle),
@@ -883,6 +918,7 @@ pub(crate) fn update_globe_lod(
                 ))
                 .id();
             tiles.resident.insert(coord, ent);
+            tiles.resident_revision = tiles.resident_revision.wrapping_add(1);
         }
 
         let ready: HashSet<TileCoord> = tiles
@@ -915,6 +951,7 @@ pub(crate) fn update_globe_lod(
         // it in the same command batch that reveals the replacement, then keep
         // the hidden entity alive for two extraction turns before despawning.
         let mut newly_retired: Vec<(Entity, u8, TileCoord)> = Vec::new();
+        let resident_count = tiles.resident.len();
         tiles.resident.retain(|coord, ent| {
             if desired.contains(coord) || draw.contains(coord) {
                 return true;
@@ -928,6 +965,9 @@ pub(crate) fn update_globe_lod(
             newly_retired.push((*ent, 2, *coord));
             false
         });
+        if tiles.resident.len() != resident_count {
+            tiles.resident_revision = tiles.resident_revision.wrapping_add(1);
+        }
         tiles.retiring.extend(newly_retired);
         let mut despawned = 0usize;
         tiles.retiring.retain_mut(|(ent, frames, _coord)| {

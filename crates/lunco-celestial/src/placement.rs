@@ -540,9 +540,52 @@ fn stamp_low_precision_roots(
 /// cache keys on. `TerrainGeoref` is therefore the authoritative body selection
 /// for DEM-backed terrain. `SiteAnchor` only declares that the scene is mounted
 /// on a celestial surface; it does not select a terrain body.
-pub fn sync_terrain_body_curvature(
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TerrainCurvatureChangeTracker<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<GeodeticAnchor>,
+            Changed<SiteAnchor>,
+            Changed<lunco_terrain_surface::DemHeightField>,
+            Changed<lunco_terrain_surface::DemTerrainRequest>,
+            Changed<lunco_terrain_surface::TerrainGeoref>,
+            Changed<lunco_terrain_surface::FlatSiteSurface>,
+            Changed<crate::registry::CelestialBody>,
+            Changed<crate::globe_lod::GlobeLod>,
+        )>,
+    >,
+    removed_site: RemovedComponents<'w, 's, SiteAnchor>,
+    removed_anchor: RemovedComponents<'w, 's, GeodeticAnchor>,
+    removed_dem: RemovedComponents<'w, 's, lunco_terrain_surface::DemHeightField>,
+    removed_request: RemovedComponents<'w, 's, lunco_terrain_surface::DemTerrainRequest>,
+    removed_georef: RemovedComponents<'w, 's, lunco_terrain_surface::TerrainGeoref>,
+    removed_flat: RemovedComponents<'w, 's, lunco_terrain_surface::FlatSiteSurface>,
+    removed_body: RemovedComponents<'w, 's, crate::registry::CelestialBody>,
+    removed_lod: RemovedComponents<'w, 's, crate::globe_lod::GlobeLod>,
+}
+
+impl TerrainCurvatureChangeTracker<'_, '_> {
+    fn has_changes(&mut self) -> bool {
+        let removed = self.removed_site.read().count()
+            + self.removed_anchor.read().count()
+            + self.removed_dem.read().count()
+            + self.removed_request.read().count()
+            + self.removed_georef.read().count()
+            + self.removed_flat.read().count()
+            + self.removed_body.read().count()
+            + self.removed_lod.read().count();
+        !self.changed.is_empty() || removed > 0
+    }
+}
+
+pub(crate) fn sync_terrain_body_curvature(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
+    mut changes: TerrainCurvatureChangeTracker<'_, '_>,
+    mut initialized: Local<bool>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     current: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
     q_dem: Query<
@@ -564,6 +607,12 @@ pub fn sync_terrain_body_curvature(
     )>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
+    let inputs_changed = changes.has_changes();
+    if *initialized && !registry.is_changed() && !inputs_changed {
+        return;
+    }
+    *initialized = true;
+
     // The site anchor still places the scene on the globe (that IS its job, and it
     // is the scene root by intent) — it just no longer decides which BODY the
     // terrain curves to.

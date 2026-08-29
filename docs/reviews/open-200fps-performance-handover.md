@@ -300,6 +300,43 @@ separate dependency integration item.
 If the upstream API cannot express this cleanly, stop and document the required
 dependency change rather than maintaining a forked/shimmed path in the app.
 
+#### 2026-08-29 stable projection and LOD verification
+
+The USD branch now gates the remaining stable projection owners at their
+authoritative inputs. The Modelica document registry revision wakes engine sync
+while per-document generations decide actual parse/upsert work. Modelica and
+physics telemetry pace batch construction by authoritative solver/fixed time;
+the shared signal registry still owns channel history. Behavior target paths are
+cached per vessel, while target active-frame ancestry is checked separately.
+Celestial curvature tracks its input components, and globe LOD caches the pure
+desired leaf set separately from material readiness and bounded tile streaming.
+No duplicate propagation path or compatibility API was added.
+
+The focused checks passed:
+
+- `cargo test -p lunco-autopilot --lib -j 4`: **30/30**.
+- `cargo test -p lunco-modelica --lib -j 4`: **282 passed, 1 ignored**.
+- `cargo test -p lunco-usd-sim --lib -j 4`: **124/124**.
+- `cargo test -p lunco-celestial --lib -j 4`: **119/119**.
+- `cargo check -p lunco-usd-sim -j 4`: passed.
+- `cargo build -p lunco-luncosim --features tracy -j 4`: passed.
+
+The fresh Apollo High Tracy capture (`target/apollo-curvature-lod-cache-short-
+20260829.tracy`) ran for 8 seconds after readiness and was shut down through
+typed `Exit`; API port `4192` was verified closed. Post-warmup CPU samples were:
+
+| Owner | p50 | p90 | p99 | max |
+|---|---:|---:|---:|---:|
+| `globe_lod::update_globe_lod` | 0.004 ms | 0.039 ms | 0.071 ms | 0.121 ms |
+| `placement::sync_terrain_body_curvature` | 0.003 ms | 0.018 ms | 0.035 ms | 0.069 ms |
+| `drive_engine_sync` | 0.001 ms | 0.007 ms | 0.013 ms | 0.085 ms |
+| `resolve_behavior_targets` | 0.003 ms | 0.045 ms | 0.078 ms | 0.117 ms |
+
+The same trace shows the remaining budget in BigSpace validation,
+`prepare_preprocess_bind_groups`, workbench rendering, exposure publication,
+and the GPU/render path. This is profiler evidence, not clean FPS acceptance;
+the 200-FPS criterion remains open.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

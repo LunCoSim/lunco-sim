@@ -280,6 +280,10 @@ pub struct EngineSyncCursor {
     /// Document → last-seen generation. Absent entry means
     /// "never synced".
     last_synced: HashMap<DocumentId, u64>,
+    /// Last registry revision whose document set was scanned. Async parse
+    /// completions advance the registry revision through `mark_changed`, so
+    /// stale completions also reopen the scan.
+    registry_revision: u64,
 }
 
 /// UI-supplied pacing hints for the async parse scheduler in
@@ -389,6 +393,12 @@ pub fn drive_engine_sync(
                 "[EngineSync] async parse stale (parse_gen={parse_gen} doc_gen={host_gen}) — discarded for doc={}",
                 doc_id.raw(),
             );
+            if registry.host(doc_id).is_some() {
+                // The document still needs a fresh parse. Keep the normal
+                // generation cursor unchanged and wake the registry-level
+                // scan with the existing mutation signal.
+                registry.mark_changed(doc_id);
+            }
             continue;
         }
         match (parsed_ast, registry.host_mut(doc_id)) {
@@ -457,6 +467,15 @@ pub fn drive_engine_sync(
         }
     }
 
+    // Completed work above can mutate the registry and is therefore visible
+    // in this same tick. If neither the registry nor an async completion moved,
+    // the per-document cursor is authoritative and a full host walk is pure
+    // overhead on the render path.
+    let registry_revision = registry.revision();
+    if registry_revision == cursor.registry_revision {
+        return;
+    }
+
     // ── 2. Collect docs needing sync ──────────────────────────────────
     // For each doc whose generation has advanced past the cursor,
     // decide between sync fast-path (fresh strict AST already on doc)
@@ -502,6 +521,7 @@ pub fn drive_engine_sync(
         .collect();
 
     if to_upsert.is_empty() && removed.is_empty() {
+        cursor.registry_revision = registry_revision;
         return;
     }
 
@@ -740,6 +760,7 @@ pub fn drive_engine_sync(
             },
         );
     }
+    cursor.registry_revision = registry.revision();
 }
 
 /// Drain parse-done envelopes from the off-thread Web Worker and

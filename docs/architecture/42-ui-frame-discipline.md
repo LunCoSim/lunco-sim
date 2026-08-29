@@ -119,6 +119,17 @@ The same ownership rule applies to the measured presentation paths:
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
 
+The same rule applies below the UI boundary. The Modelica engine-sync pass is
+woken by the document registry revision and still compares document generations
+before dispatching work. Modelica and physics telemetry retain producer-owned
+model/fixed-time cursors while the shared signal registry remains the channel
+authority. Autopilot target paths are cached per behavior entity and invalidated
+by authored XML or active-frame ancestry changes. Celestial terrain curvature is
+reconciled only when its authoritative inputs change, and globe LOD caches the
+pure desired leaf selection separately from readiness and bounded tile
+streaming. These are owner-local cursors, not compatibility stores or alternate
+sources of truth.
+
 ## 4. How to decide
 Quick checklist before you write a `Update` system:
 

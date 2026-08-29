@@ -4406,47 +4406,66 @@ fn try_wire_wheel(
 /// is handed.
 ///
 /// Re-runs when a tree's XML changes, when any prim spawns, or while a previous
-/// projection is incomplete. Unresolved paths produce an explicitly empty
-/// binding set: the compiler then refuses the tree with a dangling target rather
-/// than driving to a guessed origin. The resolver retries until the composed
-/// prim exists; it never keeps a stale map as a compatibility fallback.
+/// projection is incomplete. Target paths are derived once per entity/XML
+/// change and cached in this resolver; the compiler owns the separate active-
+/// frame pose bake. Unresolved paths produce an explicitly empty binding set:
+/// the compiler then refuses the tree with a dangling target rather than
+/// driving to a guessed origin. The resolver retries until the composed prim
+/// exists; it never keeps a stale map as a compatibility fallback.
 fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,
-        &lunco_autopilot::usd_tree::BehaviorXml,
+        Ref<lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&UsdPrimPath>,
         Option<&lunco_autopilot::usd_tree::TargetBindings>,
     )>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_new_prims: Query<(), Added<UsdPrimPath>>,
-    q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
     q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    mut target_cache: Local<bevy::ecs::entity::EntityHashMap<Vec<String>>>,
     mut commands: Commands,
 ) {
-    let retry_incomplete = q_trees.iter().any(|(_, xml, _, bindings)| {
-        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
-        bindings.map_or(!targets.is_empty(), |bindings| {
+    let alive: bevy::ecs::entity::EntityHashSet = q_trees.iter().map(|(e, ..)| e).collect();
+    target_cache.retain(|vessel, _| alive.contains(vessel));
+    if q_trees.is_empty() {
+        return;
+    }
+    let mut xml_changed = false;
+    let mut retry_incomplete = false;
+    for (vessel, xml, _, bindings) in q_trees.iter() {
+        let targets = if xml.is_changed() || !target_cache.contains_key(&vessel) {
+            xml_changed = true;
+            let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
+            target_cache.insert(vessel, targets);
+            target_cache
+                .get(&vessel)
+                .expect("target cache entry inserted above")
+        } else {
+            target_cache
+                .get(&vessel)
+                .expect("target cache entry exists for unchanged XML")
+        };
+        if bindings.map_or(!targets.is_empty(), |bindings| {
             targets
                 .iter()
                 .any(|target| !bindings.0.contains_key(target))
-        })
-    });
-    if q_trees.is_empty()
-        || (q_new_prims.is_empty()
-            && q_changed_xml.is_empty()
-            && q_new_ids.is_empty()
-            && !retry_incomplete)
-    {
+        }) {
+            retry_incomplete = true;
+        }
+    }
+    if q_new_prims.is_empty() && !xml_changed && q_new_ids.is_empty() && !retry_incomplete {
         return;
     }
-    for (vessel, xml, vessel_path, current_bindings) in q_trees.iter() {
+    for (vessel, _xml, vessel_path, current_bindings) in q_trees.iter() {
         let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         let mut missing = false;
-        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
+        let targets = target_cache
+            .get(&vessel)
+            .expect("target cache entry exists after the change-detection pass");
         debug!(
             "[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}",
             vessel,
@@ -4456,7 +4475,7 @@ fn resolve_behavior_targets(
             targets.len(),
             targets
         );
-        for path in targets {
+        for path in targets.iter().cloned() {
             let valid_target = SdfPath::new(&path).is_ok_and(|target| {
                 target.is_abs()
                     && !target.is_property_path()
