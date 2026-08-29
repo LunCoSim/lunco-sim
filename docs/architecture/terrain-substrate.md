@@ -444,7 +444,8 @@ a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
 `TerrainStreamStatus` driving a status-bar progress indicator whose pending count
 includes selected meshes and the root fallback until `ShaderLookReady` confirms
 the shader layout and declared image dependencies; in-place image updates do not
-toggle that latch; **procedural
+toggle that latch, and a cached edge-stitch material variant preserves it when
+its own shader and image dependencies are already ready; **procedural
 over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
