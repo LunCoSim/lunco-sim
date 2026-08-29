@@ -331,7 +331,14 @@ the integrator state.
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
 2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-core/src/ports.rs:180` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
-4. **On-disk DAE artifact cache** *(future)* — `lunco-modelica/src/worker.rs:303` keeps a per-entity in-memory `CachedModel` (enables instant Reset, no recompile). The compiled DAE/state-space form is deterministic per source but **not persisted across runs** — cold-compile is minutes, warm-init ~10s. Extending `CachedModel` to write compiled blocks to a content-addressed disk artifact (key = source hash) via the §2 substrate would be the single largest *startup* win for model-heavy scenarios.
+4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica/src/worker.rs`
+   keeps the per-entity `CachedModel` for instant Reset and a worker-owned
+   structural artifact cache that shares immutable DAE compilation across
+   scene instances. The prepared live solve IR is reused by DAE identity in
+   RAM and persisted by structural source key plus library fingerprint, solver,
+   and parameter overrides. Generated USD wrapper names and runtime-root
+   identity are excluded from that key; authored source identity remains part
+   of it.
 
 **Static-scene shortcut (architectural):** the Moon scene is static terrain +
 slow sun + a few dynamic movers. Baked horizon shadows (§4.1) already cover
@@ -341,10 +348,11 @@ terrain self-shadowing; restrict real-time CSM to dynamic casters. Same
 ## 6. In-RAM memoization (existing, sound — leave alone)
 
 Terrain derived layers (disk), `LodMeshCache`/`LodMaterials` (RAM), rumoca
-session phase caches + MSL bincode bundle, per-entity `CachedModel` for Reset,
-Modelica icon/class/negative-resolution caches, USD generation-gated parse
-cache. The change-detection idiom (`Added<>`, marker `Without<>`) is sound and
-should be the template for new dirty-flags.
+session phase caches + MSL bincode bundle, the worker's shared DAE/prepared
+solve-IR caches, per-entity `CachedModel` for Reset, Modelica icon/class/
+negative-resolution caches, USD generation-gated parse cache. The
+change-detection idiom (`Added<>`, marker `Without<>`) is sound and should be
+the template for new dirty-flags.
 
 ## 7. What must NOT be cached / approximated (determinism firewall)
 

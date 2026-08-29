@@ -767,10 +767,10 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
     h.finish()
 }
 
-/// Stable cross-process identity for the solve-IR cache. It includes the
-/// complete authored source set and the worker library generation; unlike a
-/// Bevy entity or a Rumoca source id it is identical in a fresh recorder
-/// process.
+/// Stable cross-process identity for the solve-IR cache. It uses the same
+/// structural source identity as the in-process artifact cache and includes
+/// the worker library generation; unlike a Bevy entity or a Rumoca source id
+/// it is identical in a fresh recorder process.
 fn prepared_unit_hash(
     model_name: &str,
     doc_uri: &str,
@@ -779,26 +779,83 @@ fn prepared_unit_hash(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    compile_unit_hash(model_name, doc_uri, unit).hash(&mut h);
+    shared_source_hash(model_name, unit, doc_uri).hash(&mut h);
     library_gen.hash(&mut h);
+    h.finish()
+}
+
+const GENERATED_MODEL_MARKER: &str = "__LUNCO_GENERATED_MODEL__";
+const GENERATED_INSTANCE_MARKER: &str = "__LUNCO_GENERATED_INSTANCE__";
+
+/// Whether this is a generated USD wrapper whose root name is instance-local.
+fn is_generated_structural_unit(model_name: &str, unit: &CompileUnit, doc_uri: &str) -> bool {
+    doc_uri.starts_with("generated://") && unit.source.contains(model_name)
+}
+
+/// Remove only identity emitted by the generated USD wrapper.  The generated
+/// class name is instance-qualified for diagnostics, while the network title
+/// also contains a numeric runtime-root suffix.  Both identify the USD copy,
+/// not its equations; ordinary numeric Modelica literals remain part of the
+/// structural key.
+fn generated_structural_source(model_name: &str, source: &str) -> String {
+    let mut normalized = source.replace(model_name, GENERATED_MODEL_MARKER);
+    let Some(class_stem) = model_name.strip_suffix("_System") else {
+        return normalized;
+    };
+    let Some((_, instance_id)) = class_stem.rsplit_once("__") else {
+        return normalized;
+    };
+    if instance_id.is_empty() || !instance_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return normalized;
+    }
+    normalized = normalized.replace(instance_id, GENERATED_INSTANCE_MARKER);
+    normalized
+}
+
+/// Hash the source identity used by the cross-entity artifact and prepared
+/// solve-IR caches. Document URIs are attribution keys, not equation identity;
+/// generated instance names and their numeric network-title suffix are
+/// similarly excluded while all authored source text and sibling URIs remain
+/// part of the key.
+fn shared_source_hash(model_name: &str, unit: &CompileUnit, doc_uri: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if is_generated_structural_unit(model_name, unit, doc_uri) {
+        generated_structural_source(model_name, &unit.source).hash(&mut h);
+    } else {
+        model_name.hash(&mut h);
+        unit.source.hash(&mut h);
+    }
+    for (uri, text) in &unit.extras {
+        uri.hash(&mut h);
+        text.hash(&mut h);
+    }
     h.finish()
 }
 
 /// Stable key for a compiled DAE that can be shared by multiple scene
 /// participants.  The document URI is intentionally absent: it identifies
 /// the authoring document, not the Modelica equations.  Two USD instances
-/// with the same model name, assembled source, and library generation have
-/// the same compile artifact; their parameter bindings and live steppers are
-/// still created independently below.
-fn shared_compile_hash(model_name: &str, unit: &CompileUnit, library_gen: u64) -> u64 {
+/// with the same assembled equations have the same compile artifact, even
+/// when generated wrappers carry different instance-qualified names; their
+/// parameter bindings and live steppers are still created independently below.
+fn shared_compile_hash(
+    model_name: &str,
+    unit: &CompileUnit,
+    doc_uri: &str,
+    library_gen: u64,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    model_name.hash(&mut h);
-    unit.source.hash(&mut h);
-    for (uri, text) in &unit.extras {
-        uri.hash(&mut h);
-        text.hash(&mut h);
-    }
+    // Generated USD network wrappers carry a per-instance identity in their
+    // Modelica class name so diagnostics and document URIs stay attributable.
+    // That identity is not part of the equations, however: hashing it here
+    // defeats the cross-entity DAE cache and serially recompiles every copy of
+    // one rover. Keep authored documents keyed by their declared model name,
+    // while generated wrappers use the same structural source key after
+    // removing only their generated root identifier. Live steppers remain
+    // entity-local; only the immutable compiled DAE is shared.
+    shared_source_hash(model_name, unit, doc_uri).hash(&mut h);
     library_gen.hash(&mut h);
     h.finish()
 }
@@ -815,7 +872,13 @@ fn compile_shared(
     doc_uri: &str,
     library_gen: u64,
 ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-    let key = shared_compile_hash(model_name, unit, library_gen);
+    let key = shared_compile_hash(model_name, unit, doc_uri, library_gen);
+    let generated = is_generated_structural_unit(model_name, unit, doc_uri);
+    log::debug!(
+        "[worker] shared artifact lookup model=`{model_name}` doc=`{doc_uri}` generated={generated} source_bytes={} cache_entries={}",
+        unit.source.len(),
+        artifacts.len(),
+    );
     if let Some(compiled) = artifacts.get(&key) {
         log::debug!("[worker] shared Modelica artifact hit for `{model_name}` (key={key})");
         return Ok(compiled.clone());
@@ -4831,9 +4894,14 @@ mod artifact_cache_tests {
         compile_unit_hash(model, uri, &unit)
     }
 
-    fn shared_hash_of(model: &str, source: &str, extras: Vec<(String, String)>) -> u64 {
+    fn shared_hash_of(model: &str, source: &str, uri: &str, extras: Vec<(String, String)>) -> u64 {
         let unit = assemble_compile_unit(source, extras);
-        shared_compile_hash(model, &unit, 4)
+        shared_compile_hash(model, &unit, uri, 4)
+    }
+
+    fn prepared_hash_of(model: &str, source: &str, uri: &str) -> u64 {
+        let unit = assemble_compile_unit(source, Vec::new());
+        prepared_unit_hash(model, uri, &unit, 4)
     }
 
     /// The hash keys the whole assembled CompileUnit: primary source, extras,
@@ -4880,16 +4948,49 @@ mod artifact_cache_tests {
     #[test]
     fn shared_hash_is_instance_independent() {
         assert_eq!(
-            shared_hash_of("M", "model M end M;", Vec::new()),
-            shared_hash_of("M", "model M end M;", Vec::new())
+            shared_hash_of("M", "model M end M;", "doc.mo", Vec::new()),
+            shared_hash_of("M", "model M end M;", "doc.mo", Vec::new())
         );
         assert_ne!(
-            shared_hash_of("M", "model M end M;", Vec::new()),
-            shared_hash_of("M2", "model M end M;", Vec::new())
+            shared_hash_of("M", "model M end M;", "doc.mo", Vec::new()),
+            shared_hash_of("M2", "model M end M;", "doc.mo", Vec::new())
         );
         assert_ne!(
-            shared_hash_of("M", "model M end M;", Vec::new()),
-            shared_hash_of("M", "model M Real x; end M;", Vec::new())
+            shared_hash_of("M", "model M end M;", "doc.mo", Vec::new()),
+            shared_hash_of("M", "model M Real x; end M;", "doc.mo", Vec::new())
+        );
+    }
+
+    #[test]
+    fn generated_shared_hash_ignores_instance_root_identity() {
+        let first = shared_hash_of(
+            "Traverse_x2f_rocker__bogie__101_System",
+            "model Traverse_x2f_rocker__bogie__101_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
+            "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+            Vec::new(),
+        );
+        let second = shared_hash_of(
+            "Traverse_x2f_rocker__bogie__202_System",
+            "model Traverse_x2f_rocker__bogie__202_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
+            "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+            Vec::new(),
+        );
+        assert_eq!(
+            first, second,
+            "generated instance identity must not defeat structural DAE reuse"
+        );
+        assert_eq!(
+            prepared_hash_of(
+                "Traverse_x2f_rocker__bogie__101_System",
+                "model Traverse_x2f_rocker__bogie__101_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
+                "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+            ),
+            prepared_hash_of(
+                "Traverse_x2f_rocker__bogie__202_System",
+                "model Traverse_x2f_rocker__bogie__202_System\n  input Real throttle;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
+                "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+            ),
+            "generated instance identity must not defeat persistent solve-IR reuse"
         );
     }
 

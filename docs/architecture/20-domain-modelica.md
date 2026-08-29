@@ -204,6 +204,12 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 - `ModelicaResult { entity, session_id, outputs, variables, error, ... }`
   — returned after each command
 
+The worker shares immutable compiled DAE artifacts across participants whose
+assembled equations are structurally identical. Generated USD wrappers keep
+instance-qualified names for diagnostics, but those names and their runtime
+root suffix are excluded from the structural cache key. Parameter bindings,
+solver instances, live state, and telemetry remain per entity.
+
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
 
