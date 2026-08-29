@@ -144,6 +144,7 @@ pub fn attach_site_scene_to_surface_grid(
         ),
     >,
     grid_config: Res<lunco_core::WorldGridConfig>,
+    q_world_grid: Query<(), With<lunco_core::WorldGrid>>,
     active_physics_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     mut commands: Commands,
 ) {
@@ -204,14 +205,30 @@ pub fn attach_site_scene_to_surface_grid(
         commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
     }
 
-    // Move the avatar into the same site grid. The conversion is
-    // relative to the root sampled above; ancestor translation/rotation cancels
-    // and no body-fixed vector is ever mistaken for ENU.
+    // Bootstrap an avatar that is still mounted in the loader's world shell or
+    // has not reached a BigSpace grid yet. Once a camera system has migrated it
+    // to any valid BigSpace grid, that camera system owns the frame handoff. In
+    // particular, the orbital camera deliberately lives in the body's
+    // EclipticJ2000 grid; reclaiming it here would fight `orbit_system` on the
+    // next celestial solve and dirty the entire high-precision propagation tree.
+    // The site placement owner must never infer a camera mode or write over a
+    // valid camera-owned frame.
+    //
+    // The conversion for the bootstrap case is relative to the root sampled
+    // above; ancestor translation/rotation cancels and no body-fixed vector is
+    // ever mistaken for ENU.
     for (avatar, _avatar_transform, _avatar_cell, avatar_child) in &q_avatars {
         if avatar_child.parent() == scene_root {
             commands
                 .entity(avatar)
                 .try_insert(lunco_environment::GravityBody { body_entity });
+            continue;
+        }
+
+        let current_parent = avatar_child.parent();
+        let is_world_shell = q_world_grid.get(current_parent).is_ok();
+        let is_valid_grid = q_grids.get(current_parent).is_ok();
+        if is_valid_grid && !is_world_shell {
             continue;
         }
 
@@ -959,6 +976,7 @@ mod tests {
             .spawn((
                 lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
+                lunco_core::WorldGrid,
             ))
             .id();
         let body_fixed_grid = app
@@ -1070,5 +1088,104 @@ mod tests {
         assert_eq!(*world.get::<Transform>(site).unwrap(), site_transform);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), avatar_cell);
         assert_eq!(*world.get::<Transform>(avatar).unwrap(), avatar_transform);
+    }
+
+    #[test]
+    fn site_placement_does_not_reclaim_a_camera_owned_grid() {
+        let mut app = App::new();
+        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.add_systems(Update, attach_site_scene_to_surface_grid);
+
+        let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
+        let body_fixed_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let surface_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(body_fixed_grid),
+            ))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                crate::CelestialBody {
+                    name: "Moon".into(),
+                    ephemeris_id: crate::ephemeris_id::MOON,
+                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                },
+                crate::globe_lod::GlobeLod {
+                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    surface_grid,
+                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                    res: 8,
+                    max_lod: 1,
+                    lod_distance_factor: 1.0,
+                },
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                SiteAnchor,
+                GeodeticAnchor {
+                    body: crate::ephemeris_id::MOON,
+                    geodetic: Geodetic::new(25.28, 307.60, 0.0),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                lunco_core::WorldGridConfig::default().grid(),
+                ChildOf(surface_grid),
+            ))
+            .id();
+        let camera_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(body_fixed_grid),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                CellCoord::ZERO,
+                Transform::from_xyz(10.0, 20.0, -30.0),
+                GlobalTransform::default(),
+                ChildOf(camera_grid),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ChildOf>(avatar).unwrap().parent(),
+            camera_grid
+        );
+        assert!(app
+            .world()
+            .get::<lunco_environment::GravityBody>(avatar)
+            .is_none());
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            site
+        );
+        assert!(app.world().get::<crate::CelestialBody>(body).is_some());
+        assert!(app
+            .world()
+            .get::<lunco_core::WorldGrid>(world_grid)
+            .is_some());
     }
 }

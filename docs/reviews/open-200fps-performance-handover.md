@@ -191,12 +191,13 @@ real scene. The camera owner now compares values before assignment in the USD
 checkout. This removes false dirty propagation while preserving every actual
 camera movement.
 
-The dependency-side fix is still required for clean scenes and for any future
-scene with a genuinely moving producer: `propagate_high_precision_channeled`
-must return before `ComputeTaskPool::scope` when no queried high-precision child
-belongs to a dirty grid or a grid whose local floating origin moved. A dedicated
-BigSpace worktree contains that owner-level patch; it was not copied into the
-Cargo cache or added as an application shim.
+The dependency-side experiment is not part of the application contract. It was
+never selected by Cargo and did not address the Apollo symptom: the real cause
+was the application placement owner reclaiming a camera-owned grid. The
+canonical fix is therefore at that owner boundary; no local BigSpace fork or
+application shim is retained. Future generic propagation optimization belongs
+upstream in BigSpace and must be adopted only after an upstream revision is
+available and measured against the same production scene.
 
 #### 2026-08-28 verification after source-owner fixes
 
@@ -222,14 +223,9 @@ Cargo cache or added as an application shim.
   window after the other session is closed.
 - Typed API `Exit` returned `accepted=true`; the close flow reported no dirty
   documents, and both the owned process and port `4133` were verified gone.
-- The dedicated BigSpace owner worktree
-  (`perf/no-idle-high-precision-scope`) now passes
-  `rustup run nightly-2026-02-27 cargo test --lib --offline -j 4` **41/41**,
-  including `clean_grid_does_not_need_high_precision_propagation`. The owner
-  patch checks the floating-origin/dirty-tick state and actual high-precision
-  children before opening the worker scope. It remains to be reviewed and
-  integrated by the BigSpace dependency owner; the app stays pinned to
-  `5f255228e9b4…` until that integration exists.
+- The discarded local BigSpace propagation experiment was removed. The app
+  remains pinned to the reviewed upstream Bevy 0.19 revision
+  `5f255228e9b4…`; no unintegrated dependency code is used or retained.
 
 #### 2026-08-29 app-side camera contract verification
 
@@ -294,8 +290,8 @@ Apollo Traverse scene on API port `4133`:
 
 This runtime was a behavior check, not 200-FPS acceptance: observed on-screen
 values varied with active machine load and remained below the 200 FPS / 5 ms
-target. The BigSpace owner-level no-idle propagation patch therefore remains a
-separate dependency integration item.
+target. The remaining performance work must be measured at the actual render
+and application owners; there is no local dependency fork to carry forward.
 
 If the upstream API cannot express this cleanly, stop and document the required
 dependency change rather than maintaining a forked/shimmed path in the app.
@@ -356,17 +352,12 @@ tail varied from approximately **14.6–39.3 ms** per frame (roughly **25–70
 FPS** in the sampled tail). It is therefore runtime evidence that the
 production path works, not 200-FPS acceptance.
 
-The dependency-owner change is now committed in the dedicated BigSpace
-worktree as `564bac3` (`perf: skip idle high precision propagation`). It gates
-the channeled high-precision path before opening the worker scope, using the
-existing floating-origin, `GridDirtyTick`, and high-precision-child queries.
-Its production-path regression test uses an actual BigSpace hierarchy and
-asserts that stable-frame `PropagationStats` remains zero;
-`rustup run nightly-2026-02-27 cargo test --lib --offline -j 4` passes **41/41**.
-The commit is not copied into Cargo's git cache or the application checkout:
-it requires integration by the maintained BigSpace dependency owner. The app
-remains correctly pinned to `5f255228e9b4…` until that upstream integration is
-available.
+The isolated BigSpace propagation experiment was not adopted and has been
+deleted. Cargo still resolves the app to the reviewed upstream Bevy 0.19
+revision `5f255228e9b4…`; the application contains no fork, alias, or alternate
+propagation path. The measured Apollo issue was fixed at its actual owner in
+the application: site placement now bootstraps only a world-shell avatar and
+never reclaims a valid camera-owned BigSpace grid.
 
 Subsequent local A/B runs were not acceptance data because a separate
 user-owned luncosim session on API port `4139` was active; that process and its
