@@ -278,9 +278,9 @@ impl HelpAnchors {
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
 pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use twin_browser::{
-    BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
-    FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
-    TWIN_BROWSER_PANEL_ID,
+    BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
+    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
+    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
 };
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
@@ -960,6 +960,7 @@ impl Plugin for WorkbenchPlugin {
             // by `WorkspacePlugin` above), not a panel-local resource.
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
+            .init_resource::<BrowserQuery>()
             .init_resource::<UnsavedDocs>()
             .init_resource::<EditorTabs<source_viewer::SourceTabState>>()
             .init_resource::<source_viewer::PendingSourceRequests>()
@@ -974,6 +975,7 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
+            .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_systems(
                 Update,
                 (drain_pending_tab_requests, drain_pending_layout_requests).chain(),

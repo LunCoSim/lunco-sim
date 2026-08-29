@@ -53,6 +53,57 @@ pub use library_section::LuncoLibrarySection;
 /// Stable id of the Twin Browser singleton panel.
 pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser");
 
+/// Shared transient filter for the Twin and Files browser panels.
+///
+/// The workbench owns the query because it is presentation state, while each
+/// domain section decides which of its authoritative rows match. Keeping the
+/// query here means a search survives switching between the Twin and Files
+/// tabs without introducing a second per-domain browser model.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BrowserQuery {
+    /// Text entered in the browser filter. Empty or whitespace-only means no
+    /// filtering.
+    pub text: String,
+}
+
+impl BrowserQuery {
+    /// Whether this query hides non-matching rows.
+    pub fn is_active(&self) -> bool {
+        !self.text.trim().is_empty()
+    }
+
+    /// Case-insensitive substring match against a display label or path.
+    pub fn matches(&self, value: &str) -> bool {
+        let needle = self.text.trim();
+        needle.is_empty() || value.to_lowercase().contains(&needle.to_lowercase())
+    }
+}
+
+/// Paint the common browser search control and queue the changed query as a
+/// panel intent. The panel never mutates [`BrowserQuery`] during egui paint.
+pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    let mut query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
+    let original = query.text.clone();
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Find").strong());
+        ui.add(
+            egui::TextEdit::singleline(&mut query.text)
+                .hint_text("names, paths, or types")
+                .desired_width(160.0),
+        );
+        if !query.text.trim().is_empty()
+            && crate::icon_button(ui, crate::UiIcon::Close, "Clear browser filter").clicked()
+        {
+            query.text.clear();
+        }
+    });
+
+    if query.text != original {
+        ctx.set_resource(query);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Browser scope (Models / Files tab toggle)
 // ─────────────────────────────────────────────────────────────────────
@@ -193,6 +244,13 @@ impl BrowserSectionRegistry {
     /// is safe.
     pub fn section_mut(&mut self, index: usize) -> &mut dyn BrowserSection {
         &mut *self.sections[index]
+    }
+
+    /// Forward Twin lifecycle cleanup to every registered section.
+    pub fn on_twin_closed(&mut self, event: &lunco_workspace::TwinClosed) {
+        for section in &mut self.sections {
+            section.on_twin_closed(event);
+        }
     }
 }
 
@@ -412,6 +470,14 @@ pub trait BrowserSection: Send + Sync + 'static {
         0
     }
 
+    /// Clear transient row state when a Twin is closed.
+    ///
+    /// Sections normally keep only presentation caches, but an inline rename
+    /// or selection can carry a path/document identity. The workbench calls
+    /// this lifecycle hook so that state cannot attach itself to a replacement
+    /// Twin with the same name or path.
+    fn on_twin_closed(&mut self, _event: &lunco_workspace::TwinClosed) {}
+
     /// Paint the section body.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>);
 }
@@ -443,6 +509,8 @@ impl Panel for TwinBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        render_search_bar(ui, ctx);
+        ui.separator();
         // Scope the section registry + action outbox out of the world for
         // the duration of the render (the narrow, structural way to get
         // `&mut` to the registry's trait objects — no raw `&mut World`).
@@ -502,6 +570,25 @@ impl Panel for TwinBrowserPanel {
     }
 }
 
+/// Notify browser sections and clear the shared filter when the active Twin is
+/// replaced. Non-active Twin closure must not disturb navigation in the Twin
+/// the user is still working in.
+pub(crate) fn clear_browser_state_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    query: Option<ResMut<BrowserQuery>>,
+    registry: Option<ResMut<BrowserSectionRegistry>>,
+) {
+    let event = trigger.event();
+    if event.was_active {
+        if let Some(mut query) = query {
+            query.text.clear();
+        }
+    }
+    if let Some(mut registry) = registry {
+        registry.on_twin_closed(event);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────
@@ -522,6 +609,27 @@ mod tests {
         }
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut BrowserCtx<'_, '_>) {
             self.render_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct LifecycleProbe {
+        closed_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl BrowserSection for LifecycleProbe {
+        fn id(&self) -> &str {
+            "test.lifecycle"
+        }
+
+        fn title(&self) -> &str {
+            "Lifecycle"
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut BrowserCtx<'_, '_>) {}
+
+        fn on_twin_closed(&mut self, _event: &lunco_workspace::TwinClosed) {
+            self.closed_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
@@ -551,5 +659,54 @@ mod tests {
         let drained = a.drain();
         assert_eq!(drained.len(), 2);
         assert!(a.drain().is_empty());
+    }
+
+    #[test]
+    fn browser_query_is_case_insensitive_and_ignores_outer_whitespace() {
+        let query = BrowserQuery {
+            text: "  rocker  ".into(),
+        };
+        assert!(query.is_active());
+        assert!(query.matches("Rocker-Bogie"));
+        assert!(!query.matches("Lander"));
+    }
+
+    #[test]
+    fn empty_browser_query_matches_everything() {
+        let query = BrowserQuery::default();
+        assert!(!query.is_active());
+        assert!(query.matches("any authored path"));
+    }
+
+    #[test]
+    fn active_twin_close_clears_query_and_notifies_sections() {
+        let closed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut app = App::new();
+        app.insert_resource(BrowserQuery {
+            text: "stale navigation".into(),
+        });
+        let mut registry = BrowserSectionRegistry::default();
+        registry.register(LifecycleProbe {
+            closed_count: closed_count.clone(),
+        });
+        app.insert_resource(registry);
+        app.add_observer(clear_browser_state_on_twin_closed);
+
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: std::path::PathBuf::from("/outgoing"),
+            was_active: true,
+        });
+        assert!(app.world().resource::<BrowserQuery>().text.is_empty());
+        assert_eq!(closed_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        app.world_mut().resource_mut::<BrowserQuery>().text = "keep".into();
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(2),
+            root: std::path::PathBuf::from("/other"),
+            was_active: false,
+        });
+        assert_eq!(app.world().resource::<BrowserQuery>().text, "keep");
+        assert_eq!(closed_count.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

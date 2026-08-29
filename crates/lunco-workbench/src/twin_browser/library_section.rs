@@ -108,7 +108,26 @@ impl BrowserSection for LuncoLibrarySection {
             .map(|scene| scene.0.clone())
             .unwrap_or_default();
         let mut clicked = None;
-        render_dir(&self.tree, Path::new(""), &loaded_name, &mut clicked, ui);
+        let query = ctx
+            .resource::<super::BrowserQuery>()
+            .cloned()
+            .unwrap_or_default();
+        let visible = render_dir(
+            &self.tree,
+            Path::new(""),
+            &loaded_name,
+            &query,
+            false,
+            &mut clicked,
+            ui,
+        );
+        if !visible {
+            ui.label(
+                egui::RichText::new("No library items match.")
+                    .weak()
+                    .italics(),
+            );
+        }
         if let Some(asset_path) = clicked {
             ctx.trigger(OpenSourceView { asset_path });
         }
@@ -119,17 +138,45 @@ fn render_dir(
     node: &PathTree<LibraryEntry>,
     prefix: &Path,
     loaded_name: &str,
+    query: &super::BrowserQuery,
+    ancestor_matches: bool,
     clicked: &mut Option<String>,
     ui: &mut egui::Ui,
-) {
+) -> bool {
+    let mut visible = false;
     for (directory, child) in &node.subdirs {
         let rel = prefix.join(directory);
+        let directory_matches = ancestor_matches || query.matches(directory);
+        if query.is_active() && !directory_matches && !tree_matches(child, query) {
+            continue;
+        }
+        visible = true;
         egui::CollapsingHeader::new(directory)
             .id_salt(("library_dir", &rel))
             .default_open(false)
-            .show(ui, |ui| render_dir(child, &rel, loaded_name, clicked, ui));
+            .open(query.is_active().then_some(true))
+            .show(ui, |ui| {
+                render_dir(
+                    child,
+                    &rel,
+                    loaded_name,
+                    query,
+                    directory_matches,
+                    clicked,
+                    ui,
+                )
+            });
     }
     for asset in &node.files {
+        if query.is_active()
+            && !ancestor_matches
+            && !query.matches(&asset.file_name)
+            && !query.matches(&asset.stem)
+            && !query.matches(&asset.rel.to_string_lossy())
+        {
+            continue;
+        }
+        visible = true;
         let is_loaded = asset.rel.extension().is_some_and(|ext| ext == "usda")
             && !loaded_name.is_empty()
             && (asset.stem == loaded_name
@@ -146,4 +193,16 @@ fn render_dir(
             *clicked = Some(asset.asset_path.clone());
         }
     }
+    visible
+}
+
+fn tree_matches(node: &PathTree<LibraryEntry>, query: &super::BrowserQuery) -> bool {
+    node.files.iter().any(|asset| {
+        query.matches(&asset.file_name)
+            || query.matches(&asset.stem)
+            || query.matches(&asset.rel.to_string_lossy())
+    }) || node
+        .subdirs
+        .iter()
+        .any(|(directory, child)| query.matches(directory) || tree_matches(child, query))
 }

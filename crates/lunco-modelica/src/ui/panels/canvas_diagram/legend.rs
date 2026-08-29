@@ -23,7 +23,10 @@ struct LegendEntry {
 }
 
 /// Paint a legend for the connection styles used by `scene`.
-pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene) {
+pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges: bool) {
+    if !show_edges {
+        return;
+    }
     let mut entries = BTreeMap::<String, LegendEntry>::new();
     for (_, edge) in scene.edges() {
         if edge.kind != "modelica.connection" {

@@ -32,6 +32,12 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`, the in-house replacement for the old external `bevy_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
+transient search field. Sections filter their own authoritative view-models by
+human-readable names/paths, retain matching ancestors, and emit the existing
+typed navigation actions. Do not add a per-domain search resource or make the
+browser search generated ids.
+
 Project-owned settings are not user-global settings: read the active Twin's
 manifest through the workspace resource and emit a typed event for changes.
 For the missing-asset consent flow, the popup's unchecked negative checkbox
@@ -77,6 +83,12 @@ HTML/CSS surfaces; do not create a hybrid shim for one widget. The
 `lunco-ui::modal` host is the canonical owner of queued modal outcomes,
 scrim, focus, Esc dismissal, and typed `CloseModal` dispatch; HUI does not yet
 supply those dialog semantics or checkbox/input state events.
+
+The Modelica diagram's `Show nets` toggle is a workbench/egui presentation
+setting stored on the per-tab `lunco-canvas::Canvas`. It hides rendered and
+interactive connection edges without changing authored topology. Keep this
+dynamic graph control in the canvas panel; HUI/Rhai does not provide the
+dynamic list and graph-state contract it would require.
 
 ## Adding a Panel
 

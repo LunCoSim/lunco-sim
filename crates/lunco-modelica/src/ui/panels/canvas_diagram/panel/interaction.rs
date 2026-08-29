@@ -25,6 +25,25 @@ pub(crate) fn handle_context_menu(
     let popup_was_open_before = egui::Popup::is_any_open(ui.ctx());
     let mut suppress_menu = tab_read_only;
 
+    // A menu opened on a wire must not survive switching the wire layer off.
+    // Clear only our cached edge target; the scene edge itself remains
+    // authored and will be available again when nets are shown.
+    let hidden_edge_menu = {
+        let docstate = state.get_for_render(render_tab_id, active_doc);
+        !docstate.canvas.show_edges
+            && matches!(
+                docstate.context_menu.as_ref().map(|menu| &menu.target),
+                Some(ContextMenuTarget::Edge(..))
+            )
+    };
+    if hidden_edge_menu {
+        egui::Popup::close_all(ui.ctx());
+        state
+            .get_mut_for_render(render_tab_id, active_doc)
+            .context_menu = None;
+        suppress_menu = true;
+    }
+
     if tab_read_only {
         let our_menu_cached = state
             .get_for_render(render_tab_id, active_doc)
@@ -66,10 +85,14 @@ pub(crate) fn handle_context_menu(
                         .viewport
                         .screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
                     let hit_node = docstate.canvas.scene.hit_node(world_pos, 6.0);
-                    let hit_edge = docstate
-                        .canvas
-                        .scene
-                        .hit_edge_kind(world_pos, 4.0, true, 5.0);
+                    let hit_edge = if docstate.canvas.show_edges {
+                        docstate
+                            .canvas
+                            .scene
+                            .hit_edge_kind(world_pos, 4.0, true, 5.0)
+                    } else {
+                        None
+                    };
                     let target = match (hit_node, hit_edge) {
                         (Some((id, _)), _) => ContextMenuTarget::Node(id),
                         (_, Some((id, kind))) => ContextMenuTarget::Edge(id, kind),

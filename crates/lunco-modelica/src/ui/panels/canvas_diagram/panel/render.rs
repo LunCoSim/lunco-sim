@@ -39,6 +39,12 @@ pub(crate) fn render_diagram_canvas(
     stash_snapshots(ui.ctx(), ctx, doc_id, target_unit_instance.as_deref());
     mark("snapshots+sigreg", &mut phase_t, &mut state.phase_log);
 
+    {
+        let docstate = state.get_mut_for_render(render_tab_id, active_doc);
+        ui.checkbox(&mut docstate.canvas.show_edges, "Show nets")
+            .on_hover_text("Show or hide connection nets without changing the authored diagram");
+    }
+
     let (response, events) = {
         let docstate = state.get_mut_for_render(render_tab_id, active_doc);
         docstate.canvas.read_only = tab_read_only;
@@ -55,7 +61,11 @@ pub(crate) fn render_diagram_canvas(
     // just rendered. It is non-interactive and therefore leaves all canvas
     // navigation, selection, and wire-hover input on the underlying widget.
     let scene = &state.get_for_render(render_tab_id, active_doc).canvas.scene;
-    super::super::legend::render(ui, response.rect, scene);
+    let show_edges = state
+        .get_for_render(render_tab_id, active_doc)
+        .canvas
+        .show_edges;
+    super::super::legend::render(ui, response.rect, scene, show_edges);
 
     // Fit only after Canvas::ui has allocated its real response rectangle.
     // This is shared by initial projection, explicit FitCanvas, and

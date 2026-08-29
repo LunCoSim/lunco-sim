@@ -131,7 +131,16 @@ impl BrowserSection for FilesSection {
         200
     }
 
+    fn on_twin_closed(&mut self, _event: &lunco_workspace::TwinClosed) {
+        self.rename = None;
+        self.rename_doc = None;
+    }
+
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
+        let query = ctx
+            .resource::<super::BrowserQuery>()
+            .cloned()
+            .unwrap_or_default();
         // Render workspace documents (saved + unsaved) so the list
         // stays stable across Save — a Save shouldn't make a doc
         // disappear from the user's view of "what am I working on."
@@ -162,7 +171,11 @@ impl BrowserSection for FilesSection {
         let mut doc_cancel = false;
         let mut doc_close: Option<lunco_doc::DocumentId> = None;
 
-        for entry in &docs {
+        for entry in docs.iter().filter(|entry| {
+            !query.is_active()
+                || query.matches(&display_name_with_ext(entry))
+                || query.matches(&entry.kind)
+        }) {
             let in_rename = self
                 .rename_doc
                 .as_ref()
@@ -363,9 +376,22 @@ impl BrowserSection for FilesSection {
                 .id_salt(("twin_browser_folder", salt.clone()))
                 .default_open(true)
                 .show(ui, |ui| {
-                    let files = twin.files();
+                    let files: Vec<lunco_twin::FileEntry> = twin
+                        .files()
+                        .iter()
+                        .filter(|file| {
+                            !query.is_active()
+                                || query.matches(&file.relative_path.to_string_lossy())
+                        })
+                        .cloned()
+                        .collect();
                     if files.is_empty() {
-                        ui.label(egui::RichText::new("(empty)").weak().italics().small());
+                        let message = if query.is_active() {
+                            "No matching files."
+                        } else {
+                            "(empty)"
+                        };
+                        ui.label(egui::RichText::new(message).weak().italics().small());
                         return;
                     }
                     // Render the directory tree DIRECTLY — no inner
@@ -378,7 +404,7 @@ impl BrowserSection for FilesSection {
                     // scrollbar — "tons of files but can't see them".
                     // Closed CollapsingHeaders still skip their contents,
                     // so render cost scales with *expanded* entries.
-                    let tree = build_tree(files);
+                    let tree = build_tree(&files);
                     render_dir(
                         &tree,
                         std::path::Path::new(""),

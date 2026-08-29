@@ -69,6 +69,8 @@ it with this one.
   compatibility branches, duplicated logic, stale comments, and stale docs.
   Update all APIs and call sites together. If a required capability is missing,
   implement it at its authoritative owner or report the blocker explicitly.
+- Comments must describe the code as it stands. Do not describe discarded
+  approaches, previous solutions, or missing capabilities.
 
 ## Coding guide
 

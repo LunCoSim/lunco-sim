@@ -34,7 +34,7 @@ use crate::event::{InputEvent, Modifiers, MouseButton, SceneEvent};
 use crate::layer::{EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer};
 use crate::overlay::Overlay;
 use crate::scene::{Pos, Rect, Scene};
-use crate::selection::Selection;
+use crate::selection::{SelectItem, Selection};
 pub use crate::tool::SnapSettings;
 use crate::tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};
 use crate::viewport::Viewport;
@@ -83,6 +83,11 @@ pub struct Canvas {
     /// to a Settings toggle).
     pub snap: Option<SnapSettings>,
 
+    /// Show authored scene edges in the render and interaction passes.
+    /// This is transient presentation state: hiding edges never removes
+    /// or changes the scene topology.
+    pub show_edges: bool,
+
     /// Input events are transient and bounded by the number of pointer/key
     /// signals egui can report in one frame. Retain the buffer and keep the
     /// common no-heap path on the stack instead of allocating a fresh vector
@@ -113,6 +118,7 @@ impl Canvas {
             last_pointer_screen: None,
             read_only: false,
             snap: None,
+            show_edges: true,
             input_events: SmallVec::new(),
         }
     }
@@ -124,6 +130,19 @@ impl Canvas {
     pub fn ui(&mut self, ui: &mut egui::Ui) -> (egui::Response, Vec<SceneEvent>) {
         let mut events: Vec<SceneEvent> = Vec::new();
         self.input_events.clear();
+
+        // A view toggle can be changed while an edge is selected. Remove
+        // that stale selection before tools or layers observe the frame so
+        // invisible edges cannot be deleted, dragged, or left highlighted.
+        if !self.show_edges {
+            let hidden_edges: Vec<_> = self.selection.edges().into_iter().collect();
+            if !hidden_edges.is_empty() {
+                for id in hidden_edges {
+                    self.selection.remove(SelectItem::Edge(id));
+                }
+                events.push(SceneEvent::SelectionChanged(self.selection.clone()));
+            }
+        }
 
         // `Sense::click_and_drag()` covers primary interactions;
         // `| Sense::click()` adds secondary-click detection so egui
@@ -407,6 +426,7 @@ impl Canvas {
                     events: &mut events,
                     read_only: self.read_only,
                     snap: self.snap,
+                    show_edges: self.show_edges,
                 };
                 self.tool.handle(&ev, &mut ops)
             };
@@ -426,6 +446,7 @@ impl Canvas {
                 events: &mut events,
                 read_only: self.read_only,
                 snap: self.snap,
+                show_edges: self.show_edges,
             };
             self.tool.tick(&mut ops, dt);
         }
@@ -469,6 +490,7 @@ impl Canvas {
                     viewport: &self.viewport,
                     screen_rect,
                     time,
+                    show_edges: self.show_edges,
                     extras: &preview,
                 };
                 layer.draw(&mut ctx, &self.scene, &self.selection);

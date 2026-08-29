@@ -335,6 +335,26 @@ ships `FilesPanel`, `TwinBrowserPanel`, and `FilesSection`, but
 nothing Modelica-specific. Adding USD/SysML/Julia is one new
 section per domain, no central edits.
 
+### 5b. Shared browser search
+
+Both navigation panels expose one transient `BrowserQuery` owned by the
+workbench. The query is presentation state, so domain sections do not keep
+parallel search resources or parse source during paint. Each section applies
+the same case-insensitive substring contract to its own authoritative display
+names, qualified paths, and authored file paths:
+
+- a matching leaf keeps its authored parents visible and open while filtering;
+- a matching parent keeps that parent's complete authored subtree available;
+- generated ids are routing details, not the primary search or display label;
+- an empty result is explicit, not an apparently empty or collapsed tree;
+- the active query and transient row state are cleared on the active `TwinClosed`
+  edge, so a replacement Twin cannot inherit stale navigation state.
+
+The workbench owns only the field and the search affordance. USD, Modelica,
+scene-closure, library, and raw-file sections remain responsible for their
+own loading/error/empty rows and for emitting the existing typed navigation
+actions.
+
 ### Panels as Document Views
 
 Per the Document System design

@@ -3,6 +3,7 @@
 use crate::package_tree::types::PackageNode;
 use crate::state::ModelLibrary;
 use bevy_egui::egui;
+use lunco_workbench::BrowserQuery;
 
 #[derive(Clone)]
 pub(super) enum PackageAction {
@@ -27,6 +28,8 @@ pub(crate) fn render_node_single_ro(
     _depth: usize,
     load_out: &mut Vec<(String, String)>,
     theme: &lunco_theme::Theme,
+    query: &BrowserQuery,
+    ancestor_matches: bool,
 ) -> Option<PackageAction> {
     let mut action = None;
     match node {
@@ -38,37 +41,49 @@ pub(crate) fn render_node_single_ro(
             children,
             is_loading,
         } => {
-            let header_resp =
-                egui::CollapsingHeader::new(name)
-                    .id_salt(id.as_str())
-                    .show(ui, |ui| {
-                        if let Some(kids) = children {
-                            for kid in kids {
-                                if let Some(a) = render_node_single_ro(
-                                    kid,
-                                    ui,
-                                    active_path,
-                                    _active_drill,
-                                    _depth + 1,
-                                    load_out,
-                                    theme,
-                                ) {
-                                    action = Some(a);
-                                }
+            let row_matches =
+                ancestor_matches || query.matches(name) || query.matches(package_path);
+            if query.is_active()
+                && !row_matches
+                && !children
+                    .as_deref()
+                    .is_some_and(|kids| kids.iter().any(|kid| node_matches(kid, query)))
+            {
+                return None;
+            }
+            let header_resp = egui::CollapsingHeader::new(name)
+                .id_salt(id.as_str())
+                .open(query.is_active().then_some(true))
+                .show(ui, |ui| {
+                    if let Some(kids) = children {
+                        for kid in kids {
+                            if let Some(a) = render_node_single_ro(
+                                kid,
+                                ui,
+                                active_path,
+                                _active_drill,
+                                _depth + 1,
+                                load_out,
+                                theme,
+                                query,
+                                row_matches,
+                            ) {
+                                action = Some(a);
                             }
-                        } else {
-                            // Unscanned: request a lazy scan (the caller
-                            // defers the AsyncComputeTaskPool spawn) and show
-                            // a loading row until the `ScanResult` lands.
-                            load_out.push((id.clone(), package_path.clone()));
                         }
-                        if children.is_none() || *is_loading {
-                            ui.horizontal(|ui| {
-                                ui.add_space(20.0);
-                                ui.label("⌛ Loading...");
-                            });
-                        }
-                    });
+                    } else {
+                        // Unscanned: request a lazy scan (the caller
+                        // defers the AsyncComputeTaskPool spawn) and show
+                        // a loading row until the `ScanResult` lands.
+                        load_out.push((id.clone(), package_path.clone()));
+                    }
+                    if children.is_none() || *is_loading {
+                        ui.horizontal(|ui| {
+                            ui.add_space(20.0);
+                            ui.label("⌛ Loading...");
+                        });
+                    }
+                });
             let _ = header_resp;
         }
         PackageNode::Model {
@@ -77,6 +92,9 @@ pub(crate) fn render_node_single_ro(
             library,
             class_kind,
         } => {
+            if query.is_active() && !ancestor_matches && !query.matches(name) {
+                return None;
+            }
             let is_active = active_path == Some(name.as_str());
             let row = ui.horizontal(|ui| {
                 if let Some(kind) = *class_kind {
@@ -122,4 +140,25 @@ pub(crate) fn render_node_single_ro(
         }
     }
     action
+}
+
+/// Whether a package-tree branch contains a human-readable name/path match.
+/// Generated tree ids remain an internal routing detail and are not used as
+/// the visible search contract.
+pub(crate) fn node_matches(node: &PackageNode, query: &BrowserQuery) -> bool {
+    match node {
+        PackageNode::Category {
+            name,
+            package_path,
+            children,
+            ..
+        } => {
+            query.matches(name)
+                || query.matches(package_path)
+                || children
+                    .as_deref()
+                    .is_some_and(|kids| kids.iter().any(|kid| node_matches(kid, query)))
+        }
+        PackageNode::Model { name, .. } => query.matches(name),
+    }
 }
