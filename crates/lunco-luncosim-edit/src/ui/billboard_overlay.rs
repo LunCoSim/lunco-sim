@@ -62,6 +62,7 @@ pub fn draw_billboard_overlay(
         Option<&BillboardIndex>,
         Option<&ViewVisibility>,
         Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
         &GlobalTransform,
     )>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
@@ -119,7 +120,7 @@ pub fn draw_billboard_overlay(
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
-    for (entity, bb, name, billboard_index, vis, callsign, gtf) in &q_billboards {
+    for (entity, bb, name, billboard_index, vis, callsign, catalog_id, gtf) in &q_billboards {
         // An entity culled or explicitly hidden must not keep a floating label.
         if vis.is_some_and(|v| !v.get()) {
             continue;
@@ -148,13 +149,12 @@ pub fn draw_billboard_overlay(
             continue; // behind the camera
         };
 
-        // The prim's leaf name — `Name` holds the full USD path.
-        let leaf = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
+        let display_name = lunco_core::entity_display_name(Some(name), callsign, catalog_id);
         let geo = surface_pose.get(entity).map(|pose| pose.geodetic);
         let text = render_billboard(
             &bb.template,
             &BillboardFacts {
-                name: leaf,
+                name: &display_name,
                 label: callsign.map(|c| c.0.as_str()),
                 index: billboard_index.map(|index| index.0),
                 geo,

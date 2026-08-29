@@ -67,6 +67,8 @@ pub fn produce_usd_prim_tree(
     q: Query<(Entity, &UsdPrimPath)>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_callsign: Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: Query<&lunco_core::CatalogEntryId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -117,7 +119,21 @@ pub fn produce_usd_prim_tree(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for key in &all_paths {
             key.hash(&mut h);
-            entity_of.contains_key(key).hash(&mut h);
+            if let Some(entity) = entity_of.get(key) {
+                true.hash(&mut h);
+                q_callsign
+                    .get(*entity)
+                    .ok()
+                    .map(|value| value.0.as_str())
+                    .hash(&mut h);
+                q_catalog_id
+                    .get(*entity)
+                    .ok()
+                    .map(|value| value.0.as_str())
+                    .hash(&mut h);
+            } else {
+                false.hash(&mut h);
+            }
         }
         h.finish()
     };
@@ -138,7 +154,19 @@ pub fn produce_usd_prim_tree(
 
     for key in &all_paths {
         let (_, path) = key;
-        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let display_name = entity_of
+            .get(key)
+            .map(|entity| {
+                let path_name = Name::new(path.clone());
+                lunco_core::entity_display_name(
+                    Some(&path_name),
+                    q_callsign.get(*entity).ok(),
+                    q_catalog_id.get(*entity).ok(),
+                )
+            })
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| lunco_core::humanize_identifier(name));
         let (type_name, is_body) = match &stage_view {
             Some(v) => match SdfPath::new(path) {
                 Ok(sdf) => (
@@ -152,7 +180,7 @@ pub fn produce_usd_prim_tree(
         nodes.insert(
             key.clone(),
             PrimTreeNode {
-                name,
+                name: display_name,
                 type_name,
                 entity: entity_of.get(key).copied(),
                 is_body,

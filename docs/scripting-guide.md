@@ -261,13 +261,13 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `get_exposure("namespace", "property")` | value \| `()` | read one raw engine capability value; Rhai owns selection and presentation policy |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
 | `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
-| `find(name)` | id (`-1` if none) | entity id by `Name` |
-| `name(id)` | string \| `()` | reverse of `find` |
+| `find(name)` | id (`-1` if none) | entity id by canonical `Name` |
+| `name(id)` | string \| `()` | human-readable presentation label; use `QueryEntity` for the canonical USD path |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
 | `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
 | `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |
 | `is_controlled(id)` | bool | is any session (human or autopilot) driving it |
-| `list_entities()` | `[#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}]` | every registered entity; `type` is the projected USD kind, not a control-component heuristic; `input_surface` is the authoritative `InputPorts` readiness bit |
+| `list_entities()` | `[#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}]` | every registered entity; `name` is the human-readable presentation label, `type` is the projected USD kind, not a control-component heuristic; `input_surface` is the authoritative `InputPorts` readiness bit |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |

@@ -24,8 +24,7 @@ use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
 use crate::signal::{
-    humanize_identifier, PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry,
-    SignalType,
+    PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
 };
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
@@ -115,15 +114,13 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
     let owner = wb
         .get::<Name>(signal.entity)
         .map(|name| {
-            let leaf = name
-                .as_str()
-                .trim_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or(name.as_str());
-            humanize_identifier(leaf)
+            lunco_core::entity_display_name(
+                Some(name),
+                wb.get::<lunco_core::markers::Callsign>(signal.entity),
+                wb.get::<lunco_core::CatalogEntryId>(signal.entity),
+            )
         })
-        .unwrap_or_else(|| format!("Entity {}", signal.entity));
+        .unwrap_or_else(|| "Unnamed entity".to_string());
     let meta = wb
         .resource::<SignalRegistry>()
         .and_then(|registry| registry.meta(signal));

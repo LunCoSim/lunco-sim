@@ -81,6 +81,8 @@ pub fn api_request_observer(
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     q_meta: Query<(
         Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
         Has<lunco_core::ControlBinding>,
         Option<&lunco_core::CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
@@ -709,6 +711,8 @@ fn execute_request(
     subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(
         Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
         Has<lunco_core::ControlBinding>,
         Option<&lunco_core::CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
@@ -843,12 +847,13 @@ fn execute_request(
                 .entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
-                    let (name, accepts_commands, body, usd_kind) =
-                        q_meta.get(entity).unwrap_or((None, false, None, None));
+                    let (name, callsign, catalog_id, accepts_commands, body, usd_kind) = q_meta
+                        .get(entity)
+                        .unwrap_or((None, None, None, false, None, None));
                     let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
                     serde_json::json!({
                         "api_id": api_id,
-                        "name": name.map(|n| n.as_str()).unwrap_or(""),
+                        "name": lunco_core::entity_display_name(name, callsign, catalog_id),
                         "type": kind,
                         "control_bound": accepts_commands,
                         "celestial_body": body.is_some(),

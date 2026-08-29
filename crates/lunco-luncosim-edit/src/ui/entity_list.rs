@@ -76,8 +76,15 @@ pub struct EntityTreeView {
     /// Shown children per parent, sorted by leaf label. A parent with no shown
     /// children has no entry (so the panel treats it as a leaf).
     pub kids: HashMap<Entity, Vec<Entity>>,
-    /// Leaf display label per visible named entity.
+    /// Display label per visible named entity.
     pub labels: HashMap<Entity, String>,
+    /// Unqualified semantic label per visible named entity. Kept separately so
+    /// the topology gate can compare source labels without treating a stable
+    /// duplicate suffix as a source change.
+    base_labels: HashMap<Entity, String>,
+    /// Stable source address used to order duplicate labels independently of
+    /// Bevy allocation order.
+    stable_keys: HashMap<Entity, String>,
     /// Direct parent snapshot for visible named entities. The gate compares
     /// this value rather than trusting a `Changed<ChildOf>` tick: grid and
     /// celestial systems may re-stamp an identical parent every frame.
@@ -88,10 +95,39 @@ pub struct EntityTreeView {
     built: bool,
 }
 
-/// Last path segment of a USD prim name (`/SandboxScene/Rover/Wheel_FL` →
-/// `Wheel_FL`); plain names (`Dynamic Ball`) pass through unchanged.
-fn leaf(full: &str) -> String {
-    full.rsplit(['/', '\\']).next().unwrap_or(full).to_string()
+fn stable_key(name: &Name, path: Option<&lunco_usd_bevy::UsdPrimPath>) -> String {
+    path.map(|path| path.path.as_str())
+        .filter(|path| !path.is_empty() && *path != "/")
+        .unwrap_or_else(|| name.as_str())
+        .to_string()
+}
+
+/// Add a deterministic ordinal only where visible entities share a semantic
+/// label. USD paths are stable presentation-order keys; the live ECS entity is
+/// never used to decide which duplicate gets which suffix.
+fn disambiguate_labels(
+    named: &[(Entity, String, String)],
+    shown: &HashMap<Entity, bool>,
+) -> HashMap<Entity, String> {
+    let mut groups: HashMap<&str, Vec<(Entity, &str)>> = HashMap::new();
+    for (entity, label, key) in named {
+        if shown.get(entity).copied().unwrap_or(false) {
+            groups.entry(label).or_default().push((*entity, key));
+        }
+    }
+
+    let mut labels = HashMap::new();
+    for (base, mut members) in groups {
+        members.sort_by(|(_, a), (_, b)| a.cmp(b));
+        if members.len() == 1 {
+            labels.insert(members[0].0, base.to_string());
+        } else {
+            for (ordinal, (entity, _)) in members.into_iter().enumerate() {
+                labels.insert(entity, format!("{base} ({})", ordinal + 1));
+            }
+        }
+    }
+    labels
 }
 
 /// `true` if `e` is shown (interesting itself, or an ancestor of something
@@ -125,7 +161,13 @@ fn compute_shown(
 pub(crate) fn populate_entity_tree_view(
     mut view: ResMut<EntityTreeView>,
     settings: Res<EntityListSettings>,
-    named_q: Query<(Entity, &Name)>,
+    named_q: Query<(
+        Entity,
+        &Name,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&lunco_usd_bevy::UsdPrimPath>,
+    )>,
     system_q: Query<Entity, With<lunco_core::SystemManaged>>,
     child_q: Query<(Entity, &ChildOf)>,
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -141,13 +183,18 @@ pub(crate) fn populate_entity_tree_view(
     } else {
         system_q.iter().collect()
     };
-    let named: Vec<(Entity, String)> = named_q
+    let named: Vec<(Entity, String, String)> = named_q
         .iter()
-        .filter(|(e, _)| !system.contains(e))
-        .map(|(e, n)| (e, n.as_str().to_string()))
+        .filter(|(e, _, _, _, _)| !system.contains(e))
+        .map(|(e, name, callsign, catalog_id, path)| {
+            (
+                e,
+                lunco_core::entity_display_name(Some(name), callsign, catalog_id),
+                stable_key(name, path),
+            )
+        })
         .collect();
-    let named_set: HashSet<Entity> = named.iter().map(|(e, _)| *e).collect();
-    let labels: HashMap<Entity, String> = named.iter().map(|(e, full)| (*e, leaf(full))).collect();
+    let named_set: HashSet<Entity> = named.iter().map(|(e, _, _)| *e).collect();
 
     // Parent of each entity (full graph, not just named) so unnamed grid/wrapper
     // entities can be skipped over when finding an entity's display parent.
@@ -182,7 +229,7 @@ pub(crate) fn populate_entity_tree_view(
     };
     let mut kids: HashMap<Entity, Vec<Entity>> = HashMap::new();
     let mut roots: Vec<Entity> = Vec::new();
-    for (e, _) in &named {
+    for (e, _, _) in &named {
         match display_parent(*e) {
             Some(p) => kids.entry(p).or_default().push(*e),
             None => roots.push(*e),
@@ -192,9 +239,16 @@ pub(crate) fn populate_entity_tree_view(
     // Visibility: an entity shows if it or any descendant is interesting.
     let interesting = |e: Entity| selectable.contains(&e) || has_mesh.contains(&e);
     let mut shown: HashMap<Entity, bool> = HashMap::new();
-    for (e, _) in &named {
+    for (e, _, _) in &named {
         compute_shown(*e, &kids, &interesting, &mut shown);
     }
+
+    let base_labels: HashMap<Entity, String> = named
+        .iter()
+        .filter(|(entity, _, _)| shown.get(entity).copied().unwrap_or(false))
+        .map(|(entity, label, _)| (*entity, label.clone()))
+        .collect();
+    let labels = disambiguate_labels(&named, &shown);
 
     // Prune children to shown-only + stable alphabetical order by leaf label, at
     // every level; drop empty entries so the panel treats them as leaves.
@@ -227,6 +281,12 @@ pub(crate) fn populate_entity_tree_view(
     view.labels = labels
         .into_iter()
         .filter(|(entity, _)| shown.get(entity).copied().unwrap_or(false))
+        .collect();
+    view.base_labels = base_labels;
+    view.stable_keys = named
+        .iter()
+        .filter(|(entity, _, _)| shown.get(entity).copied().unwrap_or(false))
+        .map(|(entity, _, key)| (*entity, key.clone()))
         .collect();
     view.parents = view
         .labels
@@ -262,18 +322,44 @@ pub(crate) fn scene_topology_changed(
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
     changed: Query<
-        (Entity, &Name, Option<&ChildOf>),
+        (
+            Entity,
+            &Name,
+            Option<&lunco_core::markers::Callsign>,
+            Option<&lunco_core::CatalogEntryId>,
+            Option<&lunco_usd_bevy::UsdPrimPath>,
+            Option<&ChildOf>,
+        ),
         (
             With<Name>,
-            Or<(Changed<Name>, Changed<ChildOf>)>,
+            Or<(
+                Changed<Name>,
+                Changed<ChildOf>,
+                Changed<lunco_core::markers::Callsign>,
+                Changed<lunco_core::CatalogEntryId>,
+                Changed<lunco_usd_bevy::UsdPrimPath>,
+            )>,
             Without<lunco_core::SystemManaged>,
         ),
     >,
     changed_system: Query<
-        (Entity, &Name, Option<&ChildOf>),
+        (
+            Entity,
+            &Name,
+            Option<&lunco_core::markers::Callsign>,
+            Option<&lunco_core::CatalogEntryId>,
+            Option<&lunco_usd_bevy::UsdPrimPath>,
+            Option<&ChildOf>,
+        ),
         (
             With<Name>,
-            Or<(Changed<Name>, Changed<ChildOf>)>,
+            Or<(
+                Changed<Name>,
+                Changed<ChildOf>,
+                Changed<lunco_core::markers::Callsign>,
+                Changed<lunco_core::CatalogEntryId>,
+                Changed<lunco_usd_bevy::UsdPrimPath>,
+            )>,
             With<lunco_core::SystemManaged>,
         ),
     >,
@@ -297,6 +383,9 @@ pub(crate) fn scene_topology_changed(
     mut rm_child: RemovedComponents<ChildOf>,
     mut rm_mesh: RemovedComponents<Mesh3d>,
     mut rm_sel: RemovedComponents<lunco_core::SelectableRoot>,
+    mut rm_callsign: RemovedComponents<lunco_core::markers::Callsign>,
+    mut rm_catalog: RemovedComponents<lunco_core::CatalogEntryId>,
+    mut rm_usd_path: RemovedComponents<lunco_usd_bevy::UsdPrimPath>,
 ) -> bool {
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed. A removed entity can no longer be
@@ -310,17 +399,31 @@ pub(crate) fn scene_topology_changed(
     let removed = drained(&mut rm_name.read())
         | drained(&mut rm_child.read())
         | drained(&mut rm_mesh.read())
-        | drained(&mut rm_sel.read());
+        | drained(&mut rm_sel.read())
+        | drained(&mut rm_callsign.read())
+        | drained(&mut rm_catalog.read())
+        | drained(&mut rm_usd_path.read());
     // The raw ECS graph contains many named but visibility-pruned implementation
     // entities (telemetry channel holders, transform wrappers, etc.).  They are
     // not inputs to this view. A change to a node the current view does not show
     // therefore cannot justify rebuilding the entire tree. New mesh/selectable
     // nodes still enter through `added`, then become visible on this rebuild.
-    let value_changed = |(entity, name, parent): (Entity, &Name, Option<&ChildOf>)| {
-        let Some(cached_label) = view.labels.get(&entity) else {
+    let value_changed = |(entity, name, callsign, catalog_id, path, parent): (
+        Entity,
+        &Name,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&lunco_usd_bevy::UsdPrimPath>,
+        Option<&ChildOf>,
+    )| {
+        let Some(cached_label) = view.base_labels.get(&entity) else {
             return false;
         };
-        leaf(name.as_str()) != *cached_label
+        lunco_core::entity_display_name(Some(name), callsign, catalog_id) != *cached_label
+            || view
+                .stable_keys
+                .get(&entity)
+                .is_none_or(|cached| stable_key(name, path) != *cached)
             || view.parents.get(&entity).copied() != parent.map(|p| p.parent())
     };
     let visible_changed = changed.iter().any(value_changed);
@@ -335,6 +438,43 @@ pub(crate) fn scene_topology_changed(
         || removed;
     *first = true;
     run
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_labels_are_ordered_by_stable_source_key() {
+        let first = Entity::from_raw_u32(1).unwrap();
+        let second = Entity::from_raw_u32(2).unwrap();
+        let named = vec![
+            (second, "Rocker Bogie".to_string(), "/Scene/B".to_string()),
+            (first, "Rocker Bogie".to_string(), "/Scene/A".to_string()),
+        ];
+        let shown = HashMap::from([(first, true), (second, true)]);
+
+        let labels = disambiguate_labels(&named, &shown);
+
+        assert_eq!(labels[&first], "Rocker Bogie (1)");
+        assert_eq!(labels[&second], "Rocker Bogie (2)");
+    }
+
+    #[test]
+    fn hidden_duplicates_do_not_change_visible_labels() {
+        let visible = Entity::from_raw_u32(1).unwrap();
+        let hidden = Entity::from_raw_u32(2).unwrap();
+        let named = vec![
+            (visible, "Antenna".to_string(), "/Scene/A".to_string()),
+            (hidden, "Antenna".to_string(), "/Scene/B".to_string()),
+        ];
+        let shown = HashMap::from([(visible, true), (hidden, false)]);
+
+        let labels = disambiguate_labels(&named, &shown);
+
+        assert_eq!(labels[&visible], "Antenna");
+        assert!(!labels.contains_key(&hidden));
+    }
 }
 
 /// Entity list panel — hierarchy tree of scene entities.
@@ -380,7 +520,7 @@ fn render_node(
         .labels
         .get(&entity)
         .cloned()
-        .unwrap_or_else(|| format!("{entity:?}"));
+        .unwrap_or_else(|| "Unnamed entity".to_string());
 
     match view.kids.get(&entity) {
         None => select_label(ui, entity, &label, selected, to_select, to_focus),

@@ -61,8 +61,7 @@ impl JointRowKind {
 /// One joint / wheel of the selected vessel, flattened for display.
 #[derive(Clone)]
 pub struct JointStateRow {
-    /// Display name — the entity's `Name` (falls back through the jointed
-    /// body's name to the raw entity id).
+    /// Readable display label resolved from the entity's authored identity.
     pub name: String,
     /// Which articulation kind produced this row.
     pub kind: JointRowKind,
@@ -136,16 +135,36 @@ fn readable_torque(t: f64) -> Option<f64> {
 
 /// Display name for a row: the entity's `Name`, else the jointed body's
 /// `Name`, else the raw entity id.
-fn row_name(entity: Entity, body: Option<Entity>, q_name: &Query<&Name>) -> String {
+fn row_name(
+    entity: Entity,
+    body: Option<Entity>,
+    q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
+) -> String {
     if let Ok(name) = q_name.get(entity) {
-        return name.as_str().to_owned();
+        let label = lunco_core::entity_display_name(
+            Some(name),
+            q_callsign.get(entity).ok(),
+            q_catalog_id.get(entity).ok(),
+        );
+        if !label.is_empty() {
+            return label;
+        }
     }
     if let Some(body) = body {
         if let Ok(name) = q_name.get(body) {
-            return name.as_str().to_owned();
+            let label = lunco_core::entity_display_name(
+                Some(name),
+                q_callsign.get(body).ok(),
+                q_catalog_id.get(body).ok(),
+            );
+            if !label.is_empty() {
+                return label;
+            }
         }
     }
-    format!("{entity:?}")
+    "Unnamed joint".to_string()
 }
 
 /// Producer for [`JointStateView`]: fills the view for the SELECTED vessel
@@ -158,6 +177,8 @@ pub fn populate_joint_state_view(
     selection: Res<SelectedEntities>,
     q_child_of: Query<&ChildOf>,
     q_name: Query<&Name>,
+    q_callsign: Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: Query<&lunco_core::CatalogEntryId>,
     q_joints: Query<(
         Entity,
         &RevoluteJoint,
@@ -180,7 +201,7 @@ pub fn populate_joint_state_view(
 
     let root = root_of(selected, &q_child_of);
     view.vessel = Some(root);
-    view.vessel_name = row_name(root, None, &q_name);
+    view.vessel_name = row_name(root, None, &q_name, &q_callsign, &q_catalog_id);
     view.rows.clear();
 
     // ── Avian revolute joints (physical wheels, suspension pins, doors) ──
@@ -210,7 +231,13 @@ pub fn populate_joint_state_view(
             .map(|port| port.value)
             .filter(|value| value.is_finite());
         view.rows.push(JointStateRow {
-            name: row_name(joint_entity, Some(joint.body2), &q_name),
+            name: row_name(
+                joint_entity,
+                Some(joint.body2),
+                &q_name,
+                &q_callsign,
+                &q_catalog_id,
+            ),
             kind: JointRowKind::Revolute,
             angle,
             omega,
@@ -237,7 +264,7 @@ pub fn populate_joint_state_view(
             .map(|port| port.value)
             .filter(|value| value.is_finite());
         view.rows.push(JointStateRow {
-            name: row_name(wheel_entity, None, &q_name),
+            name: row_name(wheel_entity, None, &q_name, &q_callsign, &q_catalog_id),
             kind: JointRowKind::RaycastWheel,
             angle: wheel.spin_angle,
             omega: wheel.spin_velocity,

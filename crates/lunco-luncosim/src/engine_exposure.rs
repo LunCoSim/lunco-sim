@@ -240,6 +240,8 @@ fn resolve_link(
     q_links: &Query<(Entity, &LinkState)>,
     q_parents: &Query<&ChildOf>,
     q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_ids: &Query<(Entity, &GlobalEntityId)>,
 ) -> Option<LinkInfo> {
     // Depth cap: a radio hangs a hop or two under its vessel. This also makes the
@@ -293,29 +295,30 @@ fn resolve_link(
     // Prefer the peer's PARENT name when the peer is an antenna child: the driver
     // thinks in terms of "Base", not "Antenna".
     //
-    // The candidate names stay borrowed until the winner is picked — this runs
-    // every frame per driven vessel, and eagerly copying both names allocated two
-    // Strings to throw one away. Exactly one allocation happens now, on the
-    // branch that survives.
-    // ⚠ `Name` on a USD-spawned entity is the FULL PRIM PATH
-    // (`Name::new(child_path.to_string())`, `lunco-usd-bevy`), not the leaf. The
-    // owner-substitution below used to compare the whole path against "Antenna",
-    // which never matched — so the driver read `/Traverse/Base/Antenna` where the
-    // code intended `Base`. Truncate to the leaf FIRST, then decide.
-    let leaf = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
-
+    // Resolve both candidates through the shared entity label contract. The
+    // source `Name` remains a full USD path, but it is never shown as the label.
     let peer_ent = q_ids
         .iter()
         .find(|(_, g)| g.get() == pick.peer)
         .map(|(e, _)| e);
     let peer_label = match peer_ent {
         Some(e) => {
-            let own = q_name.get(e).ok().map(|n| leaf(n.as_str()));
-            let parent = q_parents
-                .get(e)
-                .ok()
-                .and_then(|p| q_name.get(p.parent()).ok())
-                .map(|n| leaf(n.as_str()));
+            let own = q_name.get(e).ok().map(|n| {
+                lunco_core::entity_display_name(
+                    Some(n),
+                    q_callsign.get(e).ok(),
+                    q_catalog_id.get(e).ok(),
+                )
+            });
+            let parent = q_parents.get(e).ok().and_then(|p| {
+                let parent_entity = p.parent();
+                let name = q_name.get(parent_entity).ok()?;
+                Some(lunco_core::entity_display_name(
+                    Some(name),
+                    q_callsign.get(parent_entity).ok(),
+                    q_catalog_id.get(parent_entity).ok(),
+                ))
+            });
             match (own, parent) {
                 // An "Antenna"/"Comms" node under a named structure reads better as
                 // its owner; anything else keeps its own name.
@@ -421,6 +424,7 @@ fn resolve_driven(
     q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_vel: &Query<&LinearVelocity>,
     q_parents: &Query<&ChildOf>,
@@ -463,12 +467,19 @@ fn resolve_driven(
     // The HUD title is the ship's NAME, not its address: prefer the USD
     // `ui:displayName` (ingested as `Callsign`) over the `Name` component,
     // which carries the prim path and reads as plumbing on camera.
-    let label = q_callsign
-        .get(vessel)
-        .map(|c| c.0.clone())
-        .or_else(|_| q_name.get(vessel).map(|n| n.as_str().to_string()))
-        .or_else(|_| q_gid.get(vessel).map(|g| format!("vessel #{}", g.get())))
-        .unwrap_or_else(|_| "vessel".to_string());
+    let label = lunco_core::entity_display_name(
+        q_name.get(vessel).ok(),
+        q_callsign.get(vessel).ok(),
+        q_catalog_id.get(vessel).ok(),
+    );
+    let label = if label.is_empty() {
+        q_gid
+            .get(vessel)
+            .map(|g| format!("vessel #{}", g.get()))
+            .unwrap_or_else(|_| "vessel".to_string())
+    } else {
+        label
+    };
 
     // Derive this vessel's own bands from its wheels, at the point of use. Six
     // wheels, a min and an atan — cheaper per frame than the layout of the panel
@@ -533,7 +544,15 @@ fn resolve_driven(
         pitch_deg,
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
-        link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
+        link: resolve_link(
+            vessel,
+            q_links,
+            q_parents,
+            q_name,
+            q_callsign,
+            q_catalog_id,
+            q_ids,
+        ),
         caution_deg,
         danger_deg,
         limits_derived,
@@ -795,6 +814,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     avatar: Query<'w, 's, &'static ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     name: Query<'w, 's, &'static Name>,
     callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
+    catalog_id: Query<'w, 's, &'static lunco_core::CatalogEntryId>,
     gid: Query<'w, 's, &'static GlobalEntityId>,
     velocity: Query<'w, 's, &'static LinearVelocity>,
     parents: Query<'w, 's, &'static ChildOf>,
@@ -851,6 +871,7 @@ pub(crate) fn publish_exposure(
         &queries.avatar,
         &queries.name,
         &queries.callsign,
+        &queries.catalog_id,
         &queries.gid,
         &queries.velocity,
         &queries.parents,
@@ -880,6 +901,7 @@ pub(crate) fn publish_exposure(
             &mut runtime.exposures,
             &queries.name,
             &queries.callsign,
+            &queries.catalog_id,
             &queries.sim,
             &queries.parents,
             &queries.grids,
@@ -981,6 +1003,7 @@ pub(crate) fn publish_exposure(
         &mut runtime.exposures,
         &queries.name,
         &queries.callsign,
+        &queries.catalog_id,
         &queries.sim,
         &queries.parents,
         &queries.grids,
@@ -1194,6 +1217,7 @@ fn publish_control_exposures(
     exposures: &mut EngineExposures,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -1213,6 +1237,7 @@ fn publish_control_exposures(
         roots.first().and_then(|(entity, _)| *entity),
         q_name,
         q_callsign,
+        q_catalog_id,
         q_sim,
         q_parents,
         q_grids,
@@ -1229,6 +1254,7 @@ fn publish_control_exposures(
         roots.get(1).and_then(|(entity, _)| *entity),
         q_name,
         q_callsign,
+        q_catalog_id,
         q_sim,
         q_parents,
         q_grids,
@@ -1346,6 +1372,7 @@ fn publish_selected_control_exposure(
     root: Option<Entity>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -1393,21 +1420,16 @@ fn publish_selected_control_exposure(
     // first values, so solver readiness cannot cause a large mid-shot layout pop.
     ui.visible(true);
 
-    let vehicle = q_callsign
-        .get(root)
-        .ok()
-        .map(|callsign| callsign.0.trim().to_owned())
-        .filter(|label| !label.is_empty())
-        .or_else(|| {
-            q_name.get(root).ok().map(|name| {
-                name.as_str()
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("selected")
-                    .to_owned()
-            })
-        })
-        .unwrap_or_else(|| "selected".to_owned());
+    let vehicle = lunco_core::entity_display_name(
+        q_name.get(root).ok(),
+        q_callsign.get(root).ok(),
+        q_catalog_id.get(root).ok(),
+    );
+    let vehicle = if vehicle.is_empty() {
+        "selected".to_owned()
+    } else {
+        vehicle
+    };
     ui.property("vehicle", vehicle.clone());
     ui.property("status", "INITIALIZING");
 

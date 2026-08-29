@@ -44,6 +44,7 @@ impl ApiQueryProvider for QueryEntityProvider {
 
         let Some(mut q_meta) = QueryState::<(
             Option<&Name>,
+            Option<&lunco_core::markers::Callsign>,
             Has<lunco_core::ControlBinding>,
             Option<&lunco_core::CelestialBody>,
             Option<&Transform>,
@@ -63,9 +64,10 @@ impl ApiQueryProvider for QueryEntityProvider {
             );
         };
 
-        let (name, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) = q_meta
-            .get(world, entity)
-            .unwrap_or((None, false, None, None, None, None, None));
+        let (name, callsign, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) =
+            q_meta
+                .get(world, entity)
+                .unwrap_or((None, None, false, None, None, None, None, None));
         let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
 
         let Some((pos, rot)) = poses.pose(world, entity) else {
@@ -84,7 +86,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
         ApiResponse::ok(serde_json::json!({
             "api_id": raw,
-            "name": name.map(|n| n.as_str()).unwrap_or(""),
+            "name": lunco_core::entity_display_name(name, callsign, catalog_id),
             "type": kind,
             "control_bound": accepts_commands,
             "celestial_body": body.is_some(),
@@ -112,6 +114,7 @@ pub fn register(app: &mut App) {
     // another plugin to have spawned one of these components makes an absent
     // optional field turn the entire query into an internal error.
     world.register_component::<Name>();
+    world.register_component::<lunco_core::markers::Callsign>();
     world.register_component::<lunco_core::ControlBinding>();
     world.register_component::<lunco_core::CelestialBody>();
     world.register_component::<Transform>();
@@ -139,6 +142,7 @@ mod tests {
         // the provider is invoked.
         let world = app.world_mut();
         world.register_component::<Name>();
+        world.register_component::<lunco_core::markers::Callsign>();
         world.register_component::<lunco_core::ControlBinding>();
         world.register_component::<lunco_core::CelestialBody>();
         world.register_component::<Transform>();
@@ -182,7 +186,8 @@ mod tests {
         let prim = app
             .world_mut()
             .spawn((
-                Name::new("SolarPanel"),
+                Name::new("/Scene/rocker_bogie_123"),
+                CatalogEntryId("rocker_bogie".into()),
                 cell,
                 Transform::from_translation(local),
                 GlobalTransform::default(),
@@ -212,7 +217,7 @@ mod tests {
             "the cell-local translation must never pass for the position"
         );
         assert_eq!(data["position_frame"], "active_physics");
-        assert_eq!(data["name"], "SolarPanel");
+        assert_eq!(data["name"], "Rocker Bogie");
     }
 
     #[test]

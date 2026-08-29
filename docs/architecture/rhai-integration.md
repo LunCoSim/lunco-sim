@@ -98,7 +98,7 @@ not part of the production mission contract.
 | `get_setting("Res.field")` / `set_setting("Res.field", value)` | read / local write | reflected resource access for host settings/configuration |
 | `get_twin_setting("namespace.key")` / `set_twin_setting("namespace.key", value)` | read / persistent write | generic scalar policy in the active Twin manifest; no per-setting Rust binding |
 | `get_exposure("namespace", "property")` | read | one raw value from the generic engine exposure registry; Rhai owns presentation policy |
-| `find(name)` / `list_entities()` | read | entity lookup by `Name` / enumerate |
+| `find(name)` / `list_entities()` | read | entity lookup by canonical `Name` / enumerate with human-readable presentation labels |
 | `sim_tick()` | read | current FixedUpdate tick |
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
 
@@ -194,7 +194,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
 | Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting/src/task_tree.rs`) |
 | Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, task trees in `prelude/nav.rhai` and `prelude/tasks.rhai` |
-| By-name entity lookup | `find(name)` verb |
+| By-name entity lookup | `find(name)` verb; `name(id)` returns the presentation label and `QueryEntity` supplies the full USD path |
 | Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in the native task tree |
 | Telemetry subscribe (events to script) | `on_event` hook and task `wait_for` delivery |
 

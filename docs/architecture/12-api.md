@@ -422,11 +422,30 @@ Data responses include a `data` envelope. For example, `{"type":"ListEntities"}`
 ```json
 {
   "data": {
-    "entities": [{"api_id": "...", "entity_index": "..."}],
+    "entities": [{
+      "api_id": 98466552102768,
+      "name": "Rocker Bogie",
+      "type": "component",
+      "control_bound": false,
+      "celestial_body": false
+    }],
     "count": 192
   }
 }
 ```
+
+### Entity presentation and identity
+
+`ListEntities`, `QueryEntity`, and the scripting `list_entities()`/`name()` bridge
+return the shared human-readable entity label in `name`. The resolver prefers
+authored USD `ui:displayName`, then a catalog identity such as `rocker_bogie`
+(`Rocker Bogie`), then the leaf of the projected `Name`. A generated runtime
+prim suffix is therefore never an operator label.
+
+The label is presentation only. `api_id`/`GlobalEntityId` is the stable machine
+identity, and `QueryEntity` returns the complete `usd_prim_path` for canonical
+USD addressing. Clients must use those identity fields for commands, selection,
+replication, and diagnostics rather than parsing `name`.
 
 ### Error
 

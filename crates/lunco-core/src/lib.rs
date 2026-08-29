@@ -26,6 +26,8 @@ pub mod identity;
 pub mod ids;
 /// Debug-build invariant checks for the big_space hierarchy.
 pub mod invariants;
+/// Shared semantic labels for UI, API, and scripting presentation.
+pub mod labels;
 pub mod log;
 /// Architectural marker components for the big_space integration.
 pub mod markers;
@@ -91,6 +93,7 @@ pub use commands::{
 };
 pub use identity::Provenance;
 pub use invariants::BigSpaceInvariantsPlugin;
+pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
     ActuatorDrivenJoint, CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath,

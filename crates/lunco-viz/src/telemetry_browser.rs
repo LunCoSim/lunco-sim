@@ -426,22 +426,35 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
     reg.catalog_revision()
 }
 
-/// Reduce an authored USD prim path to the prim's display name.  Its complete
-/// path remains available in the tooltip; the browser uses this label only to
-/// keep the live hierarchy readable in a narrow panel.
-fn display_entity_name(name: &str) -> String {
-    humanize_identifier(name.trim_matches('/').rsplit('/').next().unwrap_or(name))
+/// Humanize a path segment through the shared entity-label policy. Its complete
+/// path remains the tree key and tooltip identity; the browser uses this label
+/// only to keep the live hierarchy readable in a narrow panel.
+fn display_path_segment(segment: &str) -> String {
+    let name = Name::new(segment.to_owned());
+    lunco_core::entity_display_name(Some(&name), None, None)
 }
 
-fn authored_path_lineage(path: &str) -> Vec<(String, String)> {
+fn authored_path_lineage(path: &str, leaf_label: Option<&str>) -> Vec<(String, String)> {
     let mut key = String::new();
-    path.trim_matches('/')
+    let segments: Vec<&str> = path
+        .trim_matches('/')
         .split('/')
         .filter(|segment| !segment.is_empty())
-        .map(|segment| {
+        .collect();
+    let segment_count = segments.len();
+    segments
+        .into_iter()
+        .enumerate()
+        .map(|(index, segment)| {
             key.push('/');
             key.push_str(segment);
-            (key.clone(), humanize_identifier(segment))
+            let label = (index + 1 == segment_count)
+                .then_some(leaf_label)
+                .flatten()
+                .filter(|label| !label.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| display_path_segment(segment));
+            (key.clone(), label)
         })
         .collect()
 }
@@ -452,7 +465,7 @@ fn authored_path_lineage(path: &str) -> Vec<(String, String)> {
 /// every scene, including ones the editor has never seen before.
 fn build_tree(
     reg: &SignalRegistry,
-    name_of: impl Fn(Entity) -> Option<String>,
+    label_of: impl Fn(Entity) -> Option<String>,
     parent_of: impl Fn(Entity) -> Option<Entity>,
     usd_path_of: impl Fn(Entity) -> Option<String>,
     is_navigation_root: impl Fn(Entity) -> bool,
@@ -473,9 +486,10 @@ fn build_tree(
                 // Authored ownership is the canonical hierarchy for all
                 // producers. This merges physical readback and Modelica channels
                 // without coupling either producer to the other.
-                authored_path_lineage(path)
+                authored_path_lineage(path, None)
             } else if let Some(path) = usd_path_of(sig.entity) {
-                authored_path_lineage(&path)
+                let label = label_of(sig.entity);
+                authored_path_lineage(&path, label.as_deref())
             } else {
                 let mut entities = Vec::new();
                 let mut cursor = Some(sig.entity);
@@ -499,9 +513,7 @@ fn build_tree(
                         let label = if entity == Entity::PLACEHOLDER {
                             "Global".to_string()
                         } else {
-                            name_of(entity)
-                                .map(|name| display_entity_name(&name))
-                                .unwrap_or_else(|| format!("Entity {entity}"))
+                            label_of(entity).unwrap_or_else(|| "Unnamed entity".to_string())
                         };
                         (format!("entity:{}", entity.to_bits()), label)
                     })
@@ -1266,7 +1278,14 @@ impl Panel for TelemetryBrowserPanel {
         {
             let root = build_tree(
                 registry,
-                |e| ctx.get::<Name>(e).map(|n| n.as_str().to_string()),
+                |e| {
+                    let label = lunco_core::entity_display_name(
+                        ctx.get::<Name>(e),
+                        ctx.get::<lunco_core::markers::Callsign>(e),
+                        ctx.get::<lunco_core::CatalogEntryId>(e),
+                    );
+                    (!label.is_empty()).then_some(label)
+                },
                 |c| ctx.get::<ChildOf>(c).map(|p| p.parent()),
                 |e| ctx.get::<UsdPrimPath>(e).map(|path| path.path.clone()),
                 |_| false,

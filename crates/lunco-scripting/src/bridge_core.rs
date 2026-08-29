@@ -1097,7 +1097,9 @@ pub fn despawn_entity(gid: u64) -> Result<(), String> {
 /// control_bound, celestial_body }]` for every registered entity. `type` comes
 /// from the projected USD `kind`; it is never inferred from control or physics
 /// components. `catalog_id` is present only for catalog-spawned entities, and
-/// `input_surface` is the authoritative `InputPorts` readiness bit.
+/// `input_surface` is the authoritative `InputPorts` readiness bit. `name` is
+/// the shared human-readable label; the full USD path remains available through
+/// `QueryEntity` for callers that need canonical addressing.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         let Some(pairs) = world
@@ -1112,6 +1114,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             lunco_physics::SimulationPoseQuery,
             Query<(
                 Option<&Name>,
+                Option<&lunco_core::markers::Callsign>,
                 Has<lunco_core::ControlBinding>,
                 Has<lunco_core::InputPorts>,
                 Option<&CelestialBody>,
@@ -1125,9 +1128,10 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, input_surface, body, catalog_id, usd_kind) = q_meta
-                    .get(entity)
-                    .unwrap_or((None, false, false, None, None, None));
+                let (name, callsign, accepts_commands, input_surface, body, catalog_id, usd_kind) =
+                    q_meta
+                        .get(entity)
+                        .unwrap_or((None, None, false, false, None, None, None));
                 let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
                 let pos = poses
                     .position(entity)
@@ -1137,7 +1141,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                     ("id".to_string(), b.int(gid.get() as i64)),
                     (
                         "name".to_string(),
-                        b.string(name.map(|n| n.as_str()).unwrap_or("")),
+                        b.string(&lunco_core::entity_display_name(name, callsign, catalog_id)),
                     ),
                     ("type".to_string(), b.string(kind)),
                     ("input_surface".to_string(), b.bool(input_surface)),
@@ -1156,7 +1160,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     .unwrap_or_else(|| b.array(Vec::new()))
 }
 
-/// `find(name)` — first entity gid with that `Name`, or `-1`.
+/// `find(name)` — first entity gid with that canonical `Name`, or `-1`.
 pub fn find(name: &str) -> i64 {
     with_world(|world| {
         let Some(registry) = world.get_resource::<ApiEntityRegistry>() else {
@@ -1173,11 +1177,15 @@ pub fn find(name: &str) -> i64 {
     .unwrap_or(-1)
 }
 
-/// `name(id)` — the entity's `Name`, or `None`.
+/// `name(id)` — the entity's shared human-readable label, or `None`.
 pub fn name_of(gid: u64) -> Option<String> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        world.get::<Name>(entity).map(|n| n.as_str().to_string())
+        Some(lunco_core::entity_display_name(
+            world.get::<Name>(entity),
+            world.get::<lunco_core::markers::Callsign>(entity),
+            world.get::<lunco_core::CatalogEntryId>(entity),
+        ))
     })
     .flatten()
 }

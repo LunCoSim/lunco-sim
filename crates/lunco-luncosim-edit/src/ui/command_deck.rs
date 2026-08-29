@@ -67,13 +67,21 @@ pub fn populate_command_deck_view(
     q_autopilot: Query<&Autopilot>,
     q_spec: Query<&AutopilotBehaviorSpec>,
     q_name: Query<&Name>,
+    q_callsign: Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: Query<&lunco_core::CatalogEntryId>,
     q_gid: Query<&GlobalEntityId>,
 ) {
     let sel = selected.primary();
     view.selected = sel;
     view.selected_label = sel
-        .and_then(|e| q_name.get(e).ok())
-        .map(|n| n.as_str().to_string())
+        .map(|e| {
+            lunco_core::entity_display_name(
+                q_name.get(e).ok(),
+                q_callsign.get(e).ok(),
+                q_catalog_id.get(e).ok(),
+            )
+        })
+        .filter(|label| !label.is_empty())
         .or_else(|| {
             sel.and_then(|e| q_gid.get(e).ok())
                 .map(|g| format!("vessel #{}", g.get()))

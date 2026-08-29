@@ -60,6 +60,11 @@ query, reflection, prelude, hook, and tool contracts. Everything ergonomic
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 
+`name(id)` and the `name` field from `list_entities()` are presentation labels
+resolved from authored `ui:displayName`, catalog identity, or the `Name` leaf.
+Use the API id for machine identity and `QueryEntity` when a full USD path is
+needed; display labels are not topology addresses.
+
 Scenarios are **host-authoritative**: they run on the host and in single-player,
 never on a networked client (which receives behaviour via replication).
 

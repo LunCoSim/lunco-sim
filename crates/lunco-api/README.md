@@ -70,6 +70,11 @@ object above. For example, a result-returning command may respond with
 `{"data":{"queued":true,"operations":1}}`. Long-running commands keep the
 same envelope and send their completed result when their owner finishes.
 
+`ListEntities` and `QueryEntity` expose a human-readable `name` resolved from
+authored `ui:displayName`, catalog identity, or the `Name` leaf. The stable
+`api_id` remains the machine identity; `QueryEntity.usd_prim_path` is the full
+USD address when a client needs canonical scene resolution.
+
 ### Schema Discovery
 
 ```

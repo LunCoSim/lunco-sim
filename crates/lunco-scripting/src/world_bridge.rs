@@ -1375,14 +1375,14 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
-    // find(name) -> id (i64), or -1 if no entity has that Name.
+    // find(name) -> id (i64), or -1 if no entity has that canonical Name.
     engine.register_fn("find", |name: ImmutableString| -> i64 {
         bridge_core::find(name.as_str())
     });
 
-    // name(id) -> the entity's Name as a string, or () if unnamed/unknown. The
-    // reverse of find(name): turn an id (from list_entities/nearest/children/…)
-    // back into a human label for logging/UI.
+    // name(id) -> the entity's human-readable label, or () if unknown. Turn an
+    // id (from list_entities/nearest/children/…) into a human label for logging/UI;
+    // it is intentionally not a reverse lookup for canonical find(name).
     engine.register_fn("name", |id: i64| -> Dynamic {
         bridge_core::name_of(id as u64)
             .map(Dynamic::from)
@@ -3207,7 +3207,7 @@ mod tests {
 
         // name() reverse-lookup, parent() up, children() down, and the () cases.
         let code = r#"
-            [ name(100) == "base", name(200) == "arm",
+            [ name(100) == "Base", name(200) == "Arm",
               parent(200), children(100).len(), children(100)[0],
               name(999) == (), parent(100) == () ]
         "#;
@@ -3234,7 +3234,7 @@ mod tests {
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let real = world
             .spawn((
-                Name::new("Solar Tower"),
+                Name::new("/Scene/solar_tower_123"),
                 lunco_core::CatalogEntryId("solar_tower".into()),
             ))
             .id();
@@ -3248,7 +3248,7 @@ mod tests {
         let code = r#"
             let items = list_entities();
             [
-                items.some(|e| e.catalog_id == "solar_tower"),
+                items.some(|e| e.catalog_id == "solar_tower" && e.name == "Solar Tower"),
                 items.some(|e| e.name == "Solar Panel" && e.catalog_id == ""),
             ]
         "#;

@@ -15,6 +15,18 @@ pub use lunco_signal::{
     SignalRegistry, SignalType, TelemetryFocus, DEFAULT_CAPACITY,
 };
 
+/// Convert an authored or generated identifier into the operator spelling used
+/// by telemetry-facing surfaces. This deliberately only changes the
+/// presentation: signal identities, USD paths, and persisted bindings remain
+/// untouched.
+pub fn humanize_identifier(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The one presentation policy shared by the telemetry browser, plot
 /// toolbars, legends, and exported graph labels.
 ///
@@ -29,18 +41,6 @@ pub fn operator_channel_label(path: &str, group_path: Option<&str>, unit: Option
         .map(humanize_identifier)
         .unwrap_or_default();
     compact_channel_label(path, &category, unit)
-}
-
-/// Convert an authored or generated identifier into the operator spelling used
-/// by every telemetry-facing surface. This deliberately only changes the
-/// presentation: signal identities, USD paths, and persisted bindings remain
-/// untouched.
-pub fn humanize_identifier(value: &str) -> String {
-    value
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Convert a channel variable into its operator wording while retaining the

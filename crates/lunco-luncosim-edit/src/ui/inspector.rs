@@ -1168,11 +1168,22 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         return;
     };
 
-    ui.label(format!("ID: {entity:?}"));
+    if let Some(api_id) = ctx
+        .resource::<lunco_api::registry::ApiEntityRegistry>()
+        .and_then(|registry| registry.api_id_for(entity))
+    {
+        ui.label(format!("API ID: {}", api_id.get()));
+    }
 
-    // Name (read-only)
-    if let Some(name) = ctx.get::<Name>(entity).map(|n| n.as_str().to_string()) {
-        ui.label(format!("Name: {name}"));
+    let name = ctx.get::<Name>(entity);
+    let callsign = ctx.get::<lunco_core::markers::Callsign>(entity);
+    let catalog_id = ctx.get::<lunco_core::CatalogEntryId>(entity);
+    let display_name = lunco_core::entity_display_name(name, callsign, catalog_id);
+    if !display_name.is_empty() {
+        ui.label(format!("Name: {display_name}"));
+    }
+    if let Some(path) = name.map(Name::as_str).filter(|path| path.starts_with('/')) {
+        ui.label(format!("USD path: {path}"));
     }
 
     if let Some(projection) = ctx.get::<Projection>(entity).cloned() {
@@ -1535,10 +1546,16 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             // edited and offer the way back to the whole vehicle.
             if target != entity {
                 ui.horizontal(|ui| {
-                    let part_name = ctx
-                        .get::<Name>(target)
-                        .map(|n| n.as_str().to_string())
-                        .unwrap_or_else(|| format!("{target:?}"));
+                    let part_name = lunco_core::entity_display_name(
+                        ctx.get::<Name>(target),
+                        ctx.get::<lunco_core::markers::Callsign>(target),
+                        ctx.get::<lunco_core::CatalogEntryId>(target),
+                    );
+                    let part_name = if part_name.is_empty() {
+                        "Unnamed entity".to_string()
+                    } else {
+                        part_name
+                    };
                     ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
                     if ui.small_button("⏶ back to root").clicked() {
                         ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
@@ -2534,7 +2551,8 @@ fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>)
     (parts, shader_holder)
 }
 
-/// Material-bearing parts of `root`'s subtree, each labelled by its leaf name.
+/// Material-bearing parts of `root`'s subtree, each labelled by the shared
+/// entity presentation policy.
 fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
     let ents = subtree(ctx, root);
     let mut out = Vec::new();
@@ -2542,16 +2560,16 @@ fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
         let has_shader = ctx.get::<ShaderLook>(e).is_some();
         let has_std = ctx.get::<PbrLook>(e).is_some();
         if has_shader || has_std {
-            let label = ctx
-                .get::<Name>(e)
-                .map(|n| {
-                    n.as_str()
-                        .rsplit(['/', '\\'])
-                        .next()
-                        .unwrap_or(n.as_str())
-                        .to_string()
-                })
-                .unwrap_or_else(|| format!("{e:?}"));
+            let label = lunco_core::entity_display_name(
+                ctx.get::<Name>(e),
+                ctx.get::<lunco_core::markers::Callsign>(e),
+                ctx.get::<lunco_core::CatalogEntryId>(e),
+            );
+            let label = if label.is_empty() {
+                "Unnamed entity".to_string()
+            } else {
+                label
+            };
             out.push((e, label));
         }
     }

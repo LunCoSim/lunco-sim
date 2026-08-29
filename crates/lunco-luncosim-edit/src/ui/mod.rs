@@ -162,6 +162,8 @@ fn refresh_view_help_controls(
     local_avatar: Res<TheLocalAvatar>,
     q_avatar: Query<&ControllerLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
     q_names: Query<Ref<Name>>,
+    q_callsigns: Query<&lunco_core::markers::Callsign>,
+    q_catalog_ids: Query<&lunco_core::CatalogEntryId>,
     q_bindings: Query<Ref<ControlBinding>>,
     q_inputs: Query<Ref<InputPorts>>,
     mut help: ResMut<LiveHelpSections>,
@@ -200,10 +202,20 @@ fn refresh_view_help_controls(
     }];
 
     if let Some(target) = target {
-        let name = q_names
-            .get(target)
-            .map(|name| name.as_str().to_owned())
-            .unwrap_or_else(|_| "controlled endpoint".into());
+        let name = lunco_core::entity_display_name(
+            q_names
+                .get(target)
+                .ok()
+                .map(|name| Name::new(name.as_str().to_owned()))
+                .as_ref(),
+            q_callsigns.get(target).ok(),
+            q_catalog_ids.get(target).ok(),
+        );
+        let name = if name.is_empty() {
+            "controlled endpoint".into()
+        } else {
+            name
+        };
         let mut rows = Vec::new();
         if let Ok(binding) = q_bindings.get(target) {
             for (intent, port, scale) in &binding.binds {

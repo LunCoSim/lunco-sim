@@ -42,14 +42,15 @@ pub struct FlightAuthority {
     pub piloted: bool,
 }
 
-/// A vessel's human name — "Kestrel", not "/Episode01Recording/Lander".
+/// An entity's authored human name — "Kestrel", not
+/// "/Episode01Recording/Lander".
 ///
 /// Sourced from the STANDARD UsdUI `ui:displayName` attribute
 /// (SceneGraphPrimAPI) by the USD loader — not a custom field; USD already
-/// has a word for "what this thing is called". Driver-facing UI (the HUD
-/// title, comms panels) prefers it over the `Name` component, which holds the
-/// prim PATH and reads as plumbing on camera. A vessel without one simply
-/// shows its path — absence is not an error.
+/// has a word for "what this thing is called". Presentation surfaces resolve
+/// it through [`crate::entity_display_name`], which uses the catalog identity
+/// or the `Name` leaf when no authored display name exists. The `Name`
+/// component remains the canonical hierarchy address.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct Callsign(pub String);

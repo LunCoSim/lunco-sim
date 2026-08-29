@@ -47,7 +47,12 @@ impl Plugin for ControlStatusPlugin {
 fn draw_control_blackout(
     mut egui_ctx: EguiContexts,
     paths: Option<Res<ControlPathRegistry>>,
-    q: Query<(&GlobalEntityId, Option<&Name>)>,
+    q: Query<(
+        &GlobalEntityId,
+        Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Option<&lunco_core::CatalogEntryId>,
+    )>,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
     let Some(paths) = paths else { return };
@@ -60,10 +65,14 @@ fn draw_control_blackout(
     // actually down, and `is_down` is a hash lookup.
     let mut down: Vec<String> = q
         .iter()
-        .filter(|(gid, _)| paths.is_down(gid.get()))
-        .map(|(gid, name)| {
-            name.map(|n| leaf(n.as_str()).to_string())
-                .unwrap_or_else(|| format!("vessel {}", gid.get()))
+        .filter(|(gid, _, _, _)| paths.is_down(gid.get()))
+        .map(|(gid, name, callsign, catalog_id)| {
+            let label = lunco_core::entity_display_name(name, callsign, catalog_id);
+            if label.is_empty() {
+                format!("vessel {}", gid.get())
+            } else {
+                label
+            }
         })
         .collect();
     if down.is_empty() {
@@ -113,9 +122,4 @@ fn draw_control_blackout(
                     });
                 });
         });
-}
-
-/// Prim paths name entities (`/Traverse/Rover`); a student wants "Rover".
-fn leaf(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
 }

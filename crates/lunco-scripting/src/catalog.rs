@@ -193,13 +193,13 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "find",
         "find(name)",
         "id (i64)",
-        "Entity id with the given Name, or -1 if none.",
+        "Entity id with the given canonical Name, or -1 if none.",
     ),
     (
         "name",
         "name(id)",
         "string | ()",
-        "The entity's Name (reverse of find).",
+        "The entity's human-readable presentation label; QueryEntity supplies the canonical USD path.",
     ),
     (
         "parent",
