@@ -43,9 +43,10 @@ persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `FloatingOrigin`; cameras never receive or transfer that marker. For a
 site-anchored scene, celestial placement mounts only the authored site root and
 binds its physical descendants; it does not query or migrate an avatar/camera.
-An authored avatar camera inherits the site's frame through the hierarchy, and
-all explicit camera frame changes stay with the camera subsystem through the
-same atomic migration helper. For a physical entity, keep it under
+The avatar subsystem captures a loader-relative local-camera pose before that
+mount and applies it after the site root becomes a live Grid. All explicit
+camera frame changes stay with the camera subsystem through the same atomic
+migration helper. For a physical entity, keep it under
 `ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
 or connection line, convert both endpoints into one semantic frame before
