@@ -163,6 +163,22 @@ When no window `Camera3d` is active at all (Design perspective, the Modelica
 workbench), nothing clears the target — `render_layout` handles that case by
 painting a full-window backdrop on egui's background layer.
 
+### 3.2 Render-time resource ownership
+
+`WorkbenchLayout` is the owner of the dock tree, but `render_workbench` removes
+that resource for the duration of the egui pass. Panel renderers and observers
+must therefore emit typed navigation requests (`ActivatePerspective`,
+`OpenTab`, `FocusPanel`, and related commands); they must not read or mutate
+`WorkbenchLayout` from a render-time callback. The workbench drains deferred
+layout requests before deferred tab requests so a request that changes both
+the perspective and the active tab is applied in authored order.
+
+UI projection plugins that read workbench resources install
+`WorkbenchPlugin` when it is not already present. In particular,
+`lunco_tutorial::TutorialPlugin` owns the launcher projection but relies on
+the Workbench owner for `WorkbenchLayout` and `HelpAnchors`; its composition
+contract is valid both standalone and inside an existing workbench host.
+
 ## 4. Workspaces
 
 A workspace is a named task-specific UI configuration. LunCoSim ships with

@@ -978,7 +978,11 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_systems(
                 Update,
-                (drain_pending_tab_requests, drain_pending_layout_requests).chain(),
+                // A navigation gesture may request both a perspective and a
+                // tab while the layout is extracted for egui rendering. Apply
+                // the layout first so the tab lands in the requested
+                // perspective, not the outgoing one.
+                (drain_pending_layout_requests, drain_pending_tab_requests).chain(),
             )
             .add_systems(
                 Update,
@@ -6181,6 +6185,88 @@ mod tests {
         );
     }
 
+    struct NavigationInstancePanel;
+
+    impl InstancePanel for NavigationInstancePanel {
+        fn kind(&self) -> PanelId {
+            PanelId("navigation_instance")
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::Center
+        }
+
+        fn title(&self, _world: &World, instance: u64) -> String {
+            format!("Instance {instance}")
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx, _instance: u64) {}
+    }
+
+    #[test]
+    fn deferred_navigation_applies_perspective_before_tab() {
+        let mut app = App::new();
+        app.init_resource::<PendingLayoutRequests>()
+            .init_resource::<PendingTabRequests>();
+
+        let mut layout = WorkbenchLayout::default();
+        layout.register(DockPanel(PanelId("center")));
+        layout.register_instance_panel(NavigationInstancePanel);
+        layout.register_perspective(CenterPerspective {
+            id: PerspectiveId("source"),
+        });
+        layout.register_perspective(CenterPerspective {
+            id: PerspectiveId("destination"),
+        });
+
+        // Match the render-time state: the workbench has queued both intents
+        // while its layout was unavailable, then receives the live layout
+        // before the next Update drain.
+        app.insert_resource(layout);
+        app.world_mut()
+            .resource_mut::<PendingLayoutRequests>()
+            .0
+            .push(LayoutRequest::ActivatePerspective("destination".into()));
+        app.world_mut()
+            .resource_mut::<PendingTabRequests>()
+            .0
+            .push(TabRequest::Open(OpenTab {
+                kind: PanelId("navigation_instance"),
+                instance: 7,
+            }));
+        app.add_systems(
+            Update,
+            (drain_pending_layout_requests, drain_pending_tab_requests).chain(),
+        );
+
+        app.update();
+
+        let layout = app.world().resource::<WorkbenchLayout>();
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId("destination"))
+        );
+        assert!(layout.dock.iter_all_tabs().any(|(_, tab)| {
+            *tab == TabId::Instance {
+                kind: PanelId("navigation_instance"),
+                instance: 7,
+            }
+        }));
+    }
+
+    #[test]
+    fn open_tab_is_queued_while_layout_is_scoped_out() {
+        let mut app = App::new();
+        app.init_resource::<PendingTabRequests>();
+        app.add_observer(on_open_tab);
+        app.world_mut().trigger(OpenTab {
+            kind: PanelId("navigation_instance"),
+            instance: 7,
+        });
+
+        assert_eq!(app.world().resource::<PendingTabRequests>().0.len(), 1);
+    }
+
     struct FocusPanelFixture;
 
     impl Panel for FocusPanelFixture {
@@ -6310,6 +6396,25 @@ mod tests {
             layout.set_right_inspector(None);
             layout.set_bottom(None);
             layout.set_center(vec![]);
+        }
+    }
+
+    struct CenterPerspective {
+        id: PerspectiveId,
+    }
+
+    impl Perspective for CenterPerspective {
+        fn id(&self) -> PerspectiveId {
+            self.id
+        }
+
+        fn title(&self) -> String {
+            self.id.0.to_string()
+        }
+
+        fn apply(&self, layout: &mut WorkbenchLayout) {
+            layout.set_side_browser(None);
+            layout.set_center(vec![PanelId("center")]);
         }
     }
 

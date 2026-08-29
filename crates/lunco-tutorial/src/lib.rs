@@ -1943,6 +1943,13 @@ pub struct TutorialPlugin {
 #[cfg(feature = "ui")]
 impl Plugin for TutorialPlugin {
     fn build(&self, app: &mut App) {
+        // The launcher and completion prompt render against WorkbenchLayout
+        // and HelpAnchors. Install their owner before registering any of the
+        // UI projection systems so TutorialPlugin is safe to compose on its
+        // own as well as inside a host that already has a workbench.
+        if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
+            app.add_plugins(lunco_workbench::WorkbenchPlugin);
+        }
         if !app.is_plugin_added::<TutorialCorePlugin>() {
             app.add_plugins(TutorialCorePlugin {
                 app: self.app.clone(),
@@ -2042,6 +2049,25 @@ mod tests {
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn ui_projection_installs_the_workbench_owner() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        bevy::asset::AssetApp::init_asset::<bevy::shader::Shader>(&mut app);
+        app.add_plugins(TutorialPlugin {
+            app: "sandbox".into(),
+        });
+
+        assert!(app
+            .world()
+            .contains_resource::<lunco_workbench::WorkbenchLayout>());
+        assert!(app
+            .world()
+            .contains_resource::<lunco_workbench::HelpAnchors>());
+        assert!(app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>());
     }
 
     /// A learner changing perspectives during a guided lesson is ordinary UI
