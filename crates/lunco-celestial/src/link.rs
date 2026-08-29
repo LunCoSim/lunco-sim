@@ -281,11 +281,15 @@ fn on_set_link_cadence(trigger: On<SetLinkCadence>, mut config: ResMut<LinkConfi
 
 register_commands!(on_set_link_cadence);
 
-/// Kernel scratch: last recompute epoch + the previous tick's live link set (for
-/// AOS/LOS edges), keyed by GID pair.
+/// Scene-scoped kernel state: last recompute epoch + the previous recompute's
+/// live link set (for AOS/LOS edges), keyed by GID pair.
+///
+/// This is a resource rather than `Local` because the scheduler condition and
+/// the writer must share the same cadence cursor, and scene teardown must be
+/// able to retire the outgoing graph before a replacement Twin uses its GIDs.
 #[derive(Resource, Default)]
 pub(crate) struct LinkSolverState {
-    last_jd: f64,
+    last_jd: Option<f64>,
     /// The PUBLISHED up-set from the previous recompute — what consumers were told and
     /// what AOS/LOS edges fire against. Debounced, not raw.
     prev_up: HashSet<(u64, u64)>,
@@ -293,6 +297,39 @@ pub(crate) struct LinkSolverState {
     /// as severed. Reaches [`LinkConfig::drop_debounce`] → the drop publishes. Cleared
     /// the moment the link reads up again, so a flicker never accumulates.
     down_streak: HashMap<(u64, u64), u32>,
+}
+
+/// Pure sim-time cadence decision shared by the scheduler and the kernel's
+/// direct-system guard. A missing cursor means the first identified graph is
+/// due immediately; `Option` avoids using a valid epoch such as `0.0` as a
+/// sentinel.
+fn link_solve_due_at(current_jd: f64, last_jd: Option<f64>, interval_s: f64) -> bool {
+    last_jd.is_none_or(|last| (current_jd - last).abs() * 86_400.0 >= interval_s.max(0.0))
+}
+
+/// Skip the link kernel between its authored sim-time cadence intervals. The
+/// node-count probe is bounded to two matches so an empty scene does not enter
+/// the large pairwise system at all.
+pub(crate) fn link_solve_due(
+    config: Option<Res<LinkConfig>>,
+    world_time: Option<Res<WorldTime>>,
+    state: Res<LinkSolverState>,
+    nodes: Query<(), With<LinkNode>>,
+) -> bool {
+    if nodes.iter().take(2).count() < 2 {
+        return false;
+    }
+    let (Some(config), Some(world_time)) = (config, world_time) else {
+        return false;
+    };
+    link_solve_due_at(world_time.epoch_jd, state.last_jd, config.interval_s)
+}
+
+/// Reset cadence and edge history at the scene replacement boundary. Link
+/// state is derived from the current scene; carrying a previous scene's
+/// `prev_up` set would manufacture AOS/LOS edges against unrelated entities.
+pub(crate) fn reset_link_solver_state(mut state: ResMut<LinkSolverState>) {
+    *state = LinkSolverState::default();
 }
 
 /// One resolved node, snapshotted so the world borrow is free for the terrain
@@ -348,7 +385,7 @@ pub(crate) fn update_links(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut q_state: Query<&mut LinkState>,
     mut q_geometry: Query<&mut LinkGeometryState>,
-    mut state: Local<LinkSolverState>,
+    mut state: ResMut<LinkSolverState>,
     mut commands: Commands,
 ) {
     let (Some(config), Some(world_time)) = (config, world_time) else {
@@ -360,8 +397,7 @@ pub(crate) fn update_links(
     if q_nodes.iter().count() < 2 {
         return;
     }
-    let advanced = (jd - state.last_jd).abs() * 86_400.0 >= config.interval_s;
-    if !advanced && state.last_jd != 0.0 {
+    if !link_solve_due_at(jd, state.last_jd, config.interval_s) {
         return;
     }
 
@@ -390,7 +426,7 @@ pub(crate) fn update_links(
         // skipped and the graph would wait a further interval for no reason.
         return;
     }
-    state.last_jd = jd;
+    state.last_jd = Some(jd);
 
     // Body centers for analytic occlusion.
     let bodies: Vec<(String, DVec3, f64)> = match (ephemeris.as_deref(), registry.as_deref()) {
@@ -1396,6 +1432,7 @@ mod tests {
             interval_s,
             drop_debounce: 1,
         });
+        world.insert_resource(LinkSolverState::default());
         world
     }
 
@@ -2089,6 +2126,15 @@ mod tests {
             !world.get::<LinkState>(a).unwrap().peers.is_empty(),
             "past the interval the sweep must run again"
         );
+    }
+
+    #[test]
+    fn cadence_scheduler_uses_a_real_cursor_and_handles_rewind() {
+        assert!(link_solve_due_at(0.0, None, 1.0));
+        assert!(!link_solve_due_at(42.0, Some(42.0), 1.0));
+        assert!(link_solve_due_at(42.0 + 2.0 / 86_400.0, Some(42.0), 1.0));
+        assert!(link_solve_due_at(41.0, Some(42.0), 1.0));
+        assert!(link_solve_due_at(42.0, Some(42.0), 0.0));
     }
 
     /// `interval_s = 0` means "every tick" — the escape hatch the tests above and

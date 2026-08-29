@@ -511,6 +511,19 @@ This is an owner-level use of BigSpace's maintained optimization, not an app
 propagation fork or a second cache. Focused crate tests, the production build,
 and a clean Apollo runtime are required before claiming a frame-time change.
 
+#### 2026-08-30 connectivity projection scheduler gating
+
+The generic link kernel already owns a sim-time cadence, but its regular Bevy
+system was still entered on every render frame. Its cadence cursor is now a
+scene-scoped resource shared by a scheduler condition and the direct-system
+guard, with `Option<f64>` rather than an epoch sentinel. Scene teardown clears
+the cursor and AOS/LOS edge history. The separate Wi-Fi projection now wakes
+only when a `WifiNode` or source `LinkGeometryState` changes. Link geometry,
+debounce, policy hooks, and published state are unchanged.
+
+The next verification gate is the focused celestial suite plus a production
+Apollo run; no FPS gain is claimed until a settled comparison is recorded.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

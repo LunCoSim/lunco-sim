@@ -35,6 +35,21 @@ pub struct WifiPeer {
     pub class: Option<String>,
 }
 
+/// Wi-Fi is a projection of `WifiNode` settings and the generic link geometry.
+/// Rebuild it only when one of those inputs changes; stable frames have no new
+/// graph to project.
+pub(crate) fn wifi_links_due(
+    changed: Query<
+        (),
+        (
+            With<WifiNode>,
+            Or<(Changed<WifiNode>, Changed<LinkGeometryState>)>,
+        ),
+    >,
+) -> bool {
+    !changed.is_empty()
+}
+
 /// Project a separate Wi-Fi graph from the raw geometry observations.
 ///
 /// This system deliberately does not read `LinkState`: a direct policy-down
@@ -87,7 +102,7 @@ mod tests {
     #[test]
     fn rover_radio_can_connect_when_direct_link_state_is_absent() {
         let mut app = App::new();
-        app.add_systems(Update, update_wifi_links);
+        app.add_systems(Update, update_wifi_links.run_if(wifi_links_due));
 
         let a = app
             .world_mut()
@@ -147,7 +162,7 @@ mod tests {
     #[test]
     fn wifi_applies_both_endpoint_ranges() {
         let mut app = App::new();
-        app.add_systems(Update, update_wifi_links);
+        app.add_systems(Update, update_wifi_links.run_if(wifi_links_due));
         let a = app
             .world_mut()
             .spawn((

@@ -57,7 +57,11 @@ the moment the core branches on `class == "relay"`, the domain is back in Rust.)
 range → local elevation at each end → analytic body occlusion (`segment_hits_sphere`
 over the body registry) → terrain occlusion → authored occluders. It then publishes
 `LinkState` and emits `link.aos` / `link.los` telemetry events on the rising/falling
-edges.
+edges. The system is scheduled only when its sim-time cadence expires; the
+cadence cursor and edge history are scene-scoped and reset at teardown. The
+Wi-Fi projection likewise wakes only when a `WifiNode` or its source
+`LinkGeometryState` changes. These scheduler gates do not alter the authored
+cadence, geometry, or policy contract.
 
 ### Identity is the GID
 

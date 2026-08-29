@@ -241,6 +241,7 @@ impl Plugin for CelestialPlugin {
         // Rust, verdict via the language-neutral `link.connected` hook, cadence
         // tunable live via `SetLinkCadence` (docs 10/12). Domain-free.
         app.init_resource::<link::LinkConfig>();
+        app.init_resource::<link::LinkSolverState>();
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
         app.register_type::<link::LinkOccluder>();
@@ -254,8 +255,18 @@ impl Plugin for CelestialPlugin {
         // exclusive version, needed to call the TerrainRaycast provider with
         // `&mut World`, inserted a sync point that interleaved with the
         // twin/terrain despawns and tripped avian's island bookkeeping.)
-        app.add_systems(Update, link::update_links.after(pose::update_solar_poses));
-        app.add_systems(Update, wifi::update_wifi_links.after(link::update_links));
+        app.add_systems(
+            Update,
+            link::update_links
+                .run_if(link::link_solve_due)
+                .after(pose::update_solar_poses),
+        );
+        app.add_systems(
+            Update,
+            wifi::update_wifi_links
+                .run_if(wifi::wifi_links_due)
+                .after(link::update_links),
+        );
         // Expose the working peer's range + verdict as PORTS, so an authored RF model
         // (`assets/models/CommsLink.mo`) can turn metres into bits/s off an ordinary
         // output→input wire.
@@ -330,7 +341,10 @@ impl Plugin for CelestialPlugin {
         // same frame, so that state is never observable. Retire the old sky and
         // restore the persistent physics frame exactly once at the lifecycle
         // boundary, before any replacement prim is projected.
-        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            (teardown_celestial_scene, link::reset_link_solver_state),
+        );
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
         // Core celestial updates in PreUpdate for Coordinate Stability
