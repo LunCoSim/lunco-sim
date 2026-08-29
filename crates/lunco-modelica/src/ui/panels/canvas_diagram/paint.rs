@@ -4,7 +4,20 @@
 
 use bevy_egui::egui;
 
-/// Map a Modelica connector type's leaf name to a wire colour.
+/// Presentation style derived from a Modelica connector type.
+///
+/// The domain label is used by the diagram legend; keeping it beside the
+/// colour mapping makes the legend describe the exact same canonical palette
+/// the wire painter uses. Connector instances may still provide an authored
+/// colour, in which case that colour is retained while this style supplies
+/// the standard domain label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct WireStyle {
+    pub(super) color: egui::Color32,
+    pub(super) domain: &'static str,
+}
+
+/// Map a Modelica connector type's leaf name to its canonical presentation.
 ///
 /// Returns the **canonical MSL Icon line color** for that connector
 /// kind — the same value the connector's authored `Icon(... lineColor=…)`
@@ -14,36 +27,59 @@ use bevy_egui::egui;
 /// while the underlying values match Dymola/OMEdit on a light
 /// canvas. Used as the FALLBACK when we couldn't read the connector
 /// instance's own `icon_color` from the AST.
-pub(super) fn wire_color_for(connector_type: &str) -> egui::Color32 {
+pub(super) fn wire_style_for(connector_type: &str) -> WireStyle {
     let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
     use egui::Color32 as C;
-    match leaf {
+    let (color, domain) = match leaf {
         // Electrical: red (positive) — MSL Pin uses {0,0,255}; OMEdit
         // renders these as solid red, but the canonical RGB is blue.
         // We follow the AST line color via icon_color when available.
         "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {
-            C::from_rgb(0, 0, 255)
+            (C::from_rgb(0, 0, 255), "electrical")
         }
         // Translational + rotational mechanics: BLACK — `Flange`
         // connectors author lineColor=black in MSL. OMEdit renders
         // mechanical wires black on the white canvas.
-        "Flange_a" | "Flange_b" | "Flange" | "Support" => C::from_rgb(0, 0, 0),
+        "Flange_a" | "Flange_b" | "Flange" | "Support" => (C::from_rgb(0, 0, 0), "mechanical"),
         // Heat transfer: red (191,0,0) — canonical thermal color.
-        "HeatPort_a" | "HeatPort_b" | "HeatPort" => C::from_rgb(191, 0, 0),
+        "HeatPort_a" | "HeatPort_b" | "HeatPort" => (C::from_rgb(191, 0, 0), "thermal"),
         // Fluid: blue (canonical Modelica.Fluid uses lineColor blue).
-        "FluidPort" | "FluidPort_a" | "FluidPort_b" => C::from_rgb(0, 127, 255),
+        "FluidPort" | "FluidPort_a" | "FluidPort_b" => (C::from_rgb(0, 127, 255), "fluid"),
         // Real signals: deep blue {0,0,127} — what every MSL Real
         // signal connector authors as its lineColor. OMEdit renders
         // these as bold blue with arrowheads.
-        "RealInput" | "RealOutput" => C::from_rgb(0, 0, 127),
+        "RealInput" | "RealOutput" => (C::from_rgb(0, 0, 127), "signal"),
         // Boolean signals: purple {255,0,255} per MSL Interfaces.
-        "BooleanInput" | "BooleanOutput" => C::from_rgb(255, 0, 255),
+        "BooleanInput" | "BooleanOutput" => (C::from_rgb(255, 0, 255), "boolean signal"),
         // Integer signals: green {255,127,0} (orange) per MSL.
-        "IntegerInput" | "IntegerOutput" => C::from_rgb(255, 127, 0),
+        "IntegerInput" | "IntegerOutput" => (C::from_rgb(255, 127, 0), "integer signal"),
         // Frame_a/Frame_b (multibody): orange-brown.
-        "Frame" | "Frame_a" | "Frame_b" => C::from_rgb(95, 95, 95),
+        "Frame" | "Frame_a" | "Frame_b" => (C::from_rgb(95, 95, 95), "multibody frame"),
         // Default — black (will remap to theme text on dark).
-        _ => C::from_rgb(0, 0, 0),
+        _ => (C::from_rgb(0, 0, 0), "connector"),
+    };
+    WireStyle { color, domain }
+}
+
+pub(super) fn wire_color_for(connector_type: &str) -> egui::Color32 {
+    wire_style_for(connector_type).color
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wire_style_for;
+
+    #[test]
+    fn physical_connector_styles_are_distinct_and_named() {
+        let electrical = wire_style_for("Modelica.Electrical.Analog.Interfaces.Pin");
+        let mechanical = wire_style_for("Modelica.Mechanics.Rotational.Interfaces.Flange_a");
+        let thermal = wire_style_for("Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a");
+
+        assert_eq!(electrical.domain, "electrical");
+        assert_eq!(mechanical.domain, "mechanical");
+        assert_eq!(thermal.domain, "thermal");
+        assert_ne!(electrical.color, mechanical.color);
+        assert_ne!(mechanical.color, thermal.color);
     }
 }
 

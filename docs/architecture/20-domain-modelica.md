@@ -769,6 +769,10 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
 - Connector graphics, color, causality, placement, and `flow` metadata come
   from the resolved connector AST. The renderer is not a battery/motor/solar
   palette.
+- Generated-network route annotations carry geometry only; connector colour
+  remains the resolved connector `Icon` colour. When edges are present, the
+  canvas legend lists the observed connector leaf, physical domain, and
+  causality, while wire hover exposes endpoint values and declared flow.
 - A live non-zero declared `flow` value animates directional dots on the
   actual routed polyline. Multiple flow variables are supported; the first
   active declared flow is selected, and a missing/non-flow scalar stays idle.
