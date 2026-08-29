@@ -481,6 +481,22 @@ the process and port were confirmed gone. These samples are diagnostic only;
 the Apollo readiness gate remains blocked by the independent ten-body
 USD-physics-admission issue recorded above.
 
+#### 2026-08-30 generated-domain projection trigger gating
+
+`domain_projection::project_domain_islands` was approximately **1.397 ms** in
+the mixed Tracy attribution. Its own code already knew the exact lifecycle
+triggers and returned immediately on stable frames, but the production
+schedule still entered the system and constructed its large query set every
+frame. The existing trigger contract is now also the Bevy `run_if` condition:
+new prim/identity, USD wiring dirty, or member-class resolution. The internal
+guard remains the same semantic protection for direct system invocation; the
+production schedule now skips the idle system entirely.
+
+The focused `lunco-usd-sim` domain-projection tests and production build are
+the verification gate for this change. A settled Apollo rerun is still needed
+for an FPS comparison after the independent readiness issue is fixed; no FPS
+gain is claimed from the blocked run.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

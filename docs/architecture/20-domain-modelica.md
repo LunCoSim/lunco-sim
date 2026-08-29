@@ -90,6 +90,13 @@ projection error, never a compiled-schema fallback.
 units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth.
 
+The generated-domain projector is lifecycle-driven. Its scheduler condition
+opens only for a newly projected prim or identity, a USD wiring edit, or a
+member-class resolution; stable frames do not construct the projector's large
+stage and synthesizer query set. The system retains the same trigger guard for
+direct system invocation, while the production schedule owns the idle-frame
+skip.
+
 Each policy unit carries both its Modelica class name and its root instance
 name. The shipped facts include a deterministic instance default, but a Rhai
 policy may replace it; Rust validates identifier/collision/uniqueness rules and

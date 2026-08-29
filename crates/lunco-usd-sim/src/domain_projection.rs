@@ -2233,7 +2233,12 @@ pub fn project_domain_islands(
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    if added.is_empty() && identity_added.is_empty() && !dirty.0 && !projection_dirty.0 {
+    if !projection_is_due_from_flags(
+        !added.is_empty(),
+        !identity_added.is_empty(),
+        dirty.0,
+        projection_dirty.0,
+    ) {
         return;
     }
     projection_dirty.0 = false;
@@ -3800,6 +3805,34 @@ impl MemberClasses {
 #[derive(Resource, Default)]
 pub struct ProjectionDirty(pub bool);
 
+fn projection_is_due_from_flags(
+    has_added_prim: bool,
+    has_added_identity: bool,
+    wiring_dirty: bool,
+    projection_dirty: bool,
+) -> bool {
+    has_added_prim || has_added_identity || wiring_dirty || projection_dirty
+}
+
+/// Run condition for the generated-domain projector.
+///
+/// Projection is an authoring/lifecycle transaction, not a frame service. Keep
+/// the trigger set beside [`project_domain_islands`] so the scheduler can avoid
+/// constructing its stage, identity, and synthesizer queries on stable frames.
+pub(crate) fn domain_projection_due(
+    added: Query<(), Added<UsdPrimPath>>,
+    identity_added: Query<(), Added<lunco_core::GlobalEntityId>>,
+    dirty: Res<WiringDirty>,
+    projection_dirty: Res<ProjectionDirty>,
+) -> bool {
+    projection_is_due_from_flags(
+        !added.is_empty(),
+        !identity_added.is_empty(),
+        dirty.0,
+        projection_dirty.0,
+    )
+}
+
 /// Resolve every member source's DECLARED class before synthesis.
 ///
 /// Scans the stage for component collections, loads each member's
@@ -3944,6 +3977,15 @@ pub fn resolve_member_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_projection_schedule_requires_an_authoring_trigger() {
+        assert!(!projection_is_due_from_flags(false, false, false, false));
+        assert!(projection_is_due_from_flags(true, false, false, false));
+        assert!(projection_is_due_from_flags(false, true, false, false));
+        assert!(projection_is_due_from_flags(false, false, true, false));
+        assert!(projection_is_due_from_flags(false, false, false, true));
+    }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
         DomainComponent {

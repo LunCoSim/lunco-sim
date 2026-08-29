@@ -4981,7 +4981,9 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(
         Update,
-        crate::domain_projection::project_domain_islands.in_set(CosimUpdateSet::Projection),
+        crate::domain_projection::project_domain_islands
+            .run_if(crate::domain_projection::domain_projection_due)
+            .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
