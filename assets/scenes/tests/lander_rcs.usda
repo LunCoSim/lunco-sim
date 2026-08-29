@@ -1,0 +1,79 @@
+#usda 1.0
+(
+    defaultPrim = "LanderRcsTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Authored RCS mount and wrench regression. The fixture composes the production
+# lander and inspects the twelve real force actuators; it does not replace them
+# with a test-only thruster rig.
+#
+#   target/debug/luncosim test --scene assets/scenes/tests/lander_rcs.usda
+
+def Xform "LanderRcsTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "The production lander's RCS hardpoints, exhaust directions, and generated wrench authority."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        token lunco:terrain:surfaceRole = "flat-site"
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.13, 0.125, 0.12)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </LanderRcsTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (14.0, 6.0, 14.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def "Lander" (
+        prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
+    )
+    {
+        double3 xformOp:translate = (0, 8.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:attitude_hold = 0.0
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "lander-rcs"
+
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/lander_rcs.rhai@
+        }
+    }
+}

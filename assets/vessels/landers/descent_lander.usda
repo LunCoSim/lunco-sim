@@ -1859,7 +1859,7 @@ def Xform "DescentLander" (
     }
 
     # ── RCS quads — the attitude authority the flight model exercises ──────
-    # Four thruster blocks on the upper hull diagonals. The Modelica airframe
+    # Four thruster blocks at the hull's diagonal hardpoints. The Modelica airframe
     # applies attitude torque every shot (the righting in shot 1, the banks in
     # shot 4); these give that force a visible source. The compact plume volumes
     # below are driven by the stabiliser's six signed torque channels. The
@@ -1868,7 +1868,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadPXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 2.2, 1.8)
+        double3 xformOp:translate = (1.8, 0, 1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1878,7 +1878,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 2.2, 1.8)
+        double3 xformOp:translate = (-1.8, 0, 1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1888,7 +1888,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadPXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 2.2, -1.8)
+        double3 xformOp:translate = (1.8, 0, -1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1898,7 +1898,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 2.2, -1.8)
+        double3 xformOp:translate = (-1.8, 0, -1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1917,7 +1917,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, 2.4)
+        double3 xformOp:translate = (0, 0, 2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1951,7 +1951,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, 2.4)
+        double3 xformOp:translate = (0, 0, 2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1969,7 +1969,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, -2.4)
+        double3 xformOp:translate = (0, 0, -2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2003,7 +2003,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, -2.4)
+        double3 xformOp:translate = (0, 0, -2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2021,7 +2021,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2057,7 +2057,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2075,7 +2075,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2111,7 +2111,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2129,7 +2129,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2164,7 +2164,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2182,7 +2182,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2218,7 +2218,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2241,7 +2241,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, -2.4)
+        double3 xformOp:translate = (0, 0, -2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2250,7 +2250,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        # The 180-degree mount turns the visible +Y exhaust into -Y; the body
+        # force is its opposite, so use local -Y to produce body +Y.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_pos_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_thrust_n>
@@ -2275,7 +2277,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, -2.4)
+        double3 xformOp:translate = (0, 0, -2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2293,7 +2295,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, 2.4)
+        double3 xformOp:translate = (0, 0, 2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2302,7 +2304,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        # The 180-degree mount turns the visible +Y exhaust into -Y; the body
+        # force is its opposite, so use local -Y to produce body +Y.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         rel lunco:forceActuator:commandSource = </DescentLander/AttitudeActuation.outputs:pitch_neg_b_valve>
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_thrust_n>
@@ -2327,7 +2331,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 2.4, 2.4)
+        double3 xformOp:translate = (0, 0, 2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2345,7 +2349,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2379,7 +2383,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2397,7 +2401,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2431,7 +2435,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2449,7 +2453,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2484,7 +2488,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 2.4, 0)
+        double3 xformOp:translate = (-2.4, 0, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2502,7 +2506,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2538,7 +2542,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 2.4, 0)
+        double3 xformOp:translate = (2.4, 0, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
