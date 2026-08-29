@@ -368,6 +368,44 @@ Subsequent local A/B runs were not acceptance data because a separate
 user-owned luncosim session on API port `4139` was active; that process and its
 build were preserved. Do not use those runs to claim a performance gain.
 
+#### 2026-08-30 bridge read change-gating verification
+
+The next measured owner was `lunco-usd-avian::pose_to_position`. Its previous
+steady-state path scanned every synced body twice per physics read even when no
+pose or hierarchy input changed. The bridge now uses Bevy's change detection as
+the wake signal and keeps the exact `BridgeShadow::is_representation_only`
+check as the semantic authority. First reads, active-frame handoffs, and real
+plain-ancestor motion still process the complete body set so descendants and
+frame transport retain their existing semantics. Bodies without the bridge's
+`PhysicsPoseSeeded` marker remain eligible until their initial pose is actually
+written; this preserves late/pre-existing materialization without a recovery
+scan. The unused `BridgeShadow::matches` helper was removed.
+
+Focused verification passed:
+
+- `cargo test -p lunco-usd-avian --lib -j 4 -- --nocapture`: **67/67**.
+- `cargo test -p lunco-usd-avian --test bridge_physics -j 4 -- --nocapture`:
+  **15/15**, including late-body seeding, frame handoff, teleport, ancestor
+  re-split, and rotating-parent invariants.
+- `./scripts/run_scene_tests.sh --no-build --exact allocation_spec`: passed.
+- `./scripts/run_scene_tests.sh --no-build --exact ackermann_parity`: passed.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed and produced
+  `usd/target/debug/luncosim`.
+
+A clean windowed Apollo High run on API port `4218` reached
+`ready=true` in approximately 3 seconds, with no runtime faults, broken
+connections, pending work, or algebraic loops. After settling, sampled clean
+diagnostics ranged from approximately **167–275 FPS** and **3.7–6.2 ms** frame
+time, with Avian around **0.5 ms**. This is a valid improvement measurement,
+but not 400-FPS acceptance. Typed `Exit` was accepted and the process and port
+were verified gone.
+
+The existing authored `drivetrain_parity` Rhai gate still fails its heading
+comparison at approximately **17%** versus the **15%** tolerance. A deterministic
+baseline run against the pre-optimization bridge failed the same assertion, so
+the bridge change is not the cause and the gate remains an independent follow-up
+task; its tolerance was not weakened.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

@@ -463,13 +463,6 @@ impl Default for BridgeShadow {
 }
 
 impl BridgeShadow {
-    fn matches(&self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) -> bool {
-        self.cell.as_ref() == cell
-            && self.translation == tf.translation
-            && self.rotation == tf.rotation
-            && self.physics_frame == physics_frame
-    }
-
     fn capture(&mut self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) {
         self.cell = cell.copied();
         self.translation = tf.translation;
@@ -736,20 +729,36 @@ fn pose_to_position(
             Without<Collider>,
         ),
     >,
-    mut q_bodies: Query<
-        (
+    mut body_queries: ParamSet<(
+        Query<
             Entity,
-            Option<&CellCoord>,
-            &Transform,
-            &mut Position,
-            &mut Rotation,
-            &mut LinearVelocity,
-            &mut AngularVelocity,
-            &mut BridgeShadow,
-            Option<&lunco_core::PhysicsPoseAuthoritative>,
-        ),
-        BridgeSynced,
-    >,
+            (
+                BridgeSynced,
+                Without<lunco_core::PhysicsPoseAuthoritative>,
+                Or<(
+                    Without<lunco_physics::PhysicsPoseSeeded>,
+                    Added<BridgeShadow>,
+                    Changed<Transform>,
+                    Changed<CellCoord>,
+                    Changed<ChildOf>,
+                )>,
+            ),
+        >,
+        Query<
+            (
+                Entity,
+                Option<&CellCoord>,
+                &Transform,
+                &mut Position,
+                &mut Rotation,
+                &mut LinearVelocity,
+                &mut AngularVelocity,
+                &mut BridgeShadow,
+                Option<&lunco_core::PhysicsPoseAuthoritative>,
+            ),
+            BridgeSynced,
+        >,
+    )>,
 ) {
     let active_frame = active_frame.0;
     if q_grids.get(active_frame).is_err() {
@@ -774,7 +783,8 @@ fn pose_to_position(
             &q_spatial,
         );
         if transform.is_none()
-            && q_bodies
+            && body_queries
+                .p1()
                 .iter()
                 .any(|(_, _, _, _, _, _, _, shadow, pose_override)| {
                     pose_override.is_none() && shadow.is_seeded()
@@ -796,38 +806,7 @@ fn pose_to_position(
     }
     // Pass 1 (read-only): which entities did an external writer touch?
     let mut moved = EntityHashSet::default();
-    for (e, _, _, _, _) in q_moved_plain.iter() {
-        // A Grid's Transform can be either a representation rebase or a real
-        // moving-frame update.  The former changes CellCoord and Transform as
-        // one pair and is filtered by the exact representation check below; the latter is a
-        // physical frame motion (for example the Moon's rotating surface
-        // grid).  Treating every Grid as non-moving leaves Avian's absolute
-        // Position in the old frame while the terrain and scene move in the
-        // new one.  That frame split is especially destructive to jointed
-        // assemblies: the solver sees a stationary body next to a moving
-        // collider and can inject unbounded constraint energy.
-        moved.insert(e);
-    }
-    for (e, cell, tf, _, _, _, _, shadow, pose_override) in q_bodies.iter() {
-        if pose_override.is_some() {
-            continue;
-        }
-        if first_read && shadow.is_seeded() && shadow.physics_frame != active_frame {
-            panic!(
-                "body {e:?} was seeded before the BigSpace physics bridge observed the active frame: seeded in {:?}, active is {active_frame:?}; bind ActivePhysicsFrame before the first physics read",
-                shadow.physics_frame
-            );
-        }
-        let parent_grid = q_parents
-            .get(e)
-            .ok()
-            .and_then(|parent| q_grids.get(parent.parent()).ok());
-        let internal_rebranch = shadow.is_representation_only(cell, tf, parent_grid, active_frame);
-        let mismatch = !shadow.matches(cell, tf, active_frame);
-        if !internal_rebranch && mismatch {
-            moved.insert(e);
-        }
-    }
+    let mut plain_moved = false;
     for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
         let representation_only = match (cell, shadow, child_of) {
             (Some(cell), Some(mut shadow), Some(child_of)) => {
@@ -842,20 +821,50 @@ fn pose_to_position(
         };
         if !representation_only {
             moved.insert(entity);
+            plain_moved = true;
         }
     }
-    if moved.is_empty() {
+    // A direct body change is a precise wake signal, not proof that the
+    // change is semantic: BigSpace can re-split the same pose into a new
+    // `(CellCoord, Transform)` pair.  The exact shadow check in pass 2 remains
+    // authoritative for that distinction.  The unseeded marker query also
+    // catches bodies materialized before this system's change-detection
+    // baseline; once seeded, they leave that query permanently and steady
+    // state is driven only by actual pose/topology changes.
+    moved.extend(body_queries.p0().iter());
+    let process_all_bodies = first_read || handoff.is_some() || plain_moved;
+    if !process_all_bodies && moved.is_empty() {
         return;
     }
 
     // Pass 2: re-read a body if it moved OR any ancestor moved (the ancestor's
     // new Transform is already in place, so the chain walk composes the
     // carried pose).
-    for (e, cell, tf, mut pos, mut rot, mut linear, mut angular, mut shadow, pose_override) in
-        &mut q_bodies
-    {
+    let body_entities: Vec<_> = if process_all_bodies {
+        body_queries
+            .p1()
+            .iter()
+            .map(|(entity, ..)| entity)
+            .collect()
+    } else {
+        moved.iter().copied().collect()
+    };
+    let mut q_bodies = body_queries.p1();
+    for e in body_entities {
+        let Ok((e, cell, tf, mut pos, mut rot, mut linear, mut angular, mut shadow, pose_override)) =
+            q_bodies.get_mut(e)
+        else {
+            continue;
+        };
         if pose_override.is_some() {
             continue;
+        }
+
+        if first_read && shadow.is_seeded() && shadow.physics_frame != active_frame {
+            panic!(
+                "body {e:?} was seeded before the BigSpace physics bridge observed the active frame: seeded in {:?}, active is {active_frame:?}; bind ActivePhysicsFrame before the first physics read",
+                shadow.physics_frame
+            );
         }
 
         // A scene is first projected under WorldRoot, where Avian is seeded,
