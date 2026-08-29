@@ -969,8 +969,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<CelestialBody>()
             .register_type::<Spacecraft>()
             .register_type::<MobilityRoot>()
-            .register_type::<ActiveAction>()
-            .register_type::<ActionStatus>()
             .register_type::<GlobalEntityId>()
             .register_type::<Provenance>()
             .register_type::<CameraFollow>()

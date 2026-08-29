@@ -1280,12 +1280,17 @@ pub fn apply_camera_paths(
             );
             continue;
         }
-        *cell = new_cell;
-        tf.translation = new_local.translation;
+        // A paused path can evaluate to the same sample for many render
+        // frames.  Preserve Bevy's value-based change contract so a stable
+        // cinematic camera does not wake BigSpace propagation.
+        cell.set_if_neq(new_cell);
+        if tf.translation != new_local.translation {
+            tf.translation = new_local.translation;
+        }
 
         // Only when the path owns the aim — during a `Manual` stretch the user is
         // steering and writing a stale target would fight the mouse.
-        if driven.aim_owned {
+        if driven.aim_owned && tf.rotation != new_local.rotation {
             tf.rotation = new_local.rotation;
         }
     }

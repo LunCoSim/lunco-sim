@@ -3,8 +3,9 @@
 ## Camera smoothing
 
 Baseline (shipped): frame-rate-stable exponential-decay follow with per-camera
-`damping` — see `spring_arm_system` / `orbit_system` in `src/lib.rs`. Open work
-below builds on that.
+`damping` — see `spring_arm_system` / `orbit_system` in `src/lib.rs`. Quaternion
+follow reuses Bevy's `StableInterpolate`; the position path keeps the same decay
+law in f64 so BigSpace coordinates are not rounded through f32.
 
 ### Follow-ups
 
@@ -21,11 +22,11 @@ below builds on that.
       way `damping` already does. A cinematic orbit can then differ from a
       snappy full-attitude chase.
 
-### Before building our own: check existing Bevy facilities
+### Existing facilities considered
 
 Smoothing is extremely common — likely don't need to hand-roll the math.
 
-- **Bevy core already has it.** `bevy::math::StableInterpolate` provides
+- **Bevy core owns the quaternion primitive.** `bevy::math::StableInterpolate` provides
   `smooth_nudge(&mut self, target, decay_rate, delta)` — exactly the
   `1 - exp(-decay_rate · dt)` form we wrote by hand, frame-rate independent.
   The official [Smooth Follow example](https://bevy.org/examples/math/smooth-follow/)
@@ -39,8 +40,8 @@ Smoothing is extremely common — likely don't need to hand-roll the math.
 - [`bevy_map_camera`](https://crates.io/crates/bevy_map_camera) — 3D camera
   controller with easing/tweening, as a reference design.
 
-Decision pending: adopt `StableInterpolate::smooth_nudge` for the math (cheap,
-in-tree) and keep our spring-arm/collision logic, vs. lean on a full controller
-crate. Our floating-origin `Grid` + `CellCoord` positioning means a drop-in
-camera crate probably won't fit without adaptation — but the smoothing *math*
-(`smooth_nudge`) and easing *curves* (`bevy_easings`) are reusable as-is.
+Decision: use `StableInterpolate::smooth_nudge` for f32 quaternion follow and
+keep the spring-arm/collision and BigSpace f64 position logic in the camera
+owner. A full controller crate would still need to own these grid/frame
+transactions, so adopting one would add a second pose owner rather than remove
+code.

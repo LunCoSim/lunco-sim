@@ -212,7 +212,12 @@ impl InteractionEased {
 fn restore_interaction_poses(mut q: Query<(&mut Transform, &InteractionEased)>) {
     for (mut tf, eased) in &mut q {
         if let Some(curr) = eased.curr {
-            *tf = curr;
+            // `Transform` is a BigSpace input.  Restoring an equal pose still
+            // marks the component changed through `Mut`, which needlessly
+            // wakes the high-precision propagation walk.
+            if *tf != curr {
+                *tf = curr;
+            }
         }
     }
 }
@@ -240,9 +245,16 @@ fn ease_interaction_poses(
     let s = step.overstep_fraction.clamp(0.0, 1.0);
     for (mut tf, eased) in &mut q {
         if let (Some(prev), Some(curr)) = (eased.prev, eased.curr) {
-            tf.translation = prev.translation.lerp(curr.translation, s);
-            tf.rotation = prev.rotation.slerp(curr.rotation, s);
-            tf.scale = prev.scale.lerp(curr.scale, s);
+            let next = Transform {
+                translation: prev.translation.lerp(curr.translation, s),
+                rotation: prev.rotation.slerp(curr.rotation, s),
+                scale: prev.scale.lerp(curr.scale, s),
+            };
+            // At rest `prev == curr`; the render interpolator must not turn a
+            // parked spatial entity into a perpetual BigSpace dirty source.
+            if *tf != next {
+                *tf = next;
+            }
         }
     }
 }
@@ -403,6 +415,52 @@ mod tests {
         assert_eq!(
             curr2.translation.x, 3.0,
             "no step ⇒ the true pose must not move"
+        );
+    }
+
+    /// A settled interpolated pose is not a spatial change. This guards the
+    /// BigSpace-facing contract: the render pass may run every frame, but a
+    /// parked `Transform` must not become a dirty propagation root merely
+    /// because an easing component is present.
+    #[test]
+    fn settled_interpolation_does_not_dirty_transform() {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<Time>();
+        super::build_interaction_cadence(&mut app);
+
+        let pose = Transform::from_xyz(4.0, 5.0, 6.0);
+        app.world_mut().spawn((
+            pose,
+            InteractionEased {
+                prev: Some(pose),
+                curr: Some(pose),
+            },
+        ));
+
+        #[derive(Resource, Default)]
+        struct Changes(u32);
+        app.init_resource::<Changes>();
+        app.add_systems(
+            PostUpdate,
+            (|mut changes: ResMut<Changes>,
+              q: Query<(), (With<InteractionEased>, Changed<Transform>)>| {
+                changes.0 += q.iter().count() as u32;
+            })
+            .after(InteractionRenderSet),
+        );
+
+        // Clear the Added/Changed state from spawning the fixture. The second
+        // frame is the one that proves a stable interpolation is idempotent.
+        app.update();
+        app.world_mut().resource_mut::<Changes>().0 = 0;
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Changes>().0,
+            0,
+            "settled easing must not mark Transform changed"
         );
     }
 

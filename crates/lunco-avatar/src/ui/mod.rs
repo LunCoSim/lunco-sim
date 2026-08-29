@@ -11,7 +11,7 @@ use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId, LocalAvatar, SessionProfiles, SessionRegistry};
 
-use crate::{FrameBlend, FreeFlightCamera, OrbitCamera, SpringArmCamera};
+use crate::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
 /// Semantic colour bucket for the camera-mode label.
 ///
@@ -61,7 +61,7 @@ struct SurfaceInfo {
 ///
 /// `AvatarStatusPanel::render` formerly ran ~8 world scans per frame
 /// (avatar lookup, gravity field, lat/lon/height derivation across
-/// `Transform`/`CellCoord`/`ChildOf`/`Grid`/`CelestialBody`, and four
+/// `Transform`/`CellCoord`/`ChildOf`/`Grid`/`CelestialBody`, and five
 /// camera-mode `single()` queries). [`populate_avatar_status_view`]
 /// flattens all of that into derived data here; the panel becomes a thin
 /// reader + deferred-action emitter. The readout is inherently live
@@ -223,10 +223,10 @@ pub fn populate_avatar_status_view(
     avatars: Query<Entity, (With<Avatar>, With<LocalAvatar>)>,
     surface_pose: lunco_celestial::SurfacePoseQuery,
     bodies: Query<&CelestialBody>,
-    blends: Query<&FrameBlend>,
     spring: Query<&SpringArmCamera>,
     orbit: Query<&OrbitCamera>,
     free_flight: Query<&FreeFlightCamera>,
+    surface: Query<&SurfaceCamera>,
     q_link: Query<&ControllerLink>,
     q_name: Query<&Name>,
     q_gid: Query<&GlobalEntityId>,
@@ -275,14 +275,7 @@ pub fn populate_avatar_status_view(
     });
 
     // ── Camera mode ──
-    let (color, label, detail) = if let Ok(blend) = blends.single() {
-        let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
-        (
-            ModeColor::Yellow,
-            format!("TRANSITION ({}%)", progress),
-            String::new(),
-        )
-    } else if let Ok(arm) = spring.single() {
+    let (color, label, detail) = if let Ok(arm) = spring.single() {
         (
             ModeColor::Maroon,
             "SPRING ARM".to_string(),
@@ -296,6 +289,8 @@ pub fn populate_avatar_status_view(
         )
     } else if free_flight.single().is_ok() {
         (ModeColor::Peach, "FREE FLIGHT".to_string(), String::new())
+    } else if surface.single().is_ok() {
+        (ModeColor::Yellow, "SURFACE".to_string(), String::new())
     } else {
         (ModeColor::Text, "UNKNOWN".to_string(), String::new())
     };
