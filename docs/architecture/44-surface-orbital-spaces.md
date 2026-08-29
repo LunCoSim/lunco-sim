@@ -56,12 +56,12 @@ transaction, so the replacement scene cannot inherit an orbital presentation
 fact without a valid surface-camera return state.
 
 Site placement owns only the authored site root and its physical descendants.
-It never queries or mutates an avatar/camera. An authored avatar camera is
-already in the site hierarchy and inherits the site's mounted frame through
-normal `ChildOf` propagation. Every explicit camera frame change is owned by
-the camera subsystem and uses the shared atomic migration operation; site
-placement must not reclaim an orbital camera from its body-centered inertial
-grid.
+It never queries or mutates an avatar/camera. The avatar subsystem captures the
+loader-relative camera pose before the mount, then performs the one startup
+handoff after the site root is a live Grid using the shared coordinate helpers.
+Every explicit camera frame change is owned by the camera subsystem and uses
+the shared atomic migration operation; site placement must not reclaim an
+orbital camera from its body-centered inertial grid.
 
 Surface orientation is derived from the local gravity/up direction and the
 selected frame. Orbital orientation is derived from the inertial frame. This
