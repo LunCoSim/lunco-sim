@@ -29,7 +29,7 @@ and design decisions. This skill is a quick-reference summary.
 
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.
 2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
-3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`, the in-house replacement for the old external `bevy_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
+3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
 For Twin-browser work, use the workbench-owned `BrowserQuery` as the single

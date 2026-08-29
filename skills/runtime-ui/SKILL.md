@@ -239,7 +239,7 @@ HUI/Flair owns those components.
 Lifecycle invariant: when an exposure or presentation gate turns off, the
 bridge removes the retained root whenever any HUI state remains, even if its
 local mounted marker is stale after a deferred rebuild. A hidden surface must
-not leave an old progress card in the render tree.
+not leave a stale progress card in the render tree.
 
 ## Verification
 
@@ -255,7 +255,7 @@ For a markup/style-only change:
 5. Check logs for HUI/Flair parse or asset errors.
 
 For a Rust change, build `target/debug/luncosim` in this worktree, send API
-`Exit`, verify the old process and port are gone, then launch the replacement.
+`Exit`, verify the existing process and port are gone, then launch the replacement.
 Never overlap sessions or use `pkill`.
 
 Useful diagnosis order:

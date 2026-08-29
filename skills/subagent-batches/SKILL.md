@@ -13,7 +13,7 @@ Workflow for executing many independent code changes (e.g. findings from a revie
 
 2. **Split work into lots with disjoint file ownership.** Each agent gets an explicit list of files it owns and the instruction "other agents own other files — do not touch anything else." No two agents in flight may share a file. Group by file/crate proximity, not by finding severity — the lot boundary is the file set.
 
-3. **Agents never run builds or tests.** Every agent prompt includes: "do NOT run cargo, tests, or builds of any kind; do not commit." The coordinator runs ONE `cargo check -j=2` + one test pass at the very end, after all batches land (or when the user asks). This avoids N agents compiling the same workspace concurrently.
+3. **Agents never run builds or tests.** Every agent prompt includes: "do NOT run cargo, tests, or builds of any kind; do not commit." The coordinator runs focused checks with `-j 4` after all batches land, then expands coverage only when the changed owners require it. This avoids N agents compiling the same workspace concurrently.
 
 4. **Launch each batch's agents in a single message** (parallel tool calls). Batches are sequential rounds; agents within a batch are parallel.
 
@@ -38,6 +38,6 @@ Every fix-agent prompt contains:
 
 ## End of run
 
-- Single build check + single test pass over touched crates (respect project build rules, e.g. `-j=2`).
+- Focused build and test checks over touched crates with `-j 4`; expand only when the change crosses a workspace boundary.
 - Summarize per-lot: fixed / skipped-with-reason / deferred-with-comment.
 - User commits; never commit or push from the workflow.

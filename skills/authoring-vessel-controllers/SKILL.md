@@ -1,27 +1,15 @@
 ---
 name: authoring-vessel-controllers
 description: >
-  How to model a vehicle's behaviour in LunCoSim — making a spacecraft,
-  lander, rover, or drone move, fly, drive, or land under its own control,
-  and letting a person take over. USE THIS SKILL whenever the user asks, in
-  plain words, things like: "how do I model this lander / rover?", "how do
-  I make it fly (or drive, land, hover) itself?", "how do I add an
-  autopilot / a control system / guidance / a GNC?", "how do I make it
-  follow waypoints?", "how do I let the user take control?" or "why doesn't
-  my controller / thruster respond?". Any request to model how a vehicle
-  behaves under power, or to add/fix its self-driving or manual control,
-  belongs here — the user will NOT know the internal terms. (For the agent
-  mid-code, it also covers: a `.mo` control model, a `LunCoProgramAPI` prim, the
-  `piloted` port, `external_throttle`, `possess`/`follow`, or a rumoca
-  input that `set()` writes but that has no effect — and catch-yourself
-  moments like putting control math in rhai, a bespoke mode flag, a
-  self-wire, or reading the god-view pose instead of a sensor.) These rules
-  are project-specific: a naive approach silently FOLDS unwired Modelica
-  inputs (writes vanish) and CLOBBERS the pilot; the three-layer split
-  (math→Modelica, logic/events→rhai, structure/authority→USD) and the
-  wired `piloted` authority signal are not obvious from Modelica/Bevy
-  alone. Reference impl: the lander (models/Lander.mo,
-  scenarios/lander_subsystems.rhai, vessels/landers/descent_lander.usda).
+  Author vehicle controllers in LunCoSim so spacecraft, landers, rovers, and
+  drones can move, fly, drive, land, or accept pilot control. Use when adding or
+  debugging autopilot, GNC, guidance, waypoint following, thruster response,
+  manual takeover, a Modelica control model, a controller program prim, or the
+  wired `piloted` authority signal. This skill assigns control math to Modelica,
+  sequencing and events to Rhai, and structure, sensors, wiring, and authority
+  to USD. It covers the unwired-input failure mode, PortRegistry input ownership,
+  sensor-based feedback, and reuse of the closest production exemplar. The
+  shipped lander is an example, not the universal production contract.
 ---
 
 # Authoring vessel controllers
@@ -40,9 +28,29 @@ each in the language that fits it**. Never blur them.
 | **Logic / sequencing** | **rhai** (`.rhai`) | phases, events, mission steps, reactions | EVENT-DRIVEN only. No per-tick control loops, no time-stepping. |
 | **Structure / wiring / authority** | **USD** (`.usda`) | sensors, wires, possession, identity | Declarative. Sensors are referenced library prims; a wire is a native USD connection. |
 
-The reference is the lander: `assets/models/Lander.mo`,
+The shipped lander is one reference implementation: `assets/models/Lander.mo`,
 `assets/scenarios/lander_subsystems.rhai`, `assets/vessels/landers/descent_lander.usda`
-(referenced by `assets/scenes/luncosim/lander_ops.usda`).
+(referenced by `assets/scenes/luncosim/lander_ops.usda`). For another vehicle,
+select the closest **production** controller, vehicle asset, composing scene,
+and test before authoring a new one. A tutorial model can clarify the idea while
+still being too simplified to serve as the production contract.
+
+## Start with the closest production exemplar
+
+Before writing a new controller:
+
+1. Search `assets/models/`, `assets/vessels/`, `assets/components/`,
+   `assets/scenes/`, and `assets/scenarios/` for an existing controller and its
+   consumer.
+2. Read the model's declared inputs/outputs, the USD wires, and the scene test
+   that observes the behavior.
+3. Reuse the same authority, sensor, frame, and actuation boundaries. Override
+   vehicle facts in USD and controller tuning through the established input or
+   parameter contract.
+4. Add a new `.mo` only when the existing equation or public interface is
+   genuinely insufficient; do not fork a working controller for naming alone.
+
+This is a discovery rule, not a requirement to reuse one particular vehicle.
 
 ## 1. The control law → a Modelica model
 
@@ -183,9 +191,8 @@ accepting a non-`Avatar` input surface; `SceneCamera` is presentation metadata a
 does not participate in possession.
 
 Author the scope as a **child `references` arc** to the shared profile — the SAME arc
-kind the wheels use, so it composes through a spawn/reference. (Root `subLayers` +
-`inherits` do **NOT** survive a runtime `references=` spawn — that was the old form and
-it silently left spawned rovers undrivable.)
+kind the wheels use, so it composes through a spawn/reference. Root `subLayers` and
+`inherits` do not provide the required spawned control profile.
 
 ```usda
 # on the vessel prim — a rover:
@@ -213,7 +220,9 @@ def "Controls" (
 
 ## The recipe (checklist)
 
-1. Write the control law as a `.mo` model: sensed inputs → force/torque; `min`/`max`
+0. Complete the exemplar audit above and identify the actual controller,
+   vehicle, scene, and test owner before creating files.
+1. Write or reuse the control law as a `.mo` model: sensed inputs → force/torque; `min`/`max`
    clamps; DIRECT control path; a `piloted` gate. Der-feed any tunable gain you want
    Inspector-editable at sim-rate.
 2. Reference the sensors it needs from `assets/vessels/sensors/` and mount them.
@@ -223,12 +232,12 @@ def "Controls" (
    body ports → model `inputs:`, incl. `inputs:piloted`, and model force/torque → the
    body), and add a `Controls` child that `references` a profile (`</LanderControls>`)
    so the pilot's intents reach the stick ports.
-4. Add a a `Scope` applying `LunCoProgramAPI` child prim naming a `.rhai` supervisor for events/sequencing
+4. Add a `Scope` applying `LunCoProgramAPI` child prim naming a `.rhai` supervisor for events/sequencing
    (no control loop), with connected `LunCoEvent` children for model conditions.
 5. Verify: unpossessed → the GNC flies it; possess → the pilot drives (gate flips via
    `piloted`); release → GNC resumes. Tune live via the Inspector or `set()`.
 
-## Anti-patterns (all cost us real time this codebase)
+## Anti-patterns
 
 - ❌ Control math in rhai — belongs in Modelica.
 - ❌ Per-tick rhai routing / an unconditional self-wire — clobbers the pilot; use the
@@ -237,3 +246,7 @@ def "Controls" (
   per-model. `piloted` is the general, wired, first-class signal.
 - ❌ Reading the god-view body pose — read sensors (altimeter, IMU) so it's a real GNC.
 - ❌ Magic constants (torque, mass) — wire them from the body's ports (inertia, mass).
+- ❌ Starting a new controller from a mission report or tutorial snippet without
+  reading the closest shipped production exemplar and its runtime test.
+- ❌ Forking a production controller only to rename the vehicle — keep reusable
+  equations and put vehicle-specific facts in USD-authorized parameters.

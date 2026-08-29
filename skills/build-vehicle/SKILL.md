@@ -29,6 +29,28 @@ Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (fully authored per-wheel mix), `rocker_bogie.usda` (linkage + gear-joint
 differential), `rucheyok/` (Z-forward, Modelica electrical).
 
+## Reuse-first vehicle audit
+
+Before authoring a new vehicle, identify the closest shipped assembly and read
+its component references, variant axes, composing scene, and runtime test. Use
+the existing assembly as the structural template and change only the authored
+vehicle facts: poses, dimensions, mass properties, topology, bindings, and
+parameters.
+
+Classify the request before editing:
+
+```text
+existing generic mechanism -> compose/configure it
+missing vehicle asset       -> author USD assembly/components
+missing equation            -> extend/reuse Modelica package
+missing engine behavior     -> prove with a focused fixture before Rust
+missing evidence            -> add an authored test and production run
+```
+
+Do not infer an engine gap from the absence of a mission-specific vehicle file.
+Do not use a tutorial or presentation-only vehicle as the production physics
+contract without checking its consumer and test.
+
 ## The component library (`assets/components/`)
 
 | Part | File | Owns |
@@ -131,7 +153,7 @@ state mirrors it.
 refuses to spawn and the error names ALL missing attrs. That now includes
 `physxVehicleWheel:dampingRate` (bearing + rolling drag): it is a physical
 property of the hub, so it is authored, never inferred from the drive torque —
-  the old derived drive fallback is gone. `physxVehicleWheel:moi` is the
+  drive torque is not derived from unrelated values. `physxVehicleWheel:moi` is the
   complete authored tire-and-drivetrain assembly inertia; when omitted, the
   documented solid-cylinder derivation ½·m·r² applies.
 You never author them
@@ -146,7 +168,7 @@ see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco
 
 To reach one wheel: select the rover, then **Alt+Shift+click** the wheel — that
 drills the Inspector to that subpart's own PRIM
-(`crates/lunco-luncosim-edit/src/selection.rs:315`). Plain **Shift+click is the
+(`crates/lunco-luncosim-edit/src/selection.rs`). Plain **Shift+click is the
 multi-select toggle** and explicitly *clears* the drill target; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
@@ -159,14 +181,13 @@ and `resync_wheels_for_stage` updates the live components — same entities, joi
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
 next document change would overwrite you.
 
-## Presentation-first delivery order
+## Delivery order
 
-For a Summer Space School request, author the rover, presentation course, and
-any new test scene under the Summer Space School Twin (`space-school-twin/` or
-`workshop/`), then load it through that Twin's manifest/reload path. Keep
-generic components and engine regression scenes in LunCo only when they are
-reusable beyond the school; do not make a presentation rover depend on a
-one-off engine scene.
+Author the vehicle and its test in the owning Twin. Keep generic components and
+engine regression scenes in the shared LunCo asset library only when they are
+reusable beyond one mission or presentation. A scene-specific vehicle should
+reference the shared components rather than make the shared library depend on a
+one-off scene.
 
 Build the smallest **builtin-drive, raycast** rover path before adding Modelica,
 power, thermal, autonomy, or a physical drivetrain. For a lunar presentation,
@@ -289,7 +310,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   collection (heat balance per bank). This compiles and publishes
   `motor_temp_left`/`motor_temp_right` (K) REGARDLESS of the `power` variant —
   thermal is decoupled from electrical. See
-  `docs/architecture/reviews/2026-07-30-rover-domain-layering.md`. Exemplar:
+  `docs/architecture/34-scenario-and-multidomain.md`. Exemplar:
   rocker_bogie (6 motors), skid_rover (4), six_wheel_rover (6).
 
 ## Looks
@@ -397,3 +418,5 @@ design.
   the two realizations drift silently otherwise.
 - ❌ Assuming every rover has every variant axis — check the table above; most
   have only `driveLaw`.
+- ❌ Creating a new rover assembly before reading the nearest shipped exemplar,
+  its composing scene, and its behavior test.

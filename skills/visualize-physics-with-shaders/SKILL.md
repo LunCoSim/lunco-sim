@@ -1,21 +1,12 @@
 ---
 name: visualize-physics-with-shaders
 description: >
-  How to make a simulated value VISIBLE in LunCoSim — a strut that reddens as it
-  takes load, a battery that dims as it drains, a tyre that glows where it slips,
-  a tank whose colour tracks temperature. USE THIS SKILL whenever the user asks,
-  in plain words, things like: "make the legs glow red when they take the load",
-  "show the heat / stress / charge on the model", "colour it by how hard it's
-  working", "visualize the forces", "why is the colour animated instead of real",
-  or "make the visuals follow the physics". (For the agent mid-code: a WGSL
-  `struct Material`, `inputs:<name>.connect` on a bound gprim, `ShaderLook::live`,
-  `SHADER_PARAM_BACKEND`, a uniform that stays at its default, or a colour ramp
-  someone is tempted to write in rhai.) Project-specific and non-obvious: a
-  visual is a CONSEQUENCE of physics and is wired, never scripted; the parameter
-  must be declared in the shader's `Material` struct or the wire is refused;
-  names are snake_case; and normalisation belongs on the WIRE, not in the shader.
-  For the physics itself use compose-multidomain-twin; for scene authoring use
-  build-usd-scene.
+  Wire simulated values into visible WGSL material parameters in LunCoSim, such
+  as load, heat, charge, slip, or temperature visualization. Use for shader
+  `Material` inputs, `ShaderLook::live`, USD connections, and values that must
+  follow physics. Visual consequences are wired from authoritative outputs, not
+  scripted; use compose-multidomain-twin for the physics and build-usd-scene for
+  scene authoring.
 ---
 
 # Visualizing physics values with shaders

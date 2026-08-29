@@ -1,25 +1,11 @@
 ---
 name: validate-assets
 description: >
-  How to PRE-FLIGHT a LunCoSim asset file — "does this `.mo`/`.usda`/`.wgsl`/`.rhai`
-  actually parse?" — with `ValidateAsset`, before loading a scene, starting a
-  cosim, or handing the file to a reviewer.
-  USE THIS SKILL when the user says "validate this asset", "check the file
-  compiles", "did I break the rover", "why won't this wheel spawn", "lint my
-  Modelica model", "check the shader params", "syntax-check the scenario", or
-  when you are about to launch the whole luncosim just to find out whether a file
-  you edited is well-formed. Also use it as the CHEAP first step of any
-  authoring loop (author-usd-component, build-vehicle, use-asset-library).
-  Project-specific and non-obvious: it is a QUERY that returns data (not a
-  fire-and-forget command), it is answered by `luncosim` binaries only (lunica does
-  not link it), the CLI form starts no app/window/GPU at all, `.mo` treats
-  `if`/`when` in an equation section as ERRORS (rumoca is branch-free), `.wgsl`
-  can never fail (only warn), `twin://` cannot be resolved, and a bare relative
-  path is tried against the CWD *before* the assets root. Since the lint layer
-  landed it ALSO runs the authored rules for the file's domain
-  (`assets/scripting/policy/lint_<domain>.rhai`) — so `.usda` pre-flight now
-  reports parts that would fall off a vehicle, not just files that would not
-  parse. Use `RunLint` instead when the subject is the LOADED scene.
+  Pre-flight a LunCoSim `.mo`, `.usda`, `.wgsl`, or `.rhai` asset with
+  `ValidateAsset` or the production CLI before loading it. Use for parse,
+  reference, schema, shader-parameter, Modelica, or authored-lint checks.
+  It is a read-only query; use `RunLint` for a loaded scene and test-via-api for
+  runtime behavior.
 ---
 
 # Validate an asset (pre-flight)
@@ -46,7 +32,7 @@ target/debug/luncosim --validate \
   assets/shaders/rover_hull.wgsl
 ```
 
-The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs:19-33`
+The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs`
 **before** the Bevy `App` is built, and the process `exit`s — nothing is
 rendered, no window opens, no port is bound. Run it anywhere, any time.
 
@@ -74,7 +60,7 @@ Only one param: **`path`** (string). It is a **query provider**, so the data
 comes back in the response body — no secondary result request is needed.
 
 **Answered by luncosim binaries only.** `ValidateAsset` is registered in
-`SpawnCommandPlugin` (`crates/lunco-scene-commands/src/commands.rs:2923`), which
+`SpawnCommandPlugin` (`crates/lunco-scene-commands/src/commands.rs`), which
 `lunica` does not link — asking lunica gives `CommandNotFound`. Use the CLI form
 when only lunica is up.
 
@@ -104,7 +90,7 @@ unsupported, not parsed.
 
 ### `.mo` — the branch-free lint is the point
 
-rumoca's solver path is branch-free, so `validate.rs:207` scans the source (after
+rumoca's solver path is branch-free, so `validate.rs` scans the source (after
 stripping comments) and emits **errors**, not warnings:
 
 - `when` / `elsewhen` — an error **anywhere in the file**.
@@ -169,7 +155,7 @@ is the reflected param schema (`info.shader_params` with `name`/`type`/`offset`/
 
 ## Path resolution — the trap
 
-`resolve()` (`validate.rs:86`) tries, in order:
+`resolve()` (`validate.rs`) tries, in order:
 
 1. **`Path::new(ref).is_file()`** — absolute, or **relative to the current
    working directory**.
@@ -206,8 +192,7 @@ the body </Rover> but no joint names it — it is a SEPARATE body held by nothin
 and will fall out of the vehicle. …
 ```
 
-The shipped USD rules: `nested-body-no-joint` (error — **this is the one that
-caught four motors falling off every rover**), `joint-target-not-a-body` (error),
+The USD rules include `nested-body-no-joint` (error), `joint-target-not-a-body` (error),
 `dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),
 `conditionally-stable-joint-drive` (error), `joint-drive-negative-stiffness`
 (error), `joint-drive-negative-damping` (error), `invalid-gear-drive` (error),

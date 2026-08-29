@@ -98,13 +98,30 @@ Before creating `LunCo*API` or a `lunco:*` property:
    sensor configuration, terrain generation policy, or control-session
    ownership. Keep that schema narrow and do not duplicate standard fields.
 4. If a custom field overlaps a standard field, migrate every reader and asset
-   to the standard spelling in one change, delete the old field and branch, and
+   to the standard spelling in one change, delete the superseded field and branch, and
    regenerate the schema artifacts. Do not read both spellings.
 
 The mapping and the current keep/remove decisions are recorded in
 [`references/usd-standard-map.md`](references/usd-standard-map.md). The
 authoritative engine architecture is
 [`docs/architecture/clean-architecture-and-usd-standards.md`](../../docs/architecture/clean-architecture-and-usd-standards.md).
+
+## Classify a gap before changing the engine
+
+When a report says a capability is missing, verify it against the target
+checkout before accepting the claim. Search the shipped asset library, reusable
+Modelica packages, composing scenes, and authored tests; read the closest
+production exemplar and its consumer. Classify the result as:
+
+```text
+engine substrate | reusable asset | mission assembly | external dependency | evidence gap
+```
+
+An absent mission asset is not an absent engine capability. A source parse or
+documented feature is not runtime evidence. Record the exact source path and
+the strongest observed state separately: parsed, composed, contract-ready,
+solver-running, numerical behavior, or visual behavior. Only an infrastructure
+gap that survives an authored fixture justifies a Rust design.
 
 ## Build a reusable component
 
@@ -144,7 +161,7 @@ authoritative engine architecture is
    `parameter` is not a runtime input. USD defaults for parameters go to the
    parameter set; only actual Modelica `input` variables enter runtime wiring.
    A missing required port is an authoring error with a diagnostic, not a
-   fallback to an old name or a fabricated zero.
+   fallback to an alternate name or a fabricated zero.
 5. Wire the model's outputs to generic body/actuator ports through native USD
    connections. Use the same path for autopilot, API, and scenario writes.
 6. Use possession and an authored authority signal for manual handoff. Do not
@@ -152,8 +169,25 @@ authoritative engine architecture is
 
 ## Generated Modelica networks
 
-Generated models are a first-class reusable composition boundary, not a one-off
-string workaround:
+Generated models are a first-class reusable composition boundary:
+
+### Root and island rule
+
+One `CollectionAPI:components` network root produces one generated Modelica
+participant with one public boundary. The synthesizer may partition its graph
+into several generated Modelica units, but those units remain inside the same
+root and are not additional ECS participants.
+
+Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,
+and equivalent domain connectors) inside the root whose solver owns their
+algebraic equations. A typed scalar USD connection between two roots is causal
+and may have a macro-step or one-step delay. It is not an acausal `connect()`.
+
+If zero-delay bidirectional coupling is required, move the coupled components
+into one generated Modelica root and solve the combined DAE. Do not add a Rhai
+polling loop, duplicate state, or hidden cross-root fallback. Automatic island
+fusion is an optional future mechanism; correct network authoring is the
+current default.
 
 - USD owns the component graph, instances, port names, parameters, and
   connections.
@@ -164,6 +198,9 @@ string workaround:
   Rust `if` for “electrical”, “hydraulics”, or one vehicle.
 - Acausal equations and physical conservation stay inside Modelica. Causal
   cross-domain signals cross the USD boundary as typed ports.
+- Compose reusable Modelica classes through USD before introducing a vehicle- or
+  mission-specific `.mo` wrapper. Add new equations only when the maintained
+  package and its public contract cannot express the requirement.
 - Render the generated Modelica icons and connection graph from the same model
   source; do not create a second visual-only network.
 - Make the generated browser entry useful on first click: a single-unit
@@ -242,19 +279,18 @@ string workaround:
   adding Rust-side layout parameters.
 - A cyclic set of separately co-simulated components is explicit: the runtime
   may report its one-step delay. Do not silence that warning or add a Rhai
-  workaround. If zero-delay continuous feedback is required, synthesize one
+  polling bridge. If zero-delay continuous feedback is required, synthesize one
   Modelica network and solve it as one system.
 
-## Remove wrong old behavior cleanly
+## Replace a superseded contract cleanly
 
-When the old mechanism is wrong, perform a clean cutover:
+When a mechanism is wrong, perform a clean cutover:
 
 1. Identify the authoritative replacement and write the negative test first.
 2. Update source assets, schema source, reader, projection, commands, and docs
    together.
-3. Delete the old property, alias, compatibility branch, fallback reader, and
-   migration-only shim. Do not preserve behavior merely because old scenes used
-   it.
+3. Delete the superseded property, alias, compatibility branch, fallback reader,
+   and migration-only shim. Do not preserve an invalid contract for compatibility.
 4. Regenerate `generatedSchema.usda` and `plugInfo.json` from the authoritative
    source where applicable. Never edit generated schema by hand.
 5. Verify parse, composition, contract, projection, solver, and real executable

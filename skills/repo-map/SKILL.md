@@ -1,20 +1,14 @@
 ---
 name: repo-map
 description: >
-  Orientation for the LunCoSim workspace — how the repo is laid out, which
-  binaries exist, and WHEN to run each. USE THIS SKILL whenever you need to get
-  your bearings: "which app do I run for X?", "how do I launch the sim /
-  workbench / server?", "where does <feature> live?", "what crate handles
-  Y?", "is there a headless mode?", "how do I run it without a window?", or any
-  moment you're about to grep the whole tree to find where something is. Also
-  trigger when you catch yourself about to run a bare `cargo run` (ambiguous —
-  needs a target), confusing `lunica` with the main simulator, reaching for
-  `pkill`, or guessing an API port. It's project-specific: there is NO `apps/`
-  dir (binaries live inside crates), `lunica` is the *Modelica* workbench, and
-  `luncosim` / `luncosim-server` / `lunica` are separate
-  entry points into the shared stacks, and the canonical API port is
-  4101. Authoritative indexes: docs/apps/README.md (every binary) and
-  docs/crates-index.md (every library crate, grouped by domain).
+  Orient within the LunCoSim workspace: repository layout, crate ownership,
+  runnable binaries, API launch modes, and the right evidence path for a task.
+  Use when choosing an app, locating a feature or crate, launching the simulator,
+  workbench, or server, using headless mode, or avoiding an ambiguous bare
+  `cargo run`. It distinguishes production `luncosim` scene and visual evidence
+  from numeric headless execution, identifies `lunica` as the Modelica
+  workbench, explains the canonical API port, and points to the authoritative
+  application and crate indexes.
 ---
 
 # Repo map — layout, binaries, and when to use them
@@ -46,8 +40,8 @@ When those disagree with anything here, they win.
 
 | I want to… | Run | Why |
 |---|---|---|
-| Ground physics / rovers / USD scenes / Modelica / edit tools | **`luncosim`** | The production windowed simulator — or headless with `--no-ui`. |
-| Multiplayer host / CI automation (no GUI ever linked) | **`luncosim-server`** | Same sim as `luncosim` via `run_headless()`, GUI stack never compiled in. |
+| Ground physics / rovers / USD scenes / Modelica / visual evidence | **`luncosim`** | The production scene/runtime binary; use it for scene tests, screenshots, and visual acceptance. |
+| Numeric headless simulation / CI automation | **`luncosim-server`** | The same simulation through `run_headless()`, with no GUI evidence; use it for numeric/API automation. |
 | Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets`** | `-- download\|list\|process`. |
 
@@ -80,9 +74,16 @@ The windowed apps that embed the API bridge (`luncosim`, `lunica`, and anything 
   mandatory for luncosim visual/runtime validation; use an explicit free port.
   (`lunco_core::session::DEFAULT_API_PORT`); the MCP config points here via
   `LUNCO_API_PORT`. Without `--api`, no network surface.
+
 - `--no-ui` — headless (skip winit/egui, run the shared sim loop).
 - `--scene <path>` — (`luncosim`) load a USD scene on boot; path is relative to the
   `assets/` root (do **not** prefix with `assets/`).
+
+Use production `luncosim` for scene-test and visual evidence. Use
+`luncosim-server` (or `luncosim --no-ui`) for numeric/headless evidence only;
+headless runs cannot prove screenshots, rendering, or visual acceptance. Keep
+the binary, revision, readiness state, and evidence type explicit in reports;
+these evidence paths are complementary, not interchangeable.
 
 Drive it: `POST /api/commands` with `{"type":"ExecuteCommand","command":"<Name>","params":{...}}`; discover
 the live command set with `DiscoverSchema` (it's introspected, never hard-coded). Full

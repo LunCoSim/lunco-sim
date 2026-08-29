@@ -1,23 +1,11 @@
 ---
 name: use-asset-library
 description: >
-  How to GROW THE LUNCO ASSET LIBRARY without writing any Rust — drop in a new
-  USD component, a WGSL shader, a Modelica `.mo` behaviour, or an event-driven Rhai policy,
-  and have the engine find and use it.
-  USE THIS SKILL when the user asks "where do I put this file", "how do I add a
-  new part/shader/model/script", "how does the spawn palette find things", "why
-  doesn't my asset show up in the palette", "why is my program never running",
-  "what does `lunco://` mean", "my reference doesn't load", "how do I add an
-  asset to the web build", or wants an entry point into `assets/` generally.
-  Project-specific and non-obvious: a shipped asset MUST be referenced as
-  `@lunco://…@` (a bare relative path resolves against the *anchoring document*,
-  so the same file breaks once a scene is Twin-mounted — and an unresolved
-  `info:sourceAsset` is surfaced through the program's runtime status),
-  `lunco:spawnable` is only read on the stage `defaultPrim`, the palette
-  category is the IMMEDIATE parent folder Title-cased, a source program with no
-  `inputs:`/`outputs:` ports is reported as source-only and is not stepped, rhai `import` must NOT use
-  `lunco://`, and the web build needs `scripts/build_web.sh` re-run to
-  regenerate `manifest.json`.
+  Add or locate LunCoSim assets under `assets/`: USD components, WGSL shaders,
+  Modelica models, or event-driven Rhai policies. Use for discovery, spawn
+  palette entries, `lunco://` references, Twin-mounted assets, source programs,
+  or web manifests. This skill owns placement and resolution; use
+  author-usd-component for USD authoring and validate-assets for pre-flight.
 ---
 
 # Use the asset library
@@ -84,14 +72,14 @@ evaluated ad hoc, not browsed as an authored asset.
 ## The `lunco://` scheme
 
 `lunco://<rel>` = `<repo>/assets/<rel>`, with the packed/development/global
-cache roots after authored assets (`crates/lunco-assets/src/lunco_source.rs:87`).
+cache roots after authored assets (`crates/lunco-assets/src/lunco_source.rs`).
 `twin://<name>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
-`crates/lunco-assets/src/asset_sources.rs:20`: `lunco://`, `twin://`,
-`twin://` is stateful; it is not a second texture scheme. Use the existing
-logical `lunco://` or `twin://` identity for every delivered artifact.
+`crates/lunco-assets/src/asset_sources.rs`; `twin://` is stateful, it is not a
+second texture scheme. Use the existing logical `lunco://` or `twin://` identity
+for every delivered artifact.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, or the
@@ -250,7 +238,7 @@ Three gates, each of which silently does nothing when unmet:
 
 1. **The language is the file extension**, nothing else. `.mo` → Modelica,
    `.py` → Python, `.rhai` → rhai, `.btxml` → behaviour tree (`.xml` accepted for interop).
-2. **No `inputs:`/`outputs:` ⇒ never stepped.** `cosim.rs:264` requires at least
+2. **No `inputs:`/`outputs:` ⇒ never stepped.** The cosimulation projector requires at least
    one port-prefixed attribute. A model with no ports is a documentation-only
    reference.
 3. **`realtimeSafe` defaults to `false`**, and the wiring pass then refuses the
@@ -273,7 +261,7 @@ progression in task/events.
 
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
-(`discovery.rs:160`). After adding or removing any catalogued source
+(`crates/lunco-assets/src/discovery.rs`). After adding or removing any catalogued source
 (`.usda`/`.wgsl`/`.rhai`/`.mo`/`.btxml`):
 
 ```bash
@@ -282,7 +270,7 @@ The **web** build has no filesystem: it fetches `assets/manifest.json`
 
 which rsyncs `assets/` into `dist/` and runs
 `cargo run -p lunco-assets --bin build_asset_manifest -- <dist>/assets`
-(`scripts/build_web.sh:608-640`). That generator calls the **same**
+(`scripts/build_web.sh`). That generator calls the **same**
 `discovery::scan_library` the native runtime uses, so the two cannot drift.
 There is no standalone regenerate command.
 

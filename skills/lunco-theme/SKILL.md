@@ -161,7 +161,7 @@ impl ModelicaThemeExt for Theme {
 
 - A theme author or end-user needs to pin a specific colour that
   should *not* track the palette on dark/light toggle, or
-- You're resolving a historic token whose default is itself a tier 2
+- You're resolving a token whose default is itself a tier 2
   field (e.g. `theme.get_token("modelica", "port_input", theme.schematic.wire_signal)`).
 
 `get_token` is **not** the pattern for introducing new defaults.

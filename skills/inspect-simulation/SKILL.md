@@ -1,21 +1,11 @@
 ---
 name: inspect-simulation
 description: >
-  How to OBSERVE a running LunCoSim without asking the user to look — read live
-  state, telemetry ports, cosim/Modelica variables, and viewport screenshots
-  over the API. USE THIS SKILL whenever you need to answer "is it actually
-  moving / working?", "what's the battery / altitude / speed / temperature?",
-  "read the <X> port", "watch these signals over time", "what are the current
-  variable values?", "did the cosim chain (Modelica → physics) work?", "what's
-  in the scene right now?", or "show me what it looks like". Also trigger when
-  you catch yourself about to `tail -f` the log and poll for a value, sleep-loop
-  waiting for something to change, or ask the user "can you check?". The move is
-  always: list entities → read the ports/variables → (watch if you need a
-  series) → screenshot to confirm. It's the READ-side complement to
-  test-via-api (which drives + verifies) and build-usd-scene (which authors).
-  Project-specific: entity `api_id`s come from `list_entities`, ports are
-  name-addressed and huge unless filtered, telemetry lives on the same API port
-  (4101), and log-polling is the wrong tool — the port snapshot is authoritative.
+  Observe a running LunCoSim through its API: read entities, telemetry ports,
+  Modelica or cosimulation variables, time series, and viewport screenshots.
+  Use for questions about live values, motion, scene contents, or visual state.
+  This is the read-only complement to test-via-api, which drives and verifies;
+  use build-usd-scene when the task is authoring.
 ---
 
 # Inspect a running simulation
