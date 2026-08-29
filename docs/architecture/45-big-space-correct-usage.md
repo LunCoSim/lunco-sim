@@ -136,9 +136,10 @@ while the diagnostic is present.
 
 - A scene author supplies a geodetic/body anchor or another physical placement
   fact. The engine resolves the body-fixed frame and performs the mount.
-- Site placement mounts only the authored site root. Its camera descendants
-  inherit that frame through the hierarchy; celestial placement does not query,
-  bind, or migrate avatars.
+- Site placement mounts only the authored site root. The avatar subsystem owns
+  the event-driven capture and startup handoff from the loader's world shell
+  into that site Grid; celestial placement does not query, bind, or migrate
+  avatars.
 - A camera request names a target and semantic frame. The camera system resolves
   the target grid and uses the atomic mount operation.
 - A trajectory declares its reference frame. Its samples are converted once
