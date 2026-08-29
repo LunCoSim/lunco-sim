@@ -537,14 +537,15 @@ tracks those four component lifecycles with observers. A live USD light
 projection therefore restores the normal Bevy configuration automatically.
 Explicit camera `ClusterConfig` components remain untouched.
 
-The focused `lunco-render-bevy` suite passed **50/50**, and a plain production
-build passed in `usd/target/debug`. A clean Apollo smoke run on API port `4227`
-reached `ready=true`, `world_hold=false`, `faulted=false`, and
-`pending_count=0`; typed `Exit` was accepted and the process and port were
-verified gone. Its sampled 20-second tail varied around **93–201 FPS** and
-**5.0–10.7 ms** while another user-owned `main` session was active, so it is
-contended runtime evidence rather than an FPS acceptance comparison. No FPS
-gain is claimed until a clean before/after settled run is available.
+The final focused `lunco-render-bevy` suite passed **52/52**, and the plain
+production build passed in `usd/target/debug`. A clean Apollo smoke run on API
+port `4228` reached `ready=true`, `world_hold=false`, `faulted=false`, and
+`pending_count=0`; `/api/diagnostics` reported zero broken connections,
+pending work, algebraic loops, and runtime faults. Typed `Exit` was accepted
+and the process and port were verified gone. A post-change Tracy A/B could not
+be collected because another user-owned `main` session held the sole Tracy
+connection on port 8086. No FPS gain is claimed until a clean before/after
+settled run is available.
 
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
