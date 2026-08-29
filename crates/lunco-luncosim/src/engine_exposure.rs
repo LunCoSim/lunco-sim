@@ -27,6 +27,7 @@ use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::Duration;
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -625,6 +626,33 @@ mod tilt_band_tests {
 }
 
 #[cfg(test)]
+mod exposure_schedule_tests {
+    use super::*;
+
+    #[test]
+    fn publisher_is_immediate_once_then_runs_at_the_exposure_cadence() {
+        let mut timer = None;
+
+        assert!(exposure_publish_due_at(true, &mut timer, Duration::ZERO));
+        assert!(
+            timer.is_none(),
+            "the first update should not consume cadence"
+        );
+
+        assert!(!exposure_publish_due_at(
+            false,
+            &mut timer,
+            Duration::from_millis(49)
+        ));
+        assert!(exposure_publish_due_at(
+            false,
+            &mut timer,
+            Duration::from_millis(2)
+        ));
+    }
+}
+
+#[cfg(test)]
 mod exposure_tests {
     use super::*;
 
@@ -785,13 +813,33 @@ pub(crate) fn mark_exposure_dirty(
     }
 }
 
+/// Run the exposure publisher on its existing bounded cadence while preserving
+/// the first publication at startup. The condition owns only scheduling; the
+/// publisher still uses [`ExposureRefresh`] to decide whether its snapshot
+/// actually needs rebuilding.
+pub(crate) fn exposure_publish_due(
+    time: Res<Time>,
+    refresh: Res<ExposureRefresh>,
+    mut timer: Local<Option<Timer>>,
+) -> bool {
+    exposure_publish_due_at(refresh.first_update, &mut timer, time.delta())
+}
+
+fn exposure_publish_due_at(first_update: bool, timer: &mut Option<Timer>, delta: Duration) -> bool {
+    if first_update {
+        return true;
+    }
+    timer
+        .get_or_insert_with(|| Timer::from_seconds(1.0 / EXPOSURE_UPDATE_HZ, TimerMode::Repeating))
+        .tick(delta)
+        .just_finished()
+}
+
 /// Publish a vessel exposure namespace. The engine resolves its authoritative
 /// state here, then writes only generic named values; the runtime UI layer owns
 /// all template and style mechanics.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ExposureRuntime<'w, 's> {
-    time: Res<'w, Time>,
-    timer: Local<'s, ExposureTimer>,
     refresh: ResMut<'w, ExposureRefresh>,
     exposures: ResMut<'w, EngineExposures>,
     signals: Res<'w, SignalRegistry>,
@@ -860,8 +908,7 @@ pub(crate) fn publish_exposure(
         }
     }
 
-    let timer_finished = runtime.timer.0.tick(runtime.time.delta()).just_finished();
-    if !runtime.refresh.dirty || (!timer_finished && !runtime.refresh.first_update) {
+    if !runtime.refresh.dirty && !runtime.refresh.first_update {
         return;
     }
     runtime.refresh.dirty = false;
@@ -1021,17 +1068,6 @@ pub(crate) fn publish_exposure(
         runtime.orbital_pin.as_deref(),
     );
     publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
-}
-
-struct ExposureTimer(Timer);
-
-impl Default for ExposureTimer {
-    fn default() -> Self {
-        Self(Timer::from_seconds(
-            1.0 / EXPOSURE_UPDATE_HZ,
-            TimerMode::Repeating,
-        ))
-    }
 }
 
 fn publish_celestial_capability(

@@ -130,6 +130,13 @@ pure desired leaf selection separately from readiness and bounded tile
 streaming. These are owner-local cursors, not compatibility stores or alternate
 sources of truth.
 
+The engine exposure producer has one shared 20 Hz cadence gate for both its
+change detector and publisher. The first publication is immediate; subsequent
+frames do not even enter the publisher's large query set. `ExposureRefresh`
+still records input changes between cadence ticks, so change detection remains
+lossless without paying the publisher's system-parameter setup every render
+frame.
+
 ## 4. How to decide
 Quick checklist before you write a `Update` system:
 

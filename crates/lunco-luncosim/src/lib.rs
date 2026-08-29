@@ -2775,15 +2775,10 @@ impl Plugin for SandboxCorePlugin {
             .add_systems(
                 Update,
                 (
-                    engine_exposure::mark_exposure_dirty.run_if(
-                        bevy::time::common_conditions::on_timer(
-                            std::time::Duration::from_secs_f32(
-                                1.0 / lunco_core::exposure::EXPOSURE_UPDATE_HZ,
-                            ),
-                        ),
-                    ),
+                    engine_exposure::mark_exposure_dirty,
                     engine_exposure::publish_exposure.after(engine_exposure::mark_exposure_dirty),
-                ),
+                )
+                    .run_if(engine_exposure::exposure_publish_due),
             )
             .add_plugins(lunco_core::WorldShellPlugin)
             // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
