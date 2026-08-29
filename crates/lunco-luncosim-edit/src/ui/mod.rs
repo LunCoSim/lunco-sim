@@ -467,8 +467,9 @@ impl Plugin for SceneEditUiPlugin {
 
         // WP-8: the Entity list is a pure view over `EntityTreeView`, derived by
         // a change-gated producer instead of being rebuilt every egui frame.
-        // …and its "show system entities" filter is a persisted pref exposed in the
-        // workbench Settings menu, not a panel-local toolbar.
+        // …its system-entity filter remains a global persisted preference, while
+        // grid scope is read from and written to the active Twin manifest through
+        // the generic SetTwinSetting command.
         lunco_settings::AppSettingsExt::register_settings_section::<entity_list::EntityListSettings>(
             app,
         );
@@ -481,6 +482,7 @@ impl Plugin for SceneEditUiPlugin {
         >(app);
         app.add_systems(Startup, asset_visibility::register_settings_menu);
         app.init_resource::<entity_list::EntityTreeView>();
+        app.add_observer(entity_list::on_twin_closed);
         app.add_view_model(
             entity_list::populate_entity_tree_view,
             entity_list::scene_topology_changed,

@@ -38,6 +38,14 @@ For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.
 
+The Entity list follows the same rule for `ui.entity_list.grid_scope`: `current`
+reads the authoritative `ActivePhysicsFrame`, `all` includes every mounted
+BigSpace grid, and an omitted key uses the documented `current` default. The
+Settings menu emits the existing generic `SetTwinSetting` command. Invalid
+values are visible errors, and the derived tree is cleared on active
+`TwinClosed`; do not cache this choice in a global UI resource or keep it across
+Twin replacement.
+
 Camera labels are a shared projection owned by
 `lunco-usd-bevy::camera_switch::camera_display_labels`. Reuse it in workbench
 camera lists, the USD/entity trees, and Inspector; keep the full USD path as

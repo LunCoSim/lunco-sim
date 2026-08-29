@@ -528,6 +528,7 @@ crates):
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
+| `ui.entity_list.grid_scope` | `lunco-luncosim-edit` | Active-Twin entity-tree visibility: `current` for the active `ActivePhysicsFrame`, or `all` for every mounted BigSpace grid |
 
 #### 9b.3 Per-Twin overrides
 
@@ -549,6 +550,15 @@ does not require a new Rust field, settings section, or command. The active
 Twin is the only reader/writer scope; closing it removes that scope before the
 next Twin can become active. Omitted keys preserve the authored surface's
 declared default.
+
+The entity tree uses this generic boundary for its grid scope. The key
+`ui.entity_list.grid_scope` accepts the text values `current` and `all`; an
+omitted key means `current`. `current` resolves only the live
+`ActivePhysicsFrame`, while `all` includes named entities from every mounted
+BigSpace grid. The workbench Settings menu writes the active Twin's manifest
+through `SetTwinSetting`, so the selection follows the Twin and is not a
+global UI preference. An invalid value is shown as a tree error rather than
+silently selecting a different grid.
 
 For example, the shipped camera-status surface is on by default:
 
