@@ -6,8 +6,8 @@ use lunco_workbench::{icon_text_button, Panel, PanelCtx, PanelId, PanelSlot, UiI
 
 use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
-use lunco_core::ControlBinding;
-use lunco_core::{Avatar, Spacecraft};
+use lunco_controller::{resolved_input_label, InputBindingsSettings};
+use lunco_core::{Avatar, ControlBinding, Spacecraft, UserIntent};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 /// Change the host's possession arbitration policy from Mission Control.
@@ -60,6 +60,36 @@ impl Panel for MissionControl {
         let networked;
         let is_host;
         let policy;
+        let control_hints = ctx
+            .resource::<InputBindingsSettings>()
+            .map(|settings| {
+                let label = |intent| resolved_input_label(settings, intent);
+                vec![
+                    format!(
+                        "{} / {}: move forward/back",
+                        label(UserIntent::MoveForward),
+                        label(UserIntent::MoveBackward)
+                    ),
+                    format!(
+                        "{} / {}: move left/right",
+                        label(UserIntent::MoveLeft),
+                        label(UserIntent::MoveRight)
+                    ),
+                    format!(
+                        "{} / {}: move down/up",
+                        label(UserIntent::MoveDown),
+                        label(UserIntent::MoveUp)
+                    ),
+                    format!("{}: pause/unpause", label(UserIntent::Pause)),
+                    format!(
+                        "{}: rotate camera",
+                        settings
+                            .label("look_button")
+                            .unwrap_or_else(|| "unbound pointer".into())
+                    ),
+                ]
+            })
+            .unwrap_or_default();
         {
             let view = ctx.resource::<MissionControlView>();
             avatar_ent = view.and_then(|v| v.avatar);
@@ -334,8 +364,10 @@ impl Panel for MissionControl {
 
             ui.separator();
             ui.label("Double-click entities in Inspector to focus.");
-            ui.label("WASD: move  |  QE: Up/Down");
-            ui.label("Right-Click: rotate  |  SPACE: pause");
+            for hint in &control_hints {
+                ui.label(hint);
+            }
+            ui.label("Scroll: zoom");
         });
 
         // ── Emit collected intent after paint (read borrows released). ──

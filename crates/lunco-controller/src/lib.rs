@@ -792,6 +792,16 @@ impl InputBindingsSettings {
     }
 }
 
+/// Resolve the user-facing label for a semantic intent from the one shared
+/// input-bindings resource. Invalid settings are never projected into a live
+/// input map, but keeping the semantic label here makes help surfaces safe for
+/// a partially loaded settings resource as well.
+pub fn resolved_input_label(settings: &InputBindingsSettings, intent: UserIntent) -> String {
+    settings
+        .label_for_intent(intent)
+        .unwrap_or_else(|_| intent.to_string())
+}
+
 /// Read the pointer button that activates the semantic `Look` intent.
 ///
 /// Pointer bindings live beside the keyboard bindings because they are part of
@@ -1172,6 +1182,97 @@ mod tests {
             Some(KeyCode::AltRight)
         );
         assert_eq!(settings.key_code("not-bound").unwrap(), None);
+    }
+
+    #[test]
+    fn lander_intent_labels_and_port_signs_are_data_driven() {
+        let settings = InputBindingsSettings::default();
+        assert_eq!(
+            resolved_input_label(&settings, UserIntent::MoveForward),
+            "W"
+        );
+        assert_eq!(
+            resolved_input_label(&settings, UserIntent::MoveBackward),
+            "S"
+        );
+        assert_eq!(resolved_input_label(&settings, UserIntent::MoveLeft), "A");
+        assert_eq!(resolved_input_label(&settings, UserIntent::MoveRight), "D");
+        assert_eq!(resolved_input_label(&settings, UserIntent::MoveDown), "Q");
+        assert_eq!(resolved_input_label(&settings, UserIntent::MoveUp), "E");
+
+        let rebound: InputBindingsSettings =
+            serde_json::from_str(r#"{"forward":["KeyI"],"yaw_left":[]}"#)
+                .expect("valid input override");
+        assert_eq!(
+            resolved_input_label(&rebound, UserIntent::MoveForward),
+            "I",
+            "help labels must follow the persisted semantic rebind"
+        );
+        assert_eq!(
+            resolved_input_label(&rebound, UserIntent::MoveDown),
+            "unbound"
+        );
+
+        let binding = ControlBinding::from_intent_entries(&[
+            ("forward".into(), "pitch".into(), -1.0),
+            ("backward".into(), "pitch".into(), 1.0),
+            ("left".into(), "roll".into(), 1.0),
+            ("right".into(), "roll".into(), -1.0),
+            ("yaw_left".into(), "yaw".into(), 1.0),
+            ("yaw_right".into(), "yaw".into(), -1.0),
+            ("thrust".into(), "external_throttle".into(), 1.0),
+        ])
+        .expect("lander controls");
+
+        let ports = |active: &[UserIntent]| binding.resolve(|intent| active.contains(&intent));
+        assert_eq!(
+            ports(&[UserIntent::MoveForward]),
+            vec![
+                ("pitch".into(), -1.0),
+                ("roll".into(), 0.0),
+                ("yaw".into(), 0.0),
+                ("external_throttle".into(), 0.0),
+            ]
+        );
+        assert_eq!(
+            ports(&[UserIntent::MoveBackward]),
+            vec![
+                ("pitch".into(), 1.0),
+                ("roll".into(), 0.0),
+                ("yaw".into(), 0.0),
+                ("external_throttle".into(), 0.0),
+            ]
+        );
+        assert_eq!(
+            ports(&[UserIntent::MoveForward, UserIntent::MoveBackward]),
+            vec![
+                ("pitch".into(), 0.0),
+                ("roll".into(), 0.0),
+                ("yaw".into(), 0.0),
+                ("external_throttle".into(), 0.0),
+            ],
+            "opposite pitch inputs must cancel"
+        );
+        assert_eq!(
+            ports(&[
+                UserIntent::MoveLeft,
+                UserIntent::MoveRight,
+                UserIntent::MoveDown,
+                UserIntent::MoveUp,
+                UserIntent::Thrust,
+            ]),
+            vec![
+                ("pitch".into(), 0.0),
+                ("roll".into(), 0.0),
+                ("yaw".into(), 0.0),
+                ("external_throttle".into(), 1.0),
+            ],
+            "opposite attitude inputs cancel while thrust remains active"
+        );
+        assert!(
+            ports(&[]).into_iter().all(|(_, value)| value == 0.0),
+            "release must clear every authored lander command port"
+        );
     }
 
     #[test]

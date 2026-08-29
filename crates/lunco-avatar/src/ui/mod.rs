@@ -8,8 +8,11 @@ use lunco_workbench::{
 
 use crate::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
-use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, GlobalEntityId, LocalAvatar, SessionProfiles, SessionRegistry};
+use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettings};
+use lunco_core::{
+    Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, SessionProfiles,
+    SessionRegistry, UserIntent,
+};
 
 use crate::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
@@ -195,19 +198,65 @@ impl Panel for AvatarStatusPanel {
             ui.label(&mode_detail);
         }
 
-        // `view` borrow released above (its data was cloned out); emit the
-        // typed surface-leave intent now.
+        ui.separator();
+        let settings = ctx.resource::<InputBindingsSettings>();
+        if let Some(vessel) = view.possessing_vessel {
+            ui.heading("Vehicle controls");
+            if let Some(binding) = ctx.get::<ControlBinding>(vessel) {
+                for (intent, port, factor) in &binding.binds {
+                    let label = settings
+                        .map(|settings| resolved_input_label(settings, *intent))
+                        .unwrap_or_else(|| intent.to_string());
+                    ui.label(format!("{label} → {port} ({factor:+.1})"));
+                }
+            } else {
+                ui.weak("No authored vehicle control profile");
+            }
+
+            match ctx.get::<CameraFollow>(vessel).copied().unwrap_or_default() {
+                CameraFollow::Orbit => {
+                    ui.weak("Orbit camera is stable; vehicle commands stay in body axes.");
+                }
+                CameraFollow::Chase => {
+                    ui.weak("Chase camera follows the vehicle attitude.");
+                }
+                CameraFollow::Heading => {
+                    ui.weak("Heading camera follows the vehicle surface heading.");
+                }
+            }
+        } else if let Some(settings) = settings {
+            let label = |intent| resolved_input_label(settings, intent);
+            ui.label(format!(
+                "{} / {}: move forward/back",
+                label(UserIntent::MoveForward),
+                label(UserIntent::MoveBackward)
+            ));
+            ui.label(format!(
+                "{} / {}: move left/right",
+                label(UserIntent::MoveLeft),
+                label(UserIntent::MoveRight)
+            ));
+            ui.label(format!(
+                "{} / {}: move down/up",
+                label(UserIntent::MoveDown),
+                label(UserIntent::MoveUp)
+            ));
+            ui.label(format!("{}: speed boost", label(UserIntent::SpeedBoost)));
+            ui.label(format!("{}: pause/unpause", label(UserIntent::Pause)));
+            ui.label(format!(
+                "{}: rotate camera",
+                settings
+                    .label("look_button")
+                    .unwrap_or_else(|| "unbound pointer".into())
+            ));
+            ui.label("Scroll: zoom");
+        }
+
+        // Emit the typed surface-leave intent only after the view-model borrow
+        // is no longer needed by the control readout below.
         if let Some(target) = leave_target {
             ctx.trigger(LeaveSurface { target });
         }
-
-        ui.separator();
-        ui.label("WASD: move");
-        ui.label("QE: Up/Down");
-        ui.label("SHIFT: Speed boost");
-        ui.label("SCROLL or +/-: zoom (Spring/Orbit)");
-        ui.label("Right-Click: rotate");
-        ui.label("SPACE: pause/unpause");
     }
 }
 

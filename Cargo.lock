@@ -8047,6 +8047,7 @@ dependencies = [
  "egui_plot",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-controller",
  "lunco-core",
  "lunco-theme",
  "lunco-time",

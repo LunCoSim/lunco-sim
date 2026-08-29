@@ -203,6 +203,27 @@ nearest non-avatar input surface, and direct `PossessVessel` requests apply the
 same rule before either camera binding or authority claim. Render markers such
 as `SceneCamera` do not participate in this control decision.
 
+### 6.7 Vehicle control frame
+
+The controller has one shared input path: persisted `input_bindings` resolve raw
+devices to semantic `UserIntent`s, then the vessel's authored `ControlBinding`
+resolves those intents to named command ports. A vehicle profile owns the second
+mapping; Rust does not add key-specific or vehicle-kind exceptions.
+
+`LanderControls` is body-relative. Its forward/back, left/right, and yaw
+intents write the authored lander's body `pitch`, `roll`, and `yaw` ports; thrust
+and release write their corresponding vehicle ports. It selects
+`CameraFollow::Orbit`, which keeps a stable external/gravity frame while a
+6-DOF lander rotates inside it. Camera yaw, pitch, or roll therefore never
+changes the signs or axes of the physical command. An authored `Chase` camera
+may follow the full vehicle attitude for presentation, but it still does not
+alter the body-frame control contract.
+
+The bundled W/S/A/D/Q/E and other key labels are not the control contract. They
+are the current projection of `InputBindingsSettings`; UI help and tutorials
+must resolve labels from that resource so remapping updates presentation while
+the semantic profile and physical actuator ownership remain unchanged.
+
 ---
 
 ## Technical Reference

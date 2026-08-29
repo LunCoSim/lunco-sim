@@ -204,8 +204,12 @@ def "Controls" (
 ```
 
 - Profiles live in `assets/vessels/control_profiles.usda`: `RoverControls`
-  (forward/back→throttle, left/right→steer, action→brake) and `LanderControls`
-  (forward/back→pitch, left/right→roll, Q/E→yaw, action→external_throttle, G→release).
+  (forward/back→throttle, left/right→steer, brake→brake) and `LanderControls`
+  (forward/back→body pitch, left/right→body roll, yaw_left/right→body yaw,
+  thrust→external_throttle, release→release). The lander profile selects a
+  stable `orbit` camera: camera orientation never remaps these body axes.
+  W/S/A/D/Q/E and G are only the bundled `input_bindings` labels; help must
+  resolve the current settings rather than hardcoding those keys.
   The path is relative to the vessel file (`@../../control_profiles.usda@` one dir deeper,
   `@../../vessels/control_profiles.usda@` from a scene).
 - **Override one intent** by redefining that child locally over the reference:

@@ -55,6 +55,21 @@ The settings section is an override layer over the bundled map: omitted semantic
 bindings inherit the current defaults, while an explicit empty array means
 unbound. This keeps a saved keymap from silently losing a newly added intent.
 
+### Lander control frame
+
+The authored `LanderControls` profile maps semantic intents to the lander's
+body-frame command ports: forward/back to `pitch` (`-1`/`+1`), left/right to
+`roll` (`+1`/`-1`), yaw-left/yaw-right to `yaw` (`+1`/`-1`), thrust to
+`external_throttle`, and release to `release`. The profile selects an `orbit`
+camera, so the camera remains in a stable external frame while the vehicle
+rotates inside it; changing the camera orientation does not remap the physical
+body axes. Opposite intents sum and cancel through `ControlBinding::resolve`,
+and releasing an intent writes zero to every authored command port.
+
+The default W/S/A/D/Q/E labels are only the current `input_bindings` projection.
+UI help resolves them from `InputBindingsSettings`, so remapping changes the
+display without introducing a second control scheme.
+
 ## See Also
 
 - `lunco-mobility` — Consumes the bound `SetPorts` inputs and projects them onto the authored actuator ports.
