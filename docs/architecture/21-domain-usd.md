@@ -505,7 +505,10 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   BigSpace frame and actual parent storage. Drag completion emits one
   `TransformEntity` scene command, whose live leg writes `(CellCoord, Transform)`
   through the canonical parent conversion and whose persistence leg authors
-  translation plus rotation as one runtime-layer USD change set. The default
+  translation plus rotation as one runtime-layer USD change set. Since the
+  gizmo library writes its final proxy pose in `Last` while the normal
+  interaction transfer runs in `PostUpdate`, a Last-stage final-pose snapshot
+  runs before release cleanup consumes the transaction. The default
   `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
   `gizmo_picking_backend` kept); `drive_gizmo_drag_no_shift` remains gated to
   plain, non-Shift presses and egui pointer capture. Scale handles are disabled

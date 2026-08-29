@@ -40,9 +40,12 @@ is:
 2. **`apply_gizmo_proxy_drag`** — convert the complete proxy pose through
    `render_pose_to_grid_absolute` and
    `position_in_grid_to_parent_local`/`rotation_in_grid_to_parent_local`.
-3. **`restore_gizmo_dynamic`** — commit one `TransformEntity`, or restore the
+3. **`capture_final_gizmo_pose`** — snapshot the proxy's final `Last`-schedule
+   write before release cleanup, because the normal interaction transfer runs
+   earlier in `PostUpdate`.
+4. **`restore_gizmo_dynamic`** — commit one `TransformEntity`, or restore the
    snapshot on cancel/frame invalidation, then restore physics state.
-4. **`TransformEntity`** — the scene-command owner writes the parent-local/cell
+5. **`TransformEntity`** — the scene-command owner writes the parent-local/cell
    representation and persists translation plus rotation as one USD change set.
 
 Scale handles are disabled until scale has an authored USD and runtime command

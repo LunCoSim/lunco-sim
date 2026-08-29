@@ -205,6 +205,32 @@ pub fn sync_gizmo_proxies(
     }
 }
 
+/// Convert the gizmo frontend's render-space pose into the active semantic
+/// frame. Both the live drag and the release edge use this exact conversion;
+/// keeping it here prevents the release edge from falling back to a stale
+/// cached pose or inventing a second frame convention.
+fn proxy_pose_to_active_frame(
+    grid: &big_space::prelude::Grid,
+    tf: &Transform,
+) -> Option<(DVec3, bevy::math::DQuat)> {
+    if !tf.translation.is_finite()
+        || !tf.rotation.is_finite()
+        || tf.rotation.length_squared() < 1.0e-12
+    {
+        return None;
+    }
+
+    let (position, rotation) = lunco_core::coords::render_pose_to_grid_absolute(
+        grid,
+        lunco_core::coords::RenderPos::from_render_f32(tf.translation),
+        lunco_core::coords::GridRot::from_render_rotation(tf.rotation),
+    );
+    if !position.0.is_finite() || !rotation.0.is_finite() {
+        return None;
+    }
+    Some((position.0, rotation.0))
+}
+
 /// Transfers the proxy's complete render pose into the real entity.
 ///
 /// This is deliberately an absolute conversion, never a render-space delta:
@@ -228,13 +254,6 @@ pub fn apply_gizmo_proxy_drag(
         if !gizmo_target.is_active() {
             continue;
         }
-        if !tf.translation.is_finite()
-            || !tf.rotation.is_finite()
-            || tf.rotation.length_squared() < 1.0e-12
-        {
-            continue;
-        }
-
         let Ok(state_snapshot) = world.p3().get(link.target).map(|state| {
             (
                 state.active_frame,
@@ -253,14 +272,9 @@ pub fn apply_gizmo_proxy_drag(
         let Ok(grid) = q_grids.get(state_snapshot.0) else {
             continue;
         };
-        let (position, rotation) = lunco_core::coords::render_pose_to_grid_absolute(
-            grid,
-            lunco_core::coords::RenderPos::from_render_f32(tf.translation),
-            lunco_core::coords::GridRot::from_render_rotation(tf.rotation),
-        );
-        if !position.0.is_finite() || !rotation.0.is_finite() {
+        let Some((position, rotation)) = proxy_pose_to_active_frame(grid, tf) else {
             continue;
-        }
+        };
 
         let (old_cell, new_cell, new_translation, new_rotation) = {
             let q_spatial = world.p0();
@@ -270,7 +284,7 @@ pub fn apply_gizmo_proxy_drag(
             let Some((new_cell, new_translation)) =
                 lunco_core::coords::position_in_grid_to_parent_local(
                     link.target,
-                    position.0,
+                    position,
                     state_snapshot.0,
                     &q_parents,
                     &q_grids,
@@ -281,7 +295,7 @@ pub fn apply_gizmo_proxy_drag(
             };
             let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
                 link.target,
-                rotation.0,
+                rotation,
                 state_snapshot.0,
                 &q_parents,
                 &q_grids,
@@ -310,12 +324,49 @@ pub fn apply_gizmo_proxy_drag(
             (None, None) => {}
         }
         if let Ok(mut drive) = world.p2().get_mut(link.target) {
-            drive.set_pose(position.0, rotation.0);
+            drive.set_pose(position, rotation);
         }
         if let Ok(mut state) = world.p3().get_mut(link.target) {
-            state.current_position = position.0;
-            state.current_rotation = rotation.0;
+            state.current_position = position;
+            state.current_rotation = rotation;
         }
+    }
+}
+
+/// Capture the transform-gizmo crate's final proxy write before the release
+/// cleanup consumes the drag transaction.
+///
+/// `transform-gizmo-bevy::update_gizmos` runs in `Last`, after the unpausable
+/// interaction schedule that normally transfers active drags. On the release
+/// frame it clears `GizmoTarget::is_active` immediately after writing the last
+/// proxy pose, so `apply_gizmo_proxy_drag` cannot see that write. Snapshotting
+/// the proxy here keeps the transaction's current pose authoritative without
+/// touching the real entity or adding a competing transform writer.
+pub fn capture_final_gizmo_pose(
+    q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
+    mut q_drag: Query<&mut GizmoDragState, Without<GizmoProxy>>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    q_grids: Query<&big_space::prelude::Grid>,
+    session: Res<GizmoDragSession>,
+) {
+    for (proxy_tf, link, gizmo_target) in &q_proxies {
+        if gizmo_target.is_active() || !session.targets.contains(&link.target) {
+            continue;
+        }
+        let Ok(mut drag) = q_drag.get_mut(link.target) else {
+            continue;
+        };
+        if drag.active_frame != active_frame.0 {
+            continue;
+        }
+        let Ok(grid) = q_grids.get(drag.active_frame) else {
+            continue;
+        };
+        let Some((position, rotation)) = proxy_pose_to_active_frame(grid, proxy_tf) else {
+            continue;
+        };
+        drag.current_position = position;
+        drag.current_rotation = rotation;
     }
 }
 
@@ -702,6 +753,66 @@ pub fn sync_gizmo_camera(
 mod tests {
     use super::*;
     use lunco_controller::ControllerLink;
+
+    #[test]
+    fn captures_final_proxy_pose_before_release_cleanup() {
+        let mut app = App::new();
+        app.init_resource::<GizmoDragSession>();
+
+        let active_frame = app
+            .world_mut()
+            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
+
+        let wanted_position = DVec3::new(1234.5, -22.25, 78.5);
+        let wanted_rotation =
+            bevy::math::DQuat::from_rotation_y(0.37) * bevy::math::DQuat::from_rotation_x(-0.19);
+        let (render_position, render_rotation) = {
+            let grid = app
+                .world()
+                .get::<big_space::prelude::Grid>(active_frame)
+                .unwrap();
+            lunco_core::coords::grid_absolute_pose_to_render(
+                grid,
+                lunco_core::coords::GridPos(wanted_position),
+                lunco_core::coords::GridRot(wanted_rotation),
+            )
+        };
+
+        let target = app
+            .world_mut()
+            .spawn(GizmoDragState {
+                active_frame,
+                original_position: DVec3::ZERO,
+                original_rotation: bevy::math::DQuat::IDENTITY,
+                current_position: DVec3::ZERO,
+                current_rotation: bevy::math::DQuat::IDENTITY,
+                original_body: None,
+                original_drive: None,
+                had_custom_position_integration: false,
+                had_translation_interpolation: false,
+                had_rotation_interpolation: false,
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<GizmoDragSession>()
+            .targets
+            .insert(target);
+        app.world_mut().spawn((
+            Transform::from_translation(render_position.0.as_vec3())
+                .with_rotation(render_rotation.0.as_quat()),
+            GizmoProxy { target },
+            GizmoTarget::default(),
+        ));
+        app.add_systems(Update, capture_final_gizmo_pose);
+
+        app.update();
+
+        let drag = app.world().get::<GizmoDragState>(target).unwrap();
+        assert!((drag.current_position - wanted_position).length() < 1.0e-3);
+        assert!(drag.current_rotation.dot(wanted_rotation).abs() > 1.0 - 1.0e-6);
+    }
 
     #[test]
     fn test_possessed_entity_gizmo_restoration() {

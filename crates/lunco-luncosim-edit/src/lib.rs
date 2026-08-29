@@ -168,7 +168,8 @@ impl Plugin for SceneEditPlugin {
             Last,
             (
                 gizmo::capture_gizmo_start,
-                gizmo::restore_gizmo_dynamic.after(gizmo::capture_gizmo_start),
+                gizmo::capture_final_gizmo_pose.after(gizmo::capture_gizmo_start),
+                gizmo::restore_gizmo_dynamic.after(gizmo::capture_final_gizmo_pose),
             ),
         );
         app.add_systems(
