@@ -62,6 +62,18 @@ as separate owners that consume that snapshot. Stable frames must do no route pa
 binding lookup, terrain sampling, mesh generation, or marker writes; camera-dependent
 label projection is the only remaining per-frame presentation work.
 
+Repeated presentation solvers must also be value-idempotent: compare derived
+`Transform`/`CellCoord` values before assignment. Bevy marks mutable component
+access as changed even when the value is equal, and BigSpace consumes those
+signals for dirty-subtree propagation. Guarding an equal write at the producer
+is part of the ownership contract; it is not permission to hide a real dirty
+input or to add an alternate propagation path.
+
+Apply this contract to all camera pose owners, including shared interaction
+easing, mounted USD followers, cinematic path followers, and the persistent
+camera origin. Camera selection/mode policy stays in the application; BigSpace
+owns only precision representation and derived transform propagation.
+
 ## Start with the standard-schema audit
 
 Before creating `LunCo*API` or a `lunco:*` property:

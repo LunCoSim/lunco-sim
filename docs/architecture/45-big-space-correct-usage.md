@@ -81,6 +81,20 @@ parent or a direct Grid, use `position_in_grid_to_parent_local`; it performs
 the complete parent-pose inverse and splits a `CellCoord` only for a Grid
 parent.
 
+Presentation systems that solve a pose repeatedly must compare each derived
+`Transform` and `CellCoord` value before mutating it. Bevy change detection is
+the input to BigSpace's dirty-subtree pruning; assigning an equal value still
+marks the component changed and turns an otherwise stationary hierarchy into
+real propagation work. This is an idempotence requirement, not a workaround or
+a replacement for fixing a genuinely dirty producer.
+
+This applies to every camera pose owner, not only avatar modes: the shared
+interaction interpolator, mounted USD cameras, cinematic path cameras, and the
+persistent `OriginAnchor` all commit through value-based writes. Camera mode
+selection and pose production remain application-owned; BigSpace only consumes
+the resulting `(CellCoord, Transform)` state and propagates its derived
+`GlobalTransform`.
+
 An entity migration is one atomic `(ChildOf, CellCoord, Transform)` operation
 through `lunco_core::attach::migrate_to_grid`. Compute the complete f64 pose in
 the destination frame first, then write the destination representation. Do

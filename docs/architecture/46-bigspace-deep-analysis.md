@@ -59,6 +59,12 @@ When a camera, body, rover, trajectory, or line jitters:
 9. For site lighting and solar poses, verify there is no more than one
    `SiteAnchor`; ambiguous authoring must produce a diagnostic and no selected
    site frame.
+10. For a repeated presentation solve, verify equal `Transform` and
+   `CellCoord` results are not assigned; otherwise Bevy change detection will
+   legitimately wake BigSpace propagation on every solve.
+11. Check shared interaction easing, mounted/path camera followers, and the
+    persistent camera-origin tracker as camera pose owners; they must obey the
+    same value-idempotent commit rule.
 
 Do not add a guard that corrects an invalid pose after the fact. Fix the
 producer, frame declaration, or ownership boundary that made the invalid state

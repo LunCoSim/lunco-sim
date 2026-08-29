@@ -605,46 +605,30 @@ pub fn update_camera_origin(
                     if let Ok(world_grid_component) = q_grids.get(*world_grid) {
                         let (new_cell, new_translation) =
                             world_grid_component.translation_to_grid(camera_position);
-                        if *origin_cell != new_cell {
-                            *origin_cell = new_cell;
-                        }
-                        if origin_transform.translation != new_translation
-                            || origin_transform.rotation != Quat::IDENTITY
-                            || origin_transform.scale != Vec3::ONE
-                        {
-                            *origin_transform = Transform::from_translation(new_translation);
-                        }
+                        origin_cell.set_if_neq(new_cell);
+                        origin_transform.set_if_neq(Transform::from_translation(new_translation));
                     } else {
-                        *origin_cell = CellCoord::default();
-                        *origin_transform = Transform::IDENTITY;
+                        origin_cell.set_if_neq(CellCoord::default());
+                        origin_transform.set_if_neq(Transform::IDENTITY);
                         origin_errors.push(
                             "[camera-origin] the active WorldGrid has no BigSpace Grid component"
                                 .to_string(),
                         );
                     }
                 } else {
-                    *origin_cell = CellCoord::default();
-                    *origin_transform = Transform::IDENTITY;
+                    origin_cell.set_if_neq(CellCoord::default());
+                    origin_transform.set_if_neq(Transform::IDENTITY);
                     origin_errors.push(format!(
                         "[camera-origin] active camera {active:?} has no complete f64 pose in WorldGrid"
                     ));
                 }
             } else {
-                *origin_cell = CellCoord::default();
-                *origin_transform = Transform::IDENTITY;
-            }
-            // The origin tracker is a frame marker, not scene content. Keep its
-            // rotation and scale canonical, while retaining the f32 remainder
-            // returned by the same f64-to-grid split as the cell. Together the
-            // `(CellCoord, Transform)` pair places the render origin at the
-            // selected pose rather than at the nearest cell centre.
-            if origin_transform.rotation != Quat::IDENTITY || origin_transform.scale != Vec3::ONE {
-                origin_transform.rotation = Quat::IDENTITY;
-                origin_transform.scale = Vec3::ONE;
+                origin_cell.set_if_neq(CellCoord::default());
+                origin_transform.set_if_neq(Transform::IDENTITY);
             }
         } else {
-            *origin_cell = CellCoord::default();
-            *origin_transform = Transform::IDENTITY;
+            origin_cell.set_if_neq(CellCoord::default());
+            origin_transform.set_if_neq(Transform::IDENTITY);
         }
         if vp.active_camera.is_some() && world_grids.len() != 1 {
             origin_errors.push(
