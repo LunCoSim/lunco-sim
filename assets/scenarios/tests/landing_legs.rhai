@@ -53,11 +53,11 @@ fn ys(ids) {
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 fn on_start(me) {
-    // Pin this diagnostic fixture to Avian's documented default while the
-    // engine-wide contract is being reduced. This is test policy, so it can be
-    // changed and rerun without rebuilding the Rust host.
-    if !set_physics_substeps(6) {
-        print("[legs] unable to set Avian substeps to 6");
+    // Pin this diagnostic fixture to Avian's documented production contract.
+    // This is test policy, so it can be changed and rerun without rebuilding
+    // the Rust host.
+    if !set_physics_substeps(8) {
+        print("[legs] unable to set Avian substeps to 8");
     }
     print("[legs] avian_substeps=" + physics_substeps());
     this.t = 0.0;
@@ -367,8 +367,8 @@ fn on_tick(me) {
 fn verdict(s) {
     let f = [];
 
-    f.push(t_true(s.substeps == 6,
-        "landing-gear fixture must run at Avian's six-substep default, got " + s.substeps));
+    f.push(t_true(s.substeps == 8,
+        "landing-gear fixture must run at Avian's eight-substep default, got " + s.substeps));
     f.push(t_bounded(s.hull_pos, 100.0, "hull"));
     let names = ["PX", "NX", "PZ", "NZ"];
     for i in 0..4 {

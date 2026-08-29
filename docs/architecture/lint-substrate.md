@@ -78,12 +78,9 @@ facts.prims[]   #{ path, type, parent, schemas[] }     ← the GENERIC projectio
 `bodies`/`joints` are pre-chewed answers to the questions we already ask.
 `stage` carries the fixed-step contract from `lunco-core`/`lunco-physics`; rules
 must read it rather than hardcoding a substep count. The engine-wide contract is
-Avian's six substeps per 60 Hz fixed tick. LunCo additionally repeats the native
-prismatic solver once for joints whose colliders have an active
-non-sensor contact between enabled bodies, in Avian's user-constraint slot. That
-is a local iteration for contact-to-long-anchor joint coupling; unrelated
-prismatic drives
-keep one native solve and all scenes keep the documented global budget.
+Avian's eight substeps per 60 Hz fixed tick. Prismatic drives use Avian's native
+constraint solve; there is no target-specific second joint solve in the
+production path.
 `drives` is semantic output
 from the same typed USD→Avian reader used by runtime projection, so the policy
 does not duplicate USD unit conversion or motor-model selection. A

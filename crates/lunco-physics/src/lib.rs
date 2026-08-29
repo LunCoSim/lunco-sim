@@ -32,16 +32,11 @@
 //! Holds are keyed by a `&'static str` reason, so several subsystems can hold
 //! concurrently and each releases only its own; physics runs when the set is empty.
 
-use avian3d::dynamics::joints::EntityConstraint;
-use avian3d::dynamics::solver::{
-    solver_body::{SolverBody, SolverBodyInertia},
-    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
-};
 use avian3d::prelude::{
-    AngularVelocity, ContactGraph, CustomPositionIntegration, JointDisabled, LinearVelocity,
-    Physics, PhysicsTime, Position, PrismaticJoint, RigidBody, RigidBodyColliders,
-    RigidBodyDisabled, Rotation, Sensor,
+    AngularVelocity, CustomPositionIntegration, LinearVelocity, Physics, Position, RigidBody,
+    Rotation,
 };
+use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -65,12 +60,11 @@ pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupport
 /// cross-platform contract: changing solver resolution by target architecture
 /// changes the physical result and cannot be a hidden application fallback.
 ///
-/// Six is Avian's documented default. A prismatic constraint with a touching,
-/// non-sensor contact between enabled bodies is run a second time in Avian's
-/// user-constraint slot, after contacts and the first native joint pass, so
-/// long-anchor contact coupling gets a local solver iteration without raising
-/// the global substep budget for every scene.
-pub const DEFAULT_SUBSTEP_COUNT: u32 = 6;
+/// Eight substeps is the production contract for articulated bodies. It keeps
+/// the suspension and wheel contact constraints resolved at the same fixed
+/// physics boundary; individual scenes do not receive a second, non-native
+/// joint solve or a target-specific resolution override.
+pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 
 /// Bounds for the live solver-resolution diagnostic control.
 ///
@@ -827,78 +821,6 @@ pub fn grant_physics_step(
 /// are added — whoever owns physics owns its gate.
 pub struct PhysicsGatePlugin;
 
-/// Repeats Avian's native prismatic constraint only when the joint is coupled
-/// to a touching non-sensor contact between enabled bodies. This is a local
-/// Gauss-Seidel iteration for the contact/motor/anchor system; non-contact
-/// prismatic drives retain one native solve and therefore retain their authored
-/// response.
-fn solve_contact_prismatic_joint(
-    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
-    mut joints: Query<
-        (&mut PrismaticJoint, &mut PrismaticJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    collider_lists: Query<&RigidBodyColliders>,
-    disabled_bodies: Query<(), With<RigidBodyDisabled>>,
-    sensors: Query<(), With<Sensor>>,
-    contact_graph: Res<ContactGraph>,
-    time: Res<Time>,
-) {
-    let delta_secs = time.delta_secs_f64();
-    let mut dummy_body1 = SolverBody::default();
-    let mut dummy_body2 = SolverBody::default();
-
-    for (mut joint, mut solver_data) in &mut joints {
-        let [entity1, entity2] = joint.entities();
-        let has_contact = [entity1, entity2].into_iter().any(|body| {
-            let Ok(colliders) = collider_lists.get(body) else {
-                return false;
-            };
-            colliders.into_iter().any(|collider| {
-                contact_graph.contact_pairs_with(collider).any(|pair| {
-                    pair.is_touching()
-                        && !sensors.contains(pair.collider1)
-                        && !sensors.contains(pair.collider2)
-                        && pair
-                            .body1
-                            .is_some_and(|body| !disabled_bodies.contains(body))
-                        && pair
-                            .body2
-                            .is_some_and(|body| !disabled_bodies.contains(body))
-                })
-            })
-        });
-        if !has_contact {
-            continue;
-        }
-
-        let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
-        let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
-
-        // Match Avian's native solver dispatch, including its dominance rule.
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity1) } {
-            body1 = body.into_inner();
-            inertia1 = inertia;
-        }
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity2) } {
-            body2 = body.into_inner();
-            inertia2 = inertia;
-        }
-        match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
-            std::cmp::Ordering::Greater => inertia1 = &SolverBodyInertia::DUMMY,
-            std::cmp::Ordering::Less => inertia2 = &SolverBodyInertia::DUMMY,
-            std::cmp::Ordering::Equal => {}
-        }
-
-        joint.solve(
-            [body1, body2],
-            [inertia1, inertia2],
-            &mut solver_data,
-            delta_secs,
-        );
-    }
-}
-
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
@@ -929,20 +851,6 @@ impl Plugin for PhysicsGatePlugin {
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
             // so a granted step coincides with a step that actually runs.
             .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
-            // The gate exists because bodies fall through colliders that are not
-            // ready yet; the diagnostic reports the ones that got through anyway.
-            // Same owner, same plugin — a hold that fails silently is what cost
-            // two sessions of eyeballing rendered frames.
-            .add_systems(
-                avian3d::prelude::SubstepSchedule,
-                // Avian's native pass runs in SolveConstraints. This local
-                // contact-coupled repeat reuses the prepared XPBD state, adds
-                // no joint graph edge, and keeps JointForces on the original
-                // joint entity.
-                solve_contact_prismatic_joint.in_set(
-                    avian3d::dynamics::solver::xpbd::XpbdSolverSystems::SolveUserConstraints,
-                ),
-            )
             .add_plugins(escape::EscapeDiagnosticPlugin)
             // Same reasoning: a readiness decision that nothing enforces is a
             // hold that silently does not hold.
@@ -973,7 +881,7 @@ mod tests {
             app.world().resource::<avian3d::prelude::SubstepCount>().0,
             DEFAULT_SUBSTEP_COUNT
         );
-        assert_eq!(DEFAULT_SUBSTEP_COUNT, 6);
+        assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
     }
 
     #[test]
