@@ -20,8 +20,7 @@ use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
 // This fixture is a high-resolution numerical reproduction of the nested
 // body/contact mass-frame failure. It is not a second production configuration;
-// production luncosim owns six substeps plus its generic local prismatic
-// solver repeat through lunco-physics.
+// production luncosim owns the eight-substep contract through lunco-physics.
 const NESTED_BODY_REPRODUCTION_SUBSTEPS: u32 = 32;
 
 const EDGE: f32 = 2000.0;

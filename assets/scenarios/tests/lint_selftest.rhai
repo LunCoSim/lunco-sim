@@ -171,8 +171,8 @@ fn on_tick(me) {
         f.push(t_true(unstable_drive[0].severity == "error",
             "conditionally-stable-joint-drive is severity " + unstable_drive[0].severity +
             ", expected error"));
-        f.push(t_true(unstable_drive[0].message.contains("6 substeps"),
-            "conditionally-stable-joint-drive did not report the authoritative 6-substep contract"));
+        f.push(t_true(unstable_drive[0].message.contains("8 substeps"),
+            "conditionally-stable-joint-drive did not report the authoritative 8-substep contract"));
     }
 
     let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");
