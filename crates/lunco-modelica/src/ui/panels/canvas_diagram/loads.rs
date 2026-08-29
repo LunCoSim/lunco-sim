@@ -325,21 +325,16 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // tab allocation. A generated network can be opened from the simulation
     // Build perspective; switch to the Modelica perspective before creating
     // the tab so the user lands on the diagram instead of the 3D viewport.
-    if world
-        .resource::<lunco_workbench::WorkbenchLayout>()
-        .active_perspective()
-        != Some(lunco_workbench::PerspectiveId("modelica_analyze"))
-    {
-        let activated = world
-            .resource_mut::<lunco_workbench::WorkbenchLayout>()
-            .activate_perspective_by_str("modelica_analyze");
-        if !activated {
-            bevy::log::error!(
-                "[CanvasDiagram] cannot open a Modelica class: Modelica perspective is not registered"
-            );
-            return;
-        }
-    }
+    // WorkbenchLayout is extracted while egui panels render, so navigation
+    // must use the workbench's deferred command boundary rather than touching
+    // the resource directly. The workbench drains perspective requests before
+    // tab requests, preserving this ordering even when the gesture originated
+    // inside a panel render.
+    world
+        .commands()
+        .trigger(lunco_workbench::perspective_command::ActivatePerspective {
+            id: "modelica_analyze".into(),
+        });
 
     // On web the MSL *source* tar is unpacked lazily: the fast-path bundle
     // install registers only the parsed AST (`GLOBAL_PARSED_MSL`), leaving

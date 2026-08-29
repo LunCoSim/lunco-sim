@@ -87,8 +87,9 @@ Nothing in a track names an app: which app shows it is composition.
 
 **Prerequisite (once per app):** the host app includes the scripting runtime
 (`LunCoScriptingPlugin`) + `lunco_tutorial::TutorialCorePlugin { app: "<app>".into() }`.
-Add `TutorialPlugin` as well when the host provides the optional workbench UI,
-and have the host call `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
+Add `TutorialPlugin` for the launcher UI; it installs the Workbench owner and
+its `HelpAnchors` dependency when the host has not already done so. Have the
+host call `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
 for first-run onboarding. `luncosim` and `lunica` have this; a bare app does not.
 Adding *lessons* after that never touches Rust — the curriculum layer + a `.rhai`.
 
