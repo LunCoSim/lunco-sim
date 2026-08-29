@@ -431,6 +431,33 @@ The cleanup is a lifecycle-cost reduction, not a new telemetry store or a
 change to sampling policy. The next performance decision should use a fresh
 function-level attribution if the remaining frame budget still requires it.
 
+#### 2026-08-30 runtime UI extraction acknowledgement cleanup
+
+The render-world acknowledgement previously rebuilt the visible exposure
+namespace set on every extraction, scanned required roots separately from
+their readiness state, and used a linear root-membership check while walking
+extracted UI ancestry. It now reuses the existing `EngineExposures.revision`
+boundary for the derived visibility set, combines the root/readiness query,
+and uses Bevy's `EntityHashSet` for root membership. Live roots and extracted
+nodes remain queried each frame, so topology and presentation readiness are
+not cached or duplicated.
+
+Focused verification passed:
+
+- `cargo test -p lunco-luncosim --lib ui::runtime_exposure -j 4 --
+  --nocapture`: **18/18**.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed and produced the
+  production `usd/target/debug/luncosim` binary.
+- `rustfmt --check`, `git diff --check`: passed.
+
+Two clean candidate launches on API ports `4218` and `4220` had no runtime
+faults and shut down through typed `Exit`, but neither reached a valid settled
+`/api/ready` gate: the same ten authored bodies remained under
+`ShouldBeDynamic`, reproducing the independent USD physics-admission issue.
+Those launches are therefore not FPS acceptance data. No performance gain is
+claimed until a settled Apollo run can be repeated; the UI change only removes
+known per-extraction work at its owning render acknowledgement boundary.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

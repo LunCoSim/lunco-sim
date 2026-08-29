@@ -272,6 +272,12 @@ coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
 is the latter. `EngineExposures.revision` advances only when a visibility flag
 or value actually changes; it is not a frame counter.
 
+The render-world readiness acknowledgement keeps its derived set of visible
+required namespaces at that same revision boundary. Stable frames therefore
+reuse the set while still querying live `RuntimeUiSurface` roots and extracted
+UI nodes; a changed exposure revision rebuilds the visibility set before the
+next acknowledgement.
+
 Use `ReadExposures` when inspecting a running session or building another
 consumer:
 

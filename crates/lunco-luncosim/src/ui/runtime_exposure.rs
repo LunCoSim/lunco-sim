@@ -6,6 +6,7 @@
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
@@ -331,12 +332,14 @@ pub(crate) struct RuntimeUiRenderState {
 /// phase fills `extracted_revision`; the render schedule promotes it only after
 /// the UI render set has submitted the frame. The next extraction copies that
 /// submitted revision back to the simulation world.
-#[derive(Resource, Clone, Copy, Debug, Default)]
+#[derive(Resource, Debug, Default)]
 struct RuntimeUiRenderAck {
     extracted_revision: u64,
     extracted_surface_count: u32,
     submitted_revision: u64,
     submitted_surface_count: u32,
+    visible_exposure_revision: u64,
+    visible_namespaces: HashSet<String>,
 }
 
 /// Generic named visibility gates supplied by the host application.
@@ -572,41 +575,42 @@ fn acknowledge_runtime_ui_render_extraction(
     extracted_nodes: Res<bevy::ui_render::ExtractedUiNodes>,
     mut render_ack: ResMut<RuntimeUiRenderAck>,
 ) {
-    let visible_namespaces: HashSet<String> = main_world
+    // EngineExposures already owns the invalidation boundary for visibility;
+    // do not clone every visible namespace on every render extraction.
+    let exposure_revision = main_world
         .get_resource::<EngineExposures>()
-        .map(|exposures| {
-            exposures
-                .surfaces
-                .iter()
-                .filter(|(_, exposure)| exposure.visible)
-                .map(|(namespace, _)| namespace.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    let required_roots: Vec<Entity> = {
-        let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
-        roots
-            .iter(&main_world)
-            .filter(|(_, surface)| {
-                surface.required_for_recording && visible_namespaces.contains(&surface.namespace)
+        .map_or(0, |exposures| exposures.revision);
+    if render_ack.visible_exposure_revision != exposure_revision {
+        render_ack.visible_namespaces = main_world
+            .get_resource::<EngineExposures>()
+            .map(|exposures| {
+                exposures
+                    .surfaces
+                    .iter()
+                    .filter(|(_, exposure)| exposure.visible)
+                    .map(|(namespace, _)| namespace.clone())
+                    .collect()
             })
-            .map(|(entity, _)| entity)
-            .collect()
+            .unwrap_or_default();
+        render_ack.visible_exposure_revision = exposure_revision;
+    }
+
+    let (required_roots, presentation_ready_roots) = {
+        let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
+        let mut required_roots = EntityHashSet::default();
+        let mut presentation_ready_roots = 0;
+        for (entity, surface) in roots.iter(&main_world) {
+            if surface.required_for_recording
+                && render_ack.visible_namespaces.contains(&surface.namespace)
+            {
+                required_roots.insert(entity);
+                presentation_ready_roots += surface.presentation_ready as usize;
+            }
+        }
+        (required_roots, presentation_ready_roots)
     };
 
-    let presentation_ready_roots = {
-        let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
-        roots
-            .iter(&main_world)
-            .filter(|(_, surface)| {
-                surface.required_for_recording
-                    && visible_namespaces.contains(&surface.namespace)
-                    && surface.presentation_ready
-            })
-            .count()
-    };
-
-    let mut extracted_roots = HashSet::new();
+    let mut extracted_roots = EntityHashSet::default();
     let mut parents = main_world.query::<&ChildOf>();
     for node in &extracted_nodes.uinodes {
         let mut current = node.main_entity.id();
@@ -623,9 +627,7 @@ fn acknowledge_runtime_ui_render_extraction(
     }
 
     let all_extracted = presentation_ready_roots == required_roots.len()
-        && required_roots
-            .iter()
-            .all(|root| extracted_roots.contains(root));
+        && extracted_roots.len() == required_roots.len();
     render_ack.extracted_revision = if all_extracted {
         main_world
             .get_resource::<EngineExposures>()
