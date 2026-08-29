@@ -330,6 +330,13 @@ directions — USD and avian agree:
 | collider under a **nested** body | that nested body's piece — never the parent's |
 | a nested body | a SEPARATE body; a **joint** attaches it, or it falls off |
 
+`physics:collisionEnabled=true` is an opt-in on an already-declared collider;
+it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
+must carry both. `LunCoTerrainAPI` and `PhysxVehicleWheelAPI` are the explicit
+owner-level exceptions because their terrain and vehicle projectors construct
+those shapes through their own contracts. `collision-enabled-without-api` is
+an error, not a runtime fallback.
+
 Hierarchy is namespace. **The joint is what attaches** — nesting a body without
 one is the motor bug (`nested-body-no-joint`), and nesting one *with* a joint is
 how a foot mounts on a leg and a wheel on a chassis. Both directions of that rule

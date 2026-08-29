@@ -33,6 +33,8 @@
 #                Driven mass cannot make a negative stiffness physically valid.
 #   BadGear      malformed PhysxPhysicsGearJoint drive values → invalid-gear-drive
 #                The USD-sim reader refuses the coupling; policy must surface it.
+#   MissingCollisionAPI  collisionEnabled=true without a collision schema
+#                The physics reader ignores the prim, so the intent must fail lint.
 #
 # and one CORRECT construction that must stay silent:
 #
@@ -105,6 +107,14 @@ def Xform "LintSelftest" (
         double3 xformOp:scale = (100.0, 1.0, 100.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+    }
+
+    # THE COLLIDER CONTRACT FAULT. The flag alone does not make ordinary USD
+    # geometry physical: the Avian reader admits only applied PhysicsCollisionAPI.
+    def Cube "MissingCollisionAPI"
+    {
+        double size = 0.25
+        bool physics:collisionEnabled = true
     }
 
     # A vehicle: one body, its collider on a child, one correctly jointed wheel —

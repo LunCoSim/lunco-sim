@@ -193,6 +193,7 @@ and will fall out of the vehicle. …
 ```
 
 The USD rules include `nested-body-no-joint` (error), `joint-target-not-a-body` (error),
+`collision-enabled-without-api` (error),
 `dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),
 `conditionally-stable-joint-drive` (error), `joint-drive-negative-stiffness`
 (error), `joint-drive-negative-damping` (error), `invalid-gear-drive` (error),

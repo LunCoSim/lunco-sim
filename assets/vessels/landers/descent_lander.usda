@@ -1760,7 +1760,9 @@ def Xform "DescentLander" (
     # real arrays have cells on the sun side only — a single slab would shade
     # cells onto the underside too. The cells slab is inset (5.45 × 3.25 vs 5.6 × 3.4) so the
     # backsheet shows as a frame border around the array.
-    def Cube "SolarWingPX"
+    def Cube "SolarWingPX" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
         double size = 1.0
         double3 xformOp:translate = (5.4, 1.4, 0)
@@ -1784,7 +1786,9 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/SolarWing_Mat>
         bool physics:collisionEnabled = false
     }
-    def Cube "SolarWingNX"
+    def Cube "SolarWingNX" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
         double size = 1.0
         double3 xformOp:translate = (-5.4, 1.4, 0)

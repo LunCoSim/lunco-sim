@@ -73,6 +73,11 @@ facts.drives[]  #{ path, joint_type, body0, body1, realization,
 facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
                        target_velocity, stiffness, damping, max_force }
 facts.prims[]   #{ path, type, parent, schemas[] }     ← the GENERIC projection
+facts.collision_enabled_without_api[]  paths authoring
+                                          `physics:collisionEnabled=true` without
+                                          `PhysicsCollisionAPI`; terrain and PhysX
+                                          wheels are admitted by their owning
+                                          projectors and are excluded
 ```
 
 `bodies`/`joints` are pre-chewed answers to the questions we already ask.
@@ -147,6 +152,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 |---|---|---|
 | `nested-body-no-joint` | error | a body inside a body that no joint names — it will fall out of the vehicle. **The motor bug.** Exempt: disabled bodies, and `PhysxVehicleWheelAPI` wheels, which the drivetrain realizes (jointed in `physical`, raycast-driven in `raycast`) |
 | `joint-target-not-a-body` | error | `physics:body0/1` names a prim that resolves to **no body at all** — the joint is dropped at load and the mechanism is silently rigid. Naming a non-body that sits *under* a body is fine and is how every mounted mechanism attaches (below) |
+| `collision-enabled-without-api` | error | ordinary geometry authors `physics:collisionEnabled=true` without `PhysicsCollisionAPI`, so the USD-to-Avian reader ignores the intended solid shape. Terrain and PhysX wheels use their owning projectors instead |
 | `connector-requires-network-root` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |

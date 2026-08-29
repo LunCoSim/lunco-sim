@@ -357,6 +357,24 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let paths: Vec<SdfPath> = reader.prim_paths();
     let telemetry_declarations = telemetry_declaration_facts(reader, &paths);
 
+    // `physics:collisionEnabled = true` is only meaningful on a prim that
+    // applies PhysicsCollisionAPI. Terrain and PhysX wheels are the two
+    // deliberate exceptions: their owning projectors admit geometry through
+    // LunCoTerrainAPI and PhysxVehicleWheelAPI respectively. Catch the
+    // ordinary-geometry case here because the Avian compound reader otherwise
+    // ignores the prim without any indication that the authored intent was
+    // dropped.
+    let collision_enabled_without_api: Vec<H> = paths
+        .iter()
+        .filter(|p| {
+            reader.boolean(p, ptok::A_COLLISION_ENABLED) == Some(true)
+                && !reader.has_api_schema(p, ptok::API_COLLISION)
+                && !reader.has_api_schema(p, "LunCoTerrainAPI")
+                && !reader.has_api_schema(p, "PhysxVehicleWheelAPI")
+        })
+        .map(|p| H::str(p.to_string()))
+        .collect();
+
     let mut bodies: HashSet<String> = HashSet::new();
     let mut joint_paths: Vec<SdfPath> = Vec::new();
     for p in &paths {
@@ -961,6 +979,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("network_roots", H::Array(network_roots)),
         ("prims", H::Array(prims)),
         (
+            "collision_enabled_without_api",
+            H::Array(collision_enabled_without_api),
+        ),
+        (
             "unsupported_program_prims",
             H::Array(unsupported_program_prims),
         ),
@@ -999,6 +1021,28 @@ mod tests {
             Some(H::Array(a)) => a.clone(),
             other => panic!("facts.{key} is {other:?}"),
         }
+    }
+
+    #[test]
+    fn collision_enabled_without_api_is_reported_except_for_owned_projectors() {
+        let f = facts(
+            r#"#usda 1.0
+def Scope "Root"
+{
+    def Cube "Missing" { bool physics:collisionEnabled = true }
+    def Cube "Terrain" (prepend apiSchemas = ["LunCoTerrainAPI"])
+    { bool physics:collisionEnabled = true }
+    def Cylinder "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"])
+    { bool physics:collisionEnabled = true }
+    def Cube "Collider" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    { bool physics:collisionEnabled = true }
+}
+"#,
+        );
+        assert_eq!(
+            entries(&f, "collision_enabled_without_api"),
+            vec![H::str("/Root/Missing")]
+        );
     }
 
     fn field<'a>(item: &'a H, key: &str) -> &'a H {

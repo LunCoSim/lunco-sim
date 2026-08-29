@@ -137,6 +137,23 @@ fn schemas_of(facts, path) {
     []
 }
 
+/// A collision-enabled ordinary prim without PhysicsCollisionAPI is ignored by
+/// the USD-to-Avian compound reader. Terrain and PhysX wheel prims are omitted
+/// from this fact because their owning projectors admit geometry through their
+/// own applied schemas.
+fn collision_enabled_without_api(facts) {
+    let out = [];
+    for path in facts.collision_enabled_without_api {
+        out.push(finding(
+            "collision-enabled-without-api",
+            "error",
+            path,
+            "authors physics:collisionEnabled=true without PhysicsCollisionAPI; the USD-to-Avian reader ignores this prim. Apply PhysicsCollisionAPI for a solid shape or author false for visual-only geometry.",
+        ));
+    }
+    out
+}
+
 /// Whether a component collection uses the standard generated Modelica owner.
 /// The fact producer resolves omitted selectors to the canonical owner name.
 fn is_modelica_network(scope) {
@@ -147,6 +164,7 @@ fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
+    for f in collision_enabled_without_api(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_root(facts) { out.push(f); }

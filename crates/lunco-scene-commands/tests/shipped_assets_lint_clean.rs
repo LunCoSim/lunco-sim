@@ -268,6 +268,7 @@ fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
         ("network_roots", empty()),
+        ("collision_enabled_without_api", empty()),
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         (
@@ -342,6 +343,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
         ("network_roots", H::Array(vec![scope])),
+        ("collision_enabled_without_api", empty()),
         // The WHOLE fact table, including the keys this case has nothing to say
         // about. `physics_facts` always emits every key, and a rule reading one
         // that is absent aborts `lint_usd` — taking every OTHER rule down with it,
@@ -402,6 +404,7 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("filtered_pairs", empty()),
         ("collision_groups", empty()),
         ("network_roots", empty()),
+        ("collision_enabled_without_api", empty()),
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         ("telemetry_declarations", empty()),

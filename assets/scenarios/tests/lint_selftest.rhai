@@ -156,6 +156,21 @@ fn on_tick(me) {
         "dynamic-body-no-collider never named /LintSelftest/Ghost — the one prim in " +
         "this scene that exists only to trip it"));
 
+    let missing_collision_api = by_rule(findings, "collision-enabled-without-api");
+    f.push(t_true(missing_collision_api.len() == 1,
+        "collision-enabled-without-api fired " + missing_collision_api.len() +
+        " time(s), expected exactly 1 (/LintSelftest/MissingCollisionAPI)"));
+    if missing_collision_api.len() == 1 {
+        f.push(t_true(missing_collision_api[0].subject == "/LintSelftest/MissingCollisionAPI",
+            "collision-enabled-without-api named " + missing_collision_api[0].subject +
+            ", expected the ordinary geometry prim with no collision schema"));
+        f.push(t_true(missing_collision_api[0].severity == "error",
+            "collision-enabled-without-api is severity " + missing_collision_api[0].severity +
+            ", expected error because the authored solid is ignored"));
+        f.push(t_true(missing_collision_api[0].message.contains("PhysicsCollisionAPI"),
+            "collision-enabled-without-api did not name the schema the author must apply"));
+    }
+
     // A force-based drive with stiffness but no driven mass is not the
     // production implicit motor path. The finding must name the drive itself,
     // include the authoritative solver-resolution contract, and remain separate
