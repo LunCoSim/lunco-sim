@@ -337,6 +337,41 @@ The same trace shows the remaining budget in BigSpace validation,
 and the GPU/render path. This is profiler evidence, not clean FPS acceptance;
 the 200-FPS criterion remains open.
 
+#### 2026-08-29 merge and release verification
+
+The synchronized application branches now point at `4a0c736a8`, including the
+terrain stream-readiness accounting fix. `main` and `usd` are both clean and
+contain the same three commits beyond `origin/main` (`042f02467`,
+`375f97125`, and `4a0c736a8`). The latest focused regression gate passed:
+
+- `cargo test -p lunco-terrain-surface --lib -j 4`: **108/108**.
+- `cargo build --release -p lunco-luncosim --bin luncosim -j 4`: passed and
+  produced the production `target/release/luncosim` binary.
+- A real Apollo High release run on API port `4195` reached readiness with
+  zero faults, broken connections, and pending work. Typed `Exit` was
+  accepted, and both the process and port were verified gone.
+
+The release run is healthy but does not meet the target: its captured settled
+tail varied from approximately **14.6–39.3 ms** per frame (roughly **25–70
+FPS** in the sampled tail). It is therefore runtime evidence that the
+production path works, not 200-FPS acceptance.
+
+The dependency-owner change is now committed in the dedicated BigSpace
+worktree as `564bac3` (`perf: skip idle high precision propagation`). It gates
+the channeled high-precision path before opening the worker scope, using the
+existing floating-origin, `GridDirtyTick`, and high-precision-child queries.
+Its production-path regression test uses an actual BigSpace hierarchy and
+asserts that stable-frame `PropagationStats` remains zero;
+`rustup run nightly-2026-02-27 cargo test --lib --offline -j 4` passes **41/41**.
+The commit is not copied into Cargo's git cache or the application checkout:
+it requires integration by the maintained BigSpace dependency owner. The app
+remains correctly pinned to `5f255228e9b4…` until that upstream integration is
+available.
+
+Subsequent local A/B runs were not acceptance data because a separate
+user-owned luncosim session on API port `4139` was active; that process and its
+build were preserved. Do not use those runs to claim a performance gain.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.
