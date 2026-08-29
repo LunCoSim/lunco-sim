@@ -55,6 +55,9 @@ pub fn retain_physics_telemetry(
     mission_clock: Res<MissionClock>,
     contact_graph: Option<Res<ContactGraph>>,
     physics_time: Option<Res<Time<Physics>>>,
+    mut removed_bodies: RemovedComponents<RigidBody>,
+    mut removed_wheels: RemovedComponents<WheelRaycast>,
+    sources: Query<(), Or<(With<RigidBody>, With<WheelRaycast>)>>,
     bodies: Query<
         (
             Entity,
@@ -111,7 +114,28 @@ pub fn retain_physics_telemetry(
     if !time.is_finite() {
         return;
     }
-    let mut seen = HashSet::new();
+
+    // State is keyed by the source entity, not by a display label. Bevy already
+    // records component removals, so use that lifecycle signal instead of
+    // rebuilding a live-entity set and retaining every map on every fixed tick.
+    // A body can also be a wheel, therefore only retire an entity once neither
+    // source remains; this preserves telemetry across a source transition.
+    let mut retire = |entity| {
+        if sources.contains(entity) {
+            return;
+        }
+        state.previous.remove(&entity);
+        state.last_sample_times.remove(&entity);
+        state.metadata_group_paths.remove(&entity);
+        state.metadata.retain(|signal, _| signal.entity != entity);
+    };
+    for entity in removed_bodies.read() {
+        retire(entity);
+    }
+    for entity in removed_wheels.read() {
+        retire(entity);
+    }
+
     let mut retained_any = HashSet::new();
     // The registry owns the channel catalog. Snapshot its size once per fixed
     // pass; checking it by walking every signal for every body sample turns
@@ -131,7 +155,6 @@ pub fn retain_physics_telemetry(
         collider,
     ) in &bodies
     {
-        seen.insert(entity);
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -400,7 +423,6 @@ pub fn retain_physics_telemetry(
     }
 
     for (entity, prim, wheel, suspension, hits) in &wheels {
-        seen.insert(entity);
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -473,16 +495,6 @@ pub fn retain_physics_telemetry(
         state.last_sample_times.insert(entity, time);
     }
 
-    state.previous.retain(|entity, _| seen.contains(entity));
-    state
-        .last_sample_times
-        .retain(|entity, _| seen.contains(entity));
-    state
-        .metadata_group_paths
-        .retain(|entity, _| seen.contains(entity));
-    state
-        .metadata
-        .retain(|signal, _| seen.contains(&signal.entity));
     for entity in retained_any {
         commands.entity(entity).try_insert(SignalSource);
     }
@@ -675,5 +687,50 @@ mod tests {
                 "missing generic rigid-body telemetry channel {channel}"
             );
         }
+    }
+
+    #[test]
+    fn removed_body_retires_transient_state_but_preserves_history() {
+        let mut app = App::new();
+        app.insert_resource(TelemetrySettings::default())
+            .insert_resource(SignalRegistry::default())
+            .insert_resource(SimTick(0))
+            .insert_resource(MissionClock::default())
+            .init_resource::<PhysicsTelemetryState>()
+            .add_systems(Update, retain_physics_telemetry);
+        let body = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: default(),
+                    path: "/Rover".to_string(),
+                },
+                RigidBody::Dynamic,
+                LinearVelocity(DVec3::X),
+                AngularVelocity(DVec3::ZERO),
+            ))
+            .id();
+
+        app.update();
+        let signal = SignalRef::new(body, "linear_velocity.x");
+        assert!(app
+            .world()
+            .resource::<SignalRegistry>()
+            .scalar_history(&signal)
+            .is_some());
+
+        app.world_mut().entity_mut(body).remove::<RigidBody>();
+        app.update();
+
+        let state = app.world().resource::<PhysicsTelemetryState>();
+        assert!(!state.previous.contains_key(&body));
+        assert!(!state.last_sample_times.contains_key(&body));
+        assert!(!state.metadata_group_paths.contains_key(&body));
+        assert!(state.metadata.keys().all(|key| key.entity != body));
+        assert!(app
+            .world()
+            .resource::<SignalRegistry>()
+            .scalar_history(&signal)
+            .is_some());
     }
 }

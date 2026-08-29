@@ -406,6 +406,31 @@ baseline run against the pre-optimization bridge failed the same assertion, so
 the bridge change is not the cause and the gate remains an independent follow-up
 task; its tolerance was not weakened.
 
+#### 2026-08-30 physics telemetry lifecycle cleanup
+
+The next measured app-owned leaf was `physics_telemetry::retain_physics_telemetry`
+(approximately **0.17 ms** in the settled Tracy attribution). Its sampling
+cadence and shared `SignalRegistry` ownership were already correct, but its
+cleanup path rebuilt a live-entity `HashSet` and retained four state maps on
+every fixed step. The producer now uses Bevy `RemovedComponents` plus a live
+source query to retire only entities whose last rigid-body or wheel source has
+gone. Archived signal history remains in `SignalRegistry`, and a source
+transition does not discard state while another source is still live.
+
+Verification passed:
+
+- `cargo test -p lunco-usd-sim --lib -j 4 -- --nocapture`: **125/125**.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed in `usd/target`.
+- A clean Apollo High run on API port `4218` reached `ready=true` with no
+  faults, and typed `Exit` released the process and port.
+- The 20-second Tracy capture completed with **622 frames**, **2,154,791
+  zones**, and **108.09 MB**. Its profiler-contended readiness/FPS is not
+  acceptance data; clean FPS remains the required product measurement.
+
+The cleanup is a lifecycle-cost reduction, not a new telemetry store or a
+change to sampling policy. The next performance decision should use a fresh
+function-level attribution if the remaining frame budget still requires it.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

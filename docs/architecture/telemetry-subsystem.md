@@ -229,6 +229,11 @@ discovery or when an entity's USD owner path changes, then only records samples 
 steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
 registry remains the single metadata owner.
 
+Its transient per-entity cursors follow the same lifecycle boundary: `RemovedComponents` retires
+state when the last physical source leaves an entity, while the shared registry deliberately keeps
+the archived history. The producer does not rebuild a live-entity set or scan its state maps on
+every fixed step, and a body-to-wheel source transition does not discard still-live state.
+
 ---
 
 ## 6. Recording → experiments
