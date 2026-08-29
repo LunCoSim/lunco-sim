@@ -119,7 +119,12 @@ packing may have changed; a referenced image `Removed`/`Unused` event does the
 same because the material can no longer bind its declared texture. Image
 `Added`/`Modified` events are in-place content publication and do not invalidate
 an already-ready material. Toggling the latch for those ordinary updates hides
-streamed meshes for an ECS turn and can present as terrain flicker.
+streamed meshes for an ECS turn and can present as terrain flicker. When a
+content-key change selects another cached material, the binder applies the same
+rule: an already-ready replacement preserves the latch, while a replacement
+whose shader layout or declared images are not ready clears it until the normal
+readiness pass proves the dependency contract again. This keeps terrain edge
+stitch variants from entering a deferred remove/re-add cycle.
 
 ### Two rules you must not break
 
