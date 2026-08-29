@@ -44,6 +44,10 @@ impl Plugin for TerrainSurfacePlugin {
         app.init_resource::<lunco_render::RenderingQualitySettings>();
         // `SetTerrainRenderingQuality` — the same knobs, addressable from the API/scripts.
         crate::stream_viz::register_all_commands(app);
+        // Render-resource invalidation is an event, not a reason to rescan every
+        // resident tile on stable frames. The stream owns visibility; the render
+        // binder owns the ShaderLookReady marker.
+        app.add_observer(crate::stream_viz::invalidate_removed_shader_look_ready);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         app.init_resource::<crate::stream_viz::TerrainDetailDemands>();

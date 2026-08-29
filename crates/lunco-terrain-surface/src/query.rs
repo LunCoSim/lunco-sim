@@ -401,6 +401,10 @@ impl ApiQueryProvider for TerrainRaycastProvider {
 /// This makes a visual LOD report testable through the same API session that
 /// renders it. In particular, a mounted avatar camera must appear here at its
 /// full grid-absolute pose, never at its rig-local transform offset.
+/// `stream.pending` includes both off-thread bakes and mesh entities waiting for
+/// `ShaderLookReady` (including the root fallback), so a zero pending count
+/// means the required work has crossed the render-resource boundary rather than
+/// merely leaving the worker queue.
 pub struct TerrainLodStatusProvider;
 
 impl ApiQueryProvider for TerrainLodStatusProvider {

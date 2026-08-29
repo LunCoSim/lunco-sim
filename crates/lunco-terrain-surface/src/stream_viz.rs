@@ -381,6 +381,20 @@ pub(crate) fn retire_terrain_tiles(
     }
 }
 
+/// Keep the terrain stream's readiness cache coupled to the render owner's
+/// actual material lifecycle. `ShaderLookReady` is removed when a shader or
+/// declared texture changes; an observer gives the tile streamer the same
+/// event without rescanning every resident tile on stable frames.
+pub(crate) fn invalidate_removed_shader_look_ready(
+    trigger: On<Remove, ShaderLookReady>,
+    mut terrains: Query<&mut LodTiles>,
+) {
+    let entity = trigger.entity;
+    for mut tiles in &mut terrains {
+        tiles.invalidate_material_readiness(entity);
+    }
+}
+
 /// Build the DRAW partition: which tiles actually render this frame.
 ///
 /// For each selected node, use its ready self, its complete ready child cover, or the deepest
@@ -1035,6 +1049,20 @@ impl LodTiles {
     fn insert_slot(&mut self, coord: QuadCoord, slot: TileSlot) -> Option<TileSlot> {
         self.materials_ready = false;
         self.tiles.insert(coord, slot)
+    }
+
+    /// Invalidate the streamer's cached render-readiness when the render binder
+    /// removes `ShaderLookReady` from one of its tile entities. The marker can
+    /// be removed by a shader or texture reload after the terrain has reached
+    /// its idle fast path; leaving the slot's cached `ready` bit set would then
+    /// keep an invalid material visible until another tile happened to spawn.
+    fn invalidate_material_readiness(&mut self, entity: Entity) {
+        if self.tiles.values().any(|slot| slot.entity == entity) {
+            self.materials_ready = false;
+            for slot in self.tiles.values_mut().filter(|slot| slot.entity == entity) {
+                slot.ready = false;
+            }
+        }
     }
 
     /// The shader mode the resident tiles were built with — the D8 gate: only `Lit`
@@ -1702,7 +1730,8 @@ pub struct TerrainStreamStatus {
     /// Wanted tiles with a resident mesh entity (stale-but-covering counts —
     /// the ground is visible, just not current).
     pub resident: usize,
-    /// Off-thread bakes in flight.
+    /// Stream work not yet render-ready: off-thread bakes plus selected tiles
+    /// waiting for the render binder to install a valid material.
     pub pending: usize,
     /// Obsolete in-flight requests dropped this frame after selection moved on.
     pub stale_cancelled: usize,
@@ -1715,6 +1744,32 @@ pub struct TerrainStreamStatus {
     pub focus_wanted: usize,
     /// Camera positions whose exact selected tile (not a coarse fallback) is ready.
     pub focus_resident: usize,
+}
+
+/// Count the stream work that still has to cross the render-readiness boundary.
+///
+/// A completed CPU bake is removed from `PendingTileBakes` before its spawned
+/// entity receives `ShaderLookReady`. Counting only the task map therefore made
+/// the final handful of tiles disappear from the pending count for one or more
+/// frames, even though they were still hidden and the selected cover was not
+/// complete. The root fallback is included while its readiness latch is false;
+/// it is required even though it is not part of the selected cover.
+fn render_pending_count(
+    pending_bakes: usize,
+    wanted: &HashSet<QuadCoord>,
+    tiles: &LodTiles,
+) -> usize {
+    let wanted_unready = wanted
+        .iter()
+        .filter(|coord| tiles.tiles.get(coord).is_some_and(|slot| !slot.ready))
+        .count();
+    let root_unready = (!wanted.contains(&QuadCoord::ROOT)
+        && !tiles.coarse_ready
+        && tiles
+            .tiles
+            .get(&QuadCoord::ROOT)
+            .is_some_and(|slot| !slot.ready)) as usize;
+    pending_bakes + wanted_unready + root_unready
 }
 
 fn required_focus_depth(
@@ -2927,7 +2982,7 @@ pub fn update_lod_tiles(
             .iter()
             .filter(|c| tiles.tiles.get(c).is_some_and(|slot| slot.ready))
             .count();
-        stream_status.pending += pending.0.len();
+        stream_status.pending += render_pending_count(pending.0.len(), wanted, &tiles);
         stream_status.budget_refused += tiles.budget_refused;
         add_focus_readiness(
             &mut stream_status,
@@ -3294,6 +3349,99 @@ mod draw_partition_tests {
         assert_eq!(coarse_fallback_tile_count(), 1);
         assert!(is_coarse_fallback(QuadCoord::ROOT));
         assert!(!is_coarse_fallback(c(1, 0, 0)));
+    }
+
+    #[test]
+    fn render_pending_count_includes_material_publication() {
+        let wanted = QuadCoord::ROOT
+            .children()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let unready = wanted.iter().next().copied().expect("four children");
+        let mut tiles = LodTiles::default();
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: Entity::PLACEHOLDER,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: false,
+                ready: false,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        tiles.tiles.insert(
+            unready,
+            TileSlot {
+                entity: Entity::PLACEHOLDER,
+                gen: 0,
+                morph_end: 0.0,
+                drawn: false,
+                ready: false,
+                stitch_edges: [0.0; 4],
+            },
+        );
+
+        assert_eq!(render_pending_count(2, &wanted, &tiles), 4);
+        tiles.coarse_ready = true;
+        assert_eq!(render_pending_count(2, &wanted, &tiles), 3);
+        tiles.tiles.get_mut(&unready).unwrap().ready = true;
+        assert_eq!(render_pending_count(2, &wanted, &tiles), 2);
+    }
+
+    #[test]
+    fn material_readiness_invalidation_reopens_cached_gate() {
+        let tile = Entity::PLACEHOLDER;
+        let mut tiles = LodTiles {
+            materials_ready: true,
+            ..Default::default()
+        };
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+
+        tiles.invalidate_material_readiness(tile);
+
+        assert!(!tiles.materials_ready);
+        assert!(!tiles.tiles.get(&QuadCoord::ROOT).unwrap().ready);
+    }
+
+    #[test]
+    fn shader_look_removal_observer_invalidates_matching_terrain_tile() {
+        let mut app = App::new();
+        app.add_observer(invalidate_removed_shader_look_ready);
+
+        let tile = app.world_mut().spawn(ShaderLookReady).id();
+        let mut terrain_tiles = LodTiles {
+            materials_ready: true,
+            ..Default::default()
+        };
+        terrain_tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        let terrain = app.world_mut().spawn(terrain_tiles).id();
+
+        app.world_mut().entity_mut(tile).remove::<ShaderLookReady>();
+
+        let terrain_tiles = app.world().get::<LodTiles>(terrain).unwrap();
+        assert!(!terrain_tiles.materials_ready);
+        assert!(!terrain_tiles.tiles.get(&QuadCoord::ROOT).unwrap().ready);
     }
 
     #[test]

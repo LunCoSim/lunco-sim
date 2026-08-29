@@ -436,12 +436,13 @@ exceeded → raise `pixel_error`, so morph bands move with the detail radius),
 morph bands snapped to log-lattice buckets so batching survives per-parent
 bands, and **dynamic bodies as forced visual refinement foci** (the ground under
 a rover always draws at max visual depth); **streaming** — off-thread tile bakes (budgeted per frame,
-bounded in flight) ordered coarse-carpet-first (whole view covered in a few
-frames, never a black screen) then by screen-space benefit weighted toward the
-camera heading, a reveal morph settling each child onto its parent's lattice,
+bounded in flight) keeps a root fallback queued first while refined tiles
+publish, then orders selected work by screen-space benefit weighted toward the
+camera heading, with a reveal morph settling each child onto its parent's lattice,
 a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
 `surface_key`) so warm reloads stream instead of baking, and
-`TerrainStreamStatus` driving a status-bar progress indicator; **procedural
+`TerrainStreamStatus` driving a status-bar progress indicator whose pending count
+includes selected meshes and the root fallback until `ShaderLookReady`; **procedural
 over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
