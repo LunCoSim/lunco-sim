@@ -272,21 +272,27 @@ fn model_signal_meta(
     let entry = documents
         .and_then(|registry| registry.host(model.document))
         .and_then(|host| host.document().index().find_component_by_leaf(name));
-    let unit = projected.and_then(|entry| entry.unit.clone()).or_else(|| {
-        entry
-            .and_then(|entry| entry.modifications.get("unit"))
-            .map(|unit| unit.trim_matches('"').to_string())
-            .filter(|unit| !unit.is_empty())
-    });
+    let model_variable = modelica_provenance
+        .as_ref()
+        .and_then(|identity| identity.model_variable.clone())
+        .or_else(|| (!name.is_empty()).then(|| name.to_string()));
+    let connector_metadata = model_variable
+        .as_deref()
+        .and_then(standard_connector_metadata);
+    let unit = projected
+        .and_then(|entry| entry.unit.clone())
+        .or_else(|| {
+            entry
+                .and_then(|entry| entry.modifications.get("unit"))
+                .map(|unit| unit.trim_matches('"').to_string())
+                .filter(|unit| !unit.is_empty())
+        })
+        .or_else(|| connector_metadata.map(|(unit, _)| unit.to_string()));
 
     let model_class = modelica_provenance
         .as_ref()
         .and_then(|identity| identity.model_class.clone())
         .or_else(|| (!model.model_name.is_empty()).then(|| model.model_name.clone()));
-    let model_variable = modelica_provenance
-        .as_ref()
-        .and_then(|identity| identity.model_variable.clone())
-        .or_else(|| (!name.is_empty()).then(|| name.to_string()));
     let source_asset = modelica_provenance
         .as_ref()
         .and_then(|identity| identity.source_asset.clone())
@@ -300,7 +306,8 @@ fn model_signal_meta(
                 entry
                     .map(|entry| entry.description.clone())
                     .filter(|description| !description.is_empty())
-            }),
+            })
+            .or_else(|| connector_metadata.map(|(_, description)| description.to_string())),
         unit,
         provenance: Some("modelica".to_string()),
         group_path: layout
@@ -319,6 +326,17 @@ fn model_signal_meta(
         model_variable,
         source_asset,
         canonical_name: modelica_provenance.and_then(|identity| identity.canonical_name),
+    }
+}
+
+/// Standard Modelica electrical connector fields retain their physical
+/// contract after flattening, even when the generated solver document carries
+/// no declaration metadata for the connector member itself.
+fn standard_connector_metadata(variable: &str) -> Option<(&'static str, &'static str)> {
+    match variable {
+        "p.v" | "n.v" => Some(("V", "Electrical pin voltage.")),
+        "p.i" | "n.i" => Some(("A", "Electrical pin current; positive into the component.")),
+        _ => None,
     }
 }
 
@@ -428,6 +446,32 @@ mod tests {
         assert_eq!(
             meta.source_asset.as_deref(),
             Some("lunco://models/LunCo/Electrical/CameraPayload.mo")
+        );
+    }
+
+    #[test]
+    fn flattened_electrical_connector_fields_keep_units_and_meaning() {
+        let mut model = ModelicaModel::default();
+        model.variables.insert("unit.Battery.p.v".to_string(), 28.0);
+        let mut layout = ModelicaSignalLayout::default();
+        layout.provenance_prefixes.push((
+            "unit.Battery.".to_string(),
+            ModelicaSignalProvenance {
+                model_class: Some("LunCo.Electrical.Battery".into()),
+                ..default()
+            },
+        ));
+
+        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Battery.p.v");
+        assert_eq!(meta.unit.as_deref(), Some("V"));
+        assert_eq!(meta.description.as_deref(), Some("Electrical pin voltage."));
+        assert_eq!(meta.model_variable.as_deref(), Some("p.v"));
+
+        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Battery.p.i");
+        assert_eq!(meta.unit.as_deref(), Some("A"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("Electrical pin current; positive into the component.")
         );
     }
 

@@ -130,6 +130,7 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
     let channel = crate::signal::display_channel_label(
         &signal.path,
         meta.and_then(|metadata| metadata.group_path.as_deref()),
+        meta.and_then(|metadata| metadata.unit.as_deref()),
         wb.resource_expect::<crate::telemetry_browser::TelemetryDisplaySettings>()
             .show_generated_names,
     );

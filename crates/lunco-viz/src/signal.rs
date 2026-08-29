@@ -18,16 +18,17 @@ pub use lunco_signal::{
 /// The one presentation policy shared by the telemetry browser, plot
 /// toolbars, legends, and exported graph labels.
 ///
-/// `SignalRef::path` remains the immutable identity.  This function only
+/// `SignalRef::path` remains the immutable identity. This function only
 /// projects that identity into an operator label using the producer-supplied
-/// ownership path.  New channels therefore acquire the same presentation
-/// automatically; callers must not hand-format Modelica or USD names.
-pub fn operator_channel_label(path: &str, group_path: Option<&str>) -> String {
+/// ownership path and unit metadata. New channels therefore acquire the same
+/// presentation automatically; callers must not hand-format Modelica or USD
+/// names.
+pub fn operator_channel_label(path: &str, group_path: Option<&str>, unit: Option<&str>) -> String {
     let category = group_path
         .and_then(|group| group.trim_matches('/').rsplit('/').next())
         .map(humanize_identifier)
         .unwrap_or_default();
-    compact_channel_label(path, &category)
+    compact_channel_label(path, &category, unit)
 }
 
 /// Convert an authored or generated identifier into the operator spelling used
@@ -42,14 +43,41 @@ pub fn humanize_identifier(value: &str) -> String {
         .join(" ")
 }
 
+/// Convert a channel variable into its operator wording while retaining the
+/// exact authored spelling for identity and diagnostics. Modelica electrical
+/// pins use the standard `p.v`/`p.i` and `n.v`/`n.i` fields; their physical
+/// meaning is stable even when a generated solver does not carry source
+/// descriptions for the flattened connector fields. Unit-qualified authored
+/// names omit the redundant unit suffix because the unit column supplies it.
+pub fn operator_identifier_label(value: &str, unit: Option<&str>) -> String {
+    match value.trim() {
+        "p.v" | "n.v" => return "pin voltage".to_string(),
+        "p.i" | "n.i" => return "pin current".to_string(),
+        _ => {}
+    }
+
+    let value = value.trim();
+    let source = unit.and_then(|unit| {
+        let suffix = match unit.trim() {
+            "V" => "_v",
+            "A" => "_a",
+            "W" => "_w",
+            "Ah" => "_ah",
+            _ => return None,
+        };
+        value.strip_suffix(suffix).filter(|base| !base.is_empty())
+    });
+    humanize_identifier(source.unwrap_or(value))
+}
+
 /// Compact a channel name for a row whose owning category is already visible
 /// in the surrounding tree.  Prefix removal is performed only at a name
 /// boundary, so `Motor L01.speed` is not incorrectly shortened under
 /// `Motor L0`.
-pub fn compact_channel_label(path: &str, category: &str) -> String {
+pub fn compact_channel_label(path: &str, category: &str, unit: Option<&str>) -> String {
     let decoded = path.replace("_x2f_", "/");
     let readable = decoded.trim_matches('/').rsplit('/').next().unwrap_or(path);
-    let mut label = humanize_identifier(readable);
+    let mut label = operator_identifier_label(readable, unit);
     let category = category.trim();
     if !category.is_empty() {
         let label_lower = label.to_ascii_lowercase();
@@ -99,12 +127,13 @@ pub fn compact_channel_label(path: &str, category: &str) -> String {
 pub fn display_channel_label(
     path: &str,
     group_path: Option<&str>,
+    unit: Option<&str>,
     show_generated_names: bool,
 ) -> String {
     if show_generated_names {
         path.to_owned()
     } else {
-        operator_channel_label(path, group_path)
+        operator_channel_label(path, group_path, unit)
     }
 }
 
@@ -137,12 +166,17 @@ mod tests {
         assert_eq!(
             operator_channel_label(
                 "Motor__L0.electrical_power",
-                Some("/Traverse/Rover/Motor L0")
+                Some("/Traverse/Rover/Motor L0"),
+                Some("W"),
             ),
             "electrical power"
         );
         assert_eq!(
-            operator_channel_label("Motor L01.speed", Some("/Traverse/Rover/Motor L0")),
+            operator_channel_label(
+                "Motor L01.speed",
+                Some("/Traverse/Rover/Motor L0"),
+                Some("rad/s"),
+            ),
             "Motor L01.speed"
         );
     }
@@ -150,21 +184,41 @@ mod tests {
     #[test]
     fn generated_label_mode_preserves_the_registry_identity() {
         let path = "_x2f_Traverse_x2f_Rover.generated_current_a";
-        assert_eq!(display_channel_label(path, None, true), path);
+        assert_eq!(display_channel_label(path, None, None, true), path);
         assert_eq!(
             display_channel_label(
                 "SolarPanel_generated_current_a",
                 Some("/Traverse/Rover/SolarPanel"),
+                Some("A"),
                 false,
             ),
-            "generated current a"
+            "generated current"
         );
         assert_eq!(
             operator_channel_label(
                 "__member_Traverse_x2f_Rover_x2f_Motor__L0_electrical_power",
                 Some("/Traverse/Rover/Motor_L0"),
+                Some("W"),
             ),
             "electrical power"
+        );
+    }
+
+    #[test]
+    fn operator_labels_explain_connectors_and_use_metadata_units() {
+        assert_eq!(operator_identifier_label("p.v", None), "pin voltage");
+        assert_eq!(operator_identifier_label("p.i", Some("A")), "pin current");
+        assert_eq!(
+            operator_identifier_label("terminal_voltage_v", Some("V")),
+            "terminal voltage"
+        );
+        assert_eq!(
+            operator_identifier_label("terminal_power_w", Some("W")),
+            "terminal power"
+        );
+        assert_eq!(
+            compact_channel_label("Motor L0 terminal_current_a", "Motor L0", Some("A")),
+            "terminal current"
         );
     }
 }

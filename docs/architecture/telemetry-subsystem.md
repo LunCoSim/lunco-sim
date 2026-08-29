@@ -36,10 +36,15 @@ can make the same live-versus-history choice without guessing from names.
 
 The telemetry browser, plot controls, legends, and exports all label channels through
 `lunco_viz::signal::display_channel_label`, which uses the same identifier humanizer and
-ownership-relative shortening. The generated-name setting only selects the presentation
-projection; it never changes identity, history, bindings, or the USD/Modelica model. A new
-producer therefore supplies ownership metadata once and does not need a second naming table in
-those surfaces. A runtime-authored compact surface may additionally opt a declaration into its
+ownership-relative shortening. Unit metadata removes redundant `_v`, `_a`, `_w`, and `_ah`
+suffixes from operator labels, while standard Modelica electrical connector fields are presented
+as `pin voltage` and `pin current`; their exact `p.v`/`p.i` identities remain in the tooltip,
+API `name`, and model-variable metadata. Generated member variables receive the declaration's
+units and descriptions through the existing Modelica source projection before they enter the
+shared registry. The generated-name setting only selects the presentation projection; it never
+changes identity, history, bindings, or the USD/Modelica model. A new producer therefore supplies
+ownership and source metadata once and does not need a second naming table in those surfaces. A
+runtime-authored compact surface may additionally opt a declaration into its
 operator summary with the standard USD `ui:displayName`; the USD projector carries that explicit
 label through the existing generic `Callsign` marker. This is membership and authoring data, not a
 second name heuristic: declarations without it remain in the full telemetry catalog, and the

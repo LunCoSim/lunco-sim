@@ -102,9 +102,10 @@ unit instances. Each unit has its own compact `Icon` and a `Diagram` containing
 the native LunCo member instances that its equations execute. Member classes
 bring their authored icons and connector placements through the normal class
 resolver. Rust supplies only generic source-aware package loading and the
-metadata needed by the browser (boundary interface versus promoted member
-telemetry); Rhai owns the hierarchy, annotation graphics, and policy-side
-layout so visual changes do not require a Rust rebuild.
+metadata needed by the browser (boundary interface, promoted member telemetry,
+and complete member-variable units/descriptions); Rhai owns the hierarchy,
+annotation graphics, and policy-side layout so visual changes do not require a
+Rust rebuild.
 
 The shipped electrical presentation uses readable policy-owned unit class and
 instance names (`NetworkSystem`/`NetworkUnit_N` and `network_system`/`network_unit_N`),

@@ -288,6 +288,7 @@ fn collect_live_extras(
                     &b.source.path,
                     sigs.meta(&b.source)
                         .and_then(|meta| meta.group_path.as_deref()),
+                    sigs.meta(&b.source).and_then(|meta| meta.unit.as_deref()),
                     ctx.resource_expect::<lunco_viz::TelemetryDisplaySettings>()
                         .show_generated_names,
                 )
@@ -347,6 +348,8 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                                     &binding.source.path,
                                     reg.meta(&binding.source)
                                         .and_then(|meta| meta.group_path.as_deref()),
+                                    reg.meta(&binding.source)
+                                        .and_then(|meta| meta.unit.as_deref()),
                                     world
                                         .get_resource::<lunco_viz::TelemetryDisplaySettings>()
                                         .expect(

@@ -3659,6 +3659,14 @@ fn generated_signal_layout(
             let prefix = format!("{unit_prefix}.{member_prefix}.");
             layout.prefixes.push((prefix.clone(), member.clone()));
             if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
+                if let Some(metadata) = classes.variable_metadata(asset) {
+                    for (variable, metadata) in metadata {
+                        layout
+                            .metadata
+                            .entry(format!("{prefix}{variable}"))
+                            .or_insert_with(|| metadata.clone());
+                    }
+                }
                 layout.provenance_prefixes.push((
                     prefix,
                     ModelicaSignalProvenance {
@@ -3727,7 +3735,7 @@ const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
     outputs: HashMap<String, BTreeSet<String>>,
-    output_metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
+    metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
 }
 
@@ -3759,9 +3767,20 @@ impl MemberClasses {
     /// Modelica source as the class and output names; it is not reconstructed
     /// from generated solver identifiers or component names.
     pub fn output_metadata(&self, asset: &str, output: &str) -> Option<&ModelicaVariableMetadata> {
-        self.output_metadata
+        self.metadata
             .get(asset)
             .and_then(|metadata| metadata.get(output))
+    }
+
+    /// Units and descriptions for every declared variable in a member source.
+    /// Generated solver members use this map for internal inspection rows as
+    /// well as promoted outputs, so the browser and API do not lose authored
+    /// metadata at the generated-document boundary.
+    pub fn variable_metadata(
+        &self,
+        asset: &str,
+    ) -> Option<&HashMap<String, ModelicaVariableMetadata>> {
+        self.metadata.get(asset)
     }
 
     /// Resolve the class to instantiate for `asset`. `Ok(None)` means the source
@@ -3898,7 +3917,7 @@ pub fn resolve_member_classes(
             Some(class) => {
                 if let Some((outputs, metadata)) = interface {
                     classes.outputs.insert(asset.clone(), outputs);
-                    classes.output_metadata.insert(asset.clone(), metadata);
+                    classes.metadata.insert(asset.clone(), metadata);
                 }
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
@@ -4198,6 +4217,16 @@ mod tests {
             "lunco://models/LunCo/Electrical/Battery.mo",
             "LunCo.Electrical.Battery",
         );
+        classes.metadata.insert(
+            "lunco://models/LunCo/Electrical/Battery.mo".into(),
+            HashMap::from([(
+                "terminal_voltage_v".into(),
+                ModelicaVariableMetadata {
+                    description: Some("Battery terminal voltage on the electrical bus".into()),
+                    unit: Some("V".into()),
+                },
+            )]),
+        );
         classes.declare(
             "lunco://models/LunCo/Electrical/DCMotor.mo",
             "LunCo.Electrical.DCMotor",
@@ -4273,6 +4302,21 @@ mod tests {
             Some("LunCo.Electrical.Battery")
         );
         assert_eq!(internal.model_variable.as_deref(), Some("soc_out"));
+
+        let internal_terminal = format!(
+            "{}.{}.terminal_voltage_v",
+            battery_unit.instance,
+            instance_identifier("/Rig", "/Rig/Battery").unwrap(),
+        );
+        let terminal_metadata = layout
+            .metadata
+            .get(&internal_terminal)
+            .expect("member metadata follows the generated solver prefix");
+        assert_eq!(terminal_metadata.unit.as_deref(), Some("V"));
+        assert_eq!(
+            terminal_metadata.description.as_deref(),
+            Some("Battery terminal voltage on the electrical bus")
+        );
 
         let motor_alias = aliases
             .iter()

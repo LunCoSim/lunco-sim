@@ -63,8 +63,8 @@ use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSl
 use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
 use crate::registry::VisualizationRegistry;
 use crate::signal::{
-    display_channel_label, humanize_identifier, ScalarHistory, SignalExposure, SignalRef,
-    SignalRegistry, TelemetryFocus,
+    display_channel_label, humanize_identifier, operator_identifier_label, ScalarHistory,
+    SignalExposure, SignalRef, SignalRegistry, TelemetryFocus,
 };
 use crate::view::ViewTarget;
 use crate::viz::{SignalBinding, VisualizationConfig, VizId};
@@ -701,13 +701,14 @@ fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
             .model_variable
             .as_deref()
             .or_else(|| row.sig.path.rsplit('.').next())
-            .map(humanize_identifier)
+            .map(|variable| operator_identifier_label(variable, row.unit.as_deref()))
             .unwrap_or_else(|| "state".to_string());
         return format!("{variable} · internal");
     }
     let base = display_channel_label(
         &row.sig.path,
         row.group_path.as_deref(),
+        row.unit.as_deref(),
         show_generated_names,
     );
     if show_generated_names {
@@ -1511,6 +1512,7 @@ impl Panel for TelemetryBrowserPanel {
                 title: display_channel_label(
                     &sel.path,
                     metadata.and_then(|meta| meta.group_path.as_deref()),
+                    metadata.and_then(|meta| meta.unit.as_deref()),
                     display_settings.show_generated_names,
                 ),
                 kind: LINE_PLOT_KIND,
@@ -2058,16 +2060,44 @@ mod tests {
     #[test]
     fn channel_label_removes_the_owning_category_only_at_a_name_boundary() {
         assert_eq!(
-            compact_channel_label("Motor__L0.electrical_power", "Motor L0"),
+            compact_channel_label("Motor__L0.electrical_power", "Motor L0", Some("W")),
             "electrical power"
         );
         assert_eq!(
-            compact_channel_label("Motor L0 terminal_voltage_v", "Motor L0"),
-            "terminal voltage v"
+            compact_channel_label("Motor L0 terminal_voltage_v", "Motor L0", Some("V")),
+            "terminal voltage"
         );
         assert_eq!(
-            compact_channel_label("Motor L01.speed", "Motor L0"),
+            compact_channel_label("Motor L01.speed", "Motor L0", Some("rad/s")),
             "Motor L01.speed"
+        );
+    }
+
+    #[test]
+    fn telemetry_labels_explain_modelica_connector_state() {
+        let mut internal = Row {
+            sig: SignalRef::new(ent(1), "network_system.Battery.p.v"),
+            unit: Some("V".into()),
+            description: Some("Electrical pin voltage".into()),
+            provenance: Some("modelica".into()),
+            group_path: Some("/Rover/Battery".into()),
+            model_class: Some("LunCo.Electrical.Battery".into()),
+            model_variable: Some("p.v".into()),
+            source_asset: None,
+            canonical_name: None,
+            exposure: SignalExposure::Internal,
+            in_focus: false,
+            active: true,
+        };
+        assert_eq!(
+            telemetry_row_label(&internal, false),
+            "pin voltage · internal"
+        );
+        internal.model_variable = Some("p.i".into());
+        internal.unit = Some("A".into());
+        assert_eq!(
+            telemetry_row_label(&internal, false),
+            "pin current · internal"
         );
     }
 

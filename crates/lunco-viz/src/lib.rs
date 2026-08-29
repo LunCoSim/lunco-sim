@@ -41,8 +41,8 @@ pub use panel::{VizPanel, VIZ_PANEL_KIND};
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
 pub use signal::{
     compact_channel_label, display_channel_label, humanize_identifier, operator_channel_label,
-    PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure, SignalMeta, SignalRef,
-    SignalRegistry, SignalType, TelemetryFocus,
+    operator_identifier_label, PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure,
+    SignalMeta, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
