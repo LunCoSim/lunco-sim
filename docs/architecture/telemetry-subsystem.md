@@ -34,6 +34,23 @@ tree. The browser defaults to current publishers and exposes archived history on
 an explicit display setting; `ListTelemetryChannels` keeps the `active` field so API clients
 can make the same live-versus-history choice without guessing from names.
 
+### Archived history is not automatically stale
+
+An archived row means that its publisher was removed during this process (for example, a
+scene replacement); it does not mean that its samples are orphaned or safe to delete. The
+`SignalRegistry` is an in-memory, bounded mission-history store: it is not persisted across
+application restarts, and each row retains its `(entity, path)` identity, metadata, and
+sample-capacity boundary. A valid archived history therefore remains queryable for review
+after its live publisher is gone, while the normal browser hides it by default.
+
+Treat an archived row as stale only when the owning lifecycle supplies an explicit reason to
+discard that signal (such as an authoritative channel removal or a documented run-retention
+policy). Absence of the current ECS publisher, an old session-local entity number, or a
+missing optional display label is not sufficient evidence. Cleanup must call the registry's
+owner-scoped `remove_signal`/`drop_entity` path; there is no name-only or age-only bulk purge.
+When no such owner policy exists, inventory the row and preserve it rather than deleting a
+valid mission trace.
+
 The telemetry browser, plot controls, legends, and exports all label channels through
 `lunco_viz::signal::display_channel_label`, which uses the same identifier humanizer and
 ownership-relative shortening. The generated-name setting only selects the presentation

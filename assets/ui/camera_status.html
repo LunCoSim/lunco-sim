@@ -1,8 +1,10 @@
 <template>
-  <property name="active_name">NO ACTIVE CAMERA</property>
+  <property name="active_label">NO ACTIVE CAMERA</property>
 
   <node id="camera-status-root">
     <text id="camera-status-label">CAMERA</text>
-    <text id="camera-status-name">{active_name}</text>
+    <button id="camera-status-trigger" on_press="runtime_camera_picker_toggle">
+      <text id="camera-status-name">{active_label}</text>
+    </button>
   </node>
 </template>

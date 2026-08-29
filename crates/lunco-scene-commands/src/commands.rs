@@ -2808,13 +2808,10 @@ pub fn on_focus_entity_by_path(
 /// [`apply_pending_focus`] at the start of the NEXT frame (`First` schedule).
 ///
 /// The command observer fires wherever the API dispatcher happens to sit in
-/// the frame — including BETWEEN transform-propagation passes, where the
-/// target's and the avatar's `GlobalTransform`s are momentarily in different
-/// conventions (a site-anchored scene re-bases the solar hierarchy every
-/// tick). Doing the math there teleported the avatar ~1e11 m into empty space
-/// ("click on Earth → everything vanishes"). In `First`, nothing has written a
-/// transform yet this frame, so last frame's fully-propagated GTs are
-/// mutually consistent by construction.
+/// the frame, so this transaction is applied from `First` after any queued
+/// orbit-return commands have flushed. Spatial math uses the authoritative
+/// `(CellCoord, Transform)` chain through `lunco_core::coords`; derived
+/// `GlobalTransform` is never a camera-placement input.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct PendingFocus {
     pub target: Entity,
@@ -2863,24 +2860,27 @@ pub fn on_focus_entity_by_id(
     );
 }
 
-/// Applies a [`PendingFocus`] with frame-consistent transforms (`First`
+/// Applies a [`PendingFocus`] from authoritative BigSpace poses (`First`
 /// schedule — see the type doc).
 pub fn apply_pending_focus(
     pending: Option<Res<PendingFocus>>,
-    q_target: Query<&GlobalTransform>,
     mut q_avatar: Query<
         (
             Entity,
             &mut Transform,
             &mut big_space::prelude::CellCoord,
             &ChildOf,
-            &GlobalTransform,
             Option<&mut lunco_avatar::FreeFlightCamera>,
             Has<lunco_avatar::OrbitViewReturn>,
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<
+        (Option<&big_space::prelude::CellCoord>, &Transform),
+        Without<lunco_core::Avatar>,
+    >,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
     q_celestial_decl: Query<(), With<lunco_celestial::CelestialBodyDecl>>,
     q_children: Query<&Children>,
@@ -2930,7 +2930,7 @@ pub fn apply_pending_focus(
     if let Some(avatar) = local_avatar.as_deref().and_then(|slot| slot.0) {
         if q_avatar
             .get(avatar)
-            .is_ok_and(|(_, _, _, _, _, _, orbit_return)| orbit_return)
+            .is_ok_and(|(_, _, _, _, _, orbit_return)| orbit_return)
         {
             commands.trigger(lunco_avatar::ReleaseVessel { target: avatar });
             info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
@@ -2941,22 +2941,13 @@ pub fn apply_pending_focus(
         pin.active = false;
     }
     commands.remove_resource::<PendingFocus>();
-    let cmd = FocusEntityById {
-        entity_id: 0,
-        distance,
-    };
-    let Ok(target_gt) = q_target.get(target) else {
-        warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
-        return;
-    };
     let Some(avatar_ent) = local_avatar.as_deref().and_then(|slot| slot.0) else {
         let message = "no authoritative LocalAvatar is available for local focus".to_string();
         warn!("FOCUS_ENTITY: {message}");
         replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
     };
-    let Ok((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt, _)) =
-        q_avatar.get_mut(avatar_ent)
+    let Ok((avatar_ent, mut tf, mut cell, child_of, ff_opt, _)) = q_avatar.get_mut(avatar_ent)
     else {
         let message =
             format!("authoritative LocalAvatar {avatar_ent:?} has no complete focus state");
@@ -2965,37 +2956,46 @@ pub fn apply_pending_focus(
         return;
     };
     replace_focus_diagnostic(&mut diagnostics, None);
-    // Work in the avatar→target DELTA, not the target's absolute
-    // `GlobalTransform`. Both GTs are read in the same instant so whatever
-    // convention/origin big_space happens to be mid-way through this frame
-    // (site-anchored scenes re-base every tick) cancels in the difference —
-    // reading the target GT alone teleported the avatar 1e11 m into empty
-    // space when the observer fired between propagation passes. The delta is
-    // applied to the avatar's LOCAL translation in its restored scene grid.
-    let delta = target_gt.translation() - avatar_gt.translation();
-    let dist = if cmd.distance > 0.1 {
-        cmd.distance
-    } else {
-        6.0
+    let Ok(grid) = q_grids.get(child_of.parent()) else {
+        let message = format!(
+            "authoritative LocalAvatar {avatar_ent:?} is not parented directly under a BigSpace Grid"
+        );
+        warn!("FOCUS_ENTITY: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
     };
+    let avatar_pos = grid.grid_position_double(&cell, &tf);
+    let target_pos = if target == avatar_ent {
+        avatar_pos
+    } else {
+        let Some((target_pos, _)) = lunco_core::coords::pose_in_grid(
+            target,
+            child_of.parent(),
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            let message =
+                format!("target {target:?} has no complete pose in the avatar's BigSpace frame");
+            warn!("FOCUS_ENTITY: {message}");
+            replace_focus_diagnostic(&mut diagnostics, Some(message));
+            return;
+        };
+        target_pos
+    };
+    let dist = if distance > 0.1 { distance } else { 6.0 };
     // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see
     // the spoke face) plus a little up and forward. (Celestial targets never
     // reach here — they take the orbit-focus early return above.)
     let dir = Vec3::new(1.0, 0.4, 0.25).normalize();
     let offset = dir * dist;
-    // Grid-frame absolute target = camera's CELL-AWARE position + GT delta.
-    // A previous orbit focus leaves the avatar cells away from the scene;
-    // `tf.translation` alone is only the cell remainder there. Re-split the
-    // final pose through the grid so a local focus also RESETS the cell (for
-    // scene-scale positions `translation_to_grid` returns cell (0,0,0) + the
-    // plain translation — the historical single-cell convention).
-    if let Ok(grid) = q_grids.get(child_of.parent()) {
-        let target_abs = grid.grid_position_double(&cell, &tf) + delta.as_dvec3();
-        let (new_cell, new_translation) = grid.translation_to_grid(target_abs + offset.as_dvec3());
-        *cell = new_cell;
+    // Re-split the complete target-relative pose through the owning Grid.
+    // This preserves cell precision even when the camera was previously in an
+    // inertial orbit grid; no render-space value participates in placement.
+    let (new_cell, new_translation) = grid.translation_to_grid(target_pos + offset.as_dvec3());
+    cell.set_if_neq(new_cell);
+    if tf.translation != new_translation {
         tf.translation = new_translation;
-    } else {
-        tf.translation = tf.translation + delta + offset;
     }
     // Aim back along the framing offset (camera → target).
     let d = (-offset).normalize();
@@ -3021,7 +3021,6 @@ pub fn apply_pending_focus(
                 .remove::<lunco_avatar::SpringArmCamera>()
                 .remove::<lunco_avatar::SurfaceCamera>()
                 .remove::<lunco_avatar::SurfaceRelativeMode>()
-                .remove::<lunco_avatar::FrameBlend>()
                 .try_insert(lunco_avatar::FreeFlightCamera {
                     yaw,
                     pitch,
@@ -3030,8 +3029,8 @@ pub fn apply_pending_focus(
         }
     }
     info!(
-        "FOCUS_ENTITY: framed api_id={} at {:.1} m (avatar={avatar_ent:?})",
-        cmd.entity_id, dist
+        "FOCUS_ENTITY: framed target={target:?} at {:.1} m (avatar={avatar_ent:?})",
+        dist
     );
 }
 
@@ -3103,8 +3102,10 @@ pub fn on_set_camera_look_at(
     };
     let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
     if child_of.parent() == root {
-        *cell = new_cell;
-        tf.translation = new_translation;
+        cell.set_if_neq(new_cell);
+        if tf.translation != new_translation {
+            tf.translation = new_translation;
+        }
     } else {
         lunco_core::attach::migrate_to_grid(
             &mut commands,
@@ -3142,7 +3143,6 @@ pub fn on_set_camera_look_at(
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
             .remove::<lunco_environment::GravityBody>()
-            .remove::<lunco_avatar::FrameBlend>()
             .try_insert(lunco_avatar::FreeFlightCamera {
                 yaw,
                 pitch,
@@ -3793,8 +3793,9 @@ impl Plugin for SpawnCommandPlugin {
         // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
         // the names the loader already reads back — so it round-trips + journals.
         app.add_observer(persist_environment_light_to_runtime_layer);
-        // Applies the recorded focus at frame start, when last frame's fully
-        // propagated GlobalTransforms are mutually consistent (see PendingFocus).
+        // Applies the recorded focus at frame start after any orbit-return
+        // transaction has flushed (see PendingFocus). The solver reads the
+        // authoritative BigSpace pose chain, not derived GlobalTransforms.
         app.add_systems(bevy::app::First, apply_pending_focus);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
@@ -3923,6 +3924,76 @@ mod tests {
         let composed_y = cell.y as f64 * 2_000.0 + translation.y as f64;
         assert!((composed_y - 2_500.0).abs() < 1.0e-3);
         assert_ne!(canonical_render_grid, active_physics_grid);
+    }
+
+    #[test]
+    fn focus_uses_authoritative_grid_pose_not_render_global_transform() {
+        use super::*;
+        use big_space::prelude::{CellCoord, Grid};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(1_000.0, 0.0),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let target = app
+            .world_mut()
+            .spawn((
+                CellCoord::new(2, 0, -1),
+                Transform::from_xyz(25.0, 3.0, -10.0),
+                // This deliberately stale render pose must not affect focus.
+                GlobalTransform::from(Transform::from_xyz(-1.0e11, 2.0e11, 3.0e11)),
+                ChildOf(grid),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                lunco_core::LocalAvatar,
+                CellCoord::new(1, 0, 0),
+                Transform::from_xyz(4.0, 6.0, 8.0),
+                GlobalTransform::from(Transform::from_xyz(7.0e10, -8.0e10, 9.0e10)),
+                ChildOf(grid),
+                lunco_avatar::FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                },
+            ))
+            .id();
+
+        app.insert_resource(PendingFocus {
+            target,
+            distance: 6.0,
+        });
+        app.insert_resource(lunco_core::TheLocalAvatar(Some(avatar)));
+        app.add_systems(bevy::app::First, apply_pending_focus);
+        app.update();
+
+        let grid = app.world().get::<Grid>(grid).unwrap();
+        let target_pos = DVec3::new(2_025.0, 3.0, -1_010.0);
+        let offset = Vec3::new(1.0, 0.4, 0.25).normalize() * 6.0;
+        let actual = {
+            let cell = app.world().get::<CellCoord>(avatar).unwrap();
+            let transform = app.world().get::<Transform>(avatar).unwrap();
+            grid.grid_position_double(cell, transform)
+        };
+        assert!((actual - (target_pos + offset.as_dvec3())).length() < 1.0e-3);
+
+        let freeflight = app
+            .world()
+            .get::<lunco_avatar::FreeFlightCamera>(avatar)
+            .unwrap();
+        let direction = (-offset).normalize();
+        assert!((freeflight.yaw - (-direction.x).atan2(-direction.z)).abs() < 1.0e-6);
+        assert!((freeflight.pitch - direction.y.asin()).abs() < 1.0e-6);
     }
 
     #[test]

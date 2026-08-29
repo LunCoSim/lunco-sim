@@ -138,6 +138,27 @@ impl EngineParams {
                     doc: "To-sun direction in world space (terrain shaders).",
                 },
                 EngineParam {
+                    name: "blueprint_origin",
+                    ty: ParamType::Vec3,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "WorldGrid floating-origin offset for stable Cartesian blueprint lines.",
+                },
+                EngineParam {
+                    name: "blueprint_frame_origin",
+                    ty: ParamType::Vec3,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Render-space origin of the active terrain frame for blueprint lines.",
+                },
+                EngineParam {
+                    name: "blueprint_frame_rotation",
+                    ty: ParamType::Vec4,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Inverse active terrain-frame rotation for blueprint lines.",
+                },
+                EngineParam {
                     name: "sun_tan_radius",
                     ty: ParamType::F32,
                     source: Runtime,

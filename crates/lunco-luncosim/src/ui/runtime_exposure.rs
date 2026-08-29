@@ -36,6 +36,7 @@ pub(crate) enum RuntimeUiActionKind {
     ViewBodyEarth,
     DismissTerrainOverlay,
     ToggleAutopilot,
+    ToggleCameraPicker,
 }
 
 impl RuntimeUiActionKind {
@@ -46,6 +47,7 @@ impl RuntimeUiActionKind {
             "view.body.earth" => Ok(Self::ViewBodyEarth),
             "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
             "autopilot.toggle" => Ok(Self::ToggleAutopilot),
+            "camera.picker.toggle" => Ok(Self::ToggleCameraPicker),
             _ => Err(format!("unknown runtime UI action `{value}`")),
         }
     }
@@ -394,6 +396,23 @@ impl From<&RuntimeUiPlacementDefinition> for RuntimeUiPlacement {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolvedRuntimeUiPlacement {
     rect: egui::Rect,
+}
+
+/// Last measured logical rectangle for each visible runtime surface.
+///
+/// Native egui overlays that are opened by an authored HUI control use this
+/// measurement instead of copying the surface's manifest geometry. The HUI
+/// tree remains the placement authority; egui only owns the richer popup
+/// interaction that the current retained surface contract cannot express.
+#[derive(Resource, Default, Debug, Clone)]
+pub(crate) struct RuntimeUiSurfaceRects {
+    rects: HashMap<String, egui::Rect>,
+}
+
+impl RuntimeUiSurfaceRects {
+    pub(crate) fn get(&self, namespace: &str) -> Option<egui::Rect> {
+        self.rects.get(namespace).copied()
+    }
 }
 
 /// Root marker for a retained runtime-authored HTML surface. The namespace is
@@ -1314,6 +1333,35 @@ pub(crate) fn register_runtime_ui_input_regions(
     }
 }
 
+/// Publish measured surface rectangles for native overlays that are opened by
+/// authored runtime controls. This is change-detected by Bevy's UI layout
+/// lifecycle rather than reconstructed from duplicate manifest constants.
+pub(crate) fn publish_runtime_ui_surface_rects(
+    roots: Query<(
+        &RuntimeUiSurface,
+        &Visibility,
+        Option<&InheritedVisibility>,
+        Option<&ComputedNode>,
+        Option<&UiGlobalTransform>,
+    )>,
+    mut rects: ResMut<RuntimeUiSurfaceRects>,
+) {
+    rects.rects.clear();
+    for (surface, visibility, inherited_visibility, node, transform) in &roots {
+        if !matches!(*visibility, Visibility::Visible)
+            || !inherited_visibility.is_none_or(|visibility| visibility.get())
+        {
+            continue;
+        }
+        let (Some(node), Some(transform)) = (node, transform) else {
+            continue;
+        };
+        if let Some(rect) = runtime_ui_input_rect(node, transform) {
+            rects.rects.insert(surface.namespace.clone(), rect);
+        }
+    }
+}
+
 fn is_descendant_of_runtime_surface(
     entity: Entity,
     roots: &HashSet<Entity>,
@@ -1936,6 +1984,34 @@ mod tests {
             .validate()
             .expect_err("unsupported action must be rejected");
         assert!(error.contains("unknown runtime UI action"));
+    }
+
+    #[test]
+    fn manifest_accepts_camera_picker_toggle_action() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "camera-status",
+                    "template": "ui/camera_status.html",
+                    "stylesheet": "ui/camera_status.css",
+                    "namespace": "camera-status",
+                    "actions": [{
+                        "callback": "runtime_camera_picker_toggle",
+                        "action": "camera.picker.toggle"
+                    }],
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("camera picker action should parse");
+
+        manifest
+            .validate()
+            .expect("camera picker action should be in the host action set");
+        assert_eq!(
+            RuntimeUiActionKind::parse("camera.picker.toggle"),
+            Ok(RuntimeUiActionKind::ToggleCameraPicker)
+        );
     }
 
     #[test]

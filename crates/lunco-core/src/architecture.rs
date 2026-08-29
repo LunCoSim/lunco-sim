@@ -648,47 +648,6 @@ fn safe_stop_outputs(outputs: &OutputPorts, mut write: impl FnMut(Entity, f64)) 
     }
 }
 
-// ── Action Status ─────────────────────────────────────────────────────────────
-
-/// Status of a long-running simulation action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Default)]
-pub enum ActionStatus {
-    /// The action is still in progress.
-    #[default]
-    Running,
-    /// The action finished as planned.
-    Completed,
-    /// The action was interrupted by another task or user input.
-    Preempted,
-    /// The action encountered an error and stopped.
-    Failed,
-}
-
-/// Component attached to entities currently performing a long-running action.
-///
-/// **Why**: Essential for task sequencers and UI to track non-instantaneous
-/// operations like waypoint navigation to prevent task overlapping.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct ActiveAction {
-    /// Unique identifier for the type of action.
-    pub name: String,
-    /// Current execution state.
-    pub status: ActionStatus,
-    /// Normalized progress value (0.0 to 1.0).
-    pub progress: f32,
-}
-
-impl Default for ActiveAction {
-    fn default() -> Self {
-        Self {
-            name: "Unknown".to_string(),
-            status: ActionStatus::Running,
-            progress: 0.0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -37,6 +37,18 @@ fn test_blueprint_shader_schema_reflects() {
         schema.field("major_grid_spacing").map(|f| f.ty),
         Some(ParamType::F32)
     );
+    assert_eq!(
+        schema.field("blueprint_origin").map(|f| f.ty),
+        Some(ParamType::Vec3)
+    );
+    assert_eq!(
+        schema.field("blueprint_frame_origin").map(|f| f.ty),
+        Some(ParamType::Vec3)
+    );
+    assert_eq!(
+        schema.field("blueprint_frame_rotation").map(|f| f.ty),
+        Some(ParamType::Vec4)
+    );
     // Whole block stays within the 256-byte uniform budget.
     assert!(
         schema.size <= 256,
@@ -63,6 +75,14 @@ fn blueprint_globe_mapping_is_derived_per_fragment_from_body_direction() {
     assert!(
         !fragment.contains("let globe_uv = in.uv"),
         "projecting spherical UV at vertices makes imagery depend on LOD tessellation"
+    );
+    assert!(
+        fragment.contains("stable_world = in.world_position.xyz + mat.blueprint_origin"),
+        "flat blueprint coordinates must restore the stable WorldGrid origin"
+    );
+    assert!(
+        fragment.contains("stable_world - mat.blueprint_frame_origin"),
+        "flat blueprint coordinates must map into the authored terrain frame"
     );
     assert!(
         !fragment.contains("north_cap") && !fragment.contains("south_cap"),

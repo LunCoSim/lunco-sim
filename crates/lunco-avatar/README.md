@@ -9,7 +9,6 @@ The camera system uses composable behavior components — each camera mode is it
 | `SpringArmCamera` | Vessel follow — rovers, astronauts, aircraft (via [`FollowAttitude`]) | Heading-lock / world-locked / full-attitude |
 | `OrbitCamera` | Celestial bodies, spacecraft | Ecliptic (star-fixed) |
 | `FreeFlightCamera` | Spectator / drone view | Absolute solar coordinates |
-| `FrameBlend` | Smooth transitions between behaviors | — |
 
 ## Spring Arm Camera — The Smooth Follow Formula
 
@@ -54,7 +53,13 @@ Camera systems run in `PostUpdate`, **after** `PhysicsSystems::Writeback` and **
 ### Cross-Grid Transitions
 
 When focusing a target on a different grid (e.g., Earth → Moon):
-1. The camera stays on its current grid during the blend
-2. Positions are computed in absolute solar coordinates, then converted to the camera's grid via `grid.translation_to_grid()`
-3. After the blend completes, the behavior system (e.g., `OrbitCamera`) handles any necessary grid migration
-4. The camera's `FrameBlend` recomputes the end position every frame from the target's current pose — never stale
+1. The orbit command resolves the target pose through the shared
+   `lunco_core::coords::grid_relative_pose` frame path.
+2. The destination inertial Grid performs the existing f64-to-cell/local split
+   through `Grid::translation_to_grid()`.
+3. If the camera changes Grid, `migrate_to_grid()` commits the parent,
+   `CellCoord`, and local `Transform` atomically; same-Grid updates use
+   value-gated writes.
+4. Orbit entry stores the exact pre-orbit `(ChildOf, CellCoord, Transform)`
+   and restores it atomically. There is no second transition component or
+   camera-specific coordinate representation.

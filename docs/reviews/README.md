@@ -14,6 +14,9 @@ lesson, which belongs in the architecture doc for that subsystem.
 
 ## Standing issues
 
+- [`open-200fps-performance-handover.md`](open-200fps-performance-handover.md) —
+  the Apollo High-quality frame loop is below the stable 200 FPS target; the
+  handover records the Tracy evidence and owner-first optimization plan.
 - [`open-rbac-not-enforced.md`](open-rbac-not-enforced.md) — **the project does
   not enforce access control.** Trusted LAN only; never expose a host to an
   untrusted network.

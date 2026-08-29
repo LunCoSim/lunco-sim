@@ -657,7 +657,7 @@ mod exposure_tests {
     }
 
     #[test]
-    fn camera_exposure_projects_only_authoritative_camera_facts() {
+    fn camera_exposure_projects_authoritative_fact_and_compact_label() {
         let status = lunco_usd_bevy::camera_switch::CameraSelectionStatus {
             cameras: vec!["/World/Wide".into(), "/World/Close".into()],
             active_name: Some("/World/Close".into()),
@@ -674,6 +674,7 @@ mod exposure_tests {
             .expect("camera status exposure");
         assert!(surface.visible);
         assert_eq!(surface.properties["active_name"].render(), "/World/Close");
+        assert_eq!(surface.properties["active_label"].render(), "Close");
         assert!(!surface.properties.contains_key("mode"));
         assert!(!surface.properties.contains_key("camera_count"));
         assert!(!surface.properties.contains_key("owner"));
@@ -1851,9 +1852,20 @@ fn publish_camera_exposure(
 ) {
     let mut ui = exposures.writer("camera-status");
     ui.visible(true);
-    // This boundary publishes only the authoritative current-camera fact.
-    // Selection policy and presentation wording stay in Rhai/HUI.
-    ui.property("active_name", status.active_name.as_deref().unwrap_or(""));
+    // Keep the full path as the authoritative fact for Rhai/diagnostics, and
+    // derive one deterministic identity label for compact status surfaces.
+    // Selection policy remains in Rhai/the typed camera command path.
+    let active_name = status.active_name.as_deref().unwrap_or("");
+    let labels = lunco_usd_bevy::camera_switch::camera_display_labels(&status.cameras);
+    let active_label = status
+        .active_name
+        .as_ref()
+        .and_then(|active| status.cameras.iter().position(|name| name == active))
+        .and_then(|index| labels.get(index))
+        .map(String::as_str)
+        .unwrap_or(active_name);
+    ui.property("active_name", active_name);
+    ui.property("active_label", active_label);
 }
 
 fn percent(value: f32) -> String {

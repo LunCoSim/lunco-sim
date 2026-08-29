@@ -22,13 +22,23 @@
   letter-spacing: 1px;
 }
 
-#camera-status-name {
+#camera-status-trigger {
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
   min-width: 0px;
   max-width: 100%;
   width: 120px;
+  padding: 0px;
+  border-width: 0px;
+  background-color: transparent;
+  color: var(--text-color);
+  align-items: center;
+  overflow: hidden;
+}
+
+#camera-status-name {
+  width: 100%;
   overflow: hidden;
   color: var(--text-color);
   font-size: 12px;

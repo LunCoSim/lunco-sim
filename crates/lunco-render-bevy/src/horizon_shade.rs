@@ -26,6 +26,7 @@ use bevy::math::Affine3A;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_environment::horizon::{
     finish_shadow_cache_bake, pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig,
     SunQuery,
@@ -53,6 +54,7 @@ pub(crate) fn build(app: &mut App) {
             ensure_terrain_materials,
             wire_terrain_materials,
             wire_sun_for_non_terrain_materials,
+            wire_blueprint_origin,
         )
             .chain()
             .after(finish_shadow_cache_bake)
@@ -485,6 +487,110 @@ pub fn wire_sun_for_non_terrain_materials(
                     ("sun_tan_radius", ParamValue::F32(tan_r)),
                 ]);
             }
+        }
+    }
+}
+
+/// Keep Cartesian blueprint lines in the authored active terrain frame.
+///
+/// BigSpace deliberately exposes camera-relative `GlobalTransform` values to
+/// the renderer. That is the right frame for rasterisation, but it is not the
+/// frame in which an authored terrain grid is defined. The shader receives the
+/// current floating-origin cell offset plus the active frame's render-space
+/// origin and inverse rotation before evaluating its periodic coordinates.
+pub fn wire_blueprint_origin(
+    origin: Query<(&CellCoord, &Grid), With<lunco_core::OriginAnchor>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    world_grids: Query<(Entity, &Grid), With<lunco_core::WorldGrid>>,
+    frame_parents: Query<&ChildOf>,
+    frame_grids: Query<&Grid>,
+    frame_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
+    meshes: Query<&MeshMaterial3d<ShaderMaterial>, Without<RenderLayers>>,
+) {
+    let Some(mut shader_mats) = shader_mats else {
+        return;
+    };
+    let offset = origin
+        .single()
+        .ok()
+        .map(|(cell, grid)| grid.cell_to_float(cell).as_vec3())
+        .unwrap_or(Vec3::ZERO);
+    let mut blueprint_origin = offset;
+    let mut frame_origin = Vec3::ZERO;
+    let mut frame_rotation = Vec4::new(0.0, 0.0, 0.0, 1.0);
+
+    // A site-mounted surface is authored in the active physics/site grid, not
+    // in inertial WorldGrid XZ. Resolve that frame in f64, then convert its pose
+    // into the same render frame as the fragment position. The subtraction is
+    // deliberately render-relative: adding a huge absolute cell to a f32
+    // shader coordinate would reintroduce the precision loss BigSpace avoids.
+    if let Some(active_frame) = active_frame {
+        let Ok((world_grid_entity, world_grid)) = world_grids.single() else {
+            return;
+        };
+        let Some((position, rotation)) = lunco_core::coords::pose_in_grid(
+            active_frame.0,
+            world_grid_entity,
+            &frame_parents,
+            &frame_grids,
+            &frame_spatial,
+        ) else {
+            return;
+        };
+        let (render_position, render_rotation) = lunco_core::coords::grid_absolute_pose_to_render(
+            world_grid,
+            lunco_core::coords::GridPos(position),
+            lunco_core::coords::GridRot(rotation),
+        );
+        blueprint_origin = Vec3::ZERO;
+        frame_origin = render_position.0.as_vec3();
+        frame_rotation = Vec4::from_array(render_rotation.0.inverse().as_quat().to_array());
+    }
+
+    let values = [
+        (
+            "blueprint_origin",
+            ParamValue::Vec3(blueprint_origin.to_array()),
+        ),
+        (
+            "blueprint_frame_origin",
+            ParamValue::Vec3(frame_origin.to_array()),
+        ),
+        (
+            "blueprint_frame_rotation",
+            ParamValue::Vec4(frame_rotation.to_array()),
+        ),
+    ];
+    let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
+
+    for handle in &meshes {
+        if !written.insert(handle.0.id()) {
+            continue;
+        }
+        let Some(material) = shader_mats.get(&handle.0) else {
+            continue;
+        };
+        if values
+            .iter()
+            .any(|(name, _)| material.schema.field(name).is_none())
+        {
+            continue;
+        }
+        let unchanged = material
+            .get_vec3("blueprint_origin")
+            .is_some_and(|current| (current - blueprint_origin).length() <= SUN_DIR_EPSILON)
+            && material
+                .get_vec3("blueprint_frame_origin")
+                .is_some_and(|current| (current - frame_origin).length() <= SUN_DIR_EPSILON)
+            && material
+                .get_vec4("blueprint_frame_rotation")
+                .is_some_and(|current| (current - frame_rotation).length() <= SUN_DIR_EPSILON);
+        if unchanged {
+            continue;
+        }
+        if let Some(mut material) = shader_mats.get_mut(&handle.0) {
+            material.set_many(values.iter().map(|(name, value)| (*name, *value)));
         }
     }
 }

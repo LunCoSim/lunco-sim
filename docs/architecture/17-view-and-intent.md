@@ -58,26 +58,29 @@ The rendering bridge.
 
 ---
 
-## 3. The Lifecycle: Command -> Action
+## 3. The Lifecycle: Command -> Camera Mode
 
 ### **Typed Command** (The Pulse)
 A discrete instruction event.
 - **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
 - **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
 
-### **ActiveAction** (The Process)
-A long-running, stateful task with a lifecycle:
-1. **Started**: A typed command triggers an `ActiveAction`.
-2. **Running**: A dedicated system updates `progress` and modifies the target component.
-3. **Preemption**: Manual USER input (via `UserIntent`) immediately cancels active actions to ensure tactile control responsiveness.
-4. **Result**: Upon completion, a final result status (ACK/NACK) is emitted.
+Camera commands change one exclusive behavior component on the local avatar.
+`FocusTarget`, `PossessVessel`, `FollowTarget`, `TeleportToSurface`, and
+`ReturnFromOrbit` are explicit mode transactions; the active behavior owns the
+complete BigSpace `(CellCoord, Transform)` pose. The task-tree runtime owns
+long-running authored missions separately and does not use a camera-specific
+progress component.
 
 ---
 
 ## 4. Input Preemption
-To provide a natural "human" feel, manual user input always takes precedence over automated actions:
-- If a `Look` or `Move` intent is detected, the `Avatar` automatically **Cancels** any active `CameraTransition` actions.
-- Controls are "handed over" to the USER immediately, preventing fights between manual steering and automated transitions.
+To provide a natural "human" feel, manual user input always takes precedence
+over automated camera ownership:
+- `Look`, movement, and zoom are consumed only by the currently active camera
+  mode; an authored cinematic lock explicitly owns the pose until released.
+- A mode transaction removes the competing behavior components atomically, so
+  manual input and an automated camera solver cannot write the same pose.
 
 ---
 

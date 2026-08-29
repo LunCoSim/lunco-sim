@@ -38,6 +38,21 @@ For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.
 
+Camera labels are a shared projection owned by
+`lunco-usd-bevy::camera_switch::camera_display_labels`. Reuse it in workbench
+camera lists, the USD/entity trees, and Inspector; keep the full USD path as
+the selection/tooltip identity. Unique leaves are compact, duplicate leaves
+gain nearest-owner context, generated ID suffixes stay out of primary text,
+and only an unavoidable normalized collision gets an ordinal.
+
+World-space vehicle trails are transient render presentation, not UI-owned state.
+Read the vehicle root's solved Avian `Position` in the active physics/grid frame,
+project through `GridSurfaceQuery`, and use bounded history with explicit
+`SceneTeardown` cleanup. Do not derive trails from controller input, render
+`GlobalTransform`, authored route geometry, or a per-frame USD edit; reuse the
+shared ribbon mesh builder so turns and BigSpace frame changes use one geometry
+contract.
+
 ## Runtime-authored HTML/CSS surfaces
 
 For a Twin-facing HUD, telemetry card, progress overlay, or simple runtime

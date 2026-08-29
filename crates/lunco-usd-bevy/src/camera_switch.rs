@@ -221,6 +221,124 @@ pub(crate) fn resolve_camera_names(
     }
 }
 
+/// Project authored camera identities into concise, deterministic UI labels.
+///
+/// The returned order matches `names`, while the input strings remain the
+/// canonical identities used by `SetUserCamera` and `SetActiveCamera`. A
+/// unique leaf is shown by itself; duplicate leaves gain the nearest readable
+/// owner context and then additional ancestors when necessary. Generated
+/// hexadecimal/UUID-like owner suffixes are omitted from presentation. If
+/// normalized contexts still collide, a small ordinal distinguishes the rows;
+/// the full identity remains available to the caller for a tooltip or log.
+pub fn camera_display_labels(names: &[String]) -> Vec<String> {
+    let parts: Vec<Vec<String>> = names
+        .iter()
+        .map(|name| {
+            name.split(['/', '\\'])
+                .filter(|part| !part.is_empty())
+                .map(readable_camera_segment)
+                .collect()
+        })
+        .collect();
+    let leaves: Vec<String> = parts
+        .iter()
+        .map(|parts| {
+            parts
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "Unnamed camera".to_string())
+        })
+        .collect();
+
+    let mut labels = Vec::with_capacity(names.len());
+    for (index, camera_parts) in parts.iter().enumerate() {
+        let leaf = &leaves[index];
+        let leaf_count = leaves.iter().filter(|other| *other == leaf).count();
+        if leaf_count == 1 {
+            labels.push(leaf.clone());
+            continue;
+        }
+
+        let mut label = None;
+        for depth in 2..=camera_parts.len() {
+            let candidate = camera_label_at_depth(camera_parts, depth);
+            let candidate_count = parts
+                .iter()
+                .enumerate()
+                .filter(|(other_index, other_parts)| {
+                    leaves[*other_index] == *leaf
+                        && camera_label_at_depth(other_parts, depth) == candidate
+                })
+                .count();
+            if candidate_count == 1 {
+                label = Some(candidate);
+                break;
+            }
+        }
+
+        labels.push(label.unwrap_or_else(|| {
+            if camera_parts.is_empty() {
+                leaf.clone()
+            } else {
+                camera_label_at_depth(camera_parts, 2)
+            }
+        }));
+    }
+
+    // Context normalization can intentionally collapse generated instance
+    // names. Preserve the compact label but make the remaining rows visibly
+    // distinct; the original path is still the selection/diagnostic value.
+    let mut result = Vec::with_capacity(labels.len());
+    for (index, label) in labels.iter().enumerate() {
+        let same_label_before = labels[..index]
+            .iter()
+            .filter(|previous| *previous == label)
+            .count();
+        let same_label_total = labels_equal_count(label, &labels);
+        if same_label_total > 1 {
+            result.push(format!("{label} #{}", same_label_before + 1));
+        } else {
+            result.push(label.clone());
+        }
+    }
+    result
+}
+
+fn readable_camera_segment(segment: &str) -> String {
+    let Some((base, suffix)) = segment.rsplit_once('_') else {
+        return segment.to_string();
+    };
+    if !base.is_empty() && generated_camera_suffix(suffix) {
+        base.to_string()
+    } else {
+        segment.to_string()
+    }
+}
+
+fn generated_camera_suffix(suffix: &str) -> bool {
+    suffix.len() >= 8
+        && suffix
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-')
+}
+
+fn camera_label_at_depth(parts: &[String], depth: usize) -> String {
+    parts
+        .iter()
+        .rev()
+        .take(depth)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn labels_equal_count(label: &str, labels: &[String]) -> usize {
+    labels
+        .iter()
+        .filter(|other| other.as_str() == label)
+        .count()
+}
+
 pub(crate) fn resolve_named_camera(
     want: &str,
     q_cams: &Query<(Entity, &Name), With<SceneCamera>>,
@@ -605,46 +723,30 @@ pub fn update_camera_origin(
                     if let Ok(world_grid_component) = q_grids.get(*world_grid) {
                         let (new_cell, new_translation) =
                             world_grid_component.translation_to_grid(camera_position);
-                        if *origin_cell != new_cell {
-                            *origin_cell = new_cell;
-                        }
-                        if origin_transform.translation != new_translation
-                            || origin_transform.rotation != Quat::IDENTITY
-                            || origin_transform.scale != Vec3::ONE
-                        {
-                            *origin_transform = Transform::from_translation(new_translation);
-                        }
+                        origin_cell.set_if_neq(new_cell);
+                        origin_transform.set_if_neq(Transform::from_translation(new_translation));
                     } else {
-                        *origin_cell = CellCoord::default();
-                        *origin_transform = Transform::IDENTITY;
+                        origin_cell.set_if_neq(CellCoord::default());
+                        origin_transform.set_if_neq(Transform::IDENTITY);
                         origin_errors.push(
                             "[camera-origin] the active WorldGrid has no BigSpace Grid component"
                                 .to_string(),
                         );
                     }
                 } else {
-                    *origin_cell = CellCoord::default();
-                    *origin_transform = Transform::IDENTITY;
+                    origin_cell.set_if_neq(CellCoord::default());
+                    origin_transform.set_if_neq(Transform::IDENTITY);
                     origin_errors.push(format!(
                         "[camera-origin] active camera {active:?} has no complete f64 pose in WorldGrid"
                     ));
                 }
             } else {
-                *origin_cell = CellCoord::default();
-                *origin_transform = Transform::IDENTITY;
-            }
-            // The origin tracker is a frame marker, not scene content. Keep its
-            // rotation and scale canonical, while retaining the f32 remainder
-            // returned by the same f64-to-grid split as the cell. Together the
-            // `(CellCoord, Transform)` pair places the render origin at the
-            // selected pose rather than at the nearest cell centre.
-            if origin_transform.rotation != Quat::IDENTITY || origin_transform.scale != Vec3::ONE {
-                origin_transform.rotation = Quat::IDENTITY;
-                origin_transform.scale = Vec3::ONE;
+                origin_cell.set_if_neq(CellCoord::default());
+                origin_transform.set_if_neq(Transform::IDENTITY);
             }
         } else {
-            *origin_cell = CellCoord::default();
-            *origin_transform = Transform::IDENTITY;
+            origin_cell.set_if_neq(CellCoord::default());
+            origin_transform.set_if_neq(Transform::IDENTITY);
         }
         if vp.active_camera.is_some() && world_grids.len() != 1 {
             origin_errors.push(
@@ -1311,6 +1413,59 @@ mod tests {
         assert_eq!(
             app.world().resource::<ViewportCameraSelection>().requested,
             Some(RequestedCamera::Entity(new))
+        );
+    }
+
+    #[test]
+    fn camera_labels_use_leaf_names_until_a_collision_requires_context() {
+        let names = vec![
+            "/World/Cameras/Overview".to_owned(),
+            "/World/Rovers/Overview".to_owned(),
+            "/World/Cameras/Detail".to_owned(),
+        ];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec!["Overview / Cameras", "Overview / Rovers", "Detail"]
+        );
+    }
+
+    #[test]
+    fn camera_labels_extend_context_before_exposing_a_full_path() {
+        let names = vec![
+            "/World/Alpha/Views/Overview".to_owned(),
+            "/World/Beta/Views/Overview".to_owned(),
+        ];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec!["Overview / Views / Alpha", "Overview / Views / Beta"]
+        );
+    }
+
+    #[test]
+    fn camera_labels_hide_generated_owner_suffixes_and_number_unavoidable_collisions() {
+        let names = vec![
+            "/Traverse/rocker_bogie_0123456789abcdef/FrontCamera".to_owned(),
+            "/Traverse/rocker_bogie_fedcba9876543210/FrontCamera".to_owned(),
+        ];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec![
+                "FrontCamera / rocker_bogie #1",
+                "FrontCamera / rocker_bogie #2"
+            ]
+        );
+    }
+
+    #[test]
+    fn camera_labels_have_a_visible_fallback_for_missing_names() {
+        let names = vec![String::new(), "/World/Named".to_owned()];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec!["Unnamed camera", "Named"]
         );
     }
 }

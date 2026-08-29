@@ -1646,7 +1646,12 @@ fn route_ribbon_points(
 /// `points` are grid-absolute positions returned by the terrain/waypoint
 /// projection. The route renderer adds one fixed presentation clearance to every
 /// vertex; it never reuses a marker's authored radius or local visual offset.
-fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
+pub(crate) fn build_ribbon_mesh(
+    points: &[DVec3],
+    anchor: DVec3,
+    half_width: f32,
+    surface_clearance: f32,
+) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     let n = points.len();
@@ -1666,8 +1671,8 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
         let tan = route_tangent(points, i);
         let right = route_right(tan, previous_right);
         previous_right = Some(right);
-        let right = right * ROUTE_RIBBON_HALF_WIDTH_M as f64;
-        let base = (points[i] - anchor).as_vec3() + Vec3::Y * ROUTE_SURFACE_CLEARANCE_M;
+        let right = right * half_width as f64;
+        let base = (points[i] - anchor).as_vec3() + Vec3::Y * surface_clearance;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
         pos.push((base + r).to_array());
@@ -2216,7 +2221,12 @@ pub(crate) fn sync_route_visual_meshes(
                 if old_signature == signature && parent == frame_entity {
                     continue;
                 }
-                let Some(new_mesh) = build_ribbon_mesh(points, points[0]) else {
+                let Some(new_mesh) = build_ribbon_mesh(
+                    points,
+                    points[0],
+                    ROUTE_RIBBON_HALF_WIDTH_M,
+                    ROUTE_SURFACE_CLEARANCE_M,
+                ) else {
                     commands.entity(entity).try_despawn();
                     continue;
                 };
@@ -2257,7 +2267,12 @@ pub(crate) fn sync_route_visual_meshes(
                 ));
                 continue;
             }
-            let Some(mesh) = build_ribbon_mesh(points, points[0]) else {
+            let Some(mesh) = build_ribbon_mesh(
+                points,
+                points[0],
+                ROUTE_RIBBON_HALF_WIDTH_M,
+                ROUTE_SURFACE_CLEARANCE_M,
+            ) else {
                 continue;
             };
             let (cell, local) = grid.translation_to_grid(points[0]);

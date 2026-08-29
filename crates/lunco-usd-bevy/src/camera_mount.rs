@@ -152,8 +152,11 @@ pub fn follow_mounted_cameras(
                 new_transform,
             );
         } else {
-            *cell = new_cell;
-            *tf = new_transform;
+            // Mounted cameras are spatial BigSpace entities.  A rigid mount
+            // is expected to solve the same value while both mount and camera
+            // are parked; equal writes must not dirty the propagation tree.
+            cell.set_if_neq(new_cell);
+            tf.set_if_neq(new_transform);
         }
     }
 }
@@ -371,5 +374,61 @@ mod tests {
         assert_eq!(world.get::<CellCoord>(camera).unwrap().x, 2);
         assert_eq!(world.get::<CellCoord>(camera).unwrap().y, 0);
         assert_eq!(world.get::<CellCoord>(camera).unwrap().z, 0);
+    }
+
+    #[test]
+    fn parked_mounted_camera_does_not_dirty_transform() {
+        #[derive(Resource, Default)]
+        struct Changes(u32);
+
+        let mut app = App::new();
+        let root = app.world_mut().spawn(Transform::default()).id();
+        let grid = app
+            .world_mut()
+            .spawn((Grid::new(1_000.0, 0.0), ChildOf(root)))
+            .id();
+        let mount = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_xyz(20.0, 0.0, 30.0),
+                ChildOf(grid),
+            ))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                MountedCamera {
+                    mount,
+                    offset: Transform::from_xyz(0.0, 2.0, 5.0),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(grid),
+            ))
+            .id();
+
+        app.init_resource::<Changes>();
+        app.add_systems(Update, follow_mounted_cameras);
+        app.add_systems(
+            Update,
+            (|mut changes: ResMut<Changes>,
+              q: Query<(), (With<MountedCamera>, Changed<Transform>)>| {
+                changes.0 += q.iter().count() as u32;
+            })
+            .after(follow_mounted_cameras),
+        );
+
+        app.update();
+        app.world_mut().resource_mut::<Changes>().0 = 0;
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Changes>().0,
+            0,
+            "a parked mounted camera must not dirty its Transform"
+        );
+        assert_eq!(app.world().get::<ChildOf>(camera).unwrap().parent(), grid);
     }
 }

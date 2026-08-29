@@ -4,7 +4,7 @@
 //! focus transitions, and vessel possession. The camera architecture uses
 //! composable behavior components (`SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`) rather
 //! than a monolithic state machine, enabling modular frame-aware operation
-//! and smooth transitions between reference frames.
+//! and explicit transitions between reference frames.
 //!
 //! # Architecture
 //!
@@ -13,11 +13,14 @@
 //! - **`OrbitCamera`**: Survey camera locked to the ecliptic/stars (planets, spacecraft).
 //! - **`FreeFlightCamera`**: Free-moving camera in absolute coordinates (ghost/drone view).
 //!
-//! Transitions use `FrameBlend` with pre-computed endpoints for smooth "frame handoffs."
+//! Transitions use explicit camera-mode transactions: orbit entry stores the
+//! exact return pose, while follow/surface commands install one authoritative
+//! mode and its frame. Every active mode writes the BigSpace `(CellCoord,
+//! Transform)` representation only when its solved value changes.
 
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
-use bevy::math::{DQuat, DVec3};
+use bevy::math::{DQuat, DVec3, StableInterpolate};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
@@ -249,20 +252,13 @@ const SCROLL_EXIT_ALTITUDE_M: f64 = 50_000.0;
 #[derive(Resource)]
 pub struct CameraDefaults {
     pub damping: f32,
-    // TODO(camera-smoothing): the exp-decay math below is hand-rolled. Review
-    // existing crates and probably switch: bevy core's
-    // `bevy::math::StableInterpolate::smooth_nudge` is exactly this
-    // `1 - exp(-rate*dt)` form (drop-in for our manual lines); `bevy_easings`
-    // for named easing curves; `smooth-bevy-cameras` / `bevy_dolly` for full
-    // rigs (likely need adapting to our Grid/CellCoord floating origin). Also:
-    // make smoothing fn + time-constant per-camera properties. See ../TODO.md.
     /// Base responsiveness (Hz) of rotation follow, before per-camera `damping`
-    /// scales it. Used as `alpha = 1 - exp(-rotation_rate * (1 - damping) * dt)`.
+    /// scales it. Passed to Bevy's `StableInterpolate::smooth_nudge`.
     pub rotation_rate: f32,
     /// Base responsiveness (Hz) of position follow, before per-camera `damping`
-    /// scales it. Same exp-decay form as `rotation_rate`.
+    /// scales it. The f64 position path uses the same decay law because
+    /// BigSpace positions must remain in double precision.
     pub position_rate: f32,
-    pub transition_duration: f32,
     pub default_distance: f64,
 }
 
@@ -272,10 +268,24 @@ impl Default for CameraDefaults {
             damping: 0.1,
             rotation_rate: 60.0,
             position_rate: 30.0,
-            transition_duration: 1.0,
             default_distance: 10.0,
         }
     }
+}
+
+/// Resolve the shared camera decay rate from the authored base rate and
+/// per-camera damping. Rotations use Bevy's `StableInterpolate`; positions use
+/// the same rate in f64 because `StableInterpolate` intentionally covers f32
+/// normed spaces, while BigSpace camera positions must not round-trip through
+/// f32 before the grid split.
+#[inline]
+fn camera_decay_rate(rate: f32, damping: f32) -> f32 {
+    rate * (1.0 - damping)
+}
+
+#[inline]
+fn camera_decay_alpha(rate: f32, damping: f32, dt: f32) -> f64 {
+    f64::from(1.0 - (-camera_decay_rate(rate, damping) * dt).exp())
 }
 
 // ─── Behavior Components ─────────────────────────────────────────────────────
@@ -490,11 +500,12 @@ fn register_camera_mode_hooks(app: &mut App) {
 ///
 /// The root cause of the surface camera roll bug was threefold:
 /// 1. `global_transform_propagation_system` and `big_space` fight over GlobalTransform
-/// 2. `freeflight_system` reads `tf.rotation` from the previous frame (may include stale parent rotation)
-/// 3. The camera-frame math assumed body-local coordinates while the pose lived
+/// 2. The camera-frame math assumed body-local coordinates while the pose lived
 ///    in an explicit BigSpace grid
 ///
-/// By recomputing rotation from first principles each frame, all three issues are bypassed.
+/// By recomputing rotation from first principles each frame, the surface camera
+/// has no dependency on a previously propagated render transform. Surface mode
+/// is owned by `SurfaceCamera`; free flight does not carry a second surface path.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
 pub struct SurfaceCamera {
@@ -502,29 +513,6 @@ pub struct SurfaceCamera {
     pub heading: f32,
     /// Elevation from horizon, in radians. Negative = look down, positive = look up.
     pub pitch: f32,
-}
-
-/// Smooth focus transition with target-relative endpoint recomputed each frame.
-///
-/// Blend positions are in **absolute solar coordinates** (root frame).
-/// Each frame, the blended result is converted to the camera's current grid.
-/// Rotation is set from `end_yaw`/`end_pitch` so the camera always points
-/// at the target during the approach.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-pub struct FrameBlend {
-    pub target: Entity,
-    pub target_grid: Option<Entity>,
-    pub source_target: Option<Entity>,
-    pub start_offset_from_source: DVec3,
-    pub start_rot: Quat,
-    pub end_distance: f64,
-    pub end_yaw: f32,
-    pub end_pitch: f32,
-    pub end_vertical_offset: f32,
-    pub t: f32,
-    pub duration: f32,
-    pub possess_target: Option<Entity>,
 }
 
 /// Ensures optical stability by adjusting near plane based on surface proximity.
@@ -769,7 +757,6 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<FollowAttitude>()
             .register_type::<OrbitCamera>()
             .register_type::<FreeFlightCamera>()
-            .register_type::<FrameBlend>()
             .register_type::<AdaptiveNearPlane>()
             .register_type::<SurfaceRelativeMode>()
             .register_type::<SurfaceCamera>()
@@ -1845,7 +1832,6 @@ fn spring_arm_system(
             With<Avatar>,
             With<LocalAvatar>,
             Without<Grid>,
-            Without<FrameBlend>,
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
@@ -1969,8 +1955,18 @@ fn spring_arm_system(
         // Rotation: exponential decay for snappy but smooth heading follow.
         // Frequency 60.0 — snappy without transmitting physics jitter.
         let damping = arm.damping.unwrap_or(defaults.damping);
-        let rot_alpha = 1.0 - (-defaults.rotation_rate * (1.0 - damping) * dt).exp();
-        tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
+        let mut next_rotation = tf.rotation;
+        next_rotation.smooth_nudge(
+            &desired_rot,
+            camera_decay_rate(defaults.rotation_rate, damping),
+            dt,
+        );
+        // `Mut<Transform>` is change-detected on mutable dereference, not on
+        // value inequality.  Do not wake BigSpace's dirty-subtree walk for a
+        // parked camera whose solved pose is already stable.
+        if tf.rotation != next_rotation {
+            tf.rotation = next_rotation;
+        }
 
         // Desired camera position: behind target along smoothed rotation.
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
@@ -2037,21 +2033,23 @@ fn spring_arm_system(
         let final_len = if current_len < 1e-3 {
             target_len
         } else {
-            let alpha = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
+            let alpha = camera_decay_alpha(defaults.position_rate, damping, dt);
             current_len + (target_len - current_len) * alpha
         };
         let final_pos = target_pos + ray_dir * final_len;
 
         let (new_cell, new_tf) = grid.translation_to_grid(final_pos);
-        *cell = new_cell;
-        tf.translation = new_tf;
+        cell.set_if_neq(new_cell);
+        if tf.translation != new_tf {
+            tf.translation = new_tf;
+        }
     }
 }
 
 /// OrbitCamera system: positions the camera at a fixed offset from a target,
 /// locked to the ecliptic (star-fixed) reference frame.
 ///
-/// Only runs when `OrbitCamera` is present AND no `FrameBlend` is active.
+/// Only runs when `OrbitCamera` is the active camera mode.
 /// The camera does NOT rotate with the target — stars stay still.
 fn orbit_angles_from_arm(direction: DVec3) -> (f32, f32) {
     let direction = direction.normalize_or(DVec3::Z);
@@ -2079,7 +2077,6 @@ fn orbit_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<FrameBlend>,
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
@@ -2272,7 +2269,7 @@ fn orbit_system(
             desired_len
         } else {
             let damping = orbit.damping.unwrap_or(defaults.damping);
-            let alpha = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
+            let alpha = camera_decay_alpha(defaults.position_rate, damping, dt);
             let next = current_len + (desired_len - current_len) * alpha;
             if (next - desired_len).abs() <= desired_len * 1e-9 {
                 desired_len
@@ -2293,9 +2290,7 @@ fn orbit_system(
                 next_transform,
             );
         } else {
-            if *cell != new_cell {
-                *cell = new_cell;
-            }
+            cell.set_if_neq(new_cell);
             if tf.translation != new_translation {
                 tf.translation = new_translation;
             }
@@ -2324,16 +2319,13 @@ fn orbit_system(
 }
 /// FreeFlightCamera system: moves the camera in absolute coordinates.
 ///
-/// Only runs when `FreeFlightCamera` is present AND no `FrameBlend` is active.
+/// Only runs when `FreeFlightCamera` is the active camera mode.
 /// Position is set by `apply_fly`. This system
 /// applies yaw/pitch rotation from user input.
 ///
-/// In surface mode, the rotation is built around the local gravity up vector
-/// using sequential quaternion composition — guaranteed unit-length.
-///
 /// Note: `FreeFlightCamera` and `SurfaceCamera` are mutually exclusive.
-/// The surface teleport removes `FreeFlightCamera`, so the surface-mode
-/// branch here is effectively dead code. Kept for completeness.
+/// `SurfaceCamera` owns the surface-relative rotation policy; this system owns
+/// only the ecliptic free-flight rotation.
 fn freeflight_system(
     // `Without<OrbitCamera>`: the two are mutually exclusive camera modes. If an
     // avatar ever carries both (a stray insert), each writes `Transform` every
@@ -2341,52 +2333,29 @@ fn freeflight_system(
     // exclusion structural rather than relying on every insert site to strip the
     // other mode first.
     mut q_avatar: Query<
-        (
-            &mut Transform,
-            &mut FreeFlightCamera,
-            &CellCoord,
-            &ChildOf,
-            Option<&SurfaceRelativeMode>,
-        ),
+        (&mut Transform, &mut FreeFlightCamera),
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<FrameBlend>,
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
             Without<SurfaceCamera>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
-    q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    gravity: Res<LocalGravityField>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
     }
-    for (mut tf, mut ff, _cell, child_of, surface_mode) in q_avatar.iter_mut() {
-        let rot = if surface_mode.is_some() {
-            // In surface mode, apply yaw/pitch as incremental rotations.
-            let axes = surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
-            let up_v = axes.map(|(_, _, up)| up).unwrap_or(Vec3::Y);
-            let yaw_q = Quat::from_axis_angle(up_v, ff.yaw);
-            let right: Vec3 = *tf.right();
-            let right_after_yaw = yaw_q.mul_vec3(right);
-            let pitch_q = Quat::from_axis_angle(right_after_yaw, ff.pitch);
-            let new_rot = (pitch_q * yaw_q * tf.rotation).normalize();
-
-            // Consume the deltas — they were applied as increments this frame.
-            ff.yaw = 0.0;
-            ff.pitch = 0.0;
-
-            new_rot
-        } else {
-            Quat::from_euler(EulerRot::YXZ, ff.yaw, ff.pitch, 0.0)
-        };
-        tf.rotation = rot;
+    for (mut tf, ff) in q_avatar.iter_mut() {
+        let rot = Quat::from_euler(EulerRot::YXZ, ff.yaw, ff.pitch, 0.0);
+        // Avoid marking a stable camera changed every interaction tick.  That
+        // marker is consumed by BigSpace's dirty-subtree prepass and otherwise
+        // turns a parked free-flight camera into perpetual propagation work.
+        if tf.rotation != rot {
+            tf.rotation = rot;
+        }
     }
 }
 
@@ -2425,7 +2394,6 @@ fn freeflight_scroll_transit_system(
             Or<(With<FreeFlightCamera>, With<SurfaceCamera>)>,
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
-            Without<FrameBlend>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -2500,8 +2468,10 @@ fn freeflight_scroll_transit_system(
         let fwd = (tf.rotation * Vec3::NEG_Z).as_dvec3();
         let next = pos - fwd * step;
         let (new_cell, new_tf) = grid.translation_to_grid(next);
-        *cell = new_cell;
-        tf.translation = new_tf;
+        cell.set_if_neq(new_cell);
+        if tf.translation != new_tf {
+            tf.translation = new_tf;
+        }
 
         // Past the orbital floor going OUT → hand over to the celestial
         // OrbitCamera. Same mode swap as `on_focus_command`, with ONE
@@ -2530,7 +2500,6 @@ fn freeflight_scroll_transit_system(
                 })
                 .remove::<SpringArmCamera>()
                 .remove::<FreeFlightCamera>()
-                .remove::<FrameBlend>()
                 .remove::<SurfaceCamera>()
                 .remove::<SurfaceRelativeMode>()
                 .remove::<GravityBody>()
@@ -2570,7 +2539,6 @@ fn surface_camera_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<FrameBlend>,
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<OrbitCamera>,
@@ -2604,7 +2572,10 @@ fn surface_camera_system(
         // Rebuild the rotation from the body's exact ENU frame each frame.
         // The camera remains upright relative to the curved surface while the
         // heading stays tied to the body's prime meridian.
-        tf.rotation = surface_camera_rotation(east, north, up, cam.heading, cam.pitch);
+        let next_rotation = surface_camera_rotation(east, north, up, cam.heading, cam.pitch);
+        if tf.rotation != next_rotation {
+            tf.rotation = next_rotation;
+        }
     }
 }
 
@@ -2669,7 +2640,6 @@ fn apply_fly(
     // paused, because pausing the simulation is not supposed to paralyse the user. Runs
     // at render rate in `PostUpdate` — no lockstep needed, free-flight follows nothing.
     time: Res<Time>,
-    mut commands: Commands,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
@@ -2710,9 +2680,6 @@ fn apply_fly(
             continue;
         }
 
-        // Actively moving → cancel any idle auto-action.
-        commands.entity(entity).remove::<lunco_core::ActiveAction>();
-
         // Q/E are vertical movement relative to the current world/surface, not
         // the camera's pitched up vector. A camera-relative elevation basis can
         // cancel W/S's horizontal component at a particular pitch (most visibly
@@ -2729,8 +2696,10 @@ fn apply_fly(
         // the inputs first would make the unit-vector cap erase the boost.
         let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * boost * time.delta_secs_f64();
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
-        *cell = new_cell;
-        tf.translation = new_tf;
+        cell.set_if_neq(new_cell);
+        if tf.translation != new_tf {
+            tf.translation = new_tf;
+        }
     }
 }
 
@@ -2767,12 +2736,10 @@ fn capture_avatar_intent(
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
-        let mut mouse_moved = false;
         if !pointer_captured {
             let d = intent_state.axis_pair(&UserIntent::Look);
             if d.length_squared() > 0.00001 {
                 delta = d * 10.0;
-                mouse_moved = true;
             }
         }
 
@@ -2784,12 +2751,6 @@ fn capture_avatar_intent(
             a.entity = e;
             a
         });
-
-        // Look activity cancels an idle auto-action (movement does so in `apply_fly`,
-        // zoom in `collect_camera_zoom`).
-        if mouse_moved {
-            commands.entity(entity).remove::<lunco_core::ActiveAction>();
-        }
     }
 }
 
@@ -2814,8 +2775,7 @@ fn collect_camera_zoom(
     egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
-    mut q_avatar: Query<(Entity, &mut CameraZoomInput), (With<Avatar>, With<LocalAvatar>)>,
-    mut commands: Commands,
+    mut q_avatar: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
 ) {
     if egui_focus.wants_pointer || drag_mode.is_some_and(|drag| drag.active) {
         return;
@@ -2824,9 +2784,8 @@ fn collect_camera_zoom(
     if d.abs() <= f32::EPSILON {
         return;
     }
-    for (entity, mut zoom) in q_avatar.iter_mut() {
+    for mut zoom in q_avatar.iter_mut() {
         zoom.delta += d;
-        commands.entity(entity).remove::<lunco_core::ActiveAction>();
     }
 }
 
@@ -2881,7 +2840,6 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<FrameBlend>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -2913,7 +2871,7 @@ fn avatar_behavior_input_system(
     if ctrl_pressed {
         // Momentary free-flight: apply look deltas directly to Transform.
         if let Ok((mut tf, _cell, child_of)) = q_tf.single_mut() {
-            if surface_mode.is_some() {
+            let next_rotation = if surface_mode.is_some() {
                 let up_v =
                     surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
                         .map(|(_, _, up)| up)
@@ -2922,16 +2880,19 @@ fn avatar_behavior_input_system(
                 let right: Vec3 = *tf.right();
                 let right_yawed = yaw_q.mul_vec3(right);
                 let pitch_q = Quat::from_axis_angle(right_yawed, delta_pitch);
-                tf.rotation = pitch_q * yaw_q * tf.rotation;
+                pitch_q * yaw_q * tf.rotation
             } else {
                 // Ecliptic: YXZ euler decomposition
                 let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-                tf.rotation = Quat::from_euler(
+                Quat::from_euler(
                     EulerRot::YXZ,
                     yaw + delta_yaw,
                     (pitch + delta_pitch).clamp(-1.5, 1.5),
                     0.0,
-                );
+                )
+            };
+            if tf.rotation != next_rotation {
+                tf.rotation = next_rotation;
             }
         }
     } else {
@@ -3328,8 +3289,7 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
         .remove::<SurfaceCamera>()
         .remove::<OrbitViewReturn>()
         .remove::<SunlitArrival>()
-        .remove::<RadialArrival>()
-        .remove::<FrameBlend>();
+        .remove::<RadialArrival>();
 
     match &state.behavior {
         OrbitReturnBehavior::SpringArm(spring_arm) => {
@@ -3387,8 +3347,8 @@ fn on_return_from_orbit(
     let return_state = return_state.clone();
 
     if child_of.parent() == return_state.parent_grid {
-        *cell = return_state.cell;
-        *transform = return_state.transform;
+        cell.set_if_neq(return_state.cell);
+        transform.set_if_neq(return_state.transform);
     } else {
         migrate_to_grid(
             &mut commands,
@@ -3479,8 +3439,8 @@ fn on_release_command(
             let return_state = return_state.cloned();
             if let Some(state) = &return_state {
                 if child_of.parent() == state.parent_grid {
-                    *cell = state.cell;
-                    *tf = state.transform;
+                    cell.set_if_neq(state.cell);
+                    tf.set_if_neq(state.transform);
                 } else {
                     migrate_to_grid(
                         &mut commands,
@@ -3554,8 +3514,7 @@ fn on_release_command(
         .remove::<SurfaceCamera>()
         .remove::<OrbitViewReturn>()
         .remove::<SunlitArrival>()
-        .remove::<RadialArrival>()
-        .remove::<FrameBlend>();
+        .remove::<RadialArrival>();
 
     if let Some(state) = return_state {
         let mut entity = commands.entity(avatar_ent);
@@ -3965,8 +3924,7 @@ fn on_possess_command(
     commands
         .entity(avatar_ent)
         .remove::<FreeFlightCamera>()
-        .remove::<SurfaceCamera>()
-        .remove::<FrameBlend>();
+        .remove::<SurfaceCamera>();
 }
 
 /// Follows a target with the chase camera but without taking control.
@@ -4092,7 +4050,6 @@ fn on_follow_command(
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitCamera>()
-        .remove::<FrameBlend>()
         .try_insert((SpringArmCamera {
             target: cmd.target,
             distance: end_distance,
@@ -4248,7 +4205,6 @@ fn on_focus_command(
     }
     ent.remove::<SpringArmCamera>()
         .remove::<FreeFlightCamera>()
-        .remove::<FrameBlend>()
         // Surface state must go too: `surface_camera_system` runs after
         // `orbit_system` and would rebuild the rotation as a ground-level
         // tangent frame every frame — the camera orbits the target but looks
@@ -4297,7 +4253,6 @@ fn avatar_init_system(
             // behavior component. Without this guard init would reinsert
             // FreeFlightCamera over it on the next Update tick.
             Without<SurfaceCamera>,
-            Without<FrameBlend>,
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
@@ -4604,8 +4559,7 @@ fn on_surface_teleport_command(
             })
             .remove::<FreeFlightCamera>()
             .remove::<OrbitCamera>()
-            .remove::<SpringArmCamera>()
-            .remove::<FrameBlend>();
+            .remove::<SpringArmCamera>();
 
         // Update LocalGravityField (world-space "up")
         field.body_entity = Some(body_entity);

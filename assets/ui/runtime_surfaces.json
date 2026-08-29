@@ -179,9 +179,16 @@
       "namespace": "camera-status",
       "setting": "ui.camera_status",
       "setting_default": true,
+      "interactive": true,
       "bindings": {
-        "active_name": { "source": "active_name" }
+        "active_label": { "source": "active_label" }
       },
+      "actions": [
+        {
+          "callback": "runtime_camera_picker_toggle",
+          "action": "camera.picker.toggle"
+        }
+      ],
       "visible_in_perspective": "sandbox_view",
       "placement": {
         "mode": "window",

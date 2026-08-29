@@ -40,7 +40,14 @@ The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
 dismissal, outcomes, and the typed `CloseModal` command. HUI currently has no
 modal queue/outcome, checkbox/input state events, or dynamic repeated-list
 contract, so a dialog requiring those capabilities belongs in that host until
-the runtime surface contract grows and is tested.
+the runtime surface contract grows and is tested. A compact authored button may
+still open an existing egui host control when that is the established owner:
+the camera-status picker binds the deterministic `active_label` projection,
+uses the authored `camera.picker.toggle` intent, the measured HUI surface
+rectangle as its anchor, and the same
+`CameraSelectionStatus` view model as the workbench Camera menu. Keep the
+selection command typed and do not add a second camera registry or a HUI
+dynamic-list shim.
 
 Project-owned visibility policy belongs in the active Twin manifest's generic
 `[settings]` table. A surface declares `setting` plus `setting_default` in
@@ -76,13 +83,19 @@ values are coalesced to the current bounded presentation cadence (20 Hz).
 `EngineExposures.revision` changes only when a value or visibility flag changes;
 it is not a frame counter. Do not use JSON to detect internal changes.
 
-For camera status, Rust publishes only the current camera fact through the
-generic exposure namespace. Rhai owns selection policy (`set_camera(name)`) and
-can read the fact with `get_exposure(...)`; HUI/CSS owns rendering. Camera
-status emits `CameraSelectionStatusChanged` after its camera/viewport lifecycle
-projection changes, and the exposure observer consumes that event. The UI is
-revision-gated. Do not add a Rhai `on_tick` loop, a timer poll, or a per-frame
-camera scan for this HUD.
+For camera status, Rust publishes the current camera fact and compact label
+through the generic exposure namespace. The shared
+`lunco-usd-bevy::camera_switch::camera_display_labels` resolver is also used by
+the picker, Camera menu, USD/entity trees, and Inspector: unique leaves stand
+alone, duplicate leaves gain nearest-owner context and then ancestors,
+generated hexadecimal/UUID-like owner suffixes are hidden, and an unavoidable
+normalized collision gets an ordinal. The full USD path remains the typed
+selection value and hover/diagnostic text. Rhai owns selection policy
+(`set_camera(name)`) and can read the fact with `get_exposure(...)`; HUI/CSS
+owns rendering. Camera status emits `CameraSelectionStatusChanged` after its
+camera/viewport lifecycle projection changes, and the exposure observer
+consumes that event. The UI is revision-gated. Do not add a Rhai `on_tick`
+loop, a timer poll, or a per-frame camera scan for this HUD.
 
 ### 2. Add the template and stylesheet
 
@@ -190,6 +203,14 @@ The HTML callback name is only an authored binding. The manifest maps it to a
 semantic action string; the runtime emits a typed action event; the host
 observer maps that action to an existing typed command/event. A template must
 not mutate resources or call a domain API directly.
+
+The closed action set includes `camera.picker.toggle` for the authored
+camera-status trigger. That action only opens the camera picker; because HUI
+has no dynamic repeated-list or payload-action contract, the existing egui host
+renders the options from `CameraSelectionStatus`, anchors them to the measured
+HUI surface rectangle, and emits `SetUserCamera`. Reuse that view model and
+typed command path instead of adding a second camera registry or a HUI list
+shim.
 
 If a new action is truly needed, add the canonical typed command/observer and
 register it in the owning domain. Do not add a legacy callback alias or a

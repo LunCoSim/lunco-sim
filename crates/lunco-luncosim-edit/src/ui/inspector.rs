@@ -20,7 +20,7 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
 use lunco_materials::{ParamValue, ShaderLook};
-use lunco_render::PbrLook;
+use lunco_render::{PbrLook, SceneCamera};
 
 use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 
@@ -737,6 +737,8 @@ pub struct InspectorView {
     pub exposure_ev100: Option<f32>,
     /// Active presentation camera's bloom intensity, if any.
     pub bloom_intensity: Option<f32>,
+    /// Compact shared-policy label for the selected authored camera.
+    pub selected_display_name: Option<String>,
     /// Joint readout for the primary-selected entity, if it drives one.
     pub joint: Option<JointReadout>,
 }
@@ -830,6 +832,32 @@ pub fn populate_inspector_view(world: &mut World) {
     let selected = world
         .get_resource::<SelectedEntities>()
         .and_then(|s| s.primary());
+    let camera_identities: Vec<(Entity, String)> = {
+        let mut cameras =
+            world.query_filtered::<(Entity, &Name, Option<&UsdPrimPath>), With<SceneCamera>>();
+        cameras
+            .iter(world)
+            .map(|(entity, name, path)| {
+                (
+                    entity,
+                    path.map(|path| path.path.clone())
+                        .unwrap_or_else(|| name.as_str().to_string()),
+                )
+            })
+            .collect()
+    };
+    let camera_names: Vec<String> = camera_identities
+        .iter()
+        .map(|(_, identity)| identity.clone())
+        .collect();
+    let camera_labels = lunco_usd_bevy::camera_switch::camera_display_labels(&camera_names);
+    let selected_display_name = selected.and_then(|selected| {
+        camera_identities
+            .iter()
+            .zip(camera_labels)
+            .find(|((entity, _), _)| *entity == selected)
+            .map(|((_, _), label)| label)
+    });
     let joint = if let Some(entity) = selected {
         if let Some(holder) = joint_angle_holder(world, entity) {
             let registry = world.resource::<PortRegistry>().clone();
@@ -863,6 +891,7 @@ pub fn populate_inspector_view(world: &mut World) {
     view.earthshine_lux = earthshine_lux;
     view.exposure_ev100 = exposure_ev100;
     view.bloom_intensity = bloom_intensity;
+    view.selected_display_name = selected_display_name;
     view.joint = joint;
 }
 
@@ -1172,7 +1201,14 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
     // Name (read-only)
     if let Some(name) = ctx.get::<Name>(entity).map(|n| n.as_str().to_string()) {
-        ui.label(format!("Name: {name}"));
+        let display_name = ctx
+            .resource::<InspectorView>()
+            .and_then(|view| view.selected_display_name.as_deref())
+            .unwrap_or(name.as_str());
+        let response = ui.label(format!("Name: {display_name}"));
+        if display_name != name {
+            response.on_hover_text(name);
+        }
     }
 
     if let Some(projection) = ctx.get::<Projection>(entity).cloned() {
