@@ -808,7 +808,18 @@ fn generated_structural_source(model_name: &str, source: &str) -> String {
     if instance_id.is_empty() || !instance_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return normalized;
     }
-    normalized = normalized.replace(instance_id, GENERATED_INSTANCE_MARKER);
+    // The generated policy puts the runtime-root suffix in the network-title
+    // graphic. Restrict the replacement to that authored identity line so a
+    // legitimate equation literal equal to the root id remains structural.
+    let mut title_normalized = String::with_capacity(normalized.len());
+    for line in normalized.split_inclusive('\n') {
+        if line.contains(" network") {
+            title_normalized.push_str(&line.replace(instance_id, GENERATED_INSTANCE_MARKER));
+        } else {
+            title_normalized.push_str(line);
+        }
+    }
+    normalized = title_normalized;
     normalized
 }
 
@@ -4991,6 +5002,21 @@ mod artifact_cache_tests {
                 "generated://Traverse_x2f_rocker__bogie__202_System.mo",
             ),
             "generated instance identity must not defeat persistent solve-IR reuse"
+        );
+        assert_ne!(
+            shared_hash_of(
+                "Traverse_x2f_rocker__bogie__101_System",
+                "model Traverse_x2f_rocker__bogie__101_System\n  parameter Real retained_literal = 101;\nend Traverse_x2f_rocker__bogie__101_System;\nannotation(Documentation(info=\"rocker_bogie_101 network\"));",
+                "generated://Traverse_x2f_rocker__bogie__101_System.mo",
+                Vec::new(),
+            ),
+            shared_hash_of(
+                "Traverse_x2f_rocker__bogie__202_System",
+                "model Traverse_x2f_rocker__bogie__202_System\n  parameter Real retained_literal = 202;\nend Traverse_x2f_rocker__bogie__202_System;\nannotation(Documentation(info=\"rocker_bogie_202 network\"));",
+                "generated://Traverse_x2f_rocker__bogie__202_System.mo",
+                Vec::new(),
+            ),
+            "generated normalization must not rewrite equation literals"
         );
     }
 
