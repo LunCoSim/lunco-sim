@@ -186,6 +186,12 @@ deferral with a known migration path, not the absence of a standard.
   joint that integrates the spring (`PrismaticJoint`'s `force` port), never from
   a second copy of the spring law. **When a visualization "happens too early",
   suspect something is publishing an input rather than a result.**
+- **A wheel diagnostic must use its realization's result.** Raycast wheels may
+  expose solved tire and normal forces; jointed wheels may expose the solver's
+  joint reaction. The body's integration accumulator is not a per-wheel contact
+  force. If a debug arrow is drawn from a raw velocity or force, apply an
+  explicit unit scale and cap its render length so a transient cannot become a
+  line across the terrain.
 - **Normalise on the WIRE, not in the shader, a script, or a model.** The affine
   `lunco:factor:<port>` / `lunco:offset:<port>` on the sink is exactly the SSP
   `LinearTransformation` — a unit conversion, never a sign or an orientation

@@ -37,6 +37,8 @@ pub mod joint_state;
 pub mod scene_context;
 pub mod spawn_palette;
 pub mod terrain_tools;
+/// Bounded, terrain-conforming motion trails for topology-derived vehicles.
+pub mod trail;
 pub mod usd_mount;
 pub mod usd_params;
 pub mod usd_prim_tree;
@@ -278,6 +280,8 @@ impl Plugin for SceneEditUiPlugin {
 
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();
+        app.init_resource::<trail::TrailVisualProjection>();
+        app.init_resource::<trail::TrailProjectionRebuildRequested>();
         app.init_resource::<LiveHelpSections>();
         app.add_systems(
             Update,
@@ -614,6 +618,7 @@ impl Plugin for SceneEditUiPlugin {
                     |mut dedup: ResMut<waypoint_click::WaypointClickDedup>| {
                         dedup.clear();
                     },
+                    trail::clear_vehicle_trails,
                     |q_reached: Query<Entity, With<lunco_autopilot::usd_tree::ReachedWaypoints>>,
                      mut commands: Commands| {
                         for entity in q_reached.iter() {
@@ -656,6 +661,9 @@ impl Plugin for SceneEditUiPlugin {
             .add_systems(
                 Update,
                 (
+                    trail::ensure_vehicle_trail_history.before(trail::sample_vehicle_trails),
+                    trail::sample_vehicle_trails.before(trail::arm_trail_projection_rebuild),
+                    trail::arm_trail_projection_rebuild,
                     // USD-authored marker policies are translated once into
                     // native mesh-picking behavior.
                     scene_context::apply_pointer_policies,
@@ -676,6 +684,12 @@ impl Plugin for SceneEditUiPlugin {
                     waypoint_click::sync_waypoint_marker_visuals
                         .after(waypoint_click::rebuild_waypoint_route_projection)
                         .run_if(resource_changed::<waypoint_click::RouteVisualProjection>),
+                    trail::rebuild_vehicle_trail_projection
+                        .after(trail::arm_trail_projection_rebuild)
+                        .run_if(trail::trail_projection_rebuild_is_pending),
+                    trail::sync_vehicle_trail_meshes
+                        .after(trail::rebuild_vehicle_trail_projection)
+                        .run_if(resource_changed::<trail::TrailVisualProjection>),
                     waypoint_click::handle_autopilot_toggle_intent,
                     inspector::delete_selected_on_intent,
                     // Grabbing the controls takes the vessel back from its autopilot.

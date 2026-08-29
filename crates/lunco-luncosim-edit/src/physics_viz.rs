@@ -181,12 +181,11 @@ pub fn auto_mark_dynamic_bodies(
     }
 }
 
-/// Visual scale applied to each arrow's vector before drawing. Bevy
-/// units are metres; raw force magnitudes (kN-scale) would dwarf the
-/// scene without scaling. Velocity scaled up so even slow-rolling
-/// rover wheels (~0.5 m/s) read at a glance.
-const VELOCITY_SCALE: f32 = 3.0;
-const FORCE_SCALE: f32 = 0.05;
+/// Keep diagnostic arrows readable and local to the body they describe.
+/// Raw vehicle velocities and forces are not scene-sized geometry.
+const MAX_ARROW_LEN: f32 = 4.0;
+const METERS_PER_MPS: f32 = 0.5;
+const METERS_PER_NEWTON: f32 = 1.0 / 500.0;
 
 /// Half-edge length of the always-on marker drawn at every tracked
 /// entity's COM. Lets users see which bodies have viz attached even
@@ -204,12 +203,10 @@ const MARKER_COLOR: Color = Color::srgb(1.0, 1.0, 0.3);
 /// `PhysicsArrows` pays effectively nothing.
 ///
 /// **Force read source:** uses Avian's `VelocityIntegrationData::linear_increment`
-/// (the world-space acceleration accumulated from forces this tick)
-/// multiplied by `ComputedMass`. This captures cosim-driven forces
-/// (e.g. the Modelica balloon's lift) and any `ConstantForce`,
-/// without requiring the body to expose a `ConstantForce` component
-/// explicitly. Excludes gravity, contact, and joint forces — those
-/// don't flow through the integration accumulator.
+/// multiplied by `ComputedMass`. This is the integration accumulator exposed at
+/// the render boundary, not a decomposition of contact or joint reactions. It
+/// is therefore shown as a bounded body-level diagnostic only; wheel-level
+/// diagnostics use their realization-specific solved force fields.
 pub fn draw_physics_arrows(
     mut gizmos: Gizmos,
     q: Query<(
@@ -244,8 +241,8 @@ pub fn draw_physics_arrows(
         );
         if flags.velocity {
             if let Some(v) = vel {
-                let dir = Vec3::new(v.0.x as f32, v.0.y as f32, v.0.z as f32) * VELOCITY_SCALE;
-                if dir.length_squared() > 1e-6 {
+                let vector = Vec3::new(v.0.x as f32, v.0.y as f32, v.0.z as f32);
+                if let Some(dir) = bounded_arrow(vector, METERS_PER_MPS) {
                     gizmos.arrow(origin, origin + dir, VELOCITY_COLOR);
                 }
             }
@@ -256,11 +253,20 @@ pub fn draw_physics_arrows(
                 // accumulated from forces this tick.
                 let a = integ.linear_increment;
                 let mass_scalar = m.value() as f32;
-                let dir = Vec3::new(a.x as f32, a.y as f32, a.z as f32) * mass_scalar * FORCE_SCALE;
-                if dir.length_squared() > 1e-6 {
+                let force = Vec3::new(a.x as f32, a.y as f32, a.z as f32) * mass_scalar;
+                if let Some(dir) = bounded_arrow(force, METERS_PER_NEWTON) {
                     gizmos.arrow(origin, origin + dir, FORCE_COLOR);
                 }
             }
         }
     }
+}
+
+/// Convert a physical diagnostic vector into a bounded render-space arrow.
+fn bounded_arrow(vector: Vec3, meters_per_unit: f32) -> Option<Vec3> {
+    let magnitude = vector.length();
+    if !magnitude.is_finite() || magnitude < 1.0e-3 || meters_per_unit <= 0.0 {
+        return None;
+    }
+    Some(vector / magnitude * (magnitude * meters_per_unit).min(MAX_ARROW_LEN))
 }

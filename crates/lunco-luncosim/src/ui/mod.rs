@@ -13,6 +13,7 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts};
 
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy::camera_switch::{
@@ -45,6 +46,14 @@ mod update;
 #[derive(Event, Clone, Debug)]
 struct DismissTerrainOverlay;
 
+/// Transient state for the camera picker opened by the authored camera-status
+/// surface. Camera identity and availability remain owned by
+/// [`CameraSelectionStatus`]; this resource only owns the popup lifecycle.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+struct CameraPickerState {
+    open: bool,
+}
+
 /// The luncosim's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
 /// explicit camera presentation controls.
@@ -70,6 +79,7 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
     ))
     .init_resource::<runtime_exposure::RuntimeUiRenderState>()
     .init_resource::<runtime_exposure::RuntimeUiGates>()
+    .init_resource::<runtime_exposure::RuntimeUiSurfaceRects>()
     .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)
     .add_systems(
         Update,
@@ -107,6 +117,8 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
     .add_systems(
         PostUpdate,
         (
+            runtime_exposure::publish_runtime_ui_surface_rects
+                .after(bevy::ui::UiSystems::PostLayout),
             runtime_exposure::apply_runtime_ui_placement_after_style
                 .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
                 .after(bevy::ui::UiSystems::Propagate)
@@ -169,6 +181,9 @@ impl Plugin for SandboxUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
             .required = true;
+        app.init_resource::<CameraPickerState>()
+            .add_systems(lunco_core::SceneTeardown, reset_camera_picker)
+            .add_observer(reset_camera_picker_on_twin_closed);
         app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
@@ -335,11 +350,16 @@ impl Plugin for SandboxUiPlugin {
             // field. Its state still flows through the typed SetClock command.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                celestial_time::draw_celestial_time
-                    .in_set(lunco_workbench::ApplicationOverlayRenderSet)
-                    .run_if(not(recording_offline))
-                    .run_if(in_view_perspective)
-                    .run_if(overlays::sky_clock_visible),
+                (
+                    celestial_time::draw_celestial_time
+                        .in_set(lunco_workbench::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective)
+                        .run_if(overlays::sky_clock_visible),
+                    draw_camera_picker
+                        .in_set(lunco_workbench::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline)),
+                ),
             );
 
         // Tutorial TRACKS come from the curriculum layer `TutorialCorePlugin`
@@ -421,6 +441,7 @@ fn on_runtime_ui_action(
     >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    mut camera_picker: ResMut<CameraPickerState>,
     mut commands: Commands,
 ) {
     match trigger.event().action {
@@ -468,6 +489,9 @@ fn on_runtime_ui_action(
                 vessel: link.vessel_entity,
             });
         }
+        runtime_exposure::RuntimeUiActionKind::ToggleCameraPicker => {
+            camera_picker.open = !camera_picker.open;
+        }
     }
 }
 
@@ -493,6 +517,136 @@ fn runtime_focus_body(
 fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
     warn!("[runtime-ui] {message}");
     lunco_core::trigger_error(commands, "runtime-ui-action-failed", message);
+}
+
+fn reset_camera_picker(mut picker: ResMut<CameraPickerState>) {
+    picker.open = false;
+}
+
+fn reset_camera_picker_on_twin_closed(
+    _trigger: On<lunco_workspace::TwinClosed>,
+    mut picker: ResMut<CameraPickerState>,
+) {
+    picker.open = false;
+}
+
+/// Draw the shared camera list for both the authored-triggered popup and the
+/// workbench Camera menu. The returned value is always the full authored name.
+fn camera_option_list(ui: &mut egui::Ui, state: &CameraSelectionStatus) -> Option<String> {
+    if state.cameras.is_empty() {
+        ui.label("No authored window camera is available.");
+        ui.label("This scene has no presentation until one is authored.");
+        return None;
+    }
+
+    ui.label("Operator camera");
+    let labels = lunco_usd_bevy::camera_switch::camera_display_labels(&state.cameras);
+    let mut selected = None;
+    for (name, label) in state.cameras.iter().zip(labels) {
+        let active = state.active_name.as_deref() == Some(name.as_str());
+        let response = ui
+            .selectable_label(active, label)
+            .on_hover_text(name.as_str());
+        if response.clicked() {
+            selected = Some(name.clone());
+        }
+    }
+    selected
+}
+
+/// Draw the camera picker opened by the authored camera-status button.
+///
+/// HUI 0.7 has no dynamic repeated-list or payload action contract. The
+/// authored button therefore owns only the open intent; this popup uses the
+/// same egui host and [`CameraSelectionStatus`] view-model as the Camera menu,
+/// while every selection still emits the typed [`SetUserCamera`] command.
+fn draw_camera_picker(
+    mut egui_ctx: EguiContexts,
+    mut picker: ResMut<CameraPickerState>,
+    status: Option<Res<CameraSelectionStatus>>,
+    rects: Res<runtime_exposure::RuntimeUiSurfaceRects>,
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    theme: Option<Res<lunco_theme::Theme>>,
+    mut commands: Commands,
+) {
+    if !layout.is_some_and(|layout| {
+        layout.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+    }) {
+        picker.open = false;
+        return;
+    }
+    if !picker.open {
+        return;
+    }
+    let Some(status) = status else {
+        picker.open = false;
+        return;
+    };
+    let Some(anchor) = rects.get("camera-status") else {
+        return;
+    };
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+
+    let theme = theme
+        .map(|theme| theme.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let popup_id = egui::Id::new("camera_status_picker");
+    let mut open = picker.open;
+    let mut selected = None;
+    let mut observe_avatar = false;
+    let mut resume_director = false;
+
+    egui::Popup::new(
+        popup_id,
+        ctx.clone(),
+        anchor,
+        egui::LayerId::new(egui::Order::Foreground, popup_id),
+    )
+    .align(egui::RectAlign::BOTTOM_START)
+    .gap(6.0)
+    .width(anchor.width())
+    .open_bool(&mut open)
+    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+    .layout(egui::Layout::top_down_justified(egui::Align::Min))
+    .frame(
+        egui::Frame::new()
+            .fill(theme.tokens.overlay_backdrop)
+            .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::same(8)),
+    )
+    .show(|ui| {
+        ui.heading(egui::RichText::new("Camera").color(theme.tokens.accent));
+        ui.separator();
+        if status.avatar_available && ui.button("Observe avatar").clicked() {
+            observe_avatar = true;
+        }
+        if status.director_available && ui.button("Resume authored director").clicked() {
+            resume_director = true;
+        }
+        if status.avatar_available || status.director_available {
+            ui.separator();
+        }
+        selected = camera_option_list(ui, &status);
+        if let Some(error) = &status.last_error {
+            ui.separator();
+            ui.colored_label(theme.tokens.error, error);
+        }
+    });
+
+    if selected.is_some() || observe_avatar || resume_director {
+        open = false;
+    }
+    picker.open = open;
+    if let Some(name) = selected {
+        commands.trigger(SetUserCamera { name });
+    } else if observe_avatar {
+        commands.trigger(ObserveAvatar {});
+    } else if resume_director {
+        commands.trigger(ResumeCameraDirector {});
+    }
 }
 
 /// Register an egui-hosted, keyboard-accessible route to the same semantic
@@ -533,18 +687,9 @@ fn register_camera_menu(world: &mut World) {
                 ui.close();
             }
             ui.separator();
-            if state.cameras.is_empty() {
-                ui.label("No authored window camera is available.");
-                ui.label("This scene has no presentation until one is authored.");
-            } else {
-                ui.label("Operator camera");
-                for name in &state.cameras {
-                    let active = state.active_name.as_deref() == Some(name.as_str());
-                    if ui.selectable_label(active, name).clicked() {
-                        ctx.trigger(SetUserCamera { name: name.clone() });
-                        ui.close();
-                    }
-                }
+            if let Some(name) = camera_option_list(ui, state) {
+                ctx.trigger(SetUserCamera { name });
+                ui.close();
             }
         } else {
             ui.label("Camera state is not ready.");
@@ -1383,4 +1528,36 @@ fn clean_scene_name(stem: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use lunco_usd_bevy::camera_switch::camera_display_labels;
+
+    #[test]
+    fn camera_display_labels_disambiguate_duplicate_leaf_names() {
+        let names = vec![
+            "/World/Cameras/Overview".to_owned(),
+            "/World/Rovers/Overview".to_owned(),
+            "/World/Cameras/Detail".to_owned(),
+        ];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec!["Overview / Cameras", "Overview / Rovers", "Detail"]
+        );
+    }
+
+    #[test]
+    fn camera_display_labels_extend_context_when_parent_labels_collide() {
+        let names = vec![
+            "/World/Alpha/Views/Overview".to_owned(),
+            "/World/Beta/Views/Overview".to_owned(),
+        ];
+
+        assert_eq!(
+            camera_display_labels(&names),
+            vec!["Overview / Views / Alpha", "Overview / Views / Beta"]
+        );
+    }
 }

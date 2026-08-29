@@ -10,25 +10,23 @@
 //!   (Revolute, Prismatic, Fixed, Spherical, Distance) in the scene.
 //!   Lets you see the rocker-bogie suspension topology at a glance.
 //!
-//! - **Wheel forces** — draws a wireframe box + net-force arrow at
-//!   every wheel (`PhysicalWheel` or `WheelRaycast`). The box makes
-//!   it obvious which wheels are loaded vs. airborne; the arrow shows
-//!   the force direction. Force is `VelocityIntegrationData ×
-//!   ComputedMass` (same source as `physics_viz.rs`'s force arrow —
-//!   captures cosim / constant forces, excludes gravity / contacts).
+//! - **Wheel forces** — draws a wireframe box plus the force observations
+//!   owned by each wheel realization. Raycast wheels expose the solved tire
+//!   and normal forces; joint wheels expose Avian's solved constraint force.
+//!   A wheel does not own the rigid body's integration accumulator, so that
+//!   accumulator is never projected as a per-wheel force.
 //!
 //! Both systems early-return when their flag is off, so the cost is
 //! effectively zero when visualization is disabled.
 
-use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::dynamics::joints::{DistanceJoint, SphericalJoint};
 use avian3d::prelude::{
-    ComputedMass, FixedJoint, JointAnchor, JointFrame, LinearVelocity, PrismaticJoint,
-    RevoluteJoint,
+    FixedJoint, JointAnchor, JointForces, JointFrame, LinearVelocity, PrismaticJoint,
+    RevoluteJoint, RigidBody,
 };
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{JointedWheelTire, WheelBodyMount, WheelRaycast};
 use lunco_usd_sim::PhysicalWheel;
 
 // ── Settings resource + typed command ────────────────────────────────────
@@ -74,13 +72,15 @@ const BOX_COLOR: Color = Color::srgb(0.9, 0.9, 0.2);
 
 const ANCHOR_RADIUS: f32 = 0.06;
 const AXIS_LEN: f32 = 0.4;
-const FORCE_SCALE: f32 = 0.005;
 const BOX_HALF: f32 = 0.25;
+const MAX_ARROW_LEN: f32 = 4.0;
+const NEWTONS_PER_METER: f32 = 500.0;
+const METERS_PER_MPS: f32 = 0.5;
 
-// XYZ axis colors for force-component arrows (RGB = XYZ convention).
-const FORCE_X_COLOR: Color = Color::srgb(1.0, 0.2, 0.2);
-const FORCE_Y_COLOR: Color = Color::srgb(0.2, 1.0, 0.2);
-const FORCE_Z_COLOR: Color = Color::srgb(0.2, 0.4, 1.0);
+const TIRE_FORCE_COLOR: Color = Color::srgb(1.0, 0.45, 0.15);
+const NORMAL_FORCE_COLOR: Color = Color::srgb(0.65, 1.0, 0.2);
+const JOINT_FORCE_COLOR: Color = Color::srgb(0.3, 0.75, 1.0);
+const VELOCITY_COLOR: Color = Color::srgb(0.2, 1.0, 0.4);
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -117,6 +117,21 @@ fn draw_joint_gizmo(
         let dir = dir.normalize_or_zero() * AXIS_LEN;
         gizmos.arrow(a1 - dir, a1 + dir, AXIS_COLOR);
     }
+}
+
+/// Map a physical vector to a readable, bounded gizmo arrow.
+///
+/// Debug geometry must remain local to the body being inspected. An
+/// unbounded velocity or force vector turns a normal transient into a line
+/// across the scene, which is both unreadable and easy to mistake for a
+/// frame/physics failure.
+fn arrow_vector(vector: Vec3, meters_per_unit: f32) -> Option<Vec3> {
+    let magnitude = vector.length();
+    if !magnitude.is_finite() || magnitude < 1.0e-3 || meters_per_unit <= 0.0 {
+        return None;
+    }
+    let length = (magnitude * meters_per_unit).min(MAX_ARROW_LEN);
+    Some(vector / magnitude * length)
 }
 
 // ── Joint drawing system ─────────────────────────────────────────────────
@@ -212,9 +227,8 @@ pub fn draw_joint_viz(
 /// `show_wheel_forces` is on.
 ///
 /// The box is a fixed-size `Cuboid` outline at the wheel's world
-/// position (makes loaded vs. airborne wheels visually obvious). The
-/// arrow is the net force (`VelocityIntegrationData × ComputedMass`),
-/// same source as `physics_viz.rs`'s force arrow.
+/// position (makes loaded vs. airborne wheels visually obvious). Force
+/// arrows come from the wheel realization's own solved force boundary.
 ///
 /// Covers both wheel kinds: `PhysicalWheel` (joint-based, e.g.
 /// rocker-bogie) and `WheelRaycast` (raycast, e.g. skid/Ackermann).
@@ -222,35 +236,26 @@ pub fn draw_wheel_force_viz(
     mut gizmos: Gizmos,
     settings: Res<JointVizSettings>,
     q_physical: Query<
-        (
-            &GlobalTransform,
-            Option<&LinearVelocity>,
-            Option<&VelocityIntegrationData>,
-            Option<&ComputedMass>,
-        ),
+        (&GlobalTransform, Option<&LinearVelocity>, &JointedWheelTire),
         With<PhysicalWheel>,
     >,
     q_raycast: Query<
         (
             &GlobalTransform,
             Option<&LinearVelocity>,
-            Option<&VelocityIntegrationData>,
-            Option<&ComputedMass>,
+            &WheelRaycast,
+            &WheelBodyMount,
         ),
         With<WheelRaycast>,
     >,
+    q_bodies: Query<&GlobalTransform, With<RigidBody>>,
+    q_joint_forces: Query<&JointForces>,
 ) {
     if !settings.show_wheel_forces {
         return;
     }
 
-    let draw = |gizmos: &mut Gizmos,
-                tf: &GlobalTransform,
-                vel: Option<&LinearVelocity>,
-                integration: Option<&VelocityIntegrationData>,
-                mass: Option<&ComputedMass>| {
-        let pos = tf.translation();
-
+    let draw_box = |gizmos: &mut Gizmos, pos: Vec3| {
         // Wireframe box at the wheel — makes it easy to spot which
         // wheels are tracked even when force is near-zero.
         gizmos.primitive_3d(
@@ -260,41 +265,45 @@ pub fn draw_wheel_force_viz(
             Isometry3d::from_translation(pos),
             BOX_COLOR,
         );
-
-        // Force broken into XYZ components — three arrows, one per axis,
-        // each length proportional to the force component along that axis.
-        // Red=X, Green=Y, Blue=Z (standard physics-debug convention).
-        if let (Some(integ), Some(m)) = (integration, mass) {
-            let a = integ.linear_increment;
-            let mass_scalar = m.value() as f32;
-            let s = mass_scalar * FORCE_SCALE;
-            let fx = a.x as f32 * s;
-            let fy = a.y as f32 * s;
-            let fz = a.z as f32 * s;
-            if fx.abs() > 1e-4 {
-                gizmos.arrow(pos, pos + Vec3::X * fx, FORCE_X_COLOR);
-            }
-            if fy.abs() > 1e-4 {
-                gizmos.arrow(pos, pos + Vec3::Y * fy, FORCE_Y_COLOR);
-            }
-            if fz.abs() > 1e-4 {
-                gizmos.arrow(pos, pos + Vec3::Z * fz, FORCE_Z_COLOR);
-            }
-        }
-
-        // Velocity arrow (green) so you can see drive direction.
-        if let Some(v) = vel {
-            let dir = Vec3::new(v.0.x as f32, v.0.y as f32, v.0.z as f32) * 3.0;
-            if dir.length_squared() > 1e-6 {
-                gizmos.arrow(pos, pos + dir, Color::srgb(0.2, 1.0, 0.4));
-            }
+    };
+    let draw_velocity = |gizmos: &mut Gizmos, pos: Vec3, vel: Option<&LinearVelocity>| {
+        let Some(vel) = vel else { return };
+        let velocity = Vec3::new(vel.0.x as f32, vel.0.y as f32, vel.0.z as f32);
+        if let Some(dir) = arrow_vector(velocity, METERS_PER_MPS) {
+            gizmos.arrow(pos, pos + dir, VELOCITY_COLOR);
         }
     };
 
-    for (tf, vel, integ, mass) in q_physical.iter() {
-        draw(&mut gizmos, tf, vel, integ, mass);
+    for (tf, vel, tire) in q_physical.iter() {
+        let pos = tf.translation();
+        draw_box(&mut gizmos, pos);
+        // Physical-wheel tire forces are applied through the wheel body, while
+        // the revolute joint carries the solved reaction. Read that explicit
+        // Avian writeback instead of treating the body accumulator as a wheel
+        // force. The synthesized wheel joint owns this optional readback.
+        if let Ok(joint_forces) = q_joint_forces.get(tire.drive_joint) {
+            if let Some(dir) = arrow_vector(joint_forces.force().as_vec3(), 1.0 / NEWTONS_PER_METER)
+            {
+                gizmos.arrow(pos, pos + dir, JOINT_FORCE_COLOR);
+            }
+        }
+        draw_velocity(&mut gizmos, pos, vel);
     }
-    for (tf, vel, integ, mass) in q_raycast.iter() {
-        draw(&mut gizmos, tf, vel, integ, mass);
+
+    for (tf, vel, wheel, mount) in q_raycast.iter() {
+        let pos = tf.translation();
+        draw_box(&mut gizmos, pos);
+        if let Some(dir) = arrow_vector(wheel.tire_force.as_vec3(), 1.0 / NEWTONS_PER_METER) {
+            gizmos.arrow(pos, pos + dir, TIRE_FORCE_COLOR);
+        }
+        let root_up = q_bodies
+            .get(mount.body)
+            .map(|body| body.rotation() * Vec3::Y)
+            .unwrap_or(Vec3::Y);
+        let normal = root_up * wheel.last_normal_force as f32;
+        if let Some(dir) = arrow_vector(normal, 1.0 / NEWTONS_PER_METER) {
+            gizmos.arrow(pos, pos + dir, NORMAL_FORCE_COLOR);
+        }
+        draw_velocity(&mut gizmos, pos, vel);
     }
 }

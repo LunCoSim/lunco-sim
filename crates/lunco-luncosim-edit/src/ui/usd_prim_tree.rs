@@ -23,8 +23,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_render::SceneCamera;
 use lunco_usd_bevy::{
-    instance_key, CanonicalStages, SdfPath, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdStageAsset,
+    camera_switch::camera_display_labels, instance_key, CanonicalStages, SdfPath, UsdInstanceRoot,
+    UsdPrimPath, UsdRead, UsdStageAsset,
 };
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -38,8 +40,10 @@ type NodeKey = (Option<u64>, String);
 
 /// One node in the prim tree.
 struct PrimTreeNode {
-    /// Leaf name (last path segment).
-    name: String,
+    /// Leaf name or readable camera label when this node is a scene camera.
+    display_name: String,
+    /// Full camera identity retained for the row tooltip, if this is a camera.
+    camera_identity: Option<String>,
     /// Composed `typeName`, empty for a synthesized intermediate.
     type_name: String,
     /// The ECS entity for this prim, if one was spawned (selectable).
@@ -64,7 +68,7 @@ pub struct UsdPrimTreeView {
 /// View-model producer: rebuild [`UsdPrimTreeView`] from the composed stage when
 /// the prim-path set changes.
 pub fn produce_usd_prim_tree(
-    q: Query<(Entity, &UsdPrimPath)>,
+    q: Query<(Entity, &UsdPrimPath, Has<SceneCamera>)>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
@@ -77,7 +81,7 @@ pub fn produce_usd_prim_tree(
     // Pick the scene stage = the stage id with the most prim entities.
     let mut counts: HashMap<AssetId<UsdStageAsset>, (usize, Handle<UsdStageAsset>)> =
         HashMap::new();
-    for (_, p) in q.iter() {
+    for (_, p, _) in q.iter() {
         counts
             .entry(p.stage_handle.id())
             .or_insert_with(|| (0, p.stage_handle.clone()))
@@ -95,12 +99,29 @@ pub fn produce_usd_prim_tree(
     // change gate. Keying on the instance is what gives two spawns of one asset
     // two subtrees instead of one collapsed node (their paths are identical).
     let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
-    for (e, p) in q.iter() {
+    for (e, p, _) in q.iter() {
         if p.stage_handle.id() == stage_id {
             let inst = instance_key(e, &q_provenance, &q_gid, &q_instance_root);
             entity_of.insert((inst, p.path.clone()), e);
         }
     }
+
+    let camera_identities: Vec<(Entity, String)> = q
+        .iter()
+        .filter(|(_, path, is_camera)| *is_camera && path.stage_handle.id() == stage_id)
+        .map(|(entity, path, _)| (entity, path.path.clone()))
+        .collect();
+    let camera_names: Vec<String> = camera_identities
+        .iter()
+        .map(|(_, identity)| identity.clone())
+        .collect();
+    let camera_identity_by_entity: HashMap<Entity, String> =
+        camera_identities.iter().cloned().collect();
+    let camera_labels: HashMap<Entity, String> = camera_identities
+        .into_iter()
+        .zip(camera_display_labels(&camera_names))
+        .map(|((entity, _), label)| (entity, label))
+        .collect();
 
     // Every path + all of its ancestor prefixes (within the SAME instance), so
     // intermediate xforms appear under the right spawn.
@@ -155,7 +176,7 @@ pub fn produce_usd_prim_tree(
     for key in &all_paths {
         let (_, path) = key;
         let name = path.rsplit('/').next().unwrap_or(path);
-        let display_name = entity_of
+        let default_display_name = entity_of
             .get(key)
             .map(|entity| {
                 let path_name = Name::new(path.clone());
@@ -177,10 +198,19 @@ pub fn produce_usd_prim_tree(
             },
             None => (String::new(), false),
         };
+        let display_name = entity_of
+            .get(key)
+            .and_then(|entity| camera_labels.get(entity))
+            .cloned()
+            .unwrap_or(default_display_name);
         nodes.insert(
             key.clone(),
             PrimTreeNode {
-                name: display_name,
+                display_name,
+                camera_identity: entity_of
+                    .get(key)
+                    .and_then(|entity| camera_identity_by_entity.get(entity))
+                    .cloned(),
                 type_name,
                 entity: entity_of.get(key).copied(),
                 is_body,
@@ -333,13 +363,19 @@ fn prim_select_label(
 ) {
     match node.entity {
         Some(entity) => {
+            let hint = if node.type_name.is_empty() {
+                "Click to select".to_string()
+            } else {
+                format!("{}  ·  click to select", node.type_name)
+            };
+            let hint = node
+                .camera_identity
+                .as_deref()
+                .map(|identity| format!("{identity}  ·  {hint}"))
+                .unwrap_or(hint);
             let resp = ui
                 .selectable_label(selected.entities.contains(&entity), label)
-                .on_hover_text(if node.type_name.is_empty() {
-                    "Click to select".to_string()
-                } else {
-                    format!("{}  ·  click to select", node.type_name)
-                });
+                .on_hover_text(hint);
             if resp.clicked() {
                 *to_select = Some(entity);
             }
@@ -359,5 +395,5 @@ fn prim_label(node: &PrimTreeNode) -> String {
     } else {
         "▪"
     };
-    format!("{glyph} {}", node.name)
+    format!("{glyph} {}", node.display_name)
 }

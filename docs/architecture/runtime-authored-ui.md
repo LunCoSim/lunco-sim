@@ -104,7 +104,7 @@ The fields are:
 | `template`, `stylesheet` | Asset paths under the normal Bevy asset root. |
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values such as `true` or `301` into CSS values. |
-| `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, or `overlay.terrain.dismiss`). |
+| `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, `overlay.terrain.dismiss`, `autopilot.toggle`, or `camera.picker.toggle`). |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
@@ -125,11 +125,25 @@ available to Rhai as `get_twin_setting(key)` and is changed through
 owner. A surface opts into that policy with `setting` and declares its omitted
 value with `setting_default`.
 
-The camera-status surface is the reference composition. Rust publishes only
-the current camera fact (`active_name`) through the generic `camera-status`
-exposure. Rhai owns camera-selection policy through `set_camera(name)` and can
-read that fact with `get_exposure(...)`; HUI/CSS owns only the retained
-rendering. No camera list, selection heuristic, or presentation wording is
+The camera-status surface is the reference composition. Rust publishes the
+full current camera fact (`active_name`) and a deterministic compact identity
+projection (`active_label`) through the generic `camera-status` exposure. Rhai
+owns authored camera-selection policy through `set_camera(name)` and can read
+the full fact with `get_exposure(...)`; HUI/CSS owns the compact retained
+presentation and binds `active_label` while its authored button emits
+`camera.picker.toggle`.
+The shared `lunco-usd-bevy::camera_switch::camera_display_labels` policy is
+used by the exposure, picker, Camera menu, USD prim tree, entity tree, and
+Inspector: unique authored leaves stand alone; duplicate leaves gain the
+nearest owner context and then additional ancestors; generated
+hexadecimal/UUID-like owner suffixes are omitted; an unavoidable normalized
+collision gets a small ordinal. The full USD path remains the selection
+identity and is available through tooltips, diagnostics, and `active_name`,
+never replaced by the display projection.
+Because HUI has no dynamic repeated-list or payload-action contract, the
+existing egui host draws the picker from the same `CameraSelectionStatus` view
+model, anchors it to the measured HUI surface rectangle, and emits the typed
+`SetUserCamera` command. No camera registry or selection heuristic is
 duplicated in the exposure producer.
 
 Camera and exposure updates are reactive: camera status is rebuilt after its

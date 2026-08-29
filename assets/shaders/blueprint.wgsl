@@ -5,8 +5,9 @@
 //!   * `transition < 0.5` — **spherical lat/long grid** derived per fragment from
 //!     the body's radial direction. Used by celestial Earth/Moon tiles seen from
 //!     orbit. Needs the `LUNCO_GLOBE_DIRECTION` vertex interface below.
-//!   * `transition >= 0.5` — **Cartesian XZ blueprint grid** over world position.
-//!     Used by the flat sandbox ground. Always available (no UVs needed).
+//!   * `transition >= 0.5` — **Cartesian XZ blueprint grid** in the authored
+//!     terrain frame. Used by the flat sandbox ground. Always available (no UVs
+//!     needed), and does not move when BigSpace changes the render origin.
 //!
 //! The base colour is `surface_color` multiplied by the optional `albedo_map`
 //! (binding 2/3 — Bevy's white fallback when unbound, so a solid-colour ground
@@ -103,6 +104,12 @@ fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
 //!@default fade_range       0.2,0.6
 //!@ui      line_width       0 8   "Line width (sphere px)"
 //!@default line_width       2.0
+//!@engine  blueprint_origin
+//!@default blueprint_origin 0,0,0
+//!@engine  blueprint_frame_origin
+//!@default blueprint_frame_origin 0,0,0
+//!@engine  blueprint_frame_rotation
+//!@default blueprint_frame_rotation 0,0,0,1
 //!@ui      major_grid_spacing 0.1 5000 "Major grid spacing (m)"
 //!@default major_grid_spacing 1.0
 //!@ui      minor_grid_spacing 0.1 5000 "Minor grid spacing (m)"
@@ -121,6 +128,9 @@ struct Material {
     subdivisions:       vec2<f32>,
     fade_range:         vec2<f32>,
     line_width:         f32,
+    blueprint_origin:   vec3<f32>,
+    blueprint_frame_origin: vec3<f32>,
+    blueprint_frame_rotation: vec4<f32>,
     major_grid_spacing: f32,
     minor_grid_spacing: f32,
     major_line_width:   f32,
@@ -161,6 +171,13 @@ fn equirectangular_grad(d: vec3<f32>, delta: vec3<f32>) -> vec2<f32> {
 }
 #endif
 
+// Rotate by a unit quaternion. The renderer supplies the inverse rotation from
+// the active terrain frame into the floating-origin render frame.
+fn rotate_by_quaternion(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
 fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f32> {
     var base = mat.surface_color;
     var grid_mask = 0.0;
@@ -199,7 +216,17 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
         base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
 #endif
 #endif
-        let pos = in.world_position.xz;
+        // `world_position` is the floating-origin render frame. First restore
+        // the stable WorldGrid position, then map it into the authored active
+        // terrain frame before evaluating its XZ pattern. For a site-mounted
+        // surface the renderer uses a render-relative frame origin, so this
+        // remains precise even when the absolute WorldGrid cell is enormous.
+        let stable_world = in.world_position.xyz + mat.blueprint_origin;
+        let frame_position = rotate_by_quaternion(
+            stable_world - mat.blueprint_frame_origin,
+            mat.blueprint_frame_rotation,
+        );
+        let pos = frame_position.xz;
         let world_per_px = abs(fwidth(pos));
 
         let major_dist = vec2<f32>(

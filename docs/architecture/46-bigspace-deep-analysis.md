@@ -14,6 +14,7 @@ Keep this page operational. The complete contract is in
 | f64 pose composition | `lunco-core` | `ActiveFramePoseQuery`, frame helpers |
 | Cell/local split | `big_space` | `Grid::translation_to_grid` |
 | Camera origin | `lunco-core` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |
+| Terrain blueprint coordinates | `lunco-render-bevy` | `blueprint_origin` plus the active-frame origin/inverse rotation restore authored flat-grid coordinates |
 | Physics pose bridge | `lunco-usd-avian` | explicitly bound `ActivePhysicsFrame` bridge |
 | Scene ownership | `lunco-core` / `lunco-usd` | `SceneMountState`, typed transitions |
 
@@ -52,17 +53,21 @@ When a camera, body, rover, trajectory, or line jitters:
    `ActivePhysicsFrame` to the intended `WorldGrid` or site grid, then verify
    the bridge path, not the
    rendered `GlobalTransform`.
-7. For a scene replacement, verify the old root was invalidated before
+7. For a terrain-attached periodic line or grid, verify the shader receives the
+   current `WorldGrid` cell offset plus the active frame's render-space origin
+   and inverse rotation before computing the pattern; render-relative global X/Z
+   alone is not an authored coordinate.
+8. For a scene replacement, verify the old root was invalidated before
    deferred despawn and that projection only accepts the active root.
-8. For physics admission, verify the bridge's frame diagnostic and
+9. For physics admission, verify the bridge's frame diagnostic and
    `PhysicsHolds::FRAME_CONTRACT` are clear before `StepSimulation` can run.
-9. For site lighting and solar poses, verify there is no more than one
+10. For site lighting and solar poses, verify there is no more than one
    `SiteAnchor`; ambiguous authoring must produce a diagnostic and no selected
    site frame.
-10. For a repeated presentation solve, verify equal `Transform` and
+11. For a repeated presentation solve, verify equal `Transform` and
    `CellCoord` results are not assigned; otherwise Bevy change detection will
    legitimately wake BigSpace propagation on every solve.
-11. Check shared interaction easing, mounted/path camera followers, and the
+12. Check shared interaction easing, mounted/path camera followers, and the
     persistent camera-origin tracker as camera pose owners; they must obey the
     same value-idempotent commit rule.
 

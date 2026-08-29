@@ -100,6 +100,18 @@ through `lunco_core::attach::migrate_to_grid`. Compute the complete f64 pose in
 the destination frame first, then write the destination representation. Do
 not reparent first and repair the pose next frame.
 
+### Terrain-attached render coordinates
+
+Rasterisation correctly consumes floating-origin `GlobalTransform` values, but
+periodic geometry that is authored in the terrain's Cartesian frame must restore
+the stable WorldGrid position and then map it into that authored frame.
+`lunco-render-bevy` owns this bridge through the `blueprint_origin`,
+`blueprint_frame_origin`, and `blueprint_frame_rotation` engine shader
+parameters. The blueprint shader performs that conversion before computing grid
+coordinates. Do not use a render-relative global X/Z directly for an authored
+site grid, and do not move the terrain or physics frame to compensate for a
+visual pattern.
+
 ## Physics boundary
 
 `ActivePhysicsFrame` identifies the single local frame used by Avian for the

@@ -18,7 +18,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
+use lunco_usd_bevy::camera_switch::camera_display_labels;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -85,6 +87,10 @@ pub struct EntityTreeView {
     /// Stable source address used to order duplicate labels independently of
     /// Bevy allocation order.
     stable_keys: HashMap<Entity, String>,
+    /// Visible camera entities whose labels use the shared camera policy.
+    camera_entities: HashSet<Entity>,
+    /// Full camera identities retained for row tooltips and diagnostics.
+    camera_identities: HashMap<Entity, String>,
     /// Direct parent snapshot for visible named entities. The gate compares
     /// this value rather than trusting a `Changed<ChildOf>` tick: grid and
     /// celestial systems may re-stamp an identical parent every frame.
@@ -167,6 +173,7 @@ pub(crate) fn populate_entity_tree_view(
         Option<&lunco_core::markers::Callsign>,
         Option<&lunco_core::CatalogEntryId>,
         Option<&lunco_usd_bevy::UsdPrimPath>,
+        Has<SceneCamera>,
     )>,
     system_q: Query<Entity, With<lunco_core::SystemManaged>>,
     child_q: Query<(Entity, &ChildOf)>,
@@ -185,8 +192,8 @@ pub(crate) fn populate_entity_tree_view(
     };
     let named: Vec<(Entity, String, String)> = named_q
         .iter()
-        .filter(|(e, _, _, _, _)| !system.contains(e))
-        .map(|(e, name, callsign, catalog_id, path)| {
+        .filter(|(e, _, _, _, _, _)| !system.contains(e))
+        .map(|(e, name, callsign, catalog_id, path, _)| {
             (
                 e,
                 lunco_core::entity_display_name(Some(name), callsign, catalog_id),
@@ -195,6 +202,30 @@ pub(crate) fn populate_entity_tree_view(
         })
         .collect();
     let named_set: HashSet<Entity> = named.iter().map(|(e, _, _)| *e).collect();
+
+    let camera_identities: Vec<(Entity, String)> = named_q
+        .iter()
+        .filter(|(entity, _, _, _, _path, is_camera)| *is_camera && !system.contains(entity))
+        .map(|(entity, name, _, _, path, _)| {
+            (
+                entity,
+                path.map(|path| path.path.clone())
+                    .unwrap_or_else(|| name.as_str().to_string()),
+            )
+        })
+        .collect();
+    let camera_names: Vec<String> = camera_identities
+        .iter()
+        .map(|(_, identity)| identity.clone())
+        .collect();
+    let camera_identity_by_entity: HashMap<Entity, String> =
+        camera_identities.iter().cloned().collect();
+    let camera_labels: HashMap<Entity, String> = camera_identities
+        .into_iter()
+        .zip(camera_display_labels(&camera_names))
+        .map(|((entity, _), label)| (entity, label))
+        .collect();
+    let camera_entities: HashSet<Entity> = camera_labels.keys().copied().collect();
 
     // Parent of each entity (full graph, not just named) so unnamed grid/wrapper
     // entities can be skipped over when finding an entity's display parent.
@@ -237,7 +268,9 @@ pub(crate) fn populate_entity_tree_view(
     }
 
     // Visibility: an entity shows if it or any descendant is interesting.
-    let interesting = |e: Entity| selectable.contains(&e) || has_mesh.contains(&e);
+    let interesting = |e: Entity| {
+        selectable.contains(&e) || has_mesh.contains(&e) || camera_entities.contains(&e)
+    };
     let mut shown: HashMap<Entity, bool> = HashMap::new();
     for (e, _, _) in &named {
         compute_shown(*e, &kids, &interesting, &mut shown);
@@ -248,7 +281,12 @@ pub(crate) fn populate_entity_tree_view(
         .filter(|(entity, _, _)| shown.get(entity).copied().unwrap_or(false))
         .map(|(entity, label, _)| (*entity, label.clone()))
         .collect();
-    let labels = disambiguate_labels(&named, &shown);
+    let mut labels = disambiguate_labels(&named, &shown);
+    for (entity, label) in &camera_labels {
+        if shown.get(entity).copied().unwrap_or(false) {
+            labels.insert(*entity, label.clone());
+        }
+    }
 
     // Prune children to shown-only + stable alphabetical order by leaf label, at
     // every level; drop empty entries so the panel treats them as leaves.
@@ -287,6 +325,14 @@ pub(crate) fn populate_entity_tree_view(
         .iter()
         .filter(|(entity, _, _)| shown.get(entity).copied().unwrap_or(false))
         .map(|(entity, _, key)| (*entity, key.clone()))
+        .collect();
+    view.camera_entities = camera_entities
+        .into_iter()
+        .filter(|entity| view.labels.contains_key(entity))
+        .collect();
+    view.camera_identities = camera_identity_by_entity
+        .into_iter()
+        .filter(|(entity, _)| view.labels.contains_key(entity))
         .collect();
     view.parents = view
         .labels
@@ -342,6 +388,14 @@ pub(crate) fn scene_topology_changed(
             Without<lunco_core::SystemManaged>,
         ),
     >,
+    added_cameras: Query<
+        Entity,
+        (
+            With<Name>,
+            Added<SceneCamera>,
+            Without<lunco_core::SystemManaged>,
+        ),
+    >,
     changed_system: Query<
         (
             Entity,
@@ -386,6 +440,7 @@ pub(crate) fn scene_topology_changed(
     mut rm_callsign: RemovedComponents<lunco_core::markers::Callsign>,
     mut rm_catalog: RemovedComponents<lunco_core::CatalogEntryId>,
     mut rm_usd_path: RemovedComponents<lunco_usd_bevy::UsdPrimPath>,
+    mut rm_camera: RemovedComponents<SceneCamera>,
 ) -> bool {
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed. A removed entity can no longer be
@@ -402,7 +457,10 @@ pub(crate) fn scene_topology_changed(
         | drained(&mut rm_sel.read())
         | drained(&mut rm_callsign.read())
         | drained(&mut rm_catalog.read())
-        | drained(&mut rm_usd_path.read());
+        | drained(&mut rm_usd_path.read())
+        | rm_camera.read().fold(false, |acc, entity| {
+            acc | view.camera_entities.contains(&entity)
+        });
     // The raw ECS graph contains many named but visibility-pruned implementation
     // entities (telemetry channel holders, transform wrappers, etc.).  They are
     // not inputs to this view. A change to a node the current view does not show
@@ -428,12 +486,14 @@ pub(crate) fn scene_topology_changed(
     };
     let visible_changed = changed.iter().any(value_changed);
     let visible_added = !added.is_empty();
+    let camera_added = !added_cameras.is_empty();
     let system_churn = settings.show_system
         && (changed_system.iter().any(value_changed) || !added_system.is_empty());
     let run = !*first
         || view.show_system != settings.show_system
         || visible_changed
         || visible_added
+        || camera_added
         || system_churn
         || removed;
     *first = true;
@@ -523,12 +583,28 @@ fn render_node(
         .unwrap_or_else(|| "Unnamed entity".to_string());
 
     match view.kids.get(&entity) {
-        None => select_label(ui, entity, &label, selected, to_select, to_focus),
+        None => select_label(
+            ui,
+            entity,
+            &label,
+            view.camera_identities.get(&entity).map(String::as_str),
+            selected,
+            to_select,
+            to_focus,
+        ),
         Some(children) => {
             let id = ui.make_persistent_id(("entity_tree", entity));
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
                 .show_header(ui, |ui| {
-                    select_label(ui, entity, &label, selected, to_select, to_focus);
+                    select_label(
+                        ui,
+                        entity,
+                        &label,
+                        view.camera_identities.get(&entity).map(String::as_str),
+                        selected,
+                        to_select,
+                        to_focus,
+                    );
                 })
                 .body(|ui| {
                     for &child in children {
@@ -546,13 +622,20 @@ fn select_label(
     ui: &mut egui::Ui,
     entity: Entity,
     label: &str,
+    full_identity: Option<&str>,
     selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
+    let hint = match full_identity {
+        Some(identity) => format!(
+            "{identity}  ·  click to select · Shift+Click to multiselect · double-click to focus"
+        ),
+        None => "Click to select · Shift+Click to multiselect · double-click to focus".to_owned(),
+    };
     let resp = ui
         .selectable_label(selected.entities.contains(&entity), label)
-        .on_hover_text("Click to select · Shift+Click to multiselect · double-click to focus");
+        .on_hover_text(hint);
 
     let shift_held = ui.input(|i| i.modifiers.shift);
 

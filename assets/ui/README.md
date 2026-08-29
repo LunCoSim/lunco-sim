@@ -38,11 +38,20 @@ not CSS or HUI types. A manifest binding may map exact rendered values such as
 
 HUI callbacks are semantic runtime actions. Each surface has a stable manifest
 `id`, and the manifest maps each unique callback name to a closed host action
-(`view.surface`, `view.body.moon`, `view.body.earth`, or
-`overlay.terrain.dismiss`). The adapter emits a typed action event, and the
-host translates that action through the existing command/event path. Templates
+(`view.surface`, `view.body.moon`, `view.body.earth`, `overlay.terrain.dismiss`,
+`autopilot.toggle`, or `camera.picker.toggle`). The adapter emits a typed action
+event, and the host translates that action through the existing command/event
+path. Templates
 never inspect HTML ids or call domain resources. Unknown fields/actions and
 unsafe asset paths are rejected before mounting.
+
+The camera-status card binds the deterministic compact `active_label` projection;
+the full `active_name` remains available to runtime consumers. The button is
+intentionally only the picker open intent. HUI 0.7
+does not provide a dynamic repeated-list or payload-action contract, so the
+existing egui host renders the camera options from `CameraSelectionStatus` at
+the measured HUI anchor and emits the typed camera command. This keeps the
+camera identity list single-sourced while preserving the authored trigger.
 
 ## Performance and placement
 

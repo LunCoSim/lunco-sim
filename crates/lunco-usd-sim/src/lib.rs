@@ -3695,6 +3695,10 @@ fn setup_physical_wheel(
         // makes that structurally impossible: no orphans, no reaper, no mask.
         ChildOf(carrier),
         lunco_usd_avian::ScenePhysicsOwned,
+        // Avian writes the solved revolute reaction here. The editor's wheel
+        // gizmo reads this explicit boundary; it must not infer a per-wheel
+        // force from the body's integration accumulator.
+        JointForces::new(),
         // The solved mechanical network publishes physical shaft torque on the
         // wheel drive port. The generic co-simulation boundary applies that
         // scalar across this revolute joint; it never derives torque from a
