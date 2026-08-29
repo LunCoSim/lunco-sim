@@ -785,6 +785,11 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
   workspace document before a user moves nodes.
 - Dot-grid background, pan/zoom, selection, port hit targets, and routed
   wire handles come from the generic `lunco-canvas` substrate.
+- The diagram toolbar's per-tab `Show nets` toggle is presentation state on
+  that canvas. Hiding it suppresses connection rendering, the legend, and
+  edge hit-testing while retaining the authored scene topology unchanged;
+  it is workbench/egui state because runtime HUI/Rhai has no dynamic diagram
+  graph control contract.
 
 ### 9.3 Why our own canvas
 

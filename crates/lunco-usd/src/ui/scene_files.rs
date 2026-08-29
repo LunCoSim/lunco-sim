@@ -45,6 +45,7 @@ use bevy_egui::egui;
 use lunco_assets::TwinRoots;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
+use lunco_workbench::twin_browser::BrowserQuery;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 
@@ -315,7 +316,18 @@ impl BrowserSection for SceneFilesSection {
             return;
         };
         // Snapshot before any `&mut` dispatch below.
-        let rows = view.rows.clone();
+        let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
+        let rows: Vec<SceneFileRow> = view
+            .rows
+            .iter()
+            .filter(|row| {
+                !query.is_active()
+                    || query.matches(&row.label)
+                    || query.matches(&row.path.to_string_lossy())
+                    || query.matches(row.kind.title())
+            })
+            .cloned()
+            .collect();
         let unresolved = view.unresolved;
         let no_roots = view.roots.is_empty();
 
@@ -332,6 +344,15 @@ impl BrowserSection for SceneFilesSection {
         if no_roots {
             ui.label(
                 egui::RichText::new("No file-backed scene open.")
+                    .weak()
+                    .italics(),
+            );
+            return;
+        }
+
+        if rows.is_empty() {
+            ui.label(
+                egui::RichText::new("No scene files match the filter.")
                     .weak()
                     .italics(),
             );

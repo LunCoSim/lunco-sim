@@ -206,6 +206,9 @@ impl EdgesLayer {
 
 impl Layer for EdgesLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, scene: &Scene, selection: &Selection) {
+        if !ctx.show_edges {
+            return;
+        }
         let sr = ctx.screen_rect;
         let screen_key = EdgeScreenKey {
             scene_generation: scene.generation(),

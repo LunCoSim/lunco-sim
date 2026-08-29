@@ -23,7 +23,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
-use crate::twin_browser::{BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry};
+use crate::twin_browser::{
+    render_search_bar, BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry,
+};
 
 /// Stable id of the Files panel.
 pub const FILES_PANEL_ID: PanelId = PanelId("lunco.workbench.files");
@@ -54,6 +56,8 @@ impl Panel for FilesPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        render_search_bar(ui, ctx);
+        ui.separator();
         // Scope the section registry + action outbox out of the world for the
         // duration of the render — the narrow, structural way to get `&mut` to
         // the registry's trait objects (no raw `&mut World`). Mirrors

@@ -78,6 +78,10 @@ pub struct CanvasOps<'a> {
     /// the drag, not just at commit. Plumbed down from
     /// [`crate::Canvas::snap`].
     pub snap: Option<SnapSettings>,
+    /// Whether edge hit-testing and edge selection are enabled for this
+    /// frame. Hiding edges is a presentation choice and never mutates the
+    /// scene, but invisible edges must not be interactive.
+    pub show_edges: bool,
 }
 
 /// Grid-snap configuration for drag operations. Expressed in the
@@ -700,6 +704,7 @@ impl DefaultTool {
                 PressTarget::Port(PortRef { node: id, port }, port_world)
             }
             Some((id, NodeHitKind::Body)) => PressTarget::NodeBody(id),
+            None if !ops.show_edges => PressTarget::Empty,
             None => {
                 // Could still hit an edge. Tolerances are quoted in
                 // *screen points* and scaled to world units by the
@@ -1332,28 +1337,32 @@ impl DefaultTool {
                 // Also collect edges whose polyline (endpoints +
                 // interior waypoints) intersects the band — wires can
                 // now be box-selected for batch delete / re-style.
-                let hit_edges: Vec<EdgeId> = ops
-                    .scene
-                    .edges()
-                    .filter_map(|(eid, e)| {
-                        let (from, to) = ops.scene.edge_endpoint_positions(e)?;
-                        let any_in = |p: Pos| -> bool { band.contains(p) };
-                        if any_in(from) || any_in(to) || e.waypoints.iter().any(|w| any_in(*w)) {
-                            return Some(*eid);
-                        }
-                        // Final fallback: any segment crosses the band.
-                        let mut pts: Vec<Pos> = Vec::with_capacity(2 + e.waypoints.len());
-                        pts.push(from);
-                        pts.extend(e.waypoints.iter().copied());
-                        pts.push(to);
-                        for w in pts.windows(2) {
-                            if segment_rect_intersects(w[0], w[1], band) {
+                let hit_edges: Vec<EdgeId> = if ops.show_edges {
+                    ops.scene
+                        .edges()
+                        .filter_map(|(eid, e)| {
+                            let (from, to) = ops.scene.edge_endpoint_positions(e)?;
+                            let any_in = |p: Pos| -> bool { band.contains(p) };
+                            if any_in(from) || any_in(to) || e.waypoints.iter().any(|w| any_in(*w))
+                            {
                                 return Some(*eid);
                             }
-                        }
-                        None
-                    })
-                    .collect();
+                            // Final fallback: any segment crosses the band.
+                            let mut pts: Vec<Pos> = Vec::with_capacity(2 + e.waypoints.len());
+                            pts.push(from);
+                            pts.extend(e.waypoints.iter().copied());
+                            pts.push(to);
+                            for w in pts.windows(2) {
+                                if segment_rect_intersects(w[0], w[1], band) {
+                                    return Some(*eid);
+                                }
+                            }
+                            None
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 if !extend && !toggle {
                     ops.selection.clear();
                 }
@@ -1646,6 +1655,18 @@ mod tests {
         events: &mut Vec<SceneEvent>,
         seq: &[InputEvent],
     ) {
+        run_with_edge_visibility(tool, scene, selection, viewport, events, true, seq);
+    }
+
+    fn run_with_edge_visibility(
+        tool: &mut DefaultTool,
+        scene: &mut Scene,
+        selection: &mut Selection,
+        viewport: &mut Viewport,
+        events: &mut Vec<SceneEvent>,
+        show_edges: bool,
+        seq: &[InputEvent],
+    ) {
         for ev in seq {
             let mut ops = CanvasOps {
                 scene,
@@ -1654,6 +1675,7 @@ mod tests {
                 events,
                 read_only: false,
                 snap: None,
+                show_edges,
             };
             tool.handle(ev, &mut ops);
         }
@@ -1677,6 +1699,43 @@ mod tests {
         assert_eq!(sel.len(), 1);
         // One SelectionChanged emitted.
         assert!(matches!(ev.last(), Some(SceneEvent::SelectionChanged(_))));
+    }
+
+    #[test]
+    fn hidden_edges_are_not_selectable() {
+        let (mut t, mut s, mut sel, mut vp, mut ev) = env();
+        s.insert_edge(Edge {
+            id: EdgeId(42),
+            from: PortRef {
+                node: NodeId(0),
+                port: PortId::new("out"),
+            },
+            to: PortRef {
+                node: NodeId(1),
+                port: PortId::new("in"),
+            },
+            kind: "t".into(),
+            data: empty_node_data(),
+            origin: None,
+            waypoints: Vec::new(),
+            waypoints_authored: false,
+        });
+
+        run_with_edge_visibility(
+            &mut t,
+            &mut s,
+            &mut sel,
+            &mut vp,
+            &mut ev,
+            false,
+            &[
+                down(Pos::new(70.0, 15.0), false, false),
+                up(Pos::new(70.0, 15.0)),
+            ],
+        );
+
+        assert!(!sel.contains(SelectItem::Edge(EdgeId(42))));
+        assert_eq!(s.edge_count(), 1);
     }
 
     #[test]

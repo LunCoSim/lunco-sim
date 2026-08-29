@@ -33,7 +33,7 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
+use lunco_workbench::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
 use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
@@ -78,6 +78,7 @@ impl BrowserSection for ModelicaSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
+        let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
         // OMEdit-style flat list — system libraries on top, then
         // writable workspace documents. Both source-of-truth reads:
         //   * libraries come from `PackageTreeCache::roots` (the
@@ -103,6 +104,11 @@ impl BrowserSection for ModelicaSection {
                         }
                         _ => None,
                     })
+                    .filter(|(id, name)| {
+                        !query.is_active()
+                            || query.matches(name)
+                            || crate::ui::panels::package_browser::root_matches(cache, id, &query)
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -111,7 +117,7 @@ impl BrowserSection for ModelicaSection {
             // All libraries start collapsed; user expands the ones
             // they care about. Keeps the browser scannable on startup.
             let _ = root_id;
-            let label = format!("[read-only]  {}", root_name);
+            let label = format!("[read-only]  {root_name}");
             let resp = egui::CollapsingHeader::new(label)
                 .id_salt(("twin.modelica.library", root_id))
                 .default_open(false)
@@ -146,6 +152,15 @@ impl BrowserSection for ModelicaSection {
                         // M-badge child row, so the two stay decoupled —
                         // renaming the doc row doesn't rewrite source.
                         let label: String = origin.display_name();
+                        if query.is_active()
+                            && !query.matches(&label)
+                            && !classes_from_index(document.index())
+                                .0
+                                .iter()
+                                .any(|class| class_tree_matches(class, &query))
+                        {
+                            return None;
+                        }
                         Some((doc_id, label))
                     })
                     .collect()
@@ -154,9 +169,13 @@ impl BrowserSection for ModelicaSection {
 
         if library_rows.is_empty() && workspace_docs.is_empty() {
             ui.label(
-                egui::RichText::new("No Modelica classes loaded.")
-                    .weak()
-                    .italics(),
+                egui::RichText::new(if query.is_active() {
+                    "No Modelica items match the filter."
+                } else {
+                    "No Modelica classes loaded."
+                })
+                .weak()
+                .italics(),
             );
         }
 
@@ -177,15 +196,22 @@ impl BrowserSection for ModelicaSection {
                 .resource::<lunco_theme::Theme>()
                 .cloned()
                 .unwrap_or_else(lunco_theme::Theme::dark);
-            ui.separator();
-            let header = egui::CollapsingHeader::new("⚡ Generated scene networks")
-                .id_salt("twin.modelica.generated")
-                .default_open(false);
-            header.show(ui, |ui| {
-                for entry in generated {
-                    render_generated_network_row(ui, ctx, &theme, &entry);
-                }
-            });
+            let matching_generated: Vec<_> = generated
+                .into_iter()
+                .filter(|entry| generated_entry_matches(entry, &query))
+                .collect();
+            if !matching_generated.is_empty() {
+                ui.separator();
+                let header = egui::CollapsingHeader::new("Generated scene networks")
+                    .id_salt("twin.modelica.generated")
+                    .default_open(false)
+                    .open(query.is_active().then_some(true));
+                header.show(ui, |ui| {
+                    for entry in matching_generated {
+                        render_generated_network_row(ui, ctx, &theme, &entry);
+                    }
+                });
+            }
         }
     }
 }
@@ -404,6 +430,58 @@ fn plural_suffix(count: usize) -> &'static str {
     } else {
         "s"
     }
+}
+
+fn class_tree_matches(class: &ClassEntry, query: &BrowserQuery) -> bool {
+    query.matches(&class.short_name)
+        || query.matches(&class.qualified_path)
+        || class
+            .children
+            .iter()
+            .any(|child| class_tree_matches(child, query))
+}
+
+fn filter_class_tree(class: &ClassEntry, query: &BrowserQuery) -> Option<ClassEntry> {
+    let row_matches = query.matches(&class.short_name) || query.matches(&class.qualified_path);
+    let children: Vec<ClassEntry> = if row_matches {
+        class.children.clone()
+    } else {
+        class
+            .children
+            .iter()
+            .filter_map(|child| filter_class_tree(child, query))
+            .collect()
+    };
+    (row_matches || !children.is_empty()).then(|| ClassEntry {
+        short_name: class.short_name.clone(),
+        qualified_path: class.qualified_path.clone(),
+        kind: class.kind.clone(),
+        children,
+    })
+}
+
+fn generated_entry_matches(
+    entry: &crate::state::GeneratedModelicaSourceEntry,
+    query: &BrowserQuery,
+) -> bool {
+    if !query.is_active() {
+        return true;
+    }
+    query.matches(&entry.network_root)
+        || query.matches(&entry.model_name)
+        || query.matches(&crate::state::generated_network_display_name(
+            &entry.network_root,
+        ))
+        || entry.component_paths.iter().any(|path| query.matches(path))
+        || entry.members.iter().any(|(path, asset, class)| {
+            query.matches(path) || query.matches(asset) || query.matches(class)
+        })
+        || entry
+            .member_output_aliases
+            .iter()
+            .any(|(member, output, alias)| {
+                query.matches(member) || query.matches(output) || query.matches(alias)
+            })
 }
 
 /// Inline-rename state for Twin Browser doc rows. `Some((doc, draft))`
@@ -729,6 +807,18 @@ pub(crate) fn render_workspace_doc(
     } else {
         classes
     };
+
+    let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
+    let classes: Vec<ClassEntry> = classes
+        .iter()
+        .filter_map(|class| {
+            if query.is_active() {
+                filter_class_tree(class, &query)
+            } else {
+                Some(class.clone())
+            }
+        })
+        .collect();
 
     if classes.is_empty() {
         // Distinguish empty-draft from broken-file. A blank

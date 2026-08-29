@@ -10,7 +10,7 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::twin_browser::{BrowserAction, BrowserScope};
+use lunco_workbench::twin_browser::{BrowserAction, BrowserQuery, BrowserScope};
 use lunco_workbench::{BrowserCtx, BrowserSection};
 use openusd::sdf;
 // The layer browser walks the AUTHORED specs of a layer, deliberately without
@@ -112,8 +112,14 @@ impl BrowserSection for UsdSceneSection {
         // Snapshot the view-model out of the (immutable) ctx borrow so
         // typed commands can be emitted after row painting. Rows
         // are cheap to clone (Arc readers + short strings).
+        let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
         let rows: Vec<UsdStageRow> = match ctx.resource::<UsdBrowserView>() {
-            Some(view) => view.stages.clone(),
+            Some(view) => view
+                .stages
+                .iter()
+                .filter(|row| stage_matches(row, &query))
+                .cloned()
+                .collect(),
             None => {
                 ui.colored_label(error_color, "UsdBrowserView resource missing");
                 return;
@@ -121,11 +127,12 @@ impl BrowserSection for UsdSceneSection {
         };
 
         if rows.is_empty() {
-            ui.label(
-                egui::RichText::new("No USD stages open. Open or create a `.usda` to add one.")
-                    .weak()
-                    .italics(),
-            );
+            let message = if query.is_active() {
+                "No USD stages match the filter."
+            } else {
+                "No USD stages open. Open or create a `.usda` to add one."
+            };
+            ui.label(egui::RichText::new(message).weak().italics());
             return;
         }
 
@@ -166,7 +173,7 @@ impl BrowserSection for UsdSceneSection {
                     resp.clicked()
                 },
                 |ui| {
-                    body_clicked = render_stage_body(ui, row, error_color);
+                    body_clicked = render_stage_body(ui, row, error_color, &query);
                 },
             );
 
@@ -192,7 +199,12 @@ impl BrowserSection for UsdSceneSection {
 /// Paint one stage's prim-tree body from its pre-derived row. Returns
 /// `true` when the user clicked a prim row (→ retarget the viewport).
 /// Pure read over cached authored-layer data; no world access.
-fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Color32) -> bool {
+fn render_stage_body(
+    ui: &mut egui::Ui,
+    row: &UsdStageRow,
+    error_color: egui::Color32,
+    query: &BrowserQuery,
+) -> bool {
     if let Some(err) = &row.parse_error {
         ui.colored_label(error_color, err);
         return false;
@@ -227,8 +239,17 @@ fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Co
     if top_paths.is_empty() {
         ui.label(egui::RichText::new("(no prims)").weak().italics());
     } else {
+        let stage_matches_name = query.matches(&row.name);
         for path in top_paths {
-            render_prim(ui, data, &path, &row.salt, &mut clicked_prim);
+            render_prim(
+                ui,
+                data,
+                &path,
+                &row.salt,
+                query,
+                stage_matches_name,
+                &mut clicked_prim,
+            );
         }
     }
     clicked_prim
@@ -245,15 +266,27 @@ fn render_prim(
     data: &UsdData,
     path: &sdf::Path,
     salt: &str,
+    query: &BrowserQuery,
+    ancestor_matches: bool,
     clicked: &mut bool,
-) {
+) -> bool {
     let name = path.name().unwrap_or("(root)").to_string();
+    let path_text = path.to_string();
+    let row_matches = ancestor_matches || query.matches(&name) || query.matches(&path_text);
     let type_name = data.prim_type_name(path);
     let label = match &type_name {
         Some(ty) => format!("{} ({})", name, ty),
         None => name,
     };
     let children = data.prim_children(path);
+    if query.is_active()
+        && !row_matches
+        && !children
+            .iter()
+            .any(|child| prim_matches(data, child, query))
+    {
+        return false;
+    }
     let header_id = ui.make_persistent_id((salt, path.to_string()));
 
     if children.is_empty() {
@@ -284,7 +317,7 @@ fn render_prim(
             },
             |ui| {
                 for child in children {
-                    render_prim(ui, data, &child, salt, clicked);
+                    render_prim(ui, data, &child, salt, query, row_matches, clicked);
                 }
             },
         );
@@ -292,4 +325,27 @@ fn render_prim(
             *clicked = true;
         }
     }
+    true
+}
+
+fn stage_matches(row: &UsdStageRow, query: &BrowserQuery) -> bool {
+    if !query.is_active() || query.matches(&row.name) {
+        return true;
+    }
+    row.data.as_deref().is_some_and(|data| {
+        sdf::path("/").ok().is_some_and(|root| {
+            data.prim_children(&root)
+                .iter()
+                .any(|path| prim_matches(data, path, query))
+        })
+    })
+}
+
+fn prim_matches(data: &UsdData, path: &sdf::Path, query: &BrowserQuery) -> bool {
+    query.matches(path.name().unwrap_or("(root)"))
+        || query.matches(&path.to_string())
+        || data
+            .prim_children(path)
+            .iter()
+            .any(|child| prim_matches(data, child, query))
 }

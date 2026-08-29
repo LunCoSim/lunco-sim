@@ -13,6 +13,7 @@ mod render;
 // so the headless/server build can resolve packages without egui. The Twin
 // Browser renders that backend; this module owns loading and opening.
 use crate::package_tree::{PackageNode, PackageTreeCache};
+use lunco_workbench::BrowserQuery;
 
 /// Open a class selected in the Modelica Twin-Browser section through the
 /// normal asynchronous document/tab loader.
@@ -204,6 +205,7 @@ pub fn render_root_subtree(
     ctx: &mut lunco_workbench::BrowserCtx<'_, '_>,
     root_id: &str,
 ) {
+    let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
     let active_doc = ctx
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
@@ -231,6 +233,26 @@ pub fn render_root_subtree(
         {
             ui.set_max_width(ui.available_width());
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            let root_matches = cache
+                .roots
+                .iter()
+                .find_map(|root| match root {
+                    PackageNode::Category {
+                        id,
+                        name,
+                        package_path,
+                        children,
+                        ..
+                    } if id == root_id => Some(
+                        query.matches(name)
+                            || query.matches(package_path)
+                            || children.as_deref().is_some_and(|kids| {
+                                kids.iter().any(|kid| render::node_matches(kid, &query))
+                            }),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(false);
             if let Some(kids) = children {
                 for kid in kids.iter() {
                     if let Some(a) = render::render_node_single_ro(
@@ -241,6 +263,8 @@ pub fn render_root_subtree(
                         0,
                         &mut load_out,
                         &theme,
+                        &query,
+                        root_matches,
                     ) {
                         action = Some(a);
                     }
@@ -313,6 +337,33 @@ pub fn render_root_subtree(
             );
         }
     }
+}
+
+/// Whether a named library root should remain visible for the current query.
+pub(crate) fn root_matches(cache: &PackageTreeCache, root_id: &str, query: &BrowserQuery) -> bool {
+    if !query.is_active() {
+        return true;
+    }
+    cache
+        .roots
+        .iter()
+        .find_map(|root| match root {
+            PackageNode::Category {
+                id,
+                name,
+                package_path,
+                children,
+                ..
+            } if id == root_id => Some(
+                query.matches(name)
+                    || query.matches(package_path)
+                    || children.as_deref().is_some_and(|kids| {
+                        kids.iter().any(|kid| render::node_matches(kid, query))
+                    }),
+            ),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 /// Find the Category node identified by `id` anywhere in `nodes`,

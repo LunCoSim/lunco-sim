@@ -61,6 +61,11 @@ pub struct DrawCtx<'a> {
     /// Continuous animation clock in seconds. Visuals that animate
     /// (flowing dashes, pulse) read this directly.
     pub time: f64,
+    /// Whether the host wants regular scene edges painted. This is a
+    /// presentation-only view setting; the scene still owns every edge.
+    /// Layers use it for coarse visibility decisions without adding
+    /// domain-specific state to the generic visual traits.
+    pub show_edges: bool,
     /// Escape hatch for decoration layers (viz overlay, signal
     /// lookups, anything future). Concrete visuals downcast:
     /// `ctx.extras.downcast_ref::<VizOverlayCtx>()`.
