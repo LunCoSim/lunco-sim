@@ -382,9 +382,10 @@ pub(crate) fn retire_terrain_tiles(
 }
 
 /// Keep the terrain stream's readiness cache coupled to the render owner's
-/// actual material lifecycle. `ShaderLookReady` is removed when a shader or
-/// declared texture changes; an observer gives the tile streamer the same
-/// event without rescanning every resident tile on stable frames.
+/// actual material lifecycle. `ShaderLookReady` is removed when a shader layout
+/// changes or a declared image disappears; ordinary in-place image updates do
+/// not hide a resident tile. An observer gives the tile streamer the same event
+/// without rescanning every resident tile on stable frames.
 pub(crate) fn invalidate_removed_shader_look_ready(
     trigger: On<Remove, ShaderLookReady>,
     mut terrains: Query<&mut LodTiles>,

@@ -461,6 +461,13 @@ pub(crate) fn build(app: &mut App) {
 /// proven ready. Keep the mesh hidden until reflection and material repacking
 /// have completed for the new source; otherwise a reload can expose a zeroed
 /// uniform block for exactly one frame and create a black terrain tile.
+///
+/// An image's contents are allowed to change in place: Bevy's `Added` and
+/// `Modified` notifications do not make an already-bound material unusable.
+/// Treating those notifications as dependency loss removes `ShaderLookReady`
+/// for one ECS turn, which makes streamed terrain disappear and reappear while
+/// an image is being published. Only removal of a referenced image invalidates
+/// the dependency contract.
 fn invalidate_shader_look_ready(
     mut shader_events: Option<MessageReader<AssetEvent<Shader>>>,
     mut image_events: Option<MessageReader<AssetEvent<Image>>>,
@@ -484,13 +491,7 @@ fn invalidate_shader_look_ready(
         .collect();
     let changed_images: HashSet<AssetId<Image>> = image_events
         .read()
-        .filter_map(|event| match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::Removed { id }
-            | AssetEvent::Unused { id } => Some(*id),
-            AssetEvent::LoadedWithDependencies { .. } => None,
-        })
+        .filter_map(image_dependency_removed)
         .collect();
     if changed_shaders.is_empty() && changed_images.is_empty() {
         return;
@@ -516,6 +517,18 @@ fn invalidate_shader_look_ready(
         if shader_changed || image_changed {
             commands.entity(entity).try_remove::<ShaderLookReady>();
         }
+    }
+}
+
+/// Return the image assets whose disappearance can make a ready material
+/// invalid. Content publication (`Added`/`Modified`) is safe in place and must
+/// not toggle the render-readiness latch.
+fn image_dependency_removed(event: &AssetEvent<Image>) -> Option<AssetId<Image>> {
+    match event {
+        AssetEvent::Removed { id } | AssetEvent::Unused { id } => Some(*id),
+        AssetEvent::Added { .. }
+        | AssetEvent::Modified { .. }
+        | AssetEvent::LoadedWithDependencies { .. } => None,
     }
 }
 
@@ -626,6 +639,30 @@ mod tests {
             &material,
             app.world().resource::<Assets<Image>>()
         ));
+    }
+
+    #[test]
+    fn image_content_publication_does_not_invalidate_ready_materials() {
+        let id = Handle::<Image>::default().id();
+
+        assert_eq!(
+            image_dependency_removed(&AssetEvent::Added { id }),
+            None,
+            "adding an image cannot invalidate a material already bound to it"
+        );
+        assert_eq!(
+            image_dependency_removed(&AssetEvent::Modified { id }),
+            None,
+            "in-place image content updates preserve material readiness"
+        );
+        assert_eq!(
+            image_dependency_removed(&AssetEvent::Removed { id }),
+            Some(id)
+        );
+        assert_eq!(
+            image_dependency_removed(&AssetEvent::Unused { id }),
+            Some(id)
+        );
     }
 
     fn material_of(app: &App, e: Entity) -> Handle<ShaderMaterial> {

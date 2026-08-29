@@ -113,6 +113,14 @@ would let a look reflect like diamond and refract like glass, and would need to 
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question** |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
+`ShaderLookReady` is the render binder's dependency-presence latch. A shader
+`Added`/`Modified` event invalidates the latch because reflection and material
+packing may have changed; a referenced image `Removed`/`Unused` event does the
+same because the material can no longer bind its declared texture. Image
+`Added`/`Modified` events are in-place content publication and do not invalidate
+an already-ready material. Toggling the latch for those ordinary updates hides
+streamed meshes for an ECS turn and can present as terrain flicker.
+
 ### Two rules you must not break
 
 1. **Identical looks share one material.** The binders cache by the look's *content*

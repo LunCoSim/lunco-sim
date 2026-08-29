@@ -442,7 +442,9 @@ camera heading, with a reveal morph settling each child onto its parent's lattic
 a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
 `surface_key`) so warm reloads stream instead of baking, and
 `TerrainStreamStatus` driving a status-bar progress indicator whose pending count
-includes selected meshes and the root fallback until `ShaderLookReady`; **procedural
+includes selected meshes and the root fallback until `ShaderLookReady` confirms
+the shader layout and declared image dependencies; in-place image updates do not
+toggle that latch; **procedural
 over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
