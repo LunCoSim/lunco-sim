@@ -46,8 +46,9 @@ The current entry points are deliberately split by ownership:
 - `lunco_assets::engine_asset_uri` — converts an in-tree library reference to
   its canonical `lunco://` address at command boundaries.
 - `load_startup_scene` (`lunco-luncosim/src/lib.rs`) and the USD `on_open_file`
-  observer (`lunco-usd/src/commands.rs`) both resolve the owning root, register
-  it, and enter the same doc-first `LoadScene` path.
+  observer (`lunco-usd/src/commands.rs`) both resolve the owning root and enter
+  the same asynchronous Twin scan; its completion registers the root and
+  enters the same doc-first `LoadScene` path.
 
 The root resolver and async Twin scan are shared; only the entry-point adapter
 differs (startup configuration versus the typed `OpenFile` command).

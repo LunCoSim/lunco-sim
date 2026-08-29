@@ -2870,6 +2870,7 @@ impl Plugin for SandboxCorePlugin {
             // silently boots a scene-less world (only procedural terrain /
             // obstacles), which masks the real error.
             .add_systems(Update, startup_scene_failguard)
+            .add_observer(startup_twin_scan_failguard)
             // Cosim pipeline ordering: worker responses land in Update; the
             // fixed loop then propagates, applies, and dispatches the next
             // Modelica communication point.
@@ -4789,13 +4790,14 @@ fn setup_sandbox(world: &mut World) {
 }
 
 /// Native/headless startup-scene load: resolve the enclosing Twin folder for
-/// `scene_path` (walk up to a `twin.toml`), register it as a workspace Twin so it
-/// mounts doc-first. Invalid or orphaned roots report an error and do not load a
-/// base-only scene. Web skips this — its autoload hook loads the deployment twin
-/// directly (see [`setup_sandbox`]).
+/// `scene_path` (walk up to a `twin.toml`) and enqueue its workspace scan. The
+/// scan and indexing stay off the UI thread; its completion registers the Twin
+/// and mounts the selected scene through the normal doc-first path. Invalid or
+/// orphaned roots report an error and do not load a base-only scene. Web skips
+/// this — its autoload hook loads the deployment twin directly (see
+/// [`setup_sandbox`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
-    // --- Load scene from USD ---
     // Resolve the absolute path to find the enclosing Twin folder. This is
     // deliberately shared by shipped scenes and external Twin roots: a CLI
     // spelling must never change which document root gets mounted.
@@ -4816,70 +4818,39 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         file: scene_file.clone(),
     });
 
-    // `--scene` is user-supplied, so `twin_root` may not be openable. There is
-    // deliberately NO direct-`LoadScene` fallback here: a raw load mounts a
-    // base-only stage and silently drops the doc overlay (placed waypoints,
-    // runtime spawns, moved transforms). A fallback that discards user edits is
-    // worse than a loud failure, so a bad path reports and stops — the
-    // `StartupSceneGuard` failguard turns it into a visible error rather than an
-    // empty viewport.
-    match lunco_twin::TwinMode::open(&twin_root) {
-        Ok(lunco_twin::TwinMode::Twin(mut twin)) | Ok(lunco_twin::TwinMode::Folder(mut twin)) => {
-            let rel_scene_path = abs_path
-                .strip_prefix(&twin_root)
-                .map(lunco_assets::asset_path::slashed)
-                .unwrap_or_else(|_| scene_file.clone());
-            twin.set_default_scene(rel_scene_path);
+    let rel_scene_path = abs_path
+        .strip_prefix(&twin_root)
+        .map(lunco_assets::asset_path::slashed)
+        .unwrap_or_else(|_| scene_file.clone());
+    let Some(mut pending) = world.get_resource_mut::<lunco_workspace::open::PendingTwinOpens>()
+    else {
+        error!(
+            "[luncosim] startup scene `{scene_path}` cannot begin: workspace open pipeline is not installed"
+        );
+        return;
+    };
 
-            // The asset authority owns `twin://` registration. Establish it
-            // before dispatching `TwinAdded`: this startup path admits the Twin
-            // and requests its default scene in one observer transaction, so a
-            // USD observer must never race the asset observer and see an
-            // unmounted root. The event handler repeats the same idempotent
-            // registration for ordinary workspace opens.
-            let authority = match world
-                .resource::<lunco_assets::twin_source::TwinRoots>()
-                .register_twin(&twin)
-            {
-                Ok(authority) => authority,
-                Err(error) => {
-                    error!(
-                        "[luncosim] could not register Twin asset authority for `{}`: {error}",
-                        twin.root.display()
-                    );
-                    return;
-                }
-            };
-            info!(
-                "[luncosim] registered startup Twin asset authority `{authority}` at {}",
-                twin.root.display()
-            );
-
-            let twin_id = world
-                .resource_mut::<lunco_workspace::WorkspaceResource>()
-                .add_twin(twin);
-            world.trigger(lunco_workspace::TwinAdded { twin: twin_id });
-        }
-        Ok(lunco_twin::TwinMode::Orphan(path)) => {
-            error!(
-                "[luncosim] `{}` resolved to an orphan (`{}`) — cannot open a root for `{scene_path}`",
-                twin_root.display(),
-                path.display()
-            );
-        }
-        Err(err) => {
-            error!(
-                "[luncosim] could not open `{}` as a root for `{scene_path}`: {err}",
-                twin_root.display()
-            );
-        }
-    }
+    // `TwinMode::open` walks and indexes the entire root synchronously, so it
+    // must use the same asynchronous scan owner as an interactive OpenFile.
+    // The completion path registers the asset authority before its
+    // TwinAssetMounted event and therefore preserves the doc-first overlay.
+    lunco_workspace::open::spawn_twin_scan(
+        &twin_root,
+        &mut pending,
+        "StartupScene",
+        Some(rel_scene_path),
+        lunco_workspace::open::TwinOpenMode::Replace,
+    );
+    info!(
+        "[luncosim] queued startup Twin scan for `{}` (scene `{scene_file}`)",
+        twin_root.display()
+    );
     // `--scene` is doc-backed through the same path as any workspace Twin: the
-    // The asset-mounted event emitted after `TwinAdded` runs the doc-first
-    // mount (`open_usd_docs_on_twin_asset_mounted` →
-    // `drain_pending_twin_docs`), and terrain edits stay on the incremental
-    // re-bake — `LiveRebuildExempt` + `edit_confined_to_exempt_subtree` keep a
-    // terrain-confined USD edit from ever reloading the scene.
+    // asset-mounted event emitted after `TwinAdded` runs the doc-first mount
+    // (`open_usd_docs_on_twin_asset_mounted` → `drain_pending_twin_docs`), and
+    // terrain edits stay on the incremental re-bake — `LiveRebuildExempt` +
+    // `edit_confined_to_exempt_subtree` keep a terrain-confined USD edit from
+    // ever reloading the scene.
 }
 
 /// Resolve a `--scene` argument without forcing every Twin into the engine's
@@ -4921,23 +4892,44 @@ fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
     lunco_assets::assets_dir_abs().join(path)
 }
 
-/// Tracks an explicitly requested startup scene so [`startup_scene_failguard`]
-/// can turn a silent asset-load failure into a loud, fatal error. Removed once
-/// the scene has loaded (or failed), so later runtime `LoadScene`s (API / UI) —
-/// which must NOT crash the app on a bad request — are never affected.
+/// Tracks an explicitly requested startup scene so the two startup failguards
+/// can turn a silent scan or asset-load failure into a loud, fatal error. It is
+/// removed once the scene has loaded (or failed), so later runtime `LoadScene`s
+/// (API / UI) — which must NOT crash the app on a bad request — are unaffected.
 #[derive(Resource)]
 struct StartupSceneGuard {
     /// File name of the explicitly requested startup scene.
     file: String,
 }
 
-/// Fail loud if the explicit `--scene` USD scene fails to load at startup.
+/// Fail loud if the explicit `--scene` Twin scan or USD scene fails at startup.
 ///
 /// The bug this guards: `--scene` paths are relative to the `assets/` source
 /// root; prefixing `assets/` doubles it (`assets/assets/…`), the asset is not
 /// found, and the app *silently* boots a scene-less world. Here a matching
-/// `AssetLoadFailedEvent<UsdStageAsset>` → clear error + non-zero exit. Disarms
-/// on success (scene produced `UsdPrimPath` entities) so runtime loads are safe.
+/// `TWIN_OPEN_FAILED` / `AssetLoadFailedEvent<UsdStageAsset>` → clear error +
+/// non-zero exit. Disarms on success (scene produced `UsdPrimPath` entities) so
+/// runtime loads are safe.
+fn startup_twin_scan_failguard(
+    trigger: On<lunco_core::TelemetryEvent>,
+    guard: Option<Res<StartupSceneGuard>>,
+    mut commands: Commands,
+) {
+    let Some(guard) = guard else { return };
+    if trigger.event().name != lunco_workspace::open::TWIN_OPEN_FAILED {
+        return;
+    }
+    let lunco_core::TelemetryValue::String(detail) = &trigger.event().data else {
+        return;
+    };
+    if !detail.starts_with("StartupScene failed:") {
+        return;
+    }
+    error!("Startup scene `{}` failed to scan: {detail}", guard.file);
+    commands.write_message(AppExit::error());
+    commands.remove_resource::<StartupSceneGuard>();
+}
+
 fn startup_scene_failguard(
     guard: Option<Res<StartupSceneGuard>>,
     mut failures: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
