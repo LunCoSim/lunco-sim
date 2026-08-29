@@ -184,7 +184,7 @@ fn suspension_projection_matches_each_wheel_realization() {
             ("drive:linear:physics:targetVelocity", 0.0),
             ("drive:linear:physics:stiffness", 15000.0),
             ("drive:linear:physics:damping", 3000.0),
-            ("drive:linear:physics:maxForce", 12000.0),
+            ("drive:linear:physics:maxForce", 60000.0),
         ] {
             assert_eq!(
                 view.real_f32(&slider, attribute),
