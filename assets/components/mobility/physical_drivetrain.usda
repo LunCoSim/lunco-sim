@@ -52,7 +52,7 @@ def Xform "Drivetrain" (
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 15000.0
         float drive:linear:physics:damping = 3000.0
-        float drive:linear:physics:maxForce = 12000.0
+        float drive:linear:physics:maxForce = 60000.0
     }
     def PhysicsPrismaticJoint "Suspension_FR_Slider" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -68,7 +68,7 @@ def Xform "Drivetrain" (
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 15000.0
         float drive:linear:physics:damping = 3000.0
-        float drive:linear:physics:maxForce = 12000.0
+        float drive:linear:physics:maxForce = 60000.0
     }
     def PhysicsPrismaticJoint "Suspension_RL_Slider" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -84,7 +84,7 @@ def Xform "Drivetrain" (
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 15000.0
         float drive:linear:physics:damping = 3000.0
-        float drive:linear:physics:maxForce = 12000.0
+        float drive:linear:physics:maxForce = 60000.0
     }
     def PhysicsPrismaticJoint "Suspension_RR_Slider" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -100,7 +100,7 @@ def Xform "Drivetrain" (
         float drive:linear:physics:targetVelocity = 0.0
         float drive:linear:physics:stiffness = 15000.0
         float drive:linear:physics:damping = 3000.0
-        float drive:linear:physics:maxForce = 12000.0
+        float drive:linear:physics:maxForce = 60000.0
     }
 
     # Each wheel is bound to its carrier by a `PhysicsRevoluteJoint` with a
