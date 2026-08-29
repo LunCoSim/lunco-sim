@@ -1024,9 +1024,14 @@ mod tests {
         assert!(engine.ensure_library_root("LunCo"));
         assert!(engine.has_class("LunCo.Electrical.Battery"));
         assert!(engine.has_class("LunCo.Electrical.Pin"));
+        assert!(engine.has_class("LunCo.Mechanics.GearRatio"));
         assert!(
             engine.icon_for("LunCo.Electrical.Battery").is_some(),
             "generated native members need their authored inherited icons"
+        );
+        assert!(
+            engine.icon_for("LunCo.Mechanics.GearRatio").is_some(),
+            "generated mechanical members need their authored inherited icons"
         );
     }
 
