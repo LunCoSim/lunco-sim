@@ -50,6 +50,11 @@ body-fixed frame; it does not introduce a second semantic identity.
    selected camera's f64 pose updates the anchor cell in `WorldGrid`; no parent
    grid is re-posed and no next-frame correction is scheduled.
 
+Scene replacement clears the scene-scoped `OrbitalViewPin` before the outgoing
+celestial hierarchy is retired. The avatar owns the matching orbital return
+transaction, so the replacement scene cannot inherit an orbital presentation
+fact without a valid surface-camera return state.
+
 Site placement only bootstraps an avatar that is still in the loader's
 `WorldGrid` shell (or has no valid grid parent). Once a camera has been mounted
 on any valid BigSpace grid, that camera system owns the avatar's frame. Site
