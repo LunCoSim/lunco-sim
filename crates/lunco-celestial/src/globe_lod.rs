@@ -886,6 +886,12 @@ pub(crate) fn update_globe_lod(
                     // parent/children.
                     Visibility::Hidden,
                     InheritedVisibility::default(),
+                    // The tile's BigSpace placement is immutable for its entire
+                    // residency. LOD changes replace tiles by despawning/spawning
+                    // them; they never move an existing tile. Let BigSpace's
+                    // built-in stationary path skip this high-precision leaf
+                    // while still allowing floating-origin updates.
+                    Stationary,
                     // NO `NoFrustumCulling`. It was here from the era when tile
                     // meshes were built at full body-local magnitude (vertices
                     // ~radius from the entity origin) — an AABB that big and that

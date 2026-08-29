@@ -497,6 +497,20 @@ the verification gate for this change. A settled Apollo rerun is still needed
 for an FPS comparison after the independent readiness issue is fixed; no FPS
 gain is claimed from the blocked run.
 
+#### 2026-08-30 BigSpace stationary streamed visual tiles
+
+The BigSpace dependency already provides `Stationary`, which skips cell
+recentring and spatial-hash updates for an immutable high-precision entity
+while retaining initial and floating-origin propagation. Streamed globe and
+terrain visual tiles now use that existing component at their spawn boundary:
+their LOD lifecycle replaces entities, and no resident-tile path mutates its
+`CellCoord`, `Transform`, or `ChildOf`. Physics collider tiles were deliberately
+left on the normal path because live re-bakes update their pose components.
+
+This is an owner-level use of BigSpace's maintained optimization, not an app
+propagation fork or a second cache. Focused crate tests, the production build,
+and a clean Apollo runtime are required before claiming a frame-time change.
+
 ### 2. Render CPU has several approximately 1 ms leaves and schedule stalls
 
 The render, Update, and PostUpdate schedule totals are not individual fixes.

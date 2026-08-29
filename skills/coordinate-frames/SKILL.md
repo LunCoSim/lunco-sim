@@ -37,6 +37,13 @@ Missing and duplicate declarations must remain errors (`None`).
 They never cross a user/API/network/model boundary and never become the
 authoritative source of an astronomical or physics value.
 
+For immutable high-precision presentation entities, use BigSpace's existing
+`Stationary` marker. Streamed globe/terrain visual tiles may use it because
+their placement is fixed until the entity is replaced; never use it on a
+camera, avatar, physics tile, or any entity that can mutate `CellCoord`,
+`Transform`, or `ChildOf`. Remove `Stationary` before relocating an entity, as
+required by BigSpace.
+
 For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of

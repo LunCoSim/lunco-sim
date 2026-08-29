@@ -38,7 +38,7 @@ use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::{CellCoord, Grid, Stationary};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{
     ParamValue, ShaderLook, ShaderLookReady, TextureLayer, ATTRIBUTE_MORPH_EDGE,
@@ -1701,6 +1701,12 @@ fn spawn_tile(
         // Keep the tile hidden for one complete ECS turn; the streamer promotes
         // it on the next update, after its material exists.
         Visibility::Hidden,
+        // The placement is immutable for this entity's lifetime. Streaming
+        // replaces stale or unwanted tiles by despawning/spawning entities;
+        // it never edits a resident tile's CellCoord or Transform. Use
+        // BigSpace's existing stationary path to prune this high-precision
+        // leaf from propagation and spatial-hash work on stable frames.
+        Stationary,
         LodTileOf(terrain),
         Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
         // Streamed runtime detail, not scene content — hidden from the Entity

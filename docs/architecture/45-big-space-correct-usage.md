@@ -88,6 +88,15 @@ marks the component changed and turns an otherwise stationary hierarchy into
 real propagation work. This is an idempotence requirement, not a workaround or
 a replacement for fixing a genuinely dirty producer.
 
+Entities whose high-precision placement is immutable for their whole lifetime
+should carry BigSpace's existing `Stationary` component. Streamed globe and
+terrain visual tiles follow this contract: LOD changes replace entities rather
+than moving their `(CellCoord, Transform)`, while visibility and material
+intent remain independent presentation state. `Stationary` still receives the
+initial propagation and floating-origin updates. It must not be used on
+physics tiles, cameras, avatars, or any entity whose transform/cell/parent can
+change; those entities remain on BigSpace's normal update path.
+
 This applies to every camera pose owner, not only avatar modes: the shared
 interaction interpolator, mounted USD cameras, cinematic path cameras, and the
 persistent `OriginAnchor` all commit through value-based writes. Camera mode
