@@ -7,10 +7,9 @@ description: Download and process lunar geo assets (DEMs, ortho/slope/shade maps
 
 The pipeline is `crates/lunco-assets` in this repo. Pure Rust — no GDAL.
 Sources may be **GeoTIFF or PDS3 `.IMG`** (attached or detached `.LBL`;
-`src/pds_img.rs`); polar-stereographic products are refused loudly (the crop
-affine is equirectangular-only). Worked example twin with 24 authored
-entries: `~/Documents/models/summer_space_school` (its
-`scripts/fetch_territory.sh` wraps everything below).
+`src/pds_img.rs`); polar-stereographic products are refused loudly because the
+crop affine is equirectangular-only. Use the target Twin's own `Assets.toml` as
+the worked example and inspect its current scene before wiring outputs.
 
 ## Quick commands (run from this repo's root)
 
@@ -100,8 +99,8 @@ Shared ROI fields: `center_lat`, `center_lon`, `window_m`,
 Maps bind through a **stock UsdShade Material network** — the only authoring
 path. Bind the Terrain prim to a Material, whose surface output connects to a
 Shader carrying one `asset inputs:<role>_map` + `float inputs:weight_<role>`
-per layer (live example:
-`summer_space_school/sim/scenes/traverse.usda`):
+per layer. Inspect an existing terrain scene in the target Twin for its exact
+prim paths before adding a new network:
 
 ```usda
 def Xform "Terrain" ( prepend apiSchemas = ["LunCoTerrainAPI"] )
@@ -170,12 +169,12 @@ travel with the twin. Read by `read_material_network_layer_maps`
   bus reports the terminal warning. This refinement status is separate from
   terrain tile streaming, so it cannot hide tile progress or make a presentable
   ground scene wait for an optional map.
-- For multi-site scenes, author these inputs **inside a terrain variant** —
-  see `14_SCENARIO_DESIGN.md` §4a in the twin, and verify with
+- For multi-site scenes, author these inputs **inside a terrain variant** and
+  verify with
   `cargo run -p lunco-usd --example variant_probe -- <scene.usda>`.
 
-Roadmap (bake nodes, node-graph editor): the twin's
-`18_VIZ_NODEGRAPH_DESIGN.md`.
+Node-graph authoring is outside this asset pipeline. Read the current
+multi-domain architecture before introducing a new graph owner.
 
 ## Caching & staleness
 
@@ -203,11 +202,13 @@ Roadmap (bake nodes, node-graph editor): the twin's
 
 - `*_50CM`/`*_2M` `.IMG` companions are ORTHOPHOTOS (brightness), never
   elevation — `kind = "map"`, never `kind = "dem"`.
-- LROC elevations are metres vs the **1737.4 km** sphere; the engine
-  registry uses 1737.0 km (~400 m bias — open issue).
+- Confirm the DEM datum and the scene's celestial-body radius before combining
+  terrain elevations with orbital or body-fixed coordinates. Do not encode a
+  product-specific radius correction in the asset pipeline.
 - Heights are absolute body-datum metres: prims on a surface must be
   authored at the DEM's own elevation.
 - The runtime DEM reader requires square rasters; keep the scene's
   `windowM`/`targetRes` in step with the manifest ROI.
-- Optional QGIS/GDAL extras (custom-sun hillshade, slope ramps, contours):
-  the twin's `scripts/make_maps_qgis.sh` — needs `gdaldem` on PATH.
+- Optional QGIS/GDAL extras (custom-sun hillshade, slope ramps, contours) are
+  external to `lunco-assets`; verify that the Twin supplies and documents its
+  own tooling before invoking it.

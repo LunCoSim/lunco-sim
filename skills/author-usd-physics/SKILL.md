@@ -1,21 +1,12 @@
 ---
 name: author-usd-physics
 description: >
-  How physics is AUTHORED in USD and what the engine does with it — joints,
-  joint frames, gravity, and scene teardown. USE THIS SKILL whenever the user
-  asks, in plain words, things like: "the lander explodes / flies apart / spins
-  off", "my suspension doesn't compress", "the wheel hinges the wrong way",
-  "parts of the vehicle shoot off at launch", "the rover sinks through the
-  ground", "gravity is wrong in this scene", "the leg is welded at an angle",
-  "why is my spring doing nothing", or "the scene keeps the previous scene's
-  settings". Also for the agent mid-code: a `PhysicsRevoluteJoint` /
-  `PhysicsPrismaticJoint` / `PhysicsFixedJoint` / `PhysicsSphericalJoint` prim,
-  `physics:localRot0` / `localPos0` / `physics:axis`, a `UsdPhysicsScene`,
-  `physics:gravityMagnitude`, `starts violated by … rad`, `body left the world`,
-  an `origin.is_finite()` panic out of `obvhs`, or `SceneTeardown`. These rules
-  are project-specific and non-obvious: a joint is TWO FRAMES not an axis, a
-  prismatic joint CARRIES MOMENT, and anything a scene writes must be undone on
-  unload.
+  Author or diagnose LunCoSim USD physics: rigid bodies, colliders, joints,
+  joint frames, drives, gravity, collision filtering, and scene teardown. Use
+  for exploding vehicles, wrong hinge or slider motion, detached parts, bad
+  contact, or scene-owned physics state. The critical contracts are two joint
+  frames, explicit body attachment, standard UsdPhysics fields, and teardown
+  for every scene-owned write. Use build-vehicle for mobility assembly.
 ---
 
 # Authoring physics in USD
@@ -102,36 +93,10 @@ separate concerns:
    joint's native `inputs:angle` port. The cosim joint backend owns the position
    motor only while that port is wired.
 
-```usda
-# This joint is INSIDE the reusable assembly. Referencing CommsAntenna onto a
-# host root path-translates </CommsAntenna> to that host body.
-def PhysicsRevoluteJoint "YawJoint"
-{
-    rel physics:body0 = </CommsAntenna>
-    rel physics:body1 = </CommsAntenna/CommsAssembly/YawHead>
-    uniform token physics:axis = "Y"
-    point3f physics:localPos0 = (0, 0.95, -0.5)
-    point3f physics:localPos1 = (0, 0, 0)
-    float inputs:angle.connect = </CommsAntenna/CommsAssembly/EarthTrackerController.outputs:az>
-}
-
-# The reusable antenna owns only relationships between its own bodies.
-def PhysicsRevoluteJoint "ElevationJoint"
-{
-    rel physics:body0 = </CommsAntenna/CommsAssembly/YawHead>
-    rel physics:body1 = </CommsAntenna/CommsAssembly/YawHead/DishGimbal>
-    uniform token physics:axis = "X"
-    float inputs:angle.connect = </CommsAntenna/CommsAssembly/EarthTrackerController.outputs:el>
-}
-```
-
 **The assembly owns its own hinges.** Compose the assembly's root directly onto
-the host body (the same overlay pattern as `physical_drivetrain.usda`), and USD
-reference-path translation turns its root-relative `body0` into that body. The
-host supplies no duplicate yaw or fixed joint; it only chooses to compose the
-assembly. Keep the visible mechanism under a uniquely named child such as
-`CommsAssembly` so root-overlay composition cannot collide with unrelated host
-children.
+the host body and keep its internal joints and controller connections relative
+to that root. The host supplies no duplicate attachment joint; it only chooses
+to compose the assembly. Keep the visible mechanism under a unique child path.
 
 This is the direction of dependency: a higher-level rover, lander, tower, or
 ground station knows it installs an antenna; the antenna knows only its own
@@ -155,10 +120,8 @@ joint angle, and visible boresight agree. A controller's self-error/"locked"
 output alone is not evidence of physical pointing; it can validate the same
 wrong convention it commanded.
 
-`PhysicsRevoluteJoint` is a generic mechanism, not a wheel marker. A vehicle is
-articulated only through explicit `PhysicsArticulationRootAPI` or revolute joints
-whose `body1` actually applies `PhysxVehicleWheelAPI`. Do not infer vehicle
-topology from an antenna, solar tracker, or robotic arm hinge.
+`PhysicsRevoluteJoint` is a generic mechanism, not a wheel marker. Do not infer
+vehicle topology from an antenna, solar tracker, or robotic-arm hinge.
 
 ## 2. A prismatic joint CARRIES MOMENT
 
@@ -179,19 +142,10 @@ rigid and the spring is not. A contact that only *sometimes* touches is worse
 than one that always does: it latches on the first frame it grazes and never
 lets go.
 
-The signature is unmistakable once you know it:
-
-- `displacement` reads `0.0000` in **every** regime — free fall, impact, rest.
-  Touchdown changes nothing.
-- `force` reads near zero while the vehicle is demonstrably standing on the leg.
-- The vehicle looks perfect: level, at a believable height, at rest.
-- The joint's angular lock is bent a degree or two and stays there.
-
-**The bend alone proves nothing** — measure it, but read it with the load. An
-XPBD joint is elastic, so the bend tracks FORCE: a bypassed leg bends ~2°
-carrying nothing, and a healthy one bends ~2° carrying 900 N. The tell is the
-CONJUNCTION — bending while the spring reads nothing. Stroke is what actually
-discriminates, so that is what a test should assert.
+The diagnostic is a conjunction: `displacement` remains zero, the joint `force`
+is absent or near zero under load, and the joint's angular lock is non-zero.
+Measure the angular error together with the reaction force; angular error alone
+is not enough because the joint solver is elastic.
 
 **Ground clearance is a load-path property, not a styling one.** A raked box
 strut's bottom corner hangs `half_thickness * sin(rake)` below its tip, so a
@@ -204,34 +158,13 @@ brings the strut down faster than the foot drops.
 
 ### Diagnosing it
 
-Measure the angular lock directly. A prismatic holds `rot0 · localRot0 == rot1 ·
-localRot1`, and both sides are readable from the bodies' world orientations, so
-the angle between them **is** the constraint's error:
-
-```rhai
-// per leg: the joint's free axis, computed from each body independently
-let from_chassis = qrot(world_rotation(hull), localRot0_times_Y);
-let from_strut   = qrot(world_rotation(leg),  localRot1_times_Y);
-angle_deg(from_chassis, from_strut)   // ~0 healthy; >1 means it is bending
-```
-
-Then bisect the contacts. Disable one collider at a time and re-run — the one
-whose removal restores the stroke is the thief. Do **not** start from the joint:
-the joint is usually innocent, and its authoring is where the time goes.
-
-**Suspect the shape before the physics.** The thief here was a strut modelled as
-a unit `Cube` under a non-uniform `xformOp:scale`: a box has corners, and a raked
-box's corner hangs `half_thickness * sin(rake)` below its tip, which is what
-reached the ground. The same strut as a `Cylinder` with a real `radius` has no
-corner to dig in, and the gear went from 0.07 m of travel under 170 N to 0.22 m
-under 900 N — the load it was designed for — with the footpads settling flat
-instead of hunting a 5..24° band forever.
-
-Two hypotheses that look compelling here and are worth ruling out by measurement
-before you spend a day on either: solver conditioning (change a body's mass by
-20× — if nothing moves, it is not conditioning) and friction (drop μ by 2× — same
-test). A steady error that is invariant to both is *geometric*, and geometry means
-contact.
+Measure the angular lock directly from the two body orientations. A prismatic
+holds `rot0 · localRot0 == rot1 · localRot1`; the angle between the two authored
+joint axes is its constraint error. Then isolate contacts and inspect the
+composed collider geometry. A raked box can contact the ground with a corner;
+prefer a measured primitive or a deliberately authored proxy when the foot must
+be the sole load path. Change solver and friction parameters only after the
+geometry and contact ownership are verified.
 
 ### Where a joint's rest position sits
 
@@ -335,9 +268,8 @@ traction is simply wrong on the Moon.
 ## 4. A scene owns more than its entities
 
 Anything a scene load writes belongs to that scene. Unloading despawns the
-entities; **`SceneTeardown` unloads everything else.** Without it, loading scene
-A then scene B leaves B running with a value A chose — nothing errors, the scene
-just behaves as though it were still the previous one.
+entities; **`SceneTeardown` unloads everything else.** Register teardown for every
+scene-owned resource or override so a new scene starts from its own contract.
 
 Add a reset system beside the code that writes the state:
 
@@ -368,7 +300,7 @@ scene-derived state and do not register it, you have added a leak.
 | `joint … starts violated by … rad` | a joint frame; see §1 |
 | stroke reads exactly `0.0000` in every regime | a second contact carrying the load (§2). Measure the joint's angular-lock error before touching its limits |
 | a spring loads the "wrong way" | almost never the joint. A jammed DOF and a reversed one look identical from the port; §2 tells them apart |
-| a scene behaves like the previous one | a resource that outlived its scene (§4) |
+| a scene retains another scene's setting | a resource or override missing from `SceneTeardown` (§4) |
 | a part is lying on the ground behind the vehicle | it declared its own body and no joint holds it (§6). `--validate` the asset, or `cmd("RunLint", #{})` the scene |
 
 ## 6. A part is not a body
@@ -385,11 +317,6 @@ def Xform "Rover" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
     def Xform "Motor_FL" (prepend apiSchemas = ["PhysicsMassAPI"])      { … }   # ✅ part of the rover
 }
 ```
-
-This shipped. Four motors per rover, on every rover in the luncosim, gone on the
-first physics step — while the rovers still drove, still steered and still made
-their authored top speed. Every parity gate stayed green; the bug was found in a
-screenshot of hardware lying on the regolith.
 
 **The rule.** Hierarchy is namespace; a **joint** is attachment.
 
@@ -424,100 +351,23 @@ every step until a body leaves the world.
   component that produces torque must not create a second hidden body or
   duplicate shaft state.
 
-### When two parts that are NOT jointed must not collide
+### Collision filtering
 
-`JointCollisionDisabled` covers the pair a joint names — parent and child, and no
-further. Parts **two joints apart** still collide: a hull and the footpad on the
-end of its leg, a wheel and the rocker its bogie hangs from. Author them close
-enough and the solver spends every step pushing a vehicle apart from itself.
+`JointCollisionDisabled` covers only the bodies named by a joint. For additional
+contacts, author `PhysicsFilteredPairsAPI` explicitly; for many-to-many sets,
+use `PhysicsCollisionGroup` with `UsdCollectionAPI`. Do not infer a vehicle-wide
+self-exclusion: articulated mechanisms often need selected internal contacts.
 
-**Say so declaratively — `PhysicsFilteredPairsAPI` is the standard schema for it**,
-and it is implemented:
-
-```usda
-def Cube "Pad" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-)
-{
-    # Filtering is SYMMETRIC — one opinion is the whole pair. The hull authors
-    # nothing.
-    rel physics:filteredPairs = </Lander/Hull>
-}
-```
-
-Two things the rel does not require you to get right, because the loader resolves
-them: the target may name a **body** or a **collider under one** (a collider folds
-into its body's compound, so both resolve to the body), and either end may carry
-the opinion. What it will not do is guess — a target that never spawns is
-reported by path, and a pair inside one compound body is reported as inert rather
-than quietly accepted.
-
-Timing is load-bearing and handled for you: the pair is armed in
-`PhysicsSystems::Prepare`, before the first narrow phase, because avian never
-re-filters a pair already in the contact graph. A filter that arrived a tick late
-would not apply to the contact it was authored to prevent.
-
-There is a strong temptation to make this automatic — "a vehicle never collides
-with itself" — and it should be resisted, because *vehicle* is not a thing the
-physics knows and every definition of it breaks:
-
-- a rover parked on a lander's deck is two vehicles or one, depending on the
-  minute;
-- a robotic arm **should** collide with its own base, or it folds through it;
-- filtering the whole joint-graph component silently disables contacts an
-  articulated mechanism depends on.
-
-Every engine that solved this made it explicit rather than inferred. MuJoCo
-filters a body against its parent (which is what `JointCollisionDisabled` is) and
-takes the rest as authored `<exclude>` pairs. URDF/MoveIt *precomputes* a pair
-list by sampling poses — a tool that emits authoring, not a runtime heuristic.
-PhysX filters adjacent articulation links and takes the rest from filtered pairs.
-
-So: parent-child is automatic, everything beyond it is authored, and the linter's
-job is to find the pairs that need authoring — not to guess them.
-
-Proven by `scenes/tests/filtered_pairs.usda` (a pad authored 0.5 m inside a hull
-it is two joints away from, reporting no contact) against its control
-`filtered_pairs_unfiltered.usda` (same rig, rel removed, contact within a
-second). The measurement is the CONTACT itself, off `lunco:sensor:contact` —
-not how far something moved afterwards.
-
-### When it is not two parts but twenty — `PhysicsCollisionGroup`
-
-A pair is O(n²). Six wheels that must not touch their own rockers is fifteen
-rels, and every part added reopens the file. Groups are the O(n) form of the same
-statement:
-
-```usda
-def PhysicsCollisionGroup "Wheels"
-{
-    prepend rel collection:colliders:includes = </Rover/Wheels>
-    prepend rel physics:filteredGroups = </Scene/Groups/Chassis>
-}
-```
-
-Membership is a **`UsdCollectionAPI`** — the schema applies
-`CollectionAPI:colliders`, so `collection:colliders:includes` /`:excludes` under
-the standard `expandPrims` rule: an include brings its subtree, a deeper exclude
-takes part of it back out ("the whole vehicle EXCEPT its wheels" is two lines).
-`physics:mergeGroup` makes two group prims one group, so two layers can each
-contribute members. `physics:invertFilteredGroups` flips the sense: the listed
-groups become the only ones this group collides with — including with respect to
-itself, so a group that inverts and does not list itself stops colliding
-internally.
-
-Adding a group never changes anything outside it: groups take avian layer bits
-from 1 up, never bit 0 (the default every ungrouped body keeps) and never bit 7
-(the trigger-zone layer).
-
-Both spellings are held to the same answer by `scenes/tests/collision_groups.usda`
-— the same rig as the pair test, referenced, filtered the other way, sharing one
-control and one scenario.
+Filtering is symmetric, targets may name a body or a collider under that body,
+and invalid targets or same-compound pairs must remain visible diagnostics. The
+filter is installed during `PhysicsSystems::Prepare`, before contact generation.
+Verify contact itself in a scene test such as `scenes/tests/filtered_pairs.usda`
+or `collision_groups.usda`, not only by checking subsequent motion.
 
 ## 6b. `purpose` — which geometry is the collision geometry
 
-`UsdGeomImageable.purpose` is how a prim says what its geometry is FOR, and it is
-INHERITED, so authoring it once on a scope covers everything inside:
+`UsdGeomImageable.purpose` is inherited and separates display geometry from
+collision geometry:
 
 | purpose | drawn | collided |
 |---|---|---|
@@ -526,16 +376,11 @@ INHERITED, so authoring it once on a scope covers everything inside:
 | `proxy` | no | **yes — this is the collision shape** |
 | `guide` | no | never |
 
-So a body that describes itself twice — a detailed mesh to look at, a cheap box
-to hit — says so in the standard way, and the physics takes the box. A `guide`
-prim (debug axis, sensor cone, planned path) is refused a body and a collider
-both, whatever schemas are on it.
+Use `proxy` for an authored collision shape alongside `render` geometry. A
+`guide` prim is never a body or collider. `purpose` does not replace the frame
+contract in §2b; proxy geometry still inherits its authored frame.
 
-This is the tool to reach for when a strut's visual shape and its contact shape
-want to be different. It is NOT a substitute for §2b: the *frame* problem (a body
-that is its own scaled mesh) is separate, and a proxy inherits the same frame.
-
-### Catch it before the screenshot
+### Validate and run the scene
 
 ```bash
 target/debug/luncosim --validate assets/vessels/rovers/skid_rover.usda
@@ -546,18 +391,15 @@ target/debug/luncosim --validate assets/vessels/rovers/skid_rover.usda
 inside the body </SkidRover> but no joint names it — …
 ```
 
-and on the **loaded** scene (which no file describes once you have spawned into
-it), the same rules through the verb:
+and on the **loaded** scene, run the same rules through the verb:
 
 ```rhai
 cmd("RunLint", #{}); query("LintReport");
 ```
 
 The rules are authored in `assets/scripting/policy/lint_usd.rhai` — add one there
-rather than in Rust. Two gates hold this: `shipped_assets_lint_clean.rs` (every
-shipped asset lint-clean) and `scenes/tests/parts_attached.usda` (nothing
-drifts >0.5 m from its vessel over a 12 s drive — the behavioural proof, since a
-lint cannot simulate). See
+rather than in Rust. Pair the lint with a scene test such as
+`scenes/tests/parts_attached.usda`, because lint cannot simulate motion. See
 [`validate-assets`](../validate-assets/SKILL.md#the-rules-are-authored--the-lint-layer)
 and [`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md).
 
@@ -583,22 +425,20 @@ allowance or a rendering filter.
 
 ## 6c. What this engine does NOT read
 
-Before authoring a schema because a DCC offers it, check it is consumed. The full
-table is in [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md)
-("standard schema this engine does not read yet"); the ones you are most likely
-to reach for:
+Before authoring a schema because a DCC offers it, check that the importer
+consumes it. The full table is in
+[`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md).
+Commonly mistaken fields include:
 
-- **`PhysicsArticulationRootAPI`** — authored on three of our rovers and
-  deliberately inert. avian has no reduced-coordinate articulation. Keep it for
-  PhysX round-trip; do not expect it to change anything here.
+- **`PhysicsArticulationRootAPI`** — avian has no reduced-coordinate articulation;
+  do not expect it to change this runtime.
 - **`UsdGeomPointInstancer` / `instanceable`** — not read. Every copy is a full
   prim tree.
 - **`proxyPrim`** — not read; `purpose` on a sibling covers the case we have
   (see §6b).
 
-If you author something from that table, nothing warns you. That is exactly why
-the table exists — and why anything on it either gets implemented or gets deleted
-from the assets rather than left looking meaningful.
+An unconsumed field has no runtime effect. Use a supported schema or implement
+the owner and its projection before authoring the field.
 
 ## Verify it, headlessly
 

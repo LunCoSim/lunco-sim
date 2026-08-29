@@ -1,18 +1,11 @@
 ---
 name: usd-projection
 description: >
-  How USD becomes the running 3D world in LunCoSim, and how to extend that
-  translation. USE THIS SKILL whenever you are working ON the USD layer itself
-  rather than authoring a scene with it: "add support for <USD prim type / new
-  attribute>", "my attribute is being ignored", "the edit saved but nothing moved
-  on screen", "why didn't my change undo / persist / replicate?", "how does a
-  prim become an entity?", "where do I read this attribute?", "should this be a
-  `lunco:` attribute or a standard schema?", or any time you're about to add a
-  field to a prim, touch `lunco-usd*`, or write ECS state that ought to live in
-  the document. Also trigger when tempted to "just set the component directly"
-  or to accept a second spelling of an attribute so a file loads.
-  (For AUTHORING scenes over the API — spawn/move/load — use `build-usd-scene`
-  instead. This skill is the machinery underneath it.)
+  Extend or diagnose LunCoSim's USD-to-ECS projection: add a supported prim or
+  attribute, trace an ignored field, or fix edits that fail to persist, undo,
+  replicate, or render. Use for `lunco-usd*` machinery and document-owned ECS
+  state. Prefer this skill for projection internals; use build-usd-scene for
+  scene authoring and luncosim-architecture for cross-domain ownership.
 ---
 
 # USD → ECS projection
@@ -21,7 +14,7 @@ Before adding a field or reader branch, use
 [`luncosim-architecture`](../luncosim-architecture/SKILL.md) and the
 [standard-schema boundary](../../docs/architecture/clean-architecture-and-usd-standards.md).
 Prefer the OpenUSD schema that owns the concept. A migration is a clean
-cutover: update the authored source and all readers, delete the old spelling
+cutover: update the authored source and all readers, delete the superseded spelling
 and compatibility branch, regenerate schema artifacts, and add a negative
 test. Never make the ECS projection a second source of truth.
 
@@ -59,10 +52,9 @@ disk and a prim authored at runtime produce identical entities.
 
 ## Law 1 — every edit goes through `ApplyUsdOp`
 
-An edit that does not lower to a `UsdOp` escapes **save, journal, undo, and
-network replication**, all four, silently. It will look correct on your screen
-and exist nowhere else. Both the gizmo drag and the Inspector's delete shipped
-this bug once.
+An edit that does not lower to a `UsdOp` is absent from **save, journal, undo,
+and network replication**. Route every editor and runtime mutation through the
+same projection boundary.
 
 ```rust
 commands.trigger(ApplyUsdOp { doc, op });                        // one op

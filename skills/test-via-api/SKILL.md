@@ -47,7 +47,7 @@ For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
 the test libraries and delegates to the native `luncosim rhai --stdout` client,
 which calls `RunRhai` on the existing production session. Editing and rerunning
-the test does not restart the app. Use `run_scenario.sh`
+the test does not restart the app. Use `./scripts/api/run_scenario.sh`
 when the assertion should remain attached as a persistent observer.
 
 For an interactive tour, keep one production session and use `StartTutorial`
@@ -84,15 +84,15 @@ placement/dock ownership, font rules, and performance gates.
 
 ## Session lifecycle
 
-Before launching another luncosim, send `Exit` to the previous API session and verify that
-its process and port are gone. Never overlap GUI/API sessions or reuse a port while the old
+Before launching another luncosim, send `Exit` to the existing API session and verify that
+its process and port are gone. Never overlap GUI/API sessions or reuse a port while the
 session is alive. Keep the current process for live shader/Rhai edits; restart only when a
 rebuilt binary or an explicit clean session is required.
 
 ## Lifecycle (start → drive → stop)
 
 ```bash
-# 1. After the previous session is confirmed stopped, start the production
+# 1. After the existing session is confirmed stopped, start the production
 #    binary built in this worktree. Keep it alive in the runner's background
 #    session.
 target/debug/luncosim --api 4101
@@ -138,8 +138,8 @@ Two commands, two different argument types, and mixing them up is a silent no-op
 | command | takes | notes |
 |---|---|---|
 | `OpenTwin` | a **folder** containing `twin.toml` | auto-loads `[usd] default_scene` |
-| `LoadScene` | a scheme address — `twin://<name>/<rel>` or `lunco://<rel>` | for any filesystem path, use `OpenFile` |
-| `OpenFile` | any `.usda` path on disk | resolves the owning root, registers the document, mounts through the overlay |
+| `LoadScene` | a root-qualified `twin://` or `lunco://` address | mounts a scene address; it is not a filesystem opener |
+| `OpenFile` | a filesystem path or supported URI | extension-routes the document to its owning domain; USD paths resolve their Twin root |
 
 Passing the `.usda` *file* to `OpenTwin` fails the `twin.toml` check and is
 refused with a `warn!`.
@@ -151,11 +151,10 @@ are refused with
 [scene] `…` is not a root-qualified scene address — LoadScene takes `lunco://…` or `twin://…`
 ```
 
-and the load is a no-op — the previous scene stays up, so a screenshot taken
-afterwards shows the OLD scene rather than an empty one. That is the trap: it
-looks like the command worked until you read the status bar. Reach for `OpenFile`
-instead; `LoadScene` has no access to the workspace layer, so routing a raw path
-through it would mount a base-only stage and silently drop runtime edits.
+and the load is a no-op — the currently mounted scene remains active. Read the
+status bar or query the active scene before trusting a screenshot. Use `OpenFile`
+for a filesystem path; it resolves the workspace layer and preserves the
+document-first mounting contract.
 
 `CaptureScreenshot` returns the PNG as the **response body**; write those bytes
 yourself rather than relying on `save_to_file`.
@@ -185,32 +184,12 @@ target/debug/luncosim --validate assets/models/LunCo/Electrical/Battery.mo
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution
 trap: [`validate-assets`](../validate-assets/SKILL.md).
 
-## Command catalog
+## Command ownership
 
-All commands live under `crates/lunco-modelica/src/ui/commands/` as
-reflect-registered `Event` structs, grouped by area (`inspect.rs`,
-`compile.rs`, `lifecycle.rs`, `diagram.rs`, `nav.rs`, `sim.rs`,
-`plot.rs`, `doc.rs`, …). Add new ones in the matching file if a flow
-needs them.
-
-| Command | Params | Purpose |
-|---|---|---|
-| `OpenFile` | `{path}` | Open any `.mo` file from disk into a new tab. Use this for non-MSL examples (`assets/models/*.mo`) — `OpenClass` only works on MSL paths. |
-| `OpenClass` | `{qualified, action?}` | MSL drill-in by qualified name OR (with the open-doc fallback) drill into a class within an already-loaded doc. `action: {Duplicate: {name: ""}}` = open as an editable workspace copy (empty name → derives `<short>Copy`); default `View` = read-only drill-in. |
-| `FormatDocument` | `{doc}` (`0`=active) | Run `rumoca-tool-fmt` on active doc; replaces source via `ReplaceSource`. |
-| `GetFile` | `{path}` | Read file from disk and log contents at INFO. |
-| `InspectActiveDoc` | `{}` | Log parsed AST class tree of active doc — use to diagnose "0 nodes" projections. |
-| `Exit` | `{}` | AppExit. Always use instead of pkill. |
-| `FitCanvas` | `{doc}` | Fit-all in active canvas. Defers to next render so widget rect is correct. |
-| `CaptureScreenshot` | `{}` | Returns raw PNG bytes. Save with `curl ... -o /tmp/foo.png` then read with the Read tool. |
-| `PanCanvas` | `{doc, x, y}` | Pan to (x,y) in canvas world coords. |
-| `SetZoom` | `{doc, zoom}` | Set zoom factor. |
-| `SetViewMode` | `{doc, mode}` | mode = `"Diagram"` / `"Icon"` / `"Text"`. |
-| `MoveComponent` | `{class, name, x, y, width, height}` | Modelica-coord drag. `class` empty = active. `width=height=0` = preserve size. |
-| `Undo` / `Redo` | `{doc}` | Document op stack. |
-| `AutoArrangeDiagram` | `{doc}` | Re-layout. |
-| `FocusDocumentByName` | `{pattern}` | Switch active tab (field is `pattern`, NOT `name`). |
-| `ConfirmClassPicker` | `{qualified?, cancel?}` | Confirm/dismiss the "Which class should Compile/Fast Run …?" picker that opens when a package has >1 model. `qualified` = pick that class (omit → dialog's pre-selected); `cancel:true` = dismiss without running. Headless equivalent of clicking the dialog. **Gotcha:** the picker only opens once the doc's AST has parsed AND there are >1 candidates — `FastRunActiveModel` on a just-opened package logs `no compilable top-level class` and opens NO picker if you fire it before parse completes. Wait for `async parse complete doc=N` in the log, THEN `FastRunActiveModel`, THEN `ConfirmClassPicker`. |
+This skill owns the generic API envelope, runtime lifecycle, screenshots, and
+end-to-end evidence. For Modelica-specific loading, compile/run, experiment,
+and plot commands, use [`run-modelica`](../run-modelica/SKILL.md); keep that
+catalog in one place.
 
 ## Verification workflow
 
@@ -310,7 +289,8 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
      registers the target's nested + sibling classes (sibling-pass in
      `panels/canvas_projection.rs`, the `local_classes_by_short`
      registration); connector types need to be in
-     `msl_index.json` (regenerate via `cargo run --bin msl_indexer`).
+     `msl_index.json` (regenerate via
+     `cargo run -p lunco-modelica --bin msl_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
   reflect-registered. Give the struct the `#[Command]` attribute, mark
   its observer with `#[on_command(X)]`, and list that observer in the
@@ -322,8 +302,8 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
   from a synchronous library load inside the worker pool. Move heavy loads to
   a separate `std::thread::spawn` and use the cache-only source-aware resolver
   in the projection (`peek_class_cached`).
-- **Workbench seems stale after rebuild**: it didn't restart. Send
-  Exit, verify port 4101 freed, then start.
+- **A rebuilt binary is not visible**: replace the session through `Exit`, verify
+  port 4101 is free, then start the rebuilt production binary.
 
 ## Add a command
 

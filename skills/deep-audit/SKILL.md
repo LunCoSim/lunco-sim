@@ -5,9 +5,8 @@ description: Run a multi-domain audit of the workspace (USD compliance, performa
 
 # Deep audit — multi-domain review → no-shim migration plan → batched execution
 
-Workflow for auditing the whole workspace (or a subsystem) and converting findings into
-executed fixes. Proven shape: the 2026-07-27 audit ran nine parallel reviewers, produced
-~140 findings + a 10-phase plan, and executed phases 0–9 with batched fix agents.
+Workflow for auditing the whole workspace or a subsystem and converting findings
+into an ordered, executable remediation plan.
 
 Reports live in `docs/reviews/`. A closed report is **deleted** once its findings land —
 git keeps it, and a stale report reads as an open problem list. A finding that will not be
@@ -50,7 +49,7 @@ fixed soon graduates to its own `docs/reviews/open-<name>.md`, which stays.
    - **Legacy & shims** — dual APIs, back-compat aliases, "temporary" bridges, advertised
      surfaces with no implementation, comments describing architecture that was never built
      (the "cached DAE" lie pattern). The rule is ONE FORM: the migration plan must delete
-     the old path in the same phase that lands the new one.
+     the superseded path in the same phase that lands the new one.
    - **Robotics-industry best practices** — fixed-timestep discipline, determinism
      (peer-identical bakes/sums, no hash-order iteration into physics), frame safety
      (grid-absolute vs render frame typed via `lunco_core::coords::{GridPos,RenderPos}` —
@@ -85,15 +84,14 @@ sweeps). Record execution state in the memory file as phases land.
 ## Phase C — batched execution
 
 Follow `skills/subagent-batches` exactly: disjoint file lots, agents NEVER run cargo,
-coordinator runs ONE `cargo check -j=2 --tests -p <changed crates>` after each batch, fixes
-stragglers itself, then ONE `cargo test -j=2 --no-fail-fast` with
-`CARGO_PROFILE_TEST_STRIP=debuginfo` (bevy debug test binaries are 1–2 GB each; stripping
-is the difference between fitting on disk and three failed runs). Additional lessons:
+and the coordinator runs focused checks with `-j 4` after the batches land. Run a
+broader suite only when the audit scope requires it; set
+`CARGO_PROFILE_TEST_STRIP=debuginfo` when large Bevy test binaries make disk usage
+material. Additional rules:
 
-- **Attribute every test failure before fixing.** Stash the working tree (or checkout the
-  pre-change commit for the touched crates) and rerun the failing tests: pre-existing
-  failures are the repo owner's asset/test drift, and half of them encode obsolete intent —
-  root-cause against the asset's own documented design before deciding code-fix vs
+- **Attribute every test failure before fixing.** Preserve the working tree and rerun
+  the failing target when needed. Separate failures caused by the current change,
+  asset/test drift, and intentional negative fixtures before deciding code-fix versus
   test-update.
 - **Substrate first, consumers fanned out.** For a cross-cutting type change, land the core
   types yourself (Lot 0), then launch consumer lots in parallel against the new signatures;
@@ -106,7 +104,6 @@ is the difference between fitting on disk and three failed runs). Additional les
 
 ## Definition of done
 
-Every phase: check green over touched crates, tests green (or failures attributed
-pre-existing and separately dispositioned), superseded forms deleted, report + memory
-updated. The audit is repeatable: rerunning Phase A against a clean tree should find the
-previous round's findings ✅.
+Every phase: checks cover the touched owners, failures are attributed and
+dispositioned, superseded forms are deleted, and the report is updated. Rerunning
+Phase A against a clean tree must not reproduce fixed findings.

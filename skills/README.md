@@ -129,6 +129,24 @@ one directly when doing that kind of task by hand.
 New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then the
 [Documentation Hub](../docs/README.md) and the [AI Agent Guide](../AGENTS.md).
 
+## Routing boundaries
+
+Choose one primary skill for the requested outcome and load a neighboring skill
+only when its contract is needed:
+
+| Request | Primary | Defer to |
+|---|---|---|
+| Write a reusable USD asset | `author-usd-component` | `author-usd-physics` for detailed physics; `validate-assets` for pre-flight |
+| Assemble existing assets into a scene | `build-usd-scene` | `build-vehicle` for mobility assemblies; `author-scenario` for behavior |
+| Build a vehicle | `build-vehicle` | `authoring-vessel-controllers` for GNC; `compose-multidomain-twin` for the complete Twin |
+| Add or diagnose a controller | `authoring-vessel-controllers` | `run-modelica` for standalone Modelica execution |
+| Add or diagnose USD-to-ECS machinery | `usd-projection` | `luncosim-architecture` for cross-domain ownership |
+| Add or locate an asset | `use-asset-library` | `validate-assets` for file checks |
+| Run a Modelica model | `run-modelica` | `test-via-api` for generic end-to-end evidence; `inspect-simulation` for read-only observation |
+| Observe live state | `inspect-simulation` | `test-via-api` only when commands or verdicts are required |
+| Build a Twin-wide mission | `compose-multidomain-twin` | `author-scenario` for mission policy and `author-tutorial` for lessons |
+| Workbench UI versus Twin UI | `lunco-ui` | `lunco-theme` for tokens; `runtime-ui` for authored Twin-facing surfaces |
+
 ## Writing or changing a skill
 
 A skill is a **runbook**, not a design doc. It answers "walk me through doing

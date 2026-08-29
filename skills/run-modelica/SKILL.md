@@ -27,6 +27,13 @@ workbench. Build the named binary in the current worktree, then invoke it
 directly. The API server only exists when you pass `--api`. Default port is
 **4101** (`lunco_core::session::DEFAULT_API_PORT`).
 
+Before creating a new Modelica file, inventory the maintained package roots and
+the closest composed USD network in the current checkout. Reuse existing
+component classes through USD or the generated wrapper when their equations and
+public contract fit; add a new mission/vehicle model only when the equation or
+interface is genuinely absent. An isolated Modelica compile proves neither USD
+wiring nor runtime physics.
+
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `target/debug/lunica --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
@@ -48,6 +55,9 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application
   surface is identical; screenshots, diagrams, and 3D viz are what you lose (so
   perspective switching is moot). `GetExperimentResult`/`SnapshotVariables` still
   give full numeric results headless.
+- Use production `luncosim` for scene-test and visual evidence. Use
+  `luncosim-server` or `luncosim --no-ui` for numeric/API evidence only, and
+  report the binary, revision, readiness state, and evidence type separately.
 - **If an app is already running on 4101, do NOT start another and do NOT
   `Exit` it** — reuse it. Killing it destroys the user's open tabs/state. Only
   restart when the user says so or the binary is verifiably stale after a rebuild.
@@ -415,9 +425,9 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   until `ast_parsed:true` before compiling/running a just-opened doc.
 - **`GetExperimentResult` errors** unless the run is `Done` (or `Failed` with a
   partial). Check `ListRuns` state first; a big sweep runs async.
-- **`Open` vs old verbs**: prefer `Open{uri}`. `OpenClass` resolves a
-  Modelica class through the source-aware document/library path; `OpenFile`
-  is filesystem-only.
+- **Unified opening**: prefer `Open{uri}`. `OpenClass` resolves a Modelica
+  class through the source-aware document/library path; `OpenFile` resolves a
+  filesystem URI.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

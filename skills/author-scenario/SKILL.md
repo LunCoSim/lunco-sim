@@ -1,26 +1,11 @@
 ---
 name: author-scenario
 description: >
-  How to write a scenario in LunCoSim — a rhai program attached to an entity
-  that senses the world and supplies task/mission policy. USE THIS SKILL whenever the
-  user asks, in plain words, things like: "make the rover patrol these
-  waypoints", "drive it to X then Y", "have it react when it reaches / enters /
-  sees something", "coordinate these two vehicles", "run this mission /
-  sequence / timeline", "make it do X after N seconds", "spawn some rovers and
-  have them survey the area", or "why isn't my script doing anything / holding
-  its state?". Any request to orchestrate behaviour, missions, waypoints,
-  reactions, or multi-entity coordination belongs here — the user will NOT say
-  "scenario" or "rhai". (For the agent mid-code, it also covers: a `task` /
-  `mission` / `on_event` / `on_start` hook, `RunScenario`, `nav_to` / a
-  sequencer step, `emit` / a `TelemetryEvent`, `this`-state that resets or
-  reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgramAPI` prim.) These
-  rules are project-specific: rhai `fn`s are pure (they can't see top-level
-  `let`, so naive state silently vanishes), lifecycle hooks and task closures
-  use the explicit `me`/`this` contract, `goto` is reserved, events arrive one
-  tick late, scripts are
-  host-authoritative (never run on a client), and control MATH does not belong
-  here (that's Modelica — see authoring-vessel-controllers). Reference impls:
-  assets/scripting/examples/ (patrol, mission, sequence, timeline, avoid).
+  Author event-driven LunCoSim scenarios for missions, waypoints, reactions, or
+  multi-entity coordination. Use when working with `task`, `mission`, `on_event`,
+  `RunScenario`, `nav_to`, `emit`, or persistent `this` state. Scenarios own
+  sequencing and policy; Modelica owns continuous control math, USD owns scene
+  structure and wiring, and authoring-vessel-controllers owns vessel GNC.
 ---
 
 # Authoring scenarios
@@ -80,7 +65,7 @@ fn mission(me)        { [objective("survey", #{})]; }       // optional
 fn on_start(me)       { this.i = 0; }                       // once, after (re)compile
 fn on_event(me, evt)  { if evt.name == "GO" { /* … */ } } // event-driven policy
 fn on_stop(me)        { brake(me); }                       // hot-reload / detach / despawn
-// Exceptional sampled/discrete observer (production or test):
+// Bounded sampled observer (tests only):
 // fn on_tick(me) { this.samples.push(query("rover_status", #{id: me})); }
 ```
 
@@ -93,8 +78,8 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
   The native task driver binds `this` while invoking those closures, and owns
   the task cursor/dwell/event state. Named `Fn("...")` pointers are not task
   leaves; call a named helper explicitly from an anonymous closure when useful.
-- `this` resets on hot-reload (re-`RunScenario` recompiles in place; the old
-  program's `on_stop` runs first).
+- Hot-reload runs `on_stop` before installing the new program state; initialize
+  all required `this` fields in the new run.
 
 ## 2. The verb surface (host bridge — everything else is prelude)
 
@@ -283,14 +268,10 @@ it fails the same check. Without it, "coupled mirrors" might be measuring gravit
 symmetry, or nothing at all. `differential_rig{,_nodiff}` and
 `rocker_bogie{,_nodiff}` are the worked pair.
 
-**⚠ The control's invariant is not the same on a stand as on a vehicle.** This is
-the part that catches people, and it caught me. On an isolated two-rocker stand
-with the coupling off, the far rocker stays at **0** — nothing drives it. On the
-real rover, *both* rockers carry weight: kill the differential and they simply sag
-together while the chassis rolls 30°. The rover's control is therefore the
-CONTRAPOSITIVE of the coupled claim — `|L+R|` must NOT cancel, and the chassis must
-NOT stay level — not "the far side stays put". Derive the control from what the
-mechanism is *for*, not by copying the stand's assertion.
+**The control invariant must match the fixture.** A disabled or uncoupled control
+case must have an explicit expected response; do not infer it from a simplified
+stand or from a symmetric result. Derive the assertion from the mechanism's
+purpose and declare the case through a parameter.
 
 **Declare which case a stage is; never sniff it.** Both stages reference one rig
 and differ only in whether the drive is live, so one scenario serves both — but it
@@ -306,34 +287,24 @@ def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 Reading it off the coupling's own stiffness would make the expectation depend on
 the very authoring the test exists to check.
 
-### Two ways to write a passing test that is wrong
+### Avoid weak test assertions
 
 - **`t_rel(a, b, tol_pct, what)` takes a PERCENTAGE.** `0.2` means 0.2%, not 20%.
-  A shipped test ran a hundred times stricter than its own comment claimed and
-  passed only because the rig happened to be that accurate. Write `5.0`, and say
-  "5%" in the comment beside it.
+  Write the numeric tolerance and its percent meaning together.
 - **Helper functions never see `this`.** `on_tick` has it; anything it calls does
   not. Pass every measurement through the verdict map — which is also what keeps
   the verdict a pure function of what was measured.
 - **A guard that cannot run is not a guard.** Wrapping a check in
-  `if s.x != () { ... }` makes it vanish silently when the port is absent — which
-  is precisely when you needed it. `sun_tracker` sampled its "did the sun move"
-  baseline on a fixed 4 s timer, `SunTracker.mo` was still compiling, and the
-  guard skipped itself for two runs. WAIT for the port to exist, then measure;
-  and count the assertions (`TESTS_OK 7`, not 5) when you expect a guard to fire.
+  `if s.x != () { ... }` makes it disappear when the port is absent. Wait for the
+  port to exist, then measure; count the assertions in the final verdict.
 - **Never do arithmetic on a possibly-absent reading.** `()` divided by 1000
   THROWS, the scenario dies between its last print and `report_verdict`, and
   `luncosim test` reports NO-VERDICT — the failure looks like a hang, not like the
   assertion that was about to fail. Route every logged number through a formatter
   that answers `"(none)"`.
-- **A control must vary the thing that actually gates.** Chasing a missing link,
-  a probe was authored at the same site with the elevation mask relaxed to −90°;
-  it had identical peers, and the "obvious" conclusion would have been that the
-  geometry was broken. The mask is enforced at BOTH ends of a link — the far end
-  was doing the gating. Before trusting a control, confirm it moves the variable
-  you think it moves.
-- **Measure what you claim.** "The node has zero peers" was reported from two
-  missing edges without ever calling `neighbours()`. It had one.
+- **A control must vary the quantity that actually gates.** Confirm the relevant
+  live variable, peer set, or connection output changes before diagnosing the
+  geometry or downstream behavior.
 - **Keep the producer in the connection path.** A battery's `soc_out` belongs to
   the Battery prim. When another solver consumes it, author
   `float inputs:engine_enable.connect = </Rover/Battery.outputs:soc_out>` on the
@@ -342,11 +313,8 @@ the very authoring the test exists to check.
   A script may read an intentionally published network boundary, but that
   boundary must be an authored connection to the battery, never a second state.
 - **A cut is not a camera loan.** `set_camera("RoverCam")` rebinds the viewport
-  until something rebinds it back. Backspace now returns the view to the avatar
-  (see [`51-cinematic-camera.md`](../../docs/architecture/51-cinematic-camera.md)),
-  but a scenario that cuts and then waits forever still leaves the player
-  watching a camera they cannot steer — give every `wait_until` a bound, or a
-  beat that cuts back.
+  until another action rebinds it. Give every `wait_until` a bound and provide a
+  return-to-avatar beat when the mission uses a cinematic camera.
 
 ## 4. Missions & sequencing (task policy, both pure rhai)
 
@@ -448,7 +416,7 @@ headless and deterministically (`--threads 1 --jitter 0`), exit 0=PASS / 1=FAIL 
 | Scene | Guards |
 |---|---|
 | `drivetrain_parity` · `ackermann_parity` · `six_independent_parity` | raycast ≡ physical for one authored parameter set (below) |
-| `parts_attached` | **nothing falls off the vehicle.** Four rovers driven 12 s; no descendant of a vessel may change its distance to that vessel by >0.5 m. Written because four motors per rover silently fell out while every parity gate stayed green |
+| `parts_attached` | **nothing falls off the vehicle.** Drive the assembled rig and require every descendant to remain within the authored relative-distance tolerance. |
 | `lint_selftest` | **the linter itself.** A scene authored wrong on purpose, so `RunLint` → rules → `LintReport` can be shown to FIND the faults by rule id — and to stay silent on the correctly jointed wheel beside them |
 
 Two lessons those last two encode, worth copying into any new gate:
@@ -464,56 +432,15 @@ Two lessons those last two encode, worth copying into any new gate:
   otherwise — `parts_attached` excludes rucheyok for exactly that reason rather
   than counting a frozen rover as a pass.
 
-## Drivetrain parity test
+## Comparative mechanics tests
 
-A scenario can also be a **regression test**. `assets/scenarios/tests/drivetrain_parity.rhai`
-+ `assets/scenes/tests/drivetrain_parity.usda` are the worked example — copy
-their shape when you need a scenario that ASSERTS rather than merely acts.
+When two authored realizations implement one contract, place them in one scene
+test and drive them with identical commands. Assert that both realizations move,
+compare physical outputs with tolerances appropriate to the contract, and check
+direction as well as magnitude. Add an independent bound so two equally wrong
+implementations cannot satisfy parity together.
 
-**What it guards.** Raycast and joint wheels are two realizations of ONE
-parameter set. They once diverged because the raycast force had no torque–speed
-term, so raycast rovers ran faster than joint rovers built from the same asset.
-Both now read the composed motor/gearbox reduction (12 rad/s at the shipped
-axle), so both cap at `ω_max·r = 12 × 0.4 = 4.8 m/s`.
-The scene instances `skid_rover.usda` **twice**, differing in exactly one
-opinion — `variants = { string drivetrain = "raycast" | "physical" }` — and the
-scenario drives BOTH from ONE tick loop, so they see identical commands on
-identical frames. Tolerances: **±15 %** terminal/peak speed, **±20 %** distance
-(it integrates the acceleration transient, where the solvers legitimately differ
-most), **±35 %** yaw magnitude with an **intolerant sign check**, plus an
-absolute `[0.5, 1.25] × ω_max·r` band — parity alone is satisfiable by both
-rovers being wrong together.
-
-**How to run.**
-```bash
-target/debug/luncosim --api 4101 --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
-```
-The `LunCoProgramAPI` prim in the scene auto-runs the script on load; the run takes
-~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:
-```bash
-grep -E 'DRIVETRAIN PARITY|PARITY FAIL|TESTS_' /tmp/parity.log
-```
-
-**How to read the verdict.** There is no exit code — a scenario is a tick hook,
-not a process — so it prints the harness verdict contract
-(`assets/scripting/tests/lib/test_assert.rhai`) and one unmistakable last line:
-```
-TESTS_OK 8
-DRIVETRAIN PARITY: PASS
-```
-or
-```
-  PARITY FAIL: terminal speed (m/s): raycast=23.9 physical=4.71 ratio=5.07x diff=80.29% (tol 15%)
-TESTS_FAIL 1/8
-DRIVETRAIN PARITY: FAIL
-```
-It also `emit`s `DRIVETRAIN_PARITY` = `"PASS"`/`"FAIL"` and raises a toast.
-
-**The part worth copying: make silence impossible.** Scenarios fail *silently* —
-a hook that never fires, a `find` that returned `-1`, a phase that never
-advances all look like a clean run. So: print the resolved gids in `on_start`;
-fail loudly on the first tick if a prim is missing instead of ticking forever;
-log a `[parity] …` sample row with real numbers every 0.5 s (**the log is the
-evidence — a run with no sample table proves nothing**); and treat *both values
-≈ 0* as a FAILURE, never a match. A test that cannot fail is the bug one level
-up.
+The shipped drivetrain, attachment, and linter fixtures under
+`assets/scenes/tests/` and `assets/scenarios/tests/` demonstrate this shape. Keep
+the test scenario responsible for measured samples and the verdict; keep the
+mechanism and its parameters in USD, Modelica, or the owning engine subsystem.

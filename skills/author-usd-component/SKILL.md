@@ -1,22 +1,13 @@
 ---
 name: author-usd-component
 description: >
-  How to AUTHOR a `.usda` asset from scratch for LunCoSim — geometry, materials,
-  physics, behaviour, tunable parameters, and getting it into the spawn catalog.
-  USE THIS SKILL when the user asks to "build/model/make a &lt;thing&gt;" as a reusable
-  asset: a habitat, a lander, a rover part, an antenna, a porthole, a tank; or
-  says "add a material/shader to it", "make it collide", "give it physics", "make
-  it spawnable", "expose that as a slider", "put a hole in it", "make this
-  parametric". For the agent mid-code: writing `def Xform`/`def Mesh`/`def
-  NurbsPatch`, `apiSchemas`, `material:binding`, `trimCurve:*`, `customData
-  {min,max}`, `lunco:program:*`, `lunco:spawnable`.
-  This is the AUTHORING side. To assemble a scene from assets that already exist
-  use build-usd-scene; to drive the running app use test-via-api.
-  Project-specific and non-obvious: `xformOpOrder` is MANDATORY (without it every
-  `xformOp:*` is ignored and the prim sits at identity), `uRange`/`vRange` are
-  never read, `customData` has no `doc` key, a scalar `displayColor` is silently
-  dropped, a dynamic mesh collider needs `physics:approximation`, and a new
-  `lunco:*` property is inert unless THREE schema files are edited.
+  Author a reusable LunCoSim USD asset from scratch: geometry, materials,
+  physics, behavior, parameters, or spawn-catalog metadata. Use for new
+  habitats, landers, rover parts, shaders, colliders, or parametric assets.
+  `xformOpOrder`, standard USD schemas, array display colors, collider
+  approximation, and schema generation are the key contracts. Use build-usd-scene
+  for assembling existing assets, use-asset-library for placement/discovery, and
+  validate-assets for pre-flight checks.
 ---
 
 # Author a USD component
@@ -26,7 +17,7 @@ writing a `.usda` file; the engine reads it. Nothing here is a Rust change.
 
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
-the importer (`crates/lunco-usd-bevy/src/units.rs:172`) — never branch on them.
+the importer (`crates/lunco-usd-bevy/src/units.rs`) — never branch on them.
 
 Background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`50-usd-driven-visuals.md`](../../docs/architecture/50-usd-driven-visuals.md).
@@ -34,7 +25,7 @@ Before adding a schema or property, read
 [`clean-architecture-and-usd-standards.md`](../../docs/architecture/clean-architecture-and-usd-standards.md)
 and run its standard-schema gate. Use `UsdGeom`, `UsdPhysics`, `UsdShade`, and
 `UsdLux` where they own the concept; add a LunCo field only for semantics USD
-does not define, then delete any overlapping old field and reader in the same
+does not define, then delete any overlapping superseded field and reader in the same
 cutover.
 Related skills: [`use-asset-library`](../use-asset-library/SKILL.md) (where the
 file goes, how it is discovered, the `lunco://` scheme),
@@ -72,7 +63,7 @@ def Xform "Widget" (
 `kind` is **authored but read by nothing** — standard-USD hygiene for DCC
 interop, not an engine signal. Use `doc = "..."` prim metadata for descriptions;
 `doc` is the standard USD description metadata; do not add a `lunco:description`
-attribute (`crates/lunco-scene-commands/src/spawn_meta.rs:44`).
+attribute (`crates/lunco-scene-commands/src/spawn_meta.rs`).
 
 ## Transforms — the mandatory bit
 
@@ -83,9 +74,9 @@ uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 ```
 
 **Without `xformOpOrder` the prim is at identity and every `xformOp:*` is
-ignored, silently.** There is no piecewise fallback — it was deliberately deleted
-(`crates/lunco-usd-bevy/src/lib.rs:3040-3064`). This is the single most common way
-to author a correct-looking file that does nothing.
+ignored, silently.** Treat a missing or incomplete transform order as an authoring
+error. This is the single most common way to author a correct-looking file that
+does nothing.
 
 Supported: `translate`, `scale`, `orient` (quat, USD `(w,x,y,z)`), `transform`
 (matrix4d), `rotateX/Y/Z` (degrees), all six Euler orders, and the `!invert!`
@@ -93,7 +84,7 @@ prefix. Ops compose in listed order, so the **last listed applies first** to the
 geometry. An op that is listed but unreadable is skipped as identity — silently.
 
 Also: a translation of `(0,0,0)`, an identity rotation, or an all-zero scale will
-**not overwrite** an existing spawned transform (`lib.rs:1101-1114`). Authoring
+**not overwrite** an existing spawned transform (`crates/lunco-usd-bevy/src/lib.rs`). Authoring
 zero is a no-op, not a reset.
 
 ## Geometry
@@ -110,7 +101,8 @@ zero is a no-op, not a reset.
 | `BasisCurves` / `NurbsCurves` | `points`, **`widths` required** |
 
 `axis` defaults to `"Z"`, not Y — a `Cylinder` with no `axis` lies along Z
-(`lib.rs:1144`). `Cube.width/height/depth` do **not** exist. `extent` is never read.
+(`crates/lunco-usd-bevy/src/lib.rs`). `Cube.width/height/depth` do **not** exist.
+`extent` is never read.
 
 If a referenced component supplies a generic visual proxy but the enclosing
 vehicle needs a different authored shape, keep the reference for its ports and
@@ -130,7 +122,7 @@ control cage).
 - `orientation = "leftHanded"` flips winding; default is right-handed/CCW.
 - Any malformed topology → **no mesh at all**, no fallback primitive.
 - **Interpolation is inferred from array length only** — `interpolation`
-  metadata is never read (`lib.rs:3864`). An array matching `points.len()` is
+  metadata is never read. An array matching `points.len()` is
   per-vertex; one matching `faceVertexIndices.len()` is faceVarying; **any other
   length is silently ignored**. So `uniform`/`constant` normals or UVs vanish.
 - UVs: **`primvars:st` only**, UV_0 only. Bare `st` and `primvars:st0` are not read.
@@ -163,7 +155,7 @@ def NurbsPatch "Wall" {
 - Tessellation is fixed, not adaptive: `clamp(count * 6, 8, 128)` per direction.
 - Normals are analytic; a degenerate row (a dome apex) yields `+Y` rather than NaN.
 
-Every rejection path warns with a reason (`crates/lunco-usd-bevy/src/nurbs.rs:176-300`).
+Every rejection path warns with a reason (`crates/lunco-usd-bevy/src/nurbs.rs`).
 If a patch is missing from the render, **read the log first** — it will say which
 guard fired, and untrimmed patches log their vert count.
 
@@ -171,13 +163,12 @@ guard fired, and untrimmed patches log their vert count.
 
 `widths` is **required** — no widths, no mesh. That gate is what stops a camera
 rail becoming a pipe. Note `basis = "bspline"` is approximated as CatmullRom
-(interpolating, not hull-approximating) — `lib.rs:3407`.
+(interpolating, not hull-approximating).
 
 ## Real holes — trim curves
 
-`trimCurve:*` is the only standard-USD way to put a genuine hole in a surface, and
-it **is implemented** (a stale doc comment at `lib.rs:3550` claims otherwise —
-ignore it).
+`trimCurve:*` is the standard USD way to put a genuine hole in a surface, and it
+is implemented by the importer.
 
 ```usda
 int[] trimCurve:counts = [1]           # curves per loop
@@ -193,7 +184,7 @@ point3f[] trimCurve:points = [ (u, v, w), ... ]   # HOMOGENEOUS 2D
   normalised, and are deliberately not unit/axis converted.
 - **Winding does not matter.** Classification is even-odd with the domain
   rectangle as an implicit outer loop, so USD's unstated keep/discard rule never
-  has to be guessed (`trim.rs:29-44`).
+  has to be guessed (`crates/lunco-usd-bevy/src/trim.rs`).
 - Parameter space is **anisotropic and non-linear**. On a cylinder, u spans
   circumference while v spans height, and a rational arc parameterises
   non-uniformly — at the quarter point of a 90° span the true angle is 21.598°,
@@ -228,7 +219,7 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
 
 - **`MaterialBindingAPI` does NOT need applying.** Resolution uses
   `compute_bound_material` via `::on`, so bindings **inherit down namespace** and
-  collection-based bindings work (`lib.rs:1568-1591`). Applying it is harmless.
+  collection-based bindings work (`crates/lunco-usd-bevy/src/lib.rs`). Applying it is harmless.
 - **`primvars:displayColor` must be an ARRAY.** `color3f[] primvars:displayColor
   = [(r,g,b)]`. A scalar `color3f` is silently ignored, and the bare
   `displayColor` alias is not read at all. Same for `float[] primvars:displayOpacity`.
@@ -239,8 +230,8 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   still painted the ordinary USD way. Don't author a parallel colour input on the
   Shader prim; use `inputs:*` only for what displayColor cannot express (accents,
   panel scale, wear). An explicit `inputs:display_color` overrides the fill.
-- **`inputs:*` authored directly on a gprim is not read** — it must be on a bound
-  Shader. This used to work and was removed as invalid USD.
+- **`inputs:*` authored directly on a gprim is not read** — put it on a bound
+  Shader.
 - `doubleSided` (on the **gprim**, default false) is required for anything you can
   see through — a trimmed surface reads as a hole from one side and nothing from
   the other without it.
@@ -274,22 +265,14 @@ Backend is **Avian3D**. One prim with `PhysicsRigidBodyAPI` becomes **one**
 rigid body aggregating all descendant colliders into a compound; descendants
 carry `PhysicsCollisionAPI` only and get **no** independent body.
 
-> **A component that gets MOUNTED must not apply `PhysicsRigidBodyAPI` merely as
-> a static child.** The
-> loader honours the schema wherever it appears — ancestry is never consulted,
-> because nesting-plus-joint is how a wheel is mounted — so a part inside a
-> vehicle that no joint names is a free body and falls out of it. That shipped:
-> `components/mobility/motor.usda` applied it, and four motors per rover dropped
-> through the hull on the first physics step while every parity test stayed
-> green. An internal part is **mass + geometry** (`PhysicsMassAPI`,
-> `PhysicsCollisionAPI` on its gprims) — `gearbox.usda` is the model to copy. A
-> part that must MOVE relative to its host gets a body **and** a joint, authored
-> together. A reusable moving assembly owns every joint in its mechanism,
-> including its host-facing hinge: compose its root directly onto the host body
-> and USD path translation maps the assembly root to that body. The host must
-> not duplicate an attachment joint or be named by the lower-level assembly.
-> `luncosim --validate`
-> reports the mistake as `[usd/nested-body-no-joint]`; see
+> **A mounted component must not apply `PhysicsRigidBodyAPI` as a static child.**
+> The loader honors the schema wherever it appears: a nested body is separate
+> from its parent and requires a joint. An internal part is **mass + geometry**
+> (`PhysicsMassAPI`, `PhysicsCollisionAPI` on its gprims). A part that must move
+> relative to its host gets a body and a joint authored together. A reusable
+> moving assembly owns every joint in its mechanism, including its host-facing
+> hinge. `luncosim --validate` reports an unattached nested body as
+> `[usd/nested-body-no-joint]`; see
 > [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body).
 
 - **`physics:approximation` defaults to `trimesh`, and a trimesh cannot be a
@@ -297,7 +280,7 @@ carry `PhysicsCollisionAPI` only and get **no** independent body.
   `"convexDecomposition"` or it will not behave.
 - **There is no `physics:friction`.** Use `physics:dynamicFriction` /
   `physics:staticFriction` / `physics:restitution` on a material bound through
-  `material:binding:physics`. The invented name survived months of use.
+  `material:binding:physics`.
 - `physics:density` is not read anywhere. Author `physics:mass`.
 - `PhysicsScene` gravity attributes are vendored but not consumed.
 - Non-cuboid colliders lose exactness under non-uniform scale (tessellated to a
@@ -358,8 +341,8 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 - Programs use standard `info:id` for a registered driver, `info:sourceAsset` for
   authored source, or `info:sourceCode` for live, journalled editing, matching the
   selected `info:implementationSource` arm. Production programs normally use the
-  asset form. An unknown id is a fail-safe no-op with a warning so an older runtime
-  can still open a newer scene.
+  asset form. An unknown or unsupported implementation id is an error with a
+  diagnostic; fix the authored source selector instead of adding a fallback.
 - Wiring is native USD `connectionPaths`; `SimConnection` is a derived cache, so
   hand-authoring it is pointless.
 
@@ -418,7 +401,7 @@ variantSet "tire" = {
 
 Switch at runtime with `SetVariantSelection`. **Every variant must author every
 property the others do** — a variant that only sets what it needs leaves the
-previous variant's opinions standing, so it accumulates rather than switches.
+  another variant's opinions standing, so it accumulates rather than switches.
 
 Keep a referenced component with internal relative relationships on the stable
 assembly prim, outside the variant. A variant that disables that realization

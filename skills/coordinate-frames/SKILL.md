@@ -109,10 +109,10 @@ Add the smallest real regression at the owning boundary:
 Run focused checks first:
 
 ```sh
-scripts/run_rust_tests.sh -p lunco-core --lib -j 8
-scripts/run_rust_tests.sh -p lunco-celestial -j 8
-scripts/run_rust_tests.sh -p lunco-usd-avian -j 8
-RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
+scripts/run_rust_tests.sh -p lunco-core --lib -j 4
+scripts/run_rust_tests.sh -p lunco-celestial -j 4
+scripts/run_rust_tests.sh -p lunco-usd-avian -j 4
+RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
 For visual acceptance, launch the built production binary head-full with an
