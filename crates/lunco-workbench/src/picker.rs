@@ -320,6 +320,7 @@ mod native {
                 dialog.save_file().map(StorageHandle::File)
             }
             PickMode::OpenFolder => rfd::FileDialog::new()
+                .set_can_create_directories(true)
                 .pick_folder()
                 .map(StorageHandle::File),
         }
