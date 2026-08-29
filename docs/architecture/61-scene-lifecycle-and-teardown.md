@@ -53,10 +53,13 @@ not covered by the USD prim sweep. They are retired by the dependency-light
 `lunco_core::SceneTeardown` schedule, run before the outgoing prims are
 despawned and before replacement projection starts.
 
-Celestial state follows the same boundary. Its derived tree is retired and
-`ActivePhysicsFrame` is restored to the persistent `WorldGrid` unconditionally;
-this is not inferred from a later frame with no body declarations, because a
-restart can replace old declarations with new declarations in one transaction.
+Celestial state follows the same boundary. Its derived tree is retired,
+`OrbitalViewPin` is cleared, and `ActivePhysicsFrame` is restored to the
+persistent `WorldGrid` unconditionally; this is not inferred from a later frame
+with no body declarations, because a restart can replace old declarations with
+new declarations in one transaction. The outgoing avatar owns the transactional
+camera return state; retaining only the scene-level orbital pin would make a
+replacement surface scene present as orbital without a valid return transaction.
 Scene-scoped `RuntimeDiagnostics` is cleared at the same boundary. Each producer
 then repopulates only its own findings, so a camera, environment, or physics
 error from the outgoing scene cannot be displayed as a fact about the replacement.
