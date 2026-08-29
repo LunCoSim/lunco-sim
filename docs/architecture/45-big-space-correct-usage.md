@@ -152,8 +152,9 @@ while the diagnostic is present.
 4. No duplicate semantic frame declaration.
 5. No direct `GlobalTransform` read for authoritative state.
 6. No per-frame repair, fallback frame, or next-frame reparent correction.
-7. No physical entity outside `ActivePhysicsFrame`.
-8. Scene replacement invalidates old roots before deferred despawns.
+7. No placement system reclaims a valid camera-owned BigSpace grid.
+8. No physical entity outside `ActivePhysicsFrame`.
+9. Scene replacement invalidates old roots before deferred despawns.
 
 Celestial globe/site overlap is a surface-ownership problem, not a cell-size
 problem. A site scene designates its finite ground owner through the USD

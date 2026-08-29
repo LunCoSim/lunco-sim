@@ -50,6 +50,12 @@ body-fixed frame; it does not introduce a second semantic identity.
    selected camera's f64 pose updates the anchor cell in `WorldGrid`; no parent
    grid is re-posed and no next-frame correction is scheduled.
 
+Site placement only bootstraps an avatar that is still in the loader's
+`WorldGrid` shell (or has no valid grid parent). Once a camera has been mounted
+on any valid BigSpace grid, that camera system owns the avatar's frame. Site
+placement must not reclaim an orbital camera from its body-centered inertial
+grid; the site root remains the physics frame independently.
+
 Surface orientation is derived from the local gravity/up direction and the
 selected frame. Orbital orientation is derived from the inertial frame. This
 keeps the ground below the view while preserving the Moon/Earth orientation
