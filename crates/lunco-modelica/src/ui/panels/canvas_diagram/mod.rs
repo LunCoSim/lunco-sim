@@ -42,6 +42,7 @@ pub const CANVAS_DIAGRAM_PANEL_ID: PanelId = PanelId("modelica_canvas_diagram");
 
 mod decorations;
 mod edge;
+mod legend;
 pub mod loads;
 mod menus;
 mod node;

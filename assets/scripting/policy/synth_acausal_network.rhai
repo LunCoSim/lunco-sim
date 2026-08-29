@@ -58,7 +58,6 @@ fn string_literal(value) {
 // diagram decoration cannot drift apart.
 fn power_rail_x() { HUB_X / 2 }
 fn power_rail_color() { DIAGRAM_TITLE_COLOR }
-fn power_wire_color() { DIAGRAM_TITLE_COLOR }
 fn power_line_thickness_text() { "2" }
 
 fn rect(x1, y1, x2, y2) {
@@ -465,9 +464,11 @@ fn power_bus_annotation(edge, layout) {
         line = append_point(line, feeder_x, right.y);
     }
     line = append_point(line, right_port_x, right.y);
-    line += "}, color=";
-    line += power_wire_color();
-    line += ", thickness=";
+    // Leave connection colour to the Modelica connector projection. The
+    // generated route is only geometry; a single neutral policy colour would
+    // hide the electrical/mechanical/thermal distinction carried by each
+    // connector's authored Icon.
+    line += "}, thickness=";
     line += power_line_thickness_text();
     line += "))";
     line

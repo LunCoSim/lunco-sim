@@ -34,6 +34,9 @@ fn on_start(me) {
     this.drained = ();
     this.max_battery_discharge_power = 0.0;
     this.max_drive_power = 0.0;
+    this.generated_source_checked = false;
+    this.generated_source_ok = false;
+    this.generated_route_count = 0;
     print("[battery-empty] ── empty battery actuator boundary ─────────────");
 }
 
@@ -68,6 +71,42 @@ fn on_tick(me) {
             }
             return;
         }
+        let generated = query("GeneratedModelicaSource");
+        if generated == () || generated.networks == () {
+            if this.t >= PORT_WAIT_S {
+                this.done = true;
+                fail_fast("generated Modelica source was not published within " +
+                          PORT_WAIT_S + "s", "BATTERY EMPTY ACTUATOR",
+                          "BATTERY_EMPTY_ACTUATOR");
+            }
+            return;
+        }
+        if generated.networks.len() == 0 {
+            this.done = true;
+            fail_fast("the composed rover published no generated Modelica network",
+                      "BATTERY EMPTY ACTUATOR", "BATTERY_EMPTY_ACTUATOR");
+            return;
+        }
+        this.generated_source_ok = true;
+        for network in generated.networks {
+            if network.source == () {
+                this.generated_source_ok = false;
+                break;
+            }
+            for line in network.source.split("\n") {
+                if !line.contains("connect(") || !line.contains("annotation(Line(") {
+                    continue;
+                }
+                this.generated_route_count += 1;
+                if line.contains("color=") || !line.contains("thickness=") {
+                    this.generated_source_ok = false;
+                    break;
+                }
+            }
+            if !this.generated_source_ok { break; }
+        }
+        if this.generated_route_count == 0 { this.generated_source_ok = false; }
+        this.generated_source_checked = true;
         this.phase = "drive";
         this.phase_started = this.t;
     }
@@ -92,6 +131,10 @@ fn verdict(s) {
         "battery_drained boundary output was " + s.drained + ", expected 1"));
     f.push(t_true(s.event_seen,
         "authored battery_drained event was not published"));
+    f.push(t_true(s.generated_source_checked && s.generated_source_ok
+                  && s.generated_route_count > 0,
+        "generated Modelica routes must retain geometry while leaving colour to " +
+        "resolved connector metadata"));
     f.push(t_true(s.max_battery_discharge_power <= ZERO_TOL,
         "battery supplied " + s.max_battery_discharge_power +
         " W at the empty boundary"));

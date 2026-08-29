@@ -51,6 +51,12 @@ pub(crate) fn render_diagram_canvas(
         &mut state.phase_log,
     );
 
+    // The legend is derived from the same typed edge payloads that the canvas
+    // just rendered. It is non-interactive and therefore leaves all canvas
+    // navigation, selection, and wire-hover input on the underlying widget.
+    let scene = &state.get_for_render(render_tab_id, active_doc).canvas.scene;
+    super::super::legend::render(ui, response.rect, scene);
+
     // Fit only after Canvas::ui has allocated its real response rectangle.
     // This is shared by initial projection, explicit FitCanvas, and
     // pulse-driven focus requests; keeping one consumer prevents each caller

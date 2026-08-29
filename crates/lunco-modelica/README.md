@@ -116,6 +116,9 @@ The diagram panel is a **`lunco-canvas` view over the document**:
 - Type references in rebuilt source are resolved via MLS §5.3 rules —
   fully-qualified path or import-based scope lookup — see
   [architecture § 5.6](../../docs/architecture/20-domain-modelica.md#56-type-resolution-mls-53).
+- The canvas derives generated-network wire colours from resolved connector
+  `Icon` metadata and shows an observed-connector legend; hovering a wire
+  exposes its connector and live value/flow labels.
 
 ### Code editor
 
