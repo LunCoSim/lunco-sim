@@ -76,10 +76,12 @@ lunar-surface appearance.
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
 explicit active presentation camera, an authored `LocalAvatar` presentation camera,
 or an authored camera track with a valid camera binding. The recorder consumes that
-authored presentation contract and renders it through a target-born offscreen camera;
-the authored camera remains the pose owner. It does not select a camera by entity
-order. A scene with no valid presentation camera fails the recording readiness contract
-and reports the exact camera diagnostic instead of producing an incorrectly framed take.
+authored presentation contract and renders it through a target-born offscreen camera.
+That camera mirrors the source camera's transform, projection, exposure, tonemapping,
+and MSAA intent; the authored camera remains the pose owner. It does not select a
+camera by entity order. A scene with no valid presentation camera fails the recording
+readiness contract and reports the exact camera diagnostic instead of producing an
+incorrectly framed or graded take.
 
 ---
 

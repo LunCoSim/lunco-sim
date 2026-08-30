@@ -49,6 +49,9 @@ target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps
 - No workbench exists, so the recorder activates the scene's first **authored**
   `SceneCamera` (e.g. the luncosim `WideShot`). A scene with no authored camera
   records black and logs a warning — author a camera, don't fight the picker.
+- The target-born offscreen camera mirrors the selected authored camera's transform,
+  projection, exposure, tonemapping, and MSAA, so PNG/video output uses the same
+  authored grade as the windowed presentation.
 - `--offscreen --api PORT` (without `--record-offline`) gives a windowless
   interactive instance: `StartOfflineRecording` / `CaptureScreenshot` work over
   HTTP and read the offscreen target.

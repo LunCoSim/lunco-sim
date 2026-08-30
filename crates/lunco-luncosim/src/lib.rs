@@ -4400,6 +4400,9 @@ fn maintain_offscreen_render_camera(
             Entity,
             &Transform,
             &Projection,
+            &bevy::camera::Exposure,
+            &bevy::core_pipeline::tonemapping::Tonemapping,
+            &bevy::render::view::Msaa,
             Option<&ChildOf>,
             Option<&CellCoord>,
         ),
@@ -4417,17 +4420,31 @@ fn maintain_offscreen_render_camera(
         ),
     >,
     mut mirrors: Query<(
+        Entity,
         &OffscreenRenderCamera,
         &mut Transform,
         &mut Projection,
         &mut Camera,
+        Option<&mut bevy::camera::Exposure>,
+        Option<&mut bevy::core_pipeline::tonemapping::Tonemapping>,
+        Option<&mut bevy::render::view::Msaa>,
         Option<&mut CellCoord>,
     )>,
     mut commands: Commands,
 ) {
     let Some(target) = target else { return };
     let mut source_iter = sources.iter();
-    let Some((source, source_transform, projection, parent, cell)) = source_iter.next() else {
+    let Some((
+        source,
+        source_transform,
+        projection,
+        source_exposure,
+        source_tonemapping,
+        source_msaa,
+        parent,
+        cell,
+    )) = source_iter.next()
+    else {
         return;
     };
     if source_iter.next().is_some() {
@@ -4444,8 +4461,17 @@ fn maintain_offscreen_render_camera(
     }
 
     let mut found = false;
-    for (mirror, mut mirror_transform, mut mirror_projection, mut camera, mut mirror_cell) in
-        &mut mirrors
+    for (
+        mirror_entity,
+        mirror,
+        mut mirror_transform,
+        mut mirror_projection,
+        mut camera,
+        mirror_exposure,
+        mirror_tonemapping,
+        mirror_msaa,
+        mut mirror_cell,
+    ) in &mut mirrors
     {
         if mirror.0 != source {
             camera.is_active = false;
@@ -4454,6 +4480,23 @@ fn maintain_offscreen_render_camera(
         found = true;
         *mirror_transform = source_transform.clone();
         *mirror_projection = projection.clone();
+        if let Some(mut exposure) = mirror_exposure {
+            *exposure = *source_exposure;
+        } else {
+            commands.entity(mirror_entity).try_insert(*source_exposure);
+        }
+        if let Some(mut tonemapping) = mirror_tonemapping {
+            *tonemapping = *source_tonemapping;
+        } else {
+            commands
+                .entity(mirror_entity)
+                .try_insert(*source_tonemapping);
+        }
+        if let Some(mut msaa) = mirror_msaa {
+            *msaa = *source_msaa;
+        } else {
+            commands.entity(mirror_entity).try_insert(*source_msaa);
+        }
         if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
             *mirror_cell = *source_cell;
         }
@@ -4466,6 +4509,9 @@ fn maintain_offscreen_render_camera(
             bevy::camera::RenderTarget::Image(target.0.clone().into()),
             source_transform.clone(),
             projection.clone(),
+            *source_exposure,
+            *source_tonemapping,
+            *source_msaa,
         ));
         if let Some(parent) = parent {
             entity.insert(parent.clone());
