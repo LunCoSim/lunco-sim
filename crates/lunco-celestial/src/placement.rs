@@ -480,7 +480,7 @@ fn stamp_low_precision_roots(
 /// for DEM-backed terrain. `SiteAnchor` only declares that the scene is mounted
 /// on a celestial surface; it does not select a terrain body.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct TerrainCurvatureChangeTracker<'w, 's> {
+pub struct TerrainCurvatureChangeTracker<'w, 's> {
     changed: Query<
         'w,
         's,
@@ -520,7 +520,7 @@ impl TerrainCurvatureChangeTracker<'_, '_> {
     }
 }
 
-pub(crate) fn sync_terrain_body_curvature(
+pub fn sync_terrain_body_curvature(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
     mut changes: TerrainCurvatureChangeTracker<'_, '_>,
