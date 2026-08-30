@@ -129,7 +129,10 @@ the side panels for tabbed dock trees.
 7. **Bottom panel (toggleable)** — workspace-dependent: Console, Plots,
    Timeline, etc. Collapsible to zero height.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
-   celestial body, FPS.
+   celestial body, FPS, and the latest status event. Warnings and errors
+   identify their level and source in the strip; the history popup keeps
+   events ordered and distinct, expands complete diagnostics, and copies
+   the unmodified message without depending on the window width.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
 

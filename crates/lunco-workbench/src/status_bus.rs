@@ -681,15 +681,28 @@ impl StatusBus {
     /// When work is in flight, picks the *longest-running* active
     /// entry rather than the most recently started — the latter
     /// flickered as concurrent drill-in / duplicate / projection
-    /// tasks rotated through `at`. The longest-running entry stays
-    /// pinned until it completes, then the next-oldest takes over.
-    /// Falls back to the most recent discrete history event when no
-    /// progress is active.
+    /// tasks rotated through `at`. A newer actionable discrete event
+    /// (warning, error, or attention) takes precedence so a failure
+    /// cannot be hidden behind an older long-running operation. The
+    /// longest-running entry stays pinned until it completes when no
+    /// newer actionable event exists. Falls back to the most recent
+    /// discrete history event when no progress is active.
     pub fn display_latest(&self) -> Option<&StatusEvent> {
-        self.active_progress
-            .values()
-            .min_by_key(|e| e.at)
-            .or_else(|| self.history.back())
+        let progress = self.active_progress.values().min_by_key(|e| e.at);
+        let latest = self.history.back();
+        match (progress, latest) {
+            (Some(progress), Some(latest))
+                if latest.at >= progress.at
+                    && matches!(
+                        latest.level,
+                        StatusLevel::Warn | StatusLevel::Error | StatusLevel::Attention
+                    ) =>
+            {
+                Some(latest)
+            }
+            (Some(progress), _) => Some(progress),
+            (None, latest) => latest,
+        }
     }
 
     /// Sequence number bumped on each push. Renderers use this for
@@ -833,9 +846,9 @@ pub fn surface_error_telemetry(
     };
 
     let message = if detail.is_empty() {
-        ev.name.clone()
+        format!("{} [source={}]", ev.name, ev.source)
     } else {
-        format!("{}: {}", ev.name, detail)
+        format!("{} [source={}]: {}", ev.name, ev.source, detail)
     };
 
     bus.push(TELEMETRY_SOURCE, level, message);
@@ -879,21 +892,38 @@ mod tests {
         app.add_plugins(StatusBusPlugin);
         app.world_mut().trigger(TelemetryEvent {
             name: "DEM_BUILD_FAILED".to_string(),
-            source: 0,
+            source: 42,
             severity: Severity::Error,
-            data: TelemetryValue::String("no ground was created".to_string()),
+            data: TelemetryValue::String(
+                "/twins/apollo15/terrain: no ground was created".to_string(),
+            ),
             timestamp: 0.0,
         });
 
         let bus = app.world().resource::<StatusBus>();
-        let found = bus
+        let event = bus
             .history()
-            .any(|e| e.level == StatusLevel::Error && e.message.contains("DEM_BUILD_FAILED"));
+            .find(|e| e.level == StatusLevel::Error)
+            .expect("Error telemetry must land on the bus");
         assert!(
-            found,
-            "Error telemetry must land on the bus: {:?}",
-            bus.history().map(|e| &e.message).collect::<Vec<_>>()
+            event.message.contains("DEM_BUILD_FAILED [source=42]")
+                && event.message.contains("/twins/apollo15/terrain")
         );
+    }
+
+    #[test]
+    fn newer_actionable_event_supersedes_older_progress() {
+        let mut bus = StatusBus::default();
+        bus.set_progress("scene", "loading", 1, 2);
+        bus.push(
+            "runtime",
+            StatusLevel::Error,
+            "scene failed [source=42]: missing prim /World/Terrain",
+        );
+
+        let shown = bus.display_latest().expect("status bar event");
+        assert_eq!(shown.level, StatusLevel::Error);
+        assert!(shown.message.contains("missing prim /World/Terrain"));
     }
 
     /// `TelemetryEvent` also carries ordinary simulation traffic (zone
