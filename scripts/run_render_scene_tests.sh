@@ -165,10 +165,18 @@ for scene in "${SCENES[@]}"; do
         if ! grep -Fq 'dome cubemap ready' "$log"; then
             reason="HDRI scene never completed its DomeLight cubemap projection"
         else
-            sky_mean="$(convert "$last" -crop "${RENDER_WIDTH}x$((RENDER_HEIGHT / 2))+0+0" \
-                -format '%[fx:mean]' info: 2>/dev/null)"
-            if ! awk -v mean="$sky_mean" 'BEGIN { exit !(mean + 0.0 > 0.01) }'; then
-                reason="HDRI sky region is effectively black (mean=${sky_mean:-unavailable})"
+            # Inspect only the upper sky band. The previous half-frame mean could
+            # pass on a bright ground horizon while the actual DomeLight sky was
+            # still the uniform clear color. A textured equirectangular sky must
+            # contribute tonal variation before the HDRI visual review is valid.
+            sky_height=$((RENDER_HEIGHT / 4))
+            read -r sky_mean sky_std < <(
+                convert "$last" -crop "${RENDER_WIDTH}x${sky_height}+0+0" \
+                    -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+            )
+            if ! awk -v mean="${sky_mean:-0}" -v std="${sky_std:-0}" \
+                'BEGIN { exit !(mean + 0.0 > 0.01 && std + 0.0 > 0.01) }'; then
+                reason="HDRI sky band is black or uniform (mean=${sky_mean:-unavailable}, std=${sky_std:-unavailable})"
             fi
         fi
     fi
