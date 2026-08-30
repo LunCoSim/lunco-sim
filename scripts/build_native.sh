@@ -348,6 +348,21 @@ prepare_package_icon() {
     fi
 }
 
+# Inspect the completed Linux AppImage, not only the pre-VPK staging
+# directory. Velopack owns the AppImage root desktop entry and icon; this
+# check ensures those generated files retain the fixed luncosim identity and
+# AppImage discovery contract.
+verify_linux_appimage() {
+    local appimage_dir="$1"
+    local appimage
+    appimage="$(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+    if [ -z "$appimage" ]; then
+        error "Velopack did not create a Linux AppImage in $appimage_dir"
+        return 1
+    fi
+    bash "$SCRIPT_DIR/verify_linux_appimage.sh" "$appimage"
+}
+
 # ── Write a README for the package ────────────────────────────────────────
 write_readme() {
     local dir="$1" binary="$2" platform="$3" arch="$4"
@@ -532,6 +547,14 @@ HOST_TRIPLE="$(detect_host_triple)"
 TRIPLE="${TARGET:-$HOST_TRIPLE}"
 PLATFORM="$(platform_short "$TRIPLE")"
 ARCH="$(arch_short "$TRIPLE")"
+
+# Keep one application identity across local windows, desktop entries, and
+# Velopack packages. Runtime-specific channels and package filenames still
+# separate each updater target.
+VPK_RUNTIME=""
+if [ "$VELOPACK" -eq 1 ]; then
+    VPK_RUNTIME="$(velopack_runtime "$TRIPLE")"
+fi
 
 if [ -n "$TARGET" ]; then
     info "Cross-compiling: $TRIPLE (host: $HOST_TRIPLE)"
@@ -729,14 +752,10 @@ if [ "$VELOPACK" -eq 1 ]; then
     fi
     rm -rf "$VELOPACK_OUT"
     mkdir -p "$VELOPACK_OUT"
-    VPK_RUNTIME="$(velopack_runtime "$TRIPLE")"
+    VPK_PACK_ID="luncosim"
     # Keep one feed per runtime so a client can never select another
     # architecture's full package. Velopack channels accept this slug format.
     VPK_CHANNEL="$VPK_RUNTIME"
-    # Include the runtime in the package id as well: Velopack's package
-    # filenames are derived from packId + version, and all runtime packages
-    # are published into one GitHub Release.
-    VPK_PACK_ID="LunCoSim-$VPK_RUNTIME"
     VPK_ICON_ARGS=()
     if [ -n "$PACKAGE_ICON" ]; then
         VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")
@@ -755,6 +774,9 @@ if [ "$VELOPACK" -eq 1 ]; then
     if ! find "$VELOPACK_OUT" -maxdepth 1 -type f -name "releases.$VPK_CHANNEL.json" -print -quit | grep -q .; then
         error "Velopack did not create releases.$VPK_CHANNEL.json in $VELOPACK_OUT"
         exit 1
+    fi
+    if [ "$PLATFORM" = "linux" ] && [ "$BINARY" = "luncosim" ]; then
+        verify_linux_appimage "$VELOPACK_OUT"
     fi
     success "Velopack release assembled: $VELOPACK_OUT"
 elif [ "$PACKAGE" -eq 1 ]; then
