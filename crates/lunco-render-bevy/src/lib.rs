@@ -16,6 +16,7 @@ mod env_light;
 pub mod horizon_shade;
 pub mod link_beams;
 pub mod look_cache;
+mod procedural_sky;
 mod scene_camera;
 mod sensor_beams;
 mod shader_look;
@@ -150,6 +151,7 @@ impl Plugin for LuncoRenderPlugin {
             shader_look::build_fast(app);
         } else {
             shader_look::build(app);
+            procedural_sky::build(app);
             // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
             // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
             // both were deleted when the material moved into this crate, because Bevy

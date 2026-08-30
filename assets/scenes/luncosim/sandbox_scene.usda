@@ -66,34 +66,15 @@ def Xform "SandboxScene" (
 
     # ── Sky ────────────────────────────────────────────────────────────────
     #
-    # The Moon has no atmosphere, so the sky is the star field itself. A finite
-    # dome 20 km out, drawn ADDITIVELY (`lunco:surface:additive`): additive
-    # surfaces depth-TEST but never depth-WRITE, so terrain in front still hides
-    # it while the Sun and Earth — which the ephemeris places at 1e8 m and
-    # beyond, far outside this dome — still show through. An opaque dome at any
-    # radius would swallow the whole sky.
-    #
-    # `doubleSided` because it is viewed from INSIDE, and `NotShadowCaster` via
-    # `primvars:doNotCastShadows` so a 20 km shell does not eclipse the arena
-    # the way the Sun's disc once did.
-    def Sphere "SkyDome" (
+    # The Moon has no atmosphere, so the sky is the star field itself. It is a
+    # camera background, not a finite shell: the explicit owner marker selects
+    # the renderer's fullscreen procedural path and therefore has no radius,
+    # culling AABB, or far-plane coupling.
+    def Xform "SkyDome" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     )
     {
-        # THE RADIUS IS ONLY THE CULLING VOLUME. The material's vertex stage
-        # (`info:wgsl:vertexAsset` on `Looks/Starfield/Shader`) re-anchors every
-        # vertex on the CAMERA at far depth, so neither radius nor placement
-        # affects what is drawn — the old 800 m far-plane compromise (and the
-        # circle of stars it collapsed to once a camera walked outside it) is
-        # gone. The sphere still feeds the CPU-side frustum-culling AABB, which
-        # knows nothing of the vertex stage: it must contain every camera
-        # position the scene can reach, or the sky vanishes the moment the
-        # origin-pinned box leaves the frustum. 1000 km covers the arena and any
-        # orbit view that focuses it.
-        double radius = 1000000
-        uniform bool doubleSided = true
-        bool primvars:doNotCastShadows = true
-        bool lunco:surface:additive = true
+        bool lunco:surface:skybox = true
         rel material:binding = </SandboxScene/Looks/Starfield>
     }
 
@@ -138,10 +119,6 @@ def Xform "SandboxScene" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                # The VERTEX stage is the same file: its `@vertex` re-anchors the
-                # dome on the camera at far depth, which is what frees the
-                # `SkyDome` radius/origin from mattering (see that prim).
-                uniform asset info:wgsl:vertexAsset = @lunco://shaders/starfield.wgsl@
                 # Keep the star field subordinate to the physical Sun.  The
                 # camera is HDR and blooms bright emitters; overdriving these
                 # additive values makes ordinary stars compete with the Sun.

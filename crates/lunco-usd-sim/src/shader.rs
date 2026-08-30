@@ -34,7 +34,7 @@
 use bevy::prelude::*;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
-    to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
+    to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::{
@@ -216,6 +216,26 @@ fn apply_usd_shader_material_read(
     // 88-92% identical and had already drifted apart twice; a shader_def cannot.
     let resolved_shader_path = shader_path;
 
+    // A procedural sky is an explicit scene owner, not an inference from a
+    // shader filename or from a finite Sphere. The renderer consumes the same
+    // ShaderLook values but routes this marked look through its camera
+    // background pass, so camera position and frustum size cannot make the sky
+    // disappear.
+    let procedural_skybox = match read_authored_bool_strict(
+        reader,
+        sdf_path,
+        "lunco:surface:skybox",
+    ) {
+        Ok(value) => value.unwrap_or(false),
+        Err(_) => {
+            error!(
+                "[shader] prim {} has malformed authored attribute `lunco:surface:skybox`; keeping its PbrLook",
+                prim_path.path
+            );
+            return;
+        }
+    };
+
     debug!(
         "[shader] applied {} to {}",
         resolved_shader_path, prim_path.path
@@ -283,12 +303,11 @@ fn apply_usd_shader_material_read(
     // this is a vendor attribute covering only the genuinely new part (AGENTS.md
     // rule 1); opacity keeps its standard meaning in the fallback below.
     //
-    // What it buys: an emissive backdrop that must not OCCLUDE. An additive
+    // What it buys: an emissive surface that must not OCCLUDE. An additive
     // surface is binned into the transparent phase, which depth-TESTS but does
-    // not depth-WRITE — so terrain in front still hides it, while anything
-    // farther away still shows through it. That is what lets a finite starfield
-    // dome sit 20 km out without clipping the bodies the ephemeris places at
-    // 10^8 m and beyond; an opaque dome swallows the whole sky.
+    // not depth-WRITE — so geometry in front still hides it, while anything
+    // farther away still shows through it. Procedural camera backgrounds use
+    // their dedicated Core3d pass instead and do not need this surface mode.
     let additive = match read_authored_bool_strict(reader, sdf_path, "lunco:surface:additive") {
         Ok(value) => value.unwrap_or(false),
         Err(_) => {
@@ -320,10 +339,9 @@ fn apply_usd_shader_material_read(
         }
     };
     // Optional per-material VERTEX stage, named exactly as the fragment source is:
-    // `info:wgsl:vertexAsset` on the same `Shader` prim. The starfield's skybox
-    // anchor is the worked example — its `@vertex` re-centres the dome on the
-    // camera at far depth, so the authored sphere's radius/origin stop mattering.
-    // Same normalisation as `sourceAsset` so `@lunco://…@` and bare paths agree.
+    // `info:wgsl:vertexAsset` on the same `Shader` prim. Same normalisation as
+    // `sourceAsset` so `@lunco://…@` and bare paths agree. Procedural camera
+    // backgrounds omit this mesh stage and use the renderer's fullscreen vertex.
     let vertex_shader = reader
         .asset(&shader_prim, "info:wgsl:vertexAsset")
         .map(|raw| lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(&raw)));
@@ -346,10 +364,13 @@ fn apply_usd_shader_material_read(
     // the bound gprim (for example a plume's `inputs:throttle`) are admitted by
     // the wiring pass. `UsdVisualSynced` only says that a prim was projected; it
     // is not proof that the prim owns a named port surface.
-    commands
-        .entity(entity)
+    let mut entity_commands = commands.entity(entity);
+    entity_commands
         .remove::<PbrLook>()
         .try_insert((look, lunco_core::PortSurfaceReady));
+    if procedural_skybox {
+        entity_commands.try_insert(ProceduralSkybox);
+    }
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a

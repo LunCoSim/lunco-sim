@@ -113,6 +113,11 @@ assets/components/
 │   └── motor_thermal.usda
 ```
 
+`environment/starfield_sky.usda` is a reusable procedural camera-background
+component. It owns a `ShaderLook` and the `lunco:surface:skybox` intent; the
+renderer draws it with a fullscreen pass, so it does not contain a finite dome
+mesh or provide ambient lighting.
+
 `power_bus.usda` is a passive USD bus/membership node; it is not a wrapper for
 `LunCo.Electrical.PDU`. `descent_guidance.usda` is the shipped powered-descent
 guidance overlay; there is no duplicate `powered_descent_guidance.usda` spelling.

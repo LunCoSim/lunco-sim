@@ -2175,14 +2175,6 @@ fn project_env_settings(
             // scene ambient as the sum over authored domes, which is what UsdLux
             // semantics require (lights add).
             //
-            // Keeping both spellings is what caused the bug. This projector
-            // ASSIGNED the custom attribute's value, the dome sum ASSIGNED its own,
-            // and a *textured* dome contributes nothing to that sum — so loading a
-            // starfield dome zeroed the regolith bounce a scene had authored here,
-            // and the memoised `last` guard meant this system never ran again to
-            // put it back. Two writers, one field, order-dependent: a scene that
-            // rendered correctly could go dark on an unrelated change.
-            //
             // Scenes author the bounce as a `DomeLight` prim now. There is
             // deliberately no fallback read.
             // Earthshine is not projected here either. It is an authored

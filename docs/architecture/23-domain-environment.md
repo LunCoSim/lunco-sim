@@ -88,6 +88,9 @@ Two consequences that are not obvious:
   the strictly better version of the same quantity. So adding a starfield sky will not
   darken an authored fill, but replacing a fill dome's texture with one will remove it from
   the sum entirely.
+- A procedural starfield camera background is not a `DomeLight` and contributes no
+  illumination. Its USD material is rendered as an emissive fullscreen backdrop;
+  authored `DomeLight`/earthshine values remain the lighting source.
 - **There is no `lunco:env:ambientBrightness`.** It is **deleted, not deprecated**, with
   deliberately **no fallback read**.
 

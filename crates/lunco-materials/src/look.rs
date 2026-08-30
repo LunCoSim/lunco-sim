@@ -201,6 +201,14 @@ pub struct ShaderLook {
     pub double_sided: bool,
 }
 
+/// Marks a shader look as the scene's procedural camera background.
+///
+/// The marker is render-free intent. The renderer consumes the same
+/// [`ShaderLook`] values and material asset, but draws this look once in the
+/// core 3D background pass instead of requiring a finite enclosing mesh.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ProceduralSkybox;
+
 /// Main-world proof that [`ShaderLook`] has been resolved to a concrete mesh
 /// material by the render binder.
 ///

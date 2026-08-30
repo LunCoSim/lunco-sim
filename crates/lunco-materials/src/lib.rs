@@ -38,7 +38,9 @@ pub use catalog::{
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use engine_params::{engine_params, AttrRead, EngineParam, EngineParams, EngineSource};
-pub use look::{ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer};
+pub use look::{
+    ProceduralSkybox, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer,
+};
 pub use naming::to_snake_case;
 pub use vertex::{
     ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
