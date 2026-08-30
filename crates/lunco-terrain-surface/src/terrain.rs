@@ -34,11 +34,10 @@ use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
-use web_time::Instant;
 
 /// Telemetry event name published when a DEM terrain build does not produce a
-/// terrain: an unreadable/unfetchable heightmap, a failed worker dispatch, a
-/// failed coarse bake stage, or a build that wedged before a terrain existed.
+/// terrain: an unreadable/unfetchable heightmap, a failed worker dispatch, or a
+/// failed coarse bake stage before a terrain existed.
 /// The payload is a human-readable string naming the site/DEM and the cause.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
@@ -58,9 +57,9 @@ pub const DEM_REFINEMENT_FAILED: &str = "DEM_REFINEMENT_FAILED";
 pub const TERRAIN_BUILD_FAULT_KIND: &str = "terrain-build-failed";
 
 /// Construct terrain failure telemetry for the selected lifecycle phase.
-/// Keeping the mnemonic and severity decision here prevents native, web, and
-/// watchdog paths from disagreeing about whether a coarse or full-stage error
-/// is terminal.
+/// Keeping the mnemonic and severity decision here prevents native and web
+/// paths from disagreeing about whether a coarse or full-stage error is
+/// terminal.
 fn dem_failure_event(
     detail: impl Into<String>,
     disposition: DemBuildFailureDisposition,
@@ -335,28 +334,6 @@ pub struct TerrainGenStatus {
     pub user_dismissed: bool,
 }
 
-/// Safety valve: if a build's components linger this long (a lost worker reply,
-/// a wedged bake) the build is declared dead. Matches the spirit of the 30 s
-/// ground-collider gate — degrade loudly rather than freeze the screen behind a
-/// spinner.
-///
-/// It used to clear only the OVERLAY, which made the UI *lie*: the spinner went
-/// away while the `DemTerrainRequest` / `DemWorkerJob` stayed on the entity
-/// forever, so the app read "generating" (physics still held, `start_dem_builds`
-/// still skipping the entity) while the user read "done". The watchdog now
-/// cancels the actual job and reports it, so the two stories agree.
-pub(crate) const TERRAIN_WORK_MAX_SECS: f32 = 60.0;
-
-/// Wall-clock start of the current scene-owned terrain generation window.
-///
-/// This is a resource rather than a `Local` so the shared scene-teardown
-/// boundary can reset it before the replacement Twin starts. The next Twin
-/// must never inherit the outgoing Twin's watchdog age.
-#[derive(Resource, Default)]
-struct TerrainGenWatchdog {
-    started_at: Option<Instant>,
-}
-
 /// Mark a DEM build as a terminal scene fault and release the terrain hold
 /// immediately. The fault pauses physics through the shared safety gate while
 /// leaving the process and Twin manager alive, so a replacement scene can clear
@@ -379,6 +356,7 @@ fn mark_dem_build_failed(
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 enum DemBuildFailureDisposition {
     Terminal,
     Refinement,
@@ -414,7 +392,6 @@ fn cancel_terrain_generation_on_scene_teardown(
         )>,
     >,
     mut status: ResMut<TerrainGenStatus>,
-    mut watchdog: ResMut<TerrainGenWatchdog>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     for entity in &requests {
@@ -423,7 +400,6 @@ fn cancel_terrain_generation_on_scene_teardown(
             .try_remove::<(DemTerrainRequest, DemBuildTask, DemWorkerJob)>();
     }
     *status = TerrainGenStatus::default();
-    *watchdog = TerrainGenWatchdog::default();
     if let Some(mut holds) = holds {
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, false);
     }
@@ -439,15 +415,11 @@ fn cancel_terrain_generation_on_scene_teardown(
 /// state to a real fraction: `Preparing` → `Building` (coarse) → `Refining`
 /// (full). Native is one async task with no incremental signal → indeterminate.
 fn update_terrain_gen_status(
-    mut commands: Commands,
     // `has_request` distinguishes web's two worker phases: the request is dropped
     // once the coarse grid lands, so `job && !request` = refining the full grid.
     requests: Query<(Entity, &DemTerrainRequest, Has<DemBuildTask>)>,
     worker_jobs: Query<(Entity, Option<&DemTerrainRequest>, &DemWorkerJob)>,
     mut status: ResMut<TerrainGenStatus>,
-    mut watchdog: ResMut<TerrainGenWatchdog>,
-    mut faults: ResMut<lunco_core::RuntimeFaults>,
-    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let mut baking = false; // native async bake task in flight
     let mut queued = false; // a request exists (queued or mid-bake)
@@ -484,8 +456,8 @@ fn update_terrain_gen_status(
     }
     // Only show the giant centered loader overlay during preparation, download,
     // and coarse build (before the first mesh/collider lands). Background
-    // refinement runs silently, but remains part of the liveness window so a
-    // lost full-resolution reply cannot leak a worker job forever.
+    // refinement runs silently but remains part of the generation state until
+    // its owned task publishes a result or scene teardown cancels the task.
     let overlay_active = queued || streaming_coarse;
     let generation_present = overlay_active || refining_full;
 
@@ -493,82 +465,6 @@ fn update_terrain_gen_status(
         if status.active || status.user_dismissed {
             *status = TerrainGenStatus::default();
         }
-        watchdog.started_at = None;
-        return;
-    }
-
-    let started_at = *watchdog.started_at.get_or_insert_with(Instant::now);
-    let elapsed = Instant::now()
-        .saturating_duration_since(started_at)
-        .as_secs_f32();
-
-    if elapsed > TERRAIN_WORK_MAX_SECS {
-        warn!(
-            "[terrain] generation held {TERRAIN_WORK_MAX_SECS}s — cancelling the wedged build \
-             (lost worker reply or stuck bake?)"
-        );
-        // CANCEL THE JOB, not just the spinner. Dropping `DemBuildTask` drops the
-        // `Task` (which cancels the native bake); removing `DemWorkerJob` fires
-        // `cancel_worker_job_on_remove`, which retires the id in the worker
-        // client so a late reply can't land on a recycled entity. Dropping
-        // `DemTerrainRequest` releases the physics hold and makes the entity
-        // eligible for a fresh `start_dem_builds` attempt (e.g. a re-issued
-        // `SpawnDemTerrain`) instead of being skipped forever.
-        let mut stuck: Vec<String> = Vec::new();
-        let mut failure_entity = None;
-        let mut missing_ground = false;
-        for (entity, req, _) in &requests {
-            failure_entity.get_or_insert(entity);
-            missing_ground = true;
-            stuck.push(
-                req.uri
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(req.uri.as_str())
-                    .to_string(),
-            );
-            commands
-                .entity(entity)
-                .try_remove::<(DemTerrainRequest, DemBuildTask)>();
-        }
-        for (entity, req, _) in &worker_jobs {
-            failure_entity.get_or_insert(entity);
-            missing_ground |= req.is_some();
-            commands
-                .entity(entity)
-                .try_remove::<(DemTerrainRequest, DemWorkerJob)>();
-        }
-        let named = if stuck.is_empty() {
-            status.site.clone()
-        } else {
-            stuck.join(", ")
-        };
-        let detail = if missing_ground {
-            format!(
-                "Terrain build for '{named}' gave no result after {TERRAIN_WORK_MAX_SECS:.0}s and was \
-                 cancelled — the ground is missing. Reload the scene to retry."
-            )
-        } else {
-            format!(
-                "Terrain refinement for '{named}' gave no result after {TERRAIN_WORK_MAX_SECS:.0}s and \
-                 was cancelled; the already-built coarse terrain remains active."
-            )
-        };
-        report_dem_build_failed(
-            &mut commands,
-            &mut faults,
-            holds.as_deref_mut(),
-            failure_entity,
-            detail,
-            if missing_ground {
-                DemBuildFailureDisposition::Terminal
-            } else {
-                DemBuildFailureDisposition::Refinement
-            },
-        );
-        *status = TerrainGenStatus::default();
-        watchdog.started_at = None;
         return;
     }
 
@@ -2929,7 +2825,6 @@ pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .init_resource::<TerrainEditSeq>()
         .init_resource::<TerrainGenStatus>()
-        .init_resource::<TerrainGenWatchdog>()
         .init_resource::<lunco_core::RuntimeFaults>()
         .init_resource::<crate::stream_viz::LodMeshCache>()
         .add_message::<RegenerateTerrainLayers>()
@@ -3034,7 +2929,6 @@ mod visual_product_tests {
     fn queued_generation_status_is_indeterminate() {
         let mut app = App::new();
         app.init_resource::<TerrainGenStatus>()
-            .init_resource::<TerrainGenWatchdog>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .add_systems(Update, update_terrain_gen_status);
         app.world_mut().spawn(DemTerrainRequest {
@@ -3064,7 +2958,6 @@ mod visual_product_tests {
     fn scene_teardown_cancels_generation_and_clears_status() {
         let mut app = App::new();
         app.init_resource::<TerrainGenStatus>();
-        app.init_resource::<TerrainGenWatchdog>();
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -3103,11 +2996,6 @@ mod visual_product_tests {
             .world()
             .resource::<lunco_physics::PhysicsHolds>()
             .holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
-        assert!(app
-            .world()
-            .resource::<TerrainGenWatchdog>()
-            .started_at
-            .is_none());
     }
 
     #[test]
