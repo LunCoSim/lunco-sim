@@ -836,8 +836,8 @@ fn sandbox_window(
     } else {
         window.resolution = bevy::window::WindowResolution::new(1280, 720);
     }
-    // Stable OS application identity: development windows and packaged
-    // desktop entries use the same generated LunCoSim icon name.
+    // Keep the OS application identity aligned with the generated desktop
+    // entry and icon name.
     window.name = Some("luncosim".to_string());
     // `merged_titlebar_window` removes Windows' native frame, so the workbench
     // supplies edge-resize hit testing and forwards it to winit with

@@ -186,6 +186,28 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" =~ ^(six_wheel_visual|rocker_bogie_antenna_visual|parts_attached_visual)$ ]]; then
+        # These fixtures are authored visual reviews, so a successful process
+        # and a PNG are not enough: reject black or empty captures by checking
+        # a subject-centred region for real tonal structure.
+        roi_width=$((RENDER_WIDTH / 2))
+        roi_height=$((RENDER_HEIGHT * 2 / 3))
+        roi_x=$((RENDER_WIDTH / 4))
+        roi_y=$((RENDER_HEIGHT / 6))
+        read -r subject_mean subject_std < <(
+            convert "$last" \
+                -crop "${roi_width}x${roi_height}+${roi_x}+${roi_y}" \
+                -colorspace Gray \
+                -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        if ! awk -v mean="${subject_mean:-0}" -v std="${subject_std:-0}" \
+            'BEGIN { exit !(mean + 0.0 > 0.08 && std + 0.0 > 0.025) }'; then
+            reason="subject region is black or visually flat (mean=${subject_mean:-unavailable}, std=${subject_std:-unavailable})"
+        else
+            echo "    pixels — subject mean=${subject_mean} std=${subject_std}"
+        fi
+    fi
+
     if [[ -n "$reason" ]]; then
         overall=1
         echo "    FAIL — $reason"

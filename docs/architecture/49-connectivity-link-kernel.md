@@ -47,6 +47,15 @@ values. `query("Links")` reports policy-approved direct rover↔earth,
 rover↔base, and rover↔relay edges, while `query("WifiLinks")` reports the
 short-range rover radio graph.
 
+The physical USD topology follows the same boundary. `components/comms/antenna.usda`
+is the passive steerable dish and owns the directional feed phase centre;
+`components/comms/radio.usda` is an optional active link-budget device composed
+over that directional endpoint. `components/comms/wifi_radio.usda` is a separate
+chassis-mounted device. It owns its own `LunCoWifiAPI` endpoint and generic link
+geometry source, so Wi-Fi state cannot be mistaken for the dish's Earth/relay
+state. A vessel mounts both devices explicitly; the antenna never carries the
+Wi-Fi API.
+
 `class` is an authored role string. The direct policy permits authored rover↔Earth,
 rover↔base, and rover↔relay roles; it does not turn rover↔rover geometry into a
 direct-link edge. **The core never interprets the role** — it is passed

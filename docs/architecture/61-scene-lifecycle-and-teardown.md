@@ -46,6 +46,12 @@ transaction. All three scene commands—`LoadScene`, `ClearScene`, and
 `RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
 transition merely because it entered through a different command.
 
+Consumers that own transient execution must wind down at `Started` and attach
+again only from `Completed`. The tutorial launcher preserves the active
+lesson's resolved source across `RestartScene`, then recreates its host and HUD
+on the restarted scene; a failed restart clears that lesson and reports the
+typed failure.
+
 ## Everything else — the `SceneTeardown` schedule
 
 Resources, caches, worker-side handles, and subsystem-derived entity trees are

@@ -221,9 +221,12 @@ of a link inside a link attached to nothing.
 - `assets/scenes/tests/lint_selftest.usda` + `scenarios/tests/lint_selftest.rhai` —
   the chain end to end (facts → hook → rules → report → query), including the
   false-positive guard that a correctly jointed nested body stays silent.
-- `assets/scenes/tests/parts_attached.usda` — the **behavioural** counterpart:
-  four rovers driven 12 s, and no descendant may move more than 0.5 m relative to
-  its vessel. Lint catches the authoring; this catches the physics.
+- `assets/scenes/tests/parts_attached.usda` and
+  `assets/scenes/tests/parts_attached_ackermann.usda` — the **behavioural**
+  counterpart: each pair drives for 12 s, and no descendant may move more than
+  0.5 m relative to its vessel. The pair fixtures keep physical warmup stable
+  while covering both rover types and both drivetrain realizations. Lint catches
+  the authoring; this catches the physics.
 
 ## Traps
 

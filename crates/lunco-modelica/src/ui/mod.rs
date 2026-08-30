@@ -812,7 +812,6 @@ impl Plugin for ModelicaUiPlugin {
             .register_perspective_help(
                 lunco_workbench::PerspectiveId("modelica_analyze"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "Lunica",
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![

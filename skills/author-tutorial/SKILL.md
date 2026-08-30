@@ -98,6 +98,12 @@ That's it. `StartTutorial{id}` mounts the declared world, then loads the script 
 it. The 🎓 Tutorials panel and the host's configured tutorial entry point launch
 the same command.
 
+`RestartScene` is a full scene transaction. The shared launcher stops the
+active host and clears its HUD before teardown, then reattaches the same
+resolved lesson source after the restart completion edge. A failed restart
+abandons the lesson visibly; authored tutorials must not add a second loader or
+polling-based recovery path.
+
 ## Two kinds of lesson
 
 - **Coach-mark tour** (narrated slideshow) — `coach_step(steps, i)` (or
@@ -186,9 +192,9 @@ spotlight. Unattended gates omit this presentation-only command. lunica ids incl
 `panel.modelica_plot` — spotlight but don't `focus`. Full list: `assets/tutorials/lunica/README.md`.
 
 For luncosim, use `panel.center`, `panel.side_browser`,
-`panel.right_inspector`, and `panel.bottom` for workbench docks. The title-bar
-menus and transport expose `menu.time`, `menu.network`, `menu.help`, and
-`toolbar.run`; perspective tabs use
+`panel.right_inspector`, and `panel.bottom` for workbench docks. File → Network
+and the other title-bar menus expose `menu.network`, `menu.time`, `menu.help`,
+and `toolbar.run`; perspective tabs use
 `menu.perspective.<registered-perspective-id>`, such as
 `menu.perspective.rover_build`. An empty viewport keeps its normal presentation
 visible while a tour card is shown, so UI-only lessons do not need an opaque

@@ -88,16 +88,18 @@ dirty state, and the canonical public repository. Help renders the version and
 a clickable GitHub commit URL; dirty builds retain the dirty marker instead of
 pretending to be a release. The BuildIdentity unit test covers URL generation.
 
-### APP-04 / APP-05 — Unicode glyphs were reintroduced and native icon output
-is incomplete
+### APP-04 / APP-05 — Unicode glyphs were reintroduced and Linux package
+identity was incomplete
 
 The titlebar already uses vector-painted controls because missing glyphs become
 tofu. Other current menus, help, tutorial, and Modelica controls still use
 emoji/Unicode glyphs as visual icons. That is the regression after the earlier
 tofu cleanup: the fallback font is not the root fix. Separately,
-`lunco-luncosim/build.rs` rasterizes an SVG for `winit::Window::set_window_icon`,
-but no native executable resource is embedded; packaging the generated desktop
-assets cannot give a Windows PE executable its file icon.
+`lunco-luncosim/build.rs` rasterizes an SVG for `winit::Window::set_window_icon`.
+The latest GitHub Linux AppImage contains a valid root PNG and `.DirIcon`, but
+its generated desktop entry declares `StartupWMClass=LunCoSim-linux-x64` while
+the compiled Bevy/winit window used `luncosim`. That identity mismatch prevents
+Linux shells from associating the running window with the packaged icon.
 
 **Implementation:** all scanned UI control glyphs were replaced with the shared
 vector `UiIcon` vocabulary, including Mission Control, Celestial time, busy
@@ -106,8 +108,10 @@ the canonical per-platform SVG and emits the package-native outputs: an
 embedded Windows ICO/PE resource, a macOS iconset for `iconutil`, and Linux
 hicolor PNGs. `build_native.sh` passes the resulting `.ico`, `.icns`, or `.png`
 to Velopack, so the main executable and the generated installer/AppImage use
-the same source artwork. A fresh GitHub Actions package and platform-native
-inspection remain required for acceptance.
+the same source artwork. `build_native.sh` now uses the fixed `luncosim`
+identity for both the compiled Linux window and Velopack package, then verifies
+the completed AppImage's root desktop/icon contract. A fresh GitHub Actions
+package and platform-native inspection remain required for acceptance.
 
 ### APP-06 — Lunokhod 2 terrain path needs runtime lifecycle proof
 

@@ -88,7 +88,7 @@ Re-reads the cert only at startup — restart the process after a renewal.
 
 ### Browser
 1. Open `https://<your-web-host>/` in a WebGPU-capable browser.
-2. **Network → Connect** (pre-fills the page origin `:5888`), or deep-link:
+2. **File → Network → Connect** (pre-fills the page origin `:5888`), or deep-link:
    `https://<your-web-host>/?connect=<server-host>`
 3. The browser standalone luncosim also runs fully offline (WASM does the sim) —
    the server is only needed for networked/multiplayer.

@@ -24,6 +24,25 @@
 // for its exit code. Helpers come from `prelude/auto_tests.rhai` and
 // `prelude/nav.rhai` (`yaw_delta_deg`, which reports right-hand yaw POSITIVE).
 
+fn port_value(target, name, direction) {
+    let record = query("ReadPorts", #{ api_id: target });
+    if record == () || record.ports == () { return (); }
+    for port in record.ports {
+        if port.name == name && port.direction == direction {
+            return port.value;
+        }
+    }
+    ()
+}
+
+fn set_headlights(target, value) {
+    let result = cmd("SetPorts", #{
+        target: target,
+        writes: [["headlights", value]],
+    });
+    result.ok
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.phase_start = 0.0;
@@ -35,6 +54,9 @@ fn on_start(me) {
 
     this.rover = find("/SixWheelTest/Rover");
     this.camera = find("/SixWheelTest/Rover/FrontCamera");
+    this.controller = find("/SixWheelTest/Rover/HeadlightController_L");
+    this.light = find("/SixWheelTest/Rover/Headlight_L/Light");
+    this.light_right = find("/SixWheelTest/Rover/Headlight_R/Light");
 
     this.dist_straight = 0.0;
     this.yaw_straight = 0.0;
@@ -54,7 +76,8 @@ fn on_start(me) {
     this.phase = "settle";
 
     print("[6w] ── authored wheel→port bindings ─────────────────────────");
-    print("[6w] rover gid=" + this.rover + " camera gid=" + this.camera);
+    print("[6w] rover gid=" + this.rover + " camera gid=" + this.camera +
+          " headlight controller gid=" + this.controller + " light gid=" + this.light);
 }
 
 fn on_tick(me) {
@@ -69,6 +92,14 @@ fn on_tick(me) {
 
     if this.camera == () || this.camera < 0 {
         fail_fast("mounted front camera not found (gid=" + this.camera + ") — wrong scene or asset?",
+                  "SIX WHEEL", "SIX_WHEEL");
+        this.phase = "done";
+        return;
+    }
+
+    if this.controller == () || this.controller < 0 || this.light == () || this.light < 0 ||
+       this.light_right == () || this.light_right < 0 {
+        fail_fast("reusable headlight controller or lamp did not compose",
                   "SIX WHEEL", "SIX_WHEEL");
         this.phase = "done";
         return;
@@ -130,6 +161,49 @@ fn on_tick(me) {
         if dyaw != () { this.yaw_steer += dyaw; }
         if leg >= this.steer_s {
             drive(this.rover, 0.0, 0.0);
+            if !set_headlights(this.rover, 1.0) {
+                fail_fast("Rhai could not issue the semantic headlights=1 command",
+                          "SIX WHEEL", "SIX_WHEEL");
+                this.phase = "done";
+                return;
+            }
+            this.phase = "lights_on";
+            this.phase_start = this.t;
+            print("[6w] LIGHTS ON: Rhai command -> Modelica photometry/load");
+        }
+    } else if this.phase == "lights_on" {
+        if leg >= 0.5 {
+            this.lights_on = port_value(this.rover, "headlight_left_intensity", "Out");
+            this.lights_on_right = port_value(this.rover, "headlight_right_intensity", "Out");
+            this.power_on = port_value(this.rover, "headlight_left_power_w", "Out");
+            this.power_on_right = port_value(this.rover, "headlight_right_power_w", "Out");
+            this.render_on = port_value(this.light, "light_intensity", "In");
+            this.render_on_right = port_value(this.light_right, "light_intensity", "In");
+            if this.lights_on == () || this.lights_on_right == () || this.power_on == () ||
+               this.power_on_right == () || this.render_on == () || this.render_on_right == () {
+                fail_fast("headlight on-state did not expose Modelica and scene-property ports",
+                          "SIX WHEEL", "SIX_WHEEL");
+                this.phase = "done";
+                return;
+            }
+            if !set_headlights(this.rover, 0.0) {
+                fail_fast("Rhai could not issue the semantic headlights=0 command",
+                          "SIX WHEEL", "SIX_WHEEL");
+                this.phase = "done";
+                return;
+            }
+            this.phase = "lights_off";
+            this.phase_start = this.t;
+            print("[6w] LIGHTS OFF: Modelica output must return to zero");
+        }
+    } else if this.phase == "lights_off" {
+        if leg >= 0.5 {
+            this.lights_off = port_value(this.rover, "headlight_left_intensity", "Out");
+            this.lights_off_right = port_value(this.rover, "headlight_right_intensity", "Out");
+            this.power_off = port_value(this.rover, "headlight_left_power_w", "Out");
+            this.power_off_right = port_value(this.rover, "headlight_right_power_w", "Out");
+            this.render_off = port_value(this.light, "light_intensity", "In");
+            this.render_off_right = port_value(this.light_right, "light_intensity", "In");
             this.phase = "done";
             verdict(#{
                 dist: this.dist_straight,
@@ -141,6 +215,18 @@ fn on_tick(me) {
                 camera_gap_error: this.camera_gap_error,
                 camera_fwd_min_dot: this.camera_fwd_min_dot,
                 pos: p,
+                lights_on: this.lights_on,
+                lights_on_right: this.lights_on_right,
+                lights_off: this.lights_off,
+                lights_off_right: this.lights_off_right,
+                power_on: this.power_on,
+                power_on_right: this.power_on_right,
+                power_off: this.power_off,
+                power_off_right: this.power_off_right,
+                render_on: this.render_on,
+                render_on_right: this.render_on_right,
+                render_off: this.render_off,
+                render_off_right: this.render_off_right,
             });
             return;
         }
@@ -209,6 +295,35 @@ fn verdict(s) {
         "mounted camera forward alignment fell to " + r4(s.camera_fwd_min_dot) +
         "; the onboard view no longer faces the rover's travel direction"));
 
+    f.push(t_true(s.lights_on > 1000.0,
+        "Modelica headlight output stayed at " + r2(s.lights_on) + " lm after the on command"));
+    f.push(t_true(s.lights_on_right > 1000.0,
+        "right Modelica headlight output stayed at " + r2(s.lights_on_right) +
+        " lm after the on command"));
+    f.push(t_true(s.power_on > 0.1,
+        "Modelica headlight load stayed at " + r2(s.power_on) + " W after the on command"));
+    f.push(t_true(s.power_on_right > 0.1,
+        "right Modelica headlight load stayed at " + r2(s.power_on_right) +
+        " W after the on command"));
+    f.push(t_true(s.render_on > 1000.0 && (s.render_on - s.lights_on).abs() < 1.0,
+        "USD light received " + r2(s.render_on) + " lm instead of the Modelica result " +
+        r2(s.lights_on) + " lm"));
+    f.push(t_true(s.render_on_right > 1000.0 &&
+                 (s.render_on_right - s.lights_on_right).abs() < 1.0,
+        "right USD light received " + r2(s.render_on_right) +
+        " lm instead of the Modelica result " + r2(s.lights_on_right) + " lm"));
+    f.push(t_true(s.lights_off.abs() < 0.001 && s.power_off.abs() < 0.001,
+        "Modelica headlight off command left intensity=" + r2(s.lights_off) +
+        " lm and power=" + r2(s.power_off) + " W"));
+    f.push(t_true(s.lights_off_right.abs() < 0.001 && s.power_off_right.abs() < 0.001,
+        "right Modelica headlight off command left intensity=" + r2(s.lights_off_right) +
+        " lm and power=" + r2(s.power_off_right) + " W"));
+    f.push(t_true(s.render_off.abs() < 0.001,
+        "USD light stayed at " + r2(s.render_off) + " lm after the off command"));
+    f.push(t_true(s.render_off_right.abs() < 0.001,
+        "right USD light stayed at " + r2(s.render_off_right) +
+        " lm after the off command"));
+
     print("[6w] ── results ───────────────────────────────────────────");
     print("[6w]   straight travel " + r2(s.dist) + " m");
     print("[6w]   yaw straight    " + r2(s.yaw_straight) + " deg (must be small)");
@@ -216,6 +331,12 @@ fn verdict(s) {
     print("[6w]   camera height   " + r2(s.camera.height) + " m");
     print("[6w]   camera gap err  " + r4(s.camera_gap_error) + " m");
     print("[6w]   camera fwd dot  " + r4(s.camera_fwd_min_dot));
+    print("[6w]   headlight on    " + r2(s.lights_on) + " lm / " + r2(s.power_on) + " W");
+    print("[6w]   headlight on R  " + r2(s.lights_on_right) + " lm / " +
+          r2(s.power_on_right) + " W");
+    print("[6w]   headlight off   " + r2(s.lights_off) + " lm / " + r2(s.power_off) + " W");
+    print("[6w]   headlight off R " + r2(s.lights_off_right) + " lm / " +
+          r2(s.power_off_right) + " W");
 
     report_verdict(f, "SIX WHEEL", "SIX_WHEEL");
 }

@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "VisualReviewCamera"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Shared observer for deterministic tutorial visual reviews. The fixture owns
+# the subject-specific pose; this component owns the camera/avatar contract and
+# the canonical lunar projection.
+def Camera "VisualReviewCamera" (
+    prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+    prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
+)
+{
+    uniform bool lunco:avatar = true
+    uniform token lunco:cameraMode = "freeflight"
+    double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
+    double3 xformOp:translate = (0.0, 18.0, 82.0)
+    float focalLength = 18.0
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
