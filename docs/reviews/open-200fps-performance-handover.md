@@ -544,6 +544,33 @@ Verification:
   recorded missing HDRI and fallback-pixel conditions.
 - No missing-result, scheduler, or process-cleanup error occurred.
 
+#### 2026-08-30 merged-main verification
+
+After merging `main` into the USD optimization branch, the USD checkout was
+rebuilt in its own `target/` and the production binary reran the focused and
+authored gates. The results below are the post-merge baseline; unchanged tests
+were not repeated after this run.
+
+- `cargo test -p lunco-usd-sim -j 4`: all 127 unit tests, 6 reader tests, 6
+  drivetrain-parity tests, 15 hook-synthesizer tests, and 20 connection-
+  derivation tests passed.
+- `cargo test -p lunco-celestial --test terrain_curvature_determinism -j 1`:
+  **5/5** passed. The public placement contract is exercised directly by the
+  integration test.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed in the USD
+  checkout's `target/`.
+- `./scripts/run_scene_tests.sh --no-build -j 4 rocker_bogie`: **7/7** passed.
+- The full authored gate completed all 58 headless scenes with **53/58**
+  passed. The five real failures were `ackermann_parity` and `parts_attached`
+  (physics bodies escaped), `drivetrain_parity` (16.96% yaw-raycast mismatch
+  against a 15% limit), `landing_legs` (pad tilt, residual hull motion, and
+  excessive strut travel), and `prismatic_spring` (missing active scene root).
+  No bounds clamp, retry, tolerance relaxation, or recovery scan was added.
+- Graphics remained **0/2** because the HDRI asset is absent and the existing
+  shader-fallback fixture does not produce its expected red pixel. The
+  parallel scheduler itself published every result and cleaned up every
+  production process.
+
 #### 2026-08-30 BigSpace stationary streamed visual tiles
 
 The BigSpace dependency already provides `Stationary`, which skips cell
