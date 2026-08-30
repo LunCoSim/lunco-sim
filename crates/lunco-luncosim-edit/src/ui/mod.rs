@@ -312,7 +312,6 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("sandbox_view"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "◉ View",
                     description: "Full-screen 3D observation & control mode. Fly the \
                                   camera around the scene and claim an endpoint's \
                                   public input ports. The live sections below show \
@@ -343,7 +342,6 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("rover_build"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "Build",
                     description: "3D scene editor. Spawn objects from the palette, \
                                   select and transform them, and assemble the scene.",
                     shortcuts: vec![
@@ -381,7 +379,6 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("terrain_sculpt"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "Terrain",
                     description: "Sculpt the surface. Arm a brush in the Tools palette, \
                                   then click the terrain to raise, dig, or flatten it. \
                                   Edits re-bake the visuals and the collider live.",
@@ -428,7 +425,6 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("object_builder"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "Object Builder",
                     description: "Assemble and edit objects from parts. Navigate the \
                                   object's structure in the tree, attach components from \
                                   the palette, and tune the selected prim's parameters in \

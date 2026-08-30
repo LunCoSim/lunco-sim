@@ -102,7 +102,7 @@ the side panels for tabbed dock trees.
 
 **Layout regions (from outside in):**
 
-1. **Merged menu/title bar (top)** — File / Edit / View / Window / Help menus,
+1. **Merged menu/title bar (top)** — File (including Network) / Edit / View / Window / Help menus,
    the centered application title, transport pause/resume, perspective tabs,
    and native window controls. All controls share one full-height row and the
    title-bar height/control-size tokens from `lunco-theme`; the title remains a

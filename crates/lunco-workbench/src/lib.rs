@@ -3474,6 +3474,155 @@ fn run_menu_callback(
     }
 }
 
+/// Render the network controls shared by the File → Network submenu.
+///
+/// The workbench owns only the menu surface and typed bridge events; the
+/// networking adapter owns connection behavior and observes those events.
+fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
+    use lunco_core::{NetConnectRequest, NetDisconnectRequest, NetStatus, NetworkRole};
+
+    let status = world
+        .get_resource::<NetStatus>()
+        .cloned()
+        .unwrap_or_default();
+
+    // User Profile Settings Name Input
+    let mut profile = world.resource_mut::<lunco_settings::ProfileSettings>();
+    let mut name_changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Name:");
+        if ui.text_edit_singleline(&mut profile.username).changed() {
+            name_changed = true;
+        }
+    });
+    if name_changed {
+        let mut p = world.resource_mut::<lunco_settings::ProfileSettings>();
+        p.set_changed();
+    }
+    ui.separator();
+
+    match status.role {
+        NetworkRole::Host => {
+            ui.label(format!("Hosting · {}", status.endpoint));
+            ui.separator();
+            // Copy invite link. The address a guest should dial isn't
+            // knowable from the host side (which interface?), so it's
+            // editable — prefilled with the best-guess LAN IP:port the
+            // adapter detected (`invite_hint`). The link carries the
+            // self-signed cert digest in its `#fragment` so a browser
+            // guest can pin it. Built inline (workbench keeps no
+            // networking dep, D7); the canonical format lives in
+            // `lunco_networking::connect_link`.
+            let addr_id = ui.make_persistent_id("lunco_network_invite_address");
+            let mut invite_addr = ui.data_mut(|d| {
+                d.get_temp::<String>(addr_id)
+                    .unwrap_or_else(|| status.invite_hint.clone())
+            });
+            ui.horizontal(|ui| {
+                ui.label("Guest dials:");
+                ui.text_edit_singleline(&mut invite_addr);
+            });
+            let digest = status.invite_digest.trim();
+            let frag = if digest.is_empty() {
+                String::new()
+            } else {
+                format!("#{digest}")
+            };
+            let a = invite_addr.trim();
+            let enabled = !a.is_empty();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Copy web link"))
+                    .on_hover_text("https://lunica.lunco.space/?connect=… — opens in a browser")
+                    .on_disabled_hover_text("Enter the address guests should dial first")
+                    .clicked()
+                {
+                    let link = format!("https://lunica.lunco.space/?connect={a}{frag}");
+                    ui.ctx().copy_text(link);
+                }
+                let app_q = if digest.is_empty() {
+                    String::new()
+                } else {
+                    format!("&digest={digest}")
+                };
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Copy app link"))
+                    .on_hover_text("luncosim://connect?… — opens the desktop app")
+                    .on_disabled_hover_text("Enter the address guests should dial first")
+                    .clicked()
+                {
+                    let link = format!("luncosim://connect?address={a}{app_q}");
+                    ui.ctx().copy_text(link);
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(addr_id, invite_addr));
+        }
+        NetworkRole::Client => {
+            let state = if status.connected {
+                "Connected"
+            } else {
+                "Connecting…"
+            };
+            ui.label(format!("{state} -> {}", status.endpoint));
+            if ui.button("Disconnect").clicked() {
+                world.trigger(NetDisconnectRequest);
+                ui.close();
+            }
+        }
+        NetworkRole::Standalone => {
+            ui.label("Single-player (local)");
+            ui.separator();
+            // Editable address persisted in egui temp memory so it
+            // survives across frames while the menu is open. Seeded
+            // from the adapter's `connect_hint` (page origin / local).
+            let id = ui.make_persistent_id("lunco_network_menu_address");
+            let mut address = ui.data_mut(|d| {
+                d.get_temp::<String>(id).unwrap_or_else(|| {
+                    if status.connect_hint.is_empty() {
+                        format!("127.0.0.1:{}", lunco_core::session::DEFAULT_HOST_PORT)
+                    } else {
+                        status.connect_hint.clone()
+                    }
+                })
+            });
+            ui.horizontal(|ui| {
+                ui.label("Server:");
+                ui.text_edit_singleline(&mut address);
+            });
+            // Optional self-signed cert digest to pin. A browser
+            // joining a self-signed LAN/dev host by IP needs this
+            // (it can't skip TLS validation); paste the digest the
+            // host prints (`🔐 WebTransport cert digest: …`). Leave
+            // blank for a CA-cert host or a native bare-IP dial.
+            let digest_id = ui.make_persistent_id("lunco_network_menu_digest");
+            let mut digest = ui
+                .data_mut(|d| d.get_temp::<String>(digest_id))
+                .unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.label("Cert digest:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut digest)
+                        .hint_text("optional — self-signed host"),
+                );
+            });
+            let enabled = !address.trim().is_empty();
+            if ui
+                .add_enabled(enabled, egui::Button::new("Connect"))
+                .on_disabled_hover_text("Enter a server address first")
+                .clicked()
+            {
+                world.trigger(NetConnectRequest {
+                    address: address.clone(),
+                    digest: digest.clone(),
+                });
+                ui.close();
+            }
+            ui.data_mut(|d| d.insert_temp(id, address));
+            ui.data_mut(|d| d.insert_temp(digest_id, digest));
+        }
+    }
+}
+
 fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
@@ -3910,6 +4059,16 @@ fn render_layout(
                 }
                 ui.separator();
 
+                // Network actions belong to File because they operate on the
+                // current session/document connection, while the status bar
+                // remains the always-visible connection indicator.
+                let r_network = ui.menu_button("Network", |ui| {
+                    render_network_menu(ui, world);
+                });
+                anchor_rects.push(("menu.network".to_owned(), r_network.response.rect));
+
+                ui.separator();
+
                 // -- Share --------------------------------------------
                 // Copy a link that encodes the active model's source in
                 // the URL fragment — opening it elsewhere recreates the
@@ -4271,171 +4430,6 @@ fn render_layout(
                 layout.help_menu = callbacks;
             });
             anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
-
-            // Network — Connect / Disconnect. Reads the always-on
-            // `lunco_core::NetStatus` and fires the `NetConnectRequest` /
-            // `NetDisconnectRequest` bridge events (no lunco-networking dep
-            // here, D7); the optional adapter observes them and dials. The
-            // menu is always present — in single-player it just offers a
-            // "Connect to server" field.
-            let r_network = ui.menu_button("Network", |ui| {
-                use lunco_core::{
-                    NetConnectRequest, NetDisconnectRequest, NetStatus, NetworkRole,
-                };
-                let status = world
-                    .get_resource::<NetStatus>()
-                    .cloned()
-                    .unwrap_or_default();
-
-                // User Profile Settings Name Input
-                let mut profile = world.resource_mut::<lunco_settings::ProfileSettings>();
-                let mut name_changed = false;
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    if ui.text_edit_singleline(&mut profile.username).changed() {
-                        name_changed = true;
-                    }
-                });
-                if name_changed {
-                    let mut p = world.resource_mut::<lunco_settings::ProfileSettings>();
-                    p.set_changed();
-                }
-                ui.separator();
-
-                match status.role {
-                    NetworkRole::Host => {
-                        ui.label(format!("Hosting · {}", status.endpoint));
-                        ui.separator();
-                        // Copy invite link. The address a guest should dial isn't
-                        // knowable from the host side (which interface?), so it's
-                        // editable — prefilled with the best-guess LAN IP:port the
-                        // adapter detected (`invite_hint`). The link carries the
-                        // self-signed cert digest in its `#fragment` so a browser
-                        // guest can pin it. Built inline (workbench keeps no
-                        // networking dep, D7); the canonical format lives in
-                        // `lunco_networking::connect_link`.
-                        let addr_id =
-                            ui.make_persistent_id("lunco_network_invite_address");
-                        let mut invite_addr = ui.data_mut(|d| {
-                            d.get_temp::<String>(addr_id)
-                                .unwrap_or_else(|| status.invite_hint.clone())
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Guest dials:");
-                            ui.text_edit_singleline(&mut invite_addr);
-                        });
-                        let digest = status.invite_digest.trim();
-                        let frag = if digest.is_empty() {
-                            String::new()
-                        } else {
-                            format!("#{digest}")
-                        };
-                        let a = invite_addr.trim();
-                        let enabled = !a.is_empty();
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("Copy web link"))
-                                .on_hover_text("https://lunica.lunco.space/?connect=… — opens in a browser")
-                                .on_disabled_hover_text(
-                                    "Enter the address guests should dial first",
-                                )
-                                .clicked()
-                            {
-                                let link = format!(
-                                    "https://lunica.lunco.space/?connect={a}{frag}"
-                                );
-                                ui.ctx().copy_text(link);
-                            }
-                            let app_q = if digest.is_empty() {
-                                String::new()
-                            } else {
-                                format!("&digest={digest}")
-                            };
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("Copy app link"))
-                                .on_hover_text("luncosim://connect?… — opens the desktop app")
-                                .on_disabled_hover_text(
-                                    "Enter the address guests should dial first",
-                                )
-                                .clicked()
-                            {
-                                let link =
-                                    format!("luncosim://connect?address={a}{app_q}");
-                                ui.ctx().copy_text(link);
-                            }
-                        });
-                        ui.data_mut(|d| d.insert_temp(addr_id, invite_addr));
-                    }
-                    NetworkRole::Client => {
-                        let state = if status.connected {
-                            "Connected"
-                        } else {
-                            "Connecting…"
-                        };
-                        ui.label(format!("{state} -> {}", status.endpoint));
-                        if ui.button("Disconnect").clicked() {
-                            world.trigger(NetDisconnectRequest);
-                            ui.close();
-                        }
-                    }
-                    NetworkRole::Standalone => {
-                        ui.label("Single-player (local)");
-                        ui.separator();
-                        // Editable address persisted in egui temp memory so it
-                        // survives across frames while the menu is open. Seeded
-                        // from the adapter's `connect_hint` (page origin / local).
-                        let id = ui.make_persistent_id("lunco_network_menu_address");
-                        let mut address = ui.data_mut(|d| {
-                            d.get_temp::<String>(id).unwrap_or_else(|| {
-                                if status.connect_hint.is_empty() {
-                                    format!(
-                                        "127.0.0.1:{}",
-                                        lunco_core::session::DEFAULT_HOST_PORT
-                                    )
-                                } else {
-                                    status.connect_hint.clone()
-                                }
-                            })
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Server:");
-                            ui.text_edit_singleline(&mut address);
-                        });
-                        // Optional self-signed cert digest to pin. A browser
-                        // joining a self-signed LAN/dev host by IP needs this
-                        // (it can't skip TLS validation); paste the digest the
-                        // host prints (`🔐 WebTransport cert digest: …`). Leave
-                        // blank for a CA-cert host or a native bare-IP dial.
-                        let digest_id =
-                            ui.make_persistent_id("lunco_network_menu_digest");
-                        let mut digest = ui
-                            .data_mut(|d| d.get_temp::<String>(digest_id))
-                            .unwrap_or_default();
-                        ui.horizontal(|ui| {
-                            ui.label("Cert digest:");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut digest)
-                                    .hint_text("optional — self-signed host"),
-                            );
-                        });
-                        let enabled = !address.trim().is_empty();
-                        if ui
-                            .add_enabled(enabled, egui::Button::new("Connect"))
-                            .on_disabled_hover_text("Enter a server address first")
-                            .clicked()
-                        {
-                            world.trigger(NetConnectRequest {
-                                address: address.clone(),
-                                digest: digest.clone(),
-                            });
-                            ui.close();
-                        }
-                        ui.data_mut(|d| d.insert_temp(id, address));
-                        ui.data_mut(|d| d.insert_temp(digest_id, digest));
-                    }
-                }
-            });
-            anchor_rects.push(("menu.network".to_owned(), r_network.response.rect));
 
             // Time — every clock control that is not pause/resume.
             //
@@ -6482,6 +6476,30 @@ mod tests {
         assert_eq!(
             perspective_help_anchor(PerspectiveId("sandbox_view")),
             "menu.perspective.sandbox_view"
+        );
+    }
+
+    #[test]
+    fn help_uses_visible_perspective_title_as_its_canonical_label() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("visible"),
+            title: "⚒ Build",
+            marker: PanelId("visible_panel"),
+        });
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("hidden"),
+            title: "Hidden",
+            marker: PanelId("hidden_panel"),
+        });
+
+        assert_eq!(
+            perspective_help::visible_perspective_title(&layout, PerspectiveId("visible")),
+            Some("⚒ Build".to_owned())
+        );
+        assert_eq!(
+            perspective_help::visible_perspective_title(&layout, PerspectiveId("hidden")),
+            None
         );
     }
 
