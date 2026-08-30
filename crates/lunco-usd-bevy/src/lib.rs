@@ -854,17 +854,22 @@ pub struct UsdVisualProjectionQueued;
 /// Canonical OpenUSD stages are `!Send` and Bevy render assets are main-thread
 /// resources, so projection cannot be moved wholesale to a worker. This
 /// resource spreads that unavoidable work over multiple frames instead of
-/// monopolising one update. Hosts may tune it for their frame budget; zero is
-/// treated as one prim per frame.
+/// monopolising one update. The budget is measured in wall-clock time because
+/// prim projection cost is not uniform; a prim may still overshoot the budget
+/// because its USD read, mesh construction, and child scheduling are atomic.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct UsdVisualProjectionSettings {
-    pub prims_per_frame: usize,
+    /// Maximum time the projector may start work in one `Update` pass.
+    ///
+    /// A zero budget is invalid and is reported by the projector rather than
+    /// silently changing the pacing contract.
+    pub frame_budget: std::time::Duration,
 }
 
 impl Default for UsdVisualProjectionSettings {
     fn default() -> Self {
         Self {
-            prims_per_frame: 16,
+            frame_budget: std::time::Duration::from_millis(2),
         }
     }
 }
@@ -1634,7 +1639,7 @@ fn instantiate_usd_prim_from_stage(
                 if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                     transform.rotation *= q_axis;
                 }
-                info!(
+                debug!(
                     "[usd-bevy] {} {} axis={} rot={:?}",
                     sdf_path.as_str(),
                     prim_type.as_deref().unwrap_or(""),
@@ -2120,7 +2125,7 @@ fn any_queued_usd_visuals(q: Query<(), With<UsdVisualProjectionQueued>>) -> bool
     !q.is_empty()
 }
 
-/// Project at most the configured number of USD prims in one frame.
+/// Project USD prims until the configured wall-clock budget is exhausted.
 ///
 /// This intentionally uses the same `instantiate_usd_prim` path as the
 /// immediate observer used previously. Only the scheduling boundary changes:
@@ -2171,10 +2176,17 @@ pub fn process_queued_usd_visuals(
             return;
         }
     };
-    let mut remaining = settings.prims_per_frame.max(1);
+    if settings.frame_budget.is_zero() {
+        error!(
+            "[usd-bevy] USD visual projection requires a non-zero frame budget; refusing invalid configuration"
+        );
+        return;
+    }
+    let started = web_time::Instant::now();
+    let mut projected = 0usize;
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
-        if remaining == 0 {
+        if projected != 0 && started.elapsed() >= settings.frame_budget {
             break;
         }
         if stages.get(&prim_path.stage_handle).is_none() {
@@ -2194,7 +2206,7 @@ pub fn process_queued_usd_visuals(
                 // queued entity instead of allowing it to instantiate after the
                 // new scene has mounted.
                 commands.entity(entity).try_despawn();
-                remaining -= 1;
+                projected += 1;
                 continue;
             }
         }
@@ -2224,7 +2236,7 @@ pub fn process_queued_usd_visuals(
             &mut meshes,
             requested_profile,
         );
-        remaining -= 1;
+        projected += 1;
     }
 }
 

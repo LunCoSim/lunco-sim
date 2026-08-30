@@ -13,6 +13,8 @@ use lunco_usd::{
 };
 use lunco_usd_bevy::*;
 
+mod support;
+
 /// Tests that triggering an [`ApplyUsdOp`] command modifies a shader attribute
 /// (e.g. `diffuseColor` and `roughness`) in the underlying USD stage document,
 /// and that the Bevy rendering system automatically updates the material.
@@ -146,11 +148,10 @@ def Xform "World"
         op: roughness_op,
     });
 
-    // 7. Run the Bevy app updates to process:
-    // Update 1: command execution -> document mutation -> DocumentChanged -> viewport rebuild (clears UsdVisualSynced)
-    app.update();
-    // Update 2: sync_usd_visuals runs and recreates components with the new stage reader values
-    app.update();
+    // 7. Run the Bevy app until the production projection queue drains. The
+    // projector is time-budgeted, so a fixed number of frames would test an
+    // obsolete throughput assumption rather than the loading contract.
+    support::settle_visual_projection(&mut app);
 
     // Verify updated values on the spawned child entity
     let mut updated_mesh_entity = None;
@@ -188,11 +189,9 @@ def Xform "World"
             text: usda_content.to_string(),
         },
     });
-    // Rebuild + re-instantiate takes a couple of frames (doc mutation → stage
-    // rebuild → refresh_scene_visuals → observer re-instantiates the subtree).
-    for _ in 0..6 {
-        app.update();
-    }
+    // Rebuild + re-instantiate is staged (document mutation → stage rebuild →
+    // refresh_scene_visuals → bounded visual projection).
+    support::settle_visual_projection(&mut app);
 
     let mut reverted_entity = None;
     let mut q3 = app.world_mut().query::<(Entity, &Name, &UsdPrimPath)>();

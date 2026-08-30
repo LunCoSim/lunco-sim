@@ -11,6 +11,8 @@ use lunco_usd_avian::*;
 use lunco_usd_bevy::*;
 use lunco_usd_sim::*;
 
+mod support;
+
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
 /// `Collider::compound` from its child colliders. A compound is NOT
 /// `as_cuboid()`. Extract the cuboid half-extents whether the collider is plain
@@ -63,6 +65,7 @@ fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Ent
         })
         .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
 }
+
 use std::path::Path;
 
 /// Build the live canonical stage for a rover `.usda` (which references
@@ -111,9 +114,7 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
         ViewVisibility::default(),
     ));
 
-    for _ in 0..10 {
-        app.update();
-    }
+    support::settle_visual_projection(&mut app);
     app.world_mut().flush();
     app
 }
@@ -152,9 +153,7 @@ fn headless_server_builds_wheel_physics_without_renderer() {
         ViewVisibility::default(),
     ));
 
-    for _ in 0..10 {
-        app.update();
-    }
+    support::settle_visual_projection(&mut app);
     app.world_mut().flush();
 
     let mut q = app.world_mut().query::<&WheelRaycast>();

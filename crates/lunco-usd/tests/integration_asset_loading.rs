@@ -68,6 +68,8 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use std::path::Path;
 
+mod support;
+
 // ============================================================
 // Helper: compose asset using EXACT same logic as runtime loader
 // ============================================================
@@ -209,9 +211,7 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
         ViewVisibility::default(),
     ));
 
-    for _ in 0..10 {
-        app.update();
-    }
+    support::settle_visual_projection(&mut app);
     app.world_mut().flush();
     app
 }
@@ -499,10 +499,14 @@ fn test_wheel_mesh_dimensions_after_composition() {
 
             // Rover override: radius=0.4, height=0.3
             // wheel.usda default: radius=2.0, height=4.0
-            assert!((radius - 0.4).abs() < 0.05,
-                "{label}: {w_name} cylinder radius must be ~0.4, got {radius} (using wheel.usda default 2.0?)");
-            assert!((height - 0.3).abs() < 0.05,
-                "{label}: {w_name} cylinder height must be ~0.3, got {height} (using wheel.usda default 4.0?)");
+            assert!(
+                (radius - 0.4).abs() < 0.05,
+                "{label}: {w_name} cylinder radius must be ~0.4, got {radius} (using wheel.usda default 2.0?)"
+            );
+            assert!(
+                (height - 0.3).abs() < 0.05,
+                "{label}: {w_name} cylinder height must be ~0.3, got {height} (using wheel.usda default 4.0?)"
+            );
         }
     }
 }
@@ -552,9 +556,7 @@ fn test_rover_sim_processing_after_async_load() {
         ));
 
         // Run update loop - sim processing happens in Update systems
-        for _ in 0..20 {
-            app.update();
-        }
+        support::settle_visual_projection(&mut app);
         app.world_mut().flush();
 
         // MUST have the topology-derived mobility root and its output surface
@@ -563,9 +565,11 @@ fn test_rover_sim_processing_after_async_load() {
             .world_mut()
             .query_filtered::<Entity, (With<MobilityRoot>, With<OutputPorts>)>();
         let act_count = q_act.iter(app.world()).count();
-        assert!(act_count > 0,
+        assert!(
+            act_count > 0,
             "{label}: MobilityRoot + OutputPorts must be present after sim processing. Got {act_count} mobility roots with output ports. \
-            This means the sim system didn't process the rover - likely async loading bug.");
+            This means the sim system didn't process the rover - likely async loading bug."
+        );
 
         // MUST have a DriveMix (the kernel-selected allocation) after sim processing.
         let mut q_mix = app.world_mut().query_filtered::<Entity, With<DriveMix>>();
@@ -728,9 +732,7 @@ fn test_full_scene_loads_with_rovers() {
     )
     .expect("production scene mount creates a root");
 
-    for _ in 0..10 {
-        app.update();
-    }
+    support::settle_visual_projection(&mut app);
     app.world_mut().flush();
 
     // Count rovers — 5 instances from scene references

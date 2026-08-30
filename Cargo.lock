@@ -8131,6 +8131,7 @@ dependencies = [
  "spade",
  "tempfile",
  "truck-geometry",
+ "web-time",
  "wgpu-types",
 ]
 

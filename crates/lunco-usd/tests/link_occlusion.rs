@@ -25,6 +25,8 @@ use lunco_usd_sim::cosim::spawn_scene_root_with_stage;
 use lunco_usd_sim::*;
 use std::path::Path;
 
+mod support;
+
 /// Compose a USD file and hand it to the Bevy pipeline as a canonical stage —
 /// the same shape the other pipeline tests use (each integration test is its own
 /// crate, so this helper is per-file by necessity).
@@ -65,9 +67,7 @@ fn load_through_bevy(file: &str, prim_path: &str) -> App {
     let handle = add_canonical_from_file(&mut app, &Path::new("../../assets/").join(file));
     spawn_scene_root_with_stage(app.world_mut(), file, prim_path, handle)
         .expect("production scene mount creates a root");
-    for _ in 0..10 {
-        app.update();
-    }
+    support::settle_visual_projection(&mut app);
     app.world_mut().flush();
     app
 }

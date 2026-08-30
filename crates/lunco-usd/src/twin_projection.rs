@@ -58,7 +58,8 @@ use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{
-    UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText, UsdStageAsset, UsdVisualSynced,
+    UsdAwaitingStage, UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText, UsdStageAsset,
+    UsdVisualProjectionQueued, UsdVisualSynced,
 };
 use lunco_usd_sim::cosim::LoadScene;
 
@@ -1549,11 +1550,21 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
 /// the (now-authored) live stage. The shared primitive under both the whole-scene
 /// [`refresh_scene_visuals`] and the single-prim [`refresh_prim_subtree`].
 fn reinstantiate_entity(world: &mut World, entity: Entity) {
+    let stage_ready = world
+        .get_resource::<Assets<UsdStageAsset>>()
+        .is_some_and(|assets| {
+            world
+                .get::<UsdPrimPath>(entity)
+                .is_some_and(|prim| assets.get(&prim.stage_handle).is_some())
+        });
     if let Ok(mut em) = world.get_entity_mut(entity) {
         em.remove::<UsdVisualSynced>();
         em.despawn_related::<Children>();
         if let Some(pp) = em.take::<UsdPrimPath>() {
-            em.insert(pp);
+            em.insert((pp, UsdAwaitingStage));
+            if stage_ready {
+                em.insert(UsdVisualProjectionQueued);
+            }
         }
     }
 }
