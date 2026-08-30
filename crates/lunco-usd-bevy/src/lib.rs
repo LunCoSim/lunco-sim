@@ -497,7 +497,12 @@ impl Plugin for UsdBevyPlugin {
                         >,
                     ),
                     camera_track::plan_camera_tracks,
-                    camera_switch::validate_authored_camera_contract,
+                    camera_switch::validate_authored_camera_contract.run_if(
+                        lunco_core::gate::tracked(
+                            "usd::camera_contract",
+                            camera_switch::camera_contract_inputs_changed,
+                        ),
+                    ),
                     camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
                 )
                     .chain()
@@ -740,6 +745,21 @@ pub struct PendingUsdMesh {
     stage_generation: u64,
     profile: lunco_render::RenderQualityProfile,
 }
+
+/// Render entity selected by a simulation-side visual split.
+///
+/// A wheel keeps its USD entity as the physics owner, while the mesh belongs to
+/// a child with the presentation transform. CPU-generated geometry may finish
+/// after that split, so the mesh commit must use this explicit target instead of
+/// assuming the USD entity is still renderable.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualMeshTarget(pub Entity);
+
+/// Marks the render target whose appearance is owned by a projected custom
+/// shader. The marker is render-free so the async PBR commit can avoid adding a
+/// second appearance intent without depending on the shader crate.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualShaderBound;
 
 /// The composed USD prim had malformed authored data and was intentionally not
 /// projected into the visual/physics pipeline. Keeping this explicit failure
@@ -2330,8 +2350,10 @@ fn poll_pending_usd_meshes(
         Entity,
         &UsdPrimPath,
         Has<UsdVisualSynced>,
+        Option<&UsdVisualMeshTarget>,
         &mut PendingUsdMesh,
     )>,
+    shader_targets: Query<(), With<UsdVisualShaderBound>>,
 ) {
     let current_profile = match quality.validated_profile() {
         Ok(profile) => profile,
@@ -2341,7 +2363,7 @@ fn poll_pending_usd_meshes(
         }
     };
 
-    for (entity, prim_path, visual_synced, mut pending) in &mut q {
+    for (entity, prim_path, visual_synced, visual_target, mut pending) in &mut q {
         let Some(stage) = canonical.get(pending.stage_id) else {
             continue;
         };
@@ -2379,25 +2401,33 @@ fn poll_pending_usd_meshes(
         };
 
         let mesh_handle = meshes.add(result);
-        let mut entity_commands = commands.entity(entity);
-        entity_commands
-            .try_insert(Mesh3d(mesh_handle.clone()))
+        let render_entity = visual_target.map_or(entity, |target| target.0);
+        commands
+            .entity(render_entity)
+            .try_insert(Mesh3d(mesh_handle.clone()));
+        commands
+            .entity(entity)
             .try_remove::<PendingUsdMesh>()
             .try_remove::<UsdVisualMeshPending>();
-        if let Ok(sdf_path) = SdfPath::new(&prim_path.path) {
-            if let Err(err) = apply_standard_material(
-                &stage.view(),
-                &sdf_path,
-                &mesh_handle,
-                &mut entity_commands,
-                &asset_server,
-                pending.stage_id,
-            ) {
-                error!(
-                    "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
-                    sdf_path.as_str(),
-                    err.attribute
-                );
+        // ShaderLook is the authoritative custom-shader intent. It may already
+        // have been moved onto the split child, so do not attach a second PBR
+        // intent when the async mesh commits.
+        if !shader_targets.contains(render_entity) {
+            if let Ok(sdf_path) = SdfPath::new(&prim_path.path) {
+                if let Err(err) = apply_standard_material(
+                    &stage.view(),
+                    &sdf_path,
+                    &mesh_handle,
+                    &mut commands.entity(render_entity),
+                    &asset_server,
+                    pending.stage_id,
+                ) {
+                    error!(
+                        "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
+                        sdf_path.as_str(),
+                        err.attribute
+                    );
+                }
             }
         }
     }

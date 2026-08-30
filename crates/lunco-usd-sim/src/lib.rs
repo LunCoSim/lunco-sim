@@ -262,11 +262,14 @@ pub(crate) fn torque_actuator_from_usd(
 
 /// Ordered phases of the USD-to-simulation projection.
 ///
-/// The application assembly uses [`UsdSimSet::ActivateDynamicBodies`] to place
+/// `Projection` is the publication boundary for composed scene components;
+/// camera handoff systems are ordered after it. `ActivateDynamicBodies` places
 /// terrain readiness between terrain inspection and the first dynamic physics
-/// tick. Keeping this boundary public prevents another first-load ordering race.
+/// tick. Keeping both boundaries public prevents first-load ordering races.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UsdSimSet {
+    /// Publishes the composed USD simulation and celestial components.
+    Projection,
     /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.
     ActivateDynamicBodies,
 }
@@ -604,8 +607,14 @@ impl Plugin for UsdSimPlugin {
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<InputBindingsSettings>();
         crate::shader_ports::build(app);
-        app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
-            .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
+        app.configure_sets(
+            Update,
+            (
+                UsdSimSet::Projection.before(lunco_avatar::AvatarSceneHandoffSet),
+                UsdSimSet::ActivateDynamicBodies,
+            ),
+        )
+        .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
         // Autopilot actors claim scene vessels and hold compiled trees of the scene's
@@ -678,7 +687,8 @@ impl Plugin for UsdSimPlugin {
                     remove_nested_link_nodes
                         .run_if(any_nested_link_nodes)
                         .after(project_celestial_comms_prims),
-                ),
+                )
+                    .in_set(UsdSimSet::Projection),
             );
         // Dynamic admission must happen before the fixed loop.  The main loop runs
         // FixedUpdate before Update, so admitting a body from Update gives it one
@@ -864,6 +874,8 @@ fn process_usd_sim_prims(
             Option<&Mesh3d>,
             Option<&PbrLook>,
             Option<&ShaderLook>,
+            Has<lunco_usd_bevy::UsdVisualMeshPending>,
+            Has<lunco_usd_bevy::UsdVisualShaderBound>,
         ),
         (
             With<lunco_usd_bevy::UsdVisualSynced>,
@@ -923,7 +935,17 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
-    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat) in query.iter() {
+    for (
+        entity,
+        prim_path,
+        maybe_tf,
+        maybe_mesh,
+        maybe_mat,
+        maybe_shader_mat,
+        mesh_pending,
+        shader_bound,
+    ) in query.iter()
+    {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
@@ -967,6 +989,8 @@ fn process_usd_sim_prims(
             maybe_mesh,
             maybe_mat,
             maybe_shader_mat,
+            mesh_pending,
+            shader_bound,
             topology,
             &all_prims,
             &q_child_of,
@@ -1374,6 +1398,8 @@ fn process_usd_sim_prim_read(
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
+    mesh_pending: bool,
+    shader_bound: bool,
     topology: &StageJointTopology,
     all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     q_child_of: &Query<&ChildOf>,
@@ -2502,6 +2528,8 @@ fn process_usd_sim_prim_read(
                 maybe_mesh,
                 maybe_mat,
                 maybe_shader_mat,
+                mesh_pending,
+                shader_bound,
                 physical_suspension_visuals(
                     reader,
                     prim_path,
@@ -2551,6 +2579,8 @@ fn process_usd_sim_prim_read(
                 maybe_mesh,
                 maybe_mat,
                 maybe_shader_mat,
+                mesh_pending,
+                shader_bound,
                 &params,
                 &suspension,
                 body_mount,
@@ -3111,6 +3141,62 @@ fn raycast_mass_contribution_from_usd(
     }))
 }
 
+/// Create the render side of a wheel split, including when its CPU mesh is
+/// still pending. The USD entity remains the physics owner; the explicit target
+/// lets `lunco-usd-bevy` commit the eventual mesh and material to this child.
+fn spawn_wheel_visual(
+    commands: &mut Commands,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    transform: Transform,
+    maybe_mesh: Option<&Mesh3d>,
+    maybe_mat: Option<&PbrLook>,
+    maybe_shader_mat: Option<&ShaderLook>,
+    mesh_pending: bool,
+    shader_bound: bool,
+) -> Option<Entity> {
+    if maybe_mesh.is_none() && !mesh_pending {
+        return None;
+    }
+
+    let mut visual = commands.spawn((
+        Name::new(format!(
+            "{}_visual",
+            prim_path.path.split('/').next_back().unwrap_or("wheel")
+        )),
+        transform,
+        Visibility::Inherited,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        ChildOf(entity),
+    ));
+    if let Some(mesh) = maybe_mesh.cloned() {
+        visual.try_insert(mesh);
+    }
+    // `ShaderLook` and `PbrLook` are mutually exclusive render intents. The
+    // shader path wins, preserving the composed USD material through the split.
+    if let Some(shader) = maybe_shader_mat.cloned() {
+        visual.try_insert(shader);
+    } else if let Some(material) = maybe_mat.cloned() {
+        visual.try_insert(material);
+    }
+    if shader_bound {
+        visual.try_insert(lunco_usd_bevy::UsdVisualShaderBound);
+    }
+
+    let visual_entity = visual.id();
+    commands
+        .entity(entity)
+        .try_insert(lunco_usd_bevy::UsdVisualMeshTarget(visual_entity));
+    commands
+        .entity(entity)
+        .remove::<Mesh3d>()
+        .remove::<PbrLook>()
+        .remove::<ShaderLook>()
+        .remove::<lunco_usd_bevy::UsdVisualShaderBound>();
+    Some(visual_entity)
+}
+
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
 ///
 /// Raycast wheels need two entities:
@@ -3124,6 +3210,8 @@ fn setup_raycast_wheel(
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
+    mesh_pending: bool,
+    shader_bound: bool,
     params: &WheelParams,
     susp: &SuspensionParams,
     body_mount: lunco_mobility::WheelBodyMount,
@@ -3145,45 +3233,23 @@ fn setup_raycast_wheel(
     // so `apply_wheel_suspension` can reposition it to ground-level
     // each frame — its `q_visual` query filters out `WheelRaycast`,
     // so it can only operate on a separate visual entity.
-    let wheel_mesh = maybe_mesh.cloned();
     let wheel_rotation = existing_tf.rotation;
-
-    if let Some(wheel_mesh) = wheel_mesh {
-        // Atomic spawn: `ChildOf(entity)` in the bundle so parent + transform
-        // land together — same contract as `migrate_to_grid`.
-        let mut visual = commands.spawn((
-            Name::new(format!(
-                "{}_visual",
-                prim_path.path.split('/').next_back().unwrap_or("wheel")
-            )),
-            Transform {
-                translation: Vec3::ZERO,
-                rotation: wheel_rotation,
-                scale: existing_tf.scale,
-            },
-            Visibility::Inherited,
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            wheel_mesh,
-            ChildOf(entity),
-        ));
-        // Move whichever appearance INTENT the prim received onto the visual child;
-        // `lunco-render-bevy` rebinds the material there. A USD
-        // `materialType="shader"` prim gets a `ShaderLook` (authored by
-        // `apply_usd_shader_materials`, ordered before this split) — prefer it over
-        // the plain `PbrLook` so USD-authored shaders survive the wheel split. The
-        // two are mutually exclusive on one entity (an entity carrying both would
-        // draw twice), so `remove` BOTH from the physics entity.
-        if let Some(sm) = maybe_shader_mat.cloned() {
-            visual.try_insert(sm);
-        } else if let Some(mat) = maybe_mat.cloned() {
-            visual.try_insert(mat);
-        }
-        wheel.visual_entity = Some(visual.id());
-        commands.entity(entity).remove::<Mesh3d>();
-        commands.entity(entity).remove::<PbrLook>();
-        commands.entity(entity).remove::<ShaderLook>();
-    }
+    let visual_id = spawn_wheel_visual(
+        commands,
+        entity,
+        prim_path,
+        Transform {
+            translation: Vec3::ZERO,
+            rotation: wheel_rotation,
+            scale: existing_tf.scale,
+        },
+        maybe_mesh,
+        maybe_mat,
+        maybe_shader_mat,
+        mesh_pending,
+        shader_bound,
+    );
+    wheel.visual_entity = visual_id;
 
     // Physics entity: identity rotation, position preserved
     let wheel_tf = Transform {
@@ -3349,6 +3415,8 @@ fn setup_physical_wheel(
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
+    mesh_pending: bool,
+    shader_bound: bool,
     suspension_visuals: Vec<(Entity, Transform)>,
     params: &WheelParams,
     body_mount: lunco_mobility::WheelBodyMount,
@@ -3401,33 +3469,17 @@ fn setup_physical_wheel(
     };
     // Visual mesh child id, captured so the client-proxy animator
     // (`animate_proxy_physical_wheels`) can author its rotation directly.
-    let mut visual_id: Option<Entity> = None;
-    if let Some(mesh) = maybe_mesh.cloned() {
-        let mut visual = commands.spawn((
-            Name::new(format!(
-                "{}_visual",
-                prim_path.path.split('/').next_back().unwrap_or("wheel")
-            )),
-            Transform::from_rotation(visual_axis_rot),
-            Visibility::Inherited,
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            mesh,
-            ChildOf(entity),
-        ));
-        visual_id = Some(visual.id());
-        // Move whichever appearance INTENT the prim received onto the visual child
-        // (see `setup_raycast_wheel` for the full rationale): the `ShaderLook` wins
-        // over the plain `PbrLook`, and both are removed from the physics entity.
-        if let Some(sm) = maybe_shader_mat.cloned() {
-            visual.try_insert(sm);
-        } else if let Some(mat) = maybe_mat.cloned() {
-            visual.try_insert(mat);
-        }
-        commands.entity(entity).remove::<Mesh3d>();
-        commands.entity(entity).remove::<PbrLook>();
-        commands.entity(entity).remove::<ShaderLook>();
-    }
+    let visual_id = spawn_wheel_visual(
+        commands,
+        entity,
+        prim_path,
+        Transform::from_rotation(visual_axis_rot),
+        maybe_mesh,
+        maybe_mat,
+        maybe_shader_mat,
+        mesh_pending,
+        shader_bound,
+    );
 
     commands
         .entity(entity)
@@ -4020,6 +4072,16 @@ fn project_celestial_comms_prims(
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
     for (entity, prim_path) in query.iter() {
+        // A scene mounted without an explicit root uses the empty path as the
+        // documented defaultPrim-resolution sentinel.  The USD visual
+        // projector replaces it with the concrete composed path once the stage
+        // is loaded.  Do not consume the celestial projection marker while the
+        // path is unresolved: the root carries the scene's SiteAnchor, so
+        // marking it here would permanently lose the only frame from which
+        // scene-local link nodes can derive their solar poses.
+        if prim_path.path.is_empty() {
+            continue;
+        }
         // Read the live canonical stage, built on demand from the recipe — the same
         // source `process_usd_sim_prims` reads.
         let id = prim_path.stage_handle.id();

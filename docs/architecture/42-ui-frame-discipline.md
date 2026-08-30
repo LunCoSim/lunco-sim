@@ -89,6 +89,12 @@ uses Bevy identity change detection to reprocess only prims whose path or
 identity changed. USD wiring or member-source invalidation explicitly requests
 the broader root pass; an unrelated descendant identity does not.
 
+The authored camera-contract admission check follows the same boundary. It
+validates roots, camera-track plans, camera identities, and ancestry only after
+the scene mount, USD revision, camera/track lifecycle, or required-host setting
+changes. Its verdict is not treated as an input, so publishing diagnostics does
+not reopen the structural scan on every frame.
+
 ## 2. The UI must stay responsive
 The user types, drags, and right-clicks into the same event queue
 the physics solver empties. Never block that queue:

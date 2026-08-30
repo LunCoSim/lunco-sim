@@ -559,6 +559,14 @@ impl Default for SurfaceModeThreshold {
 /// Plugin for managing local embodiment logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
+/// Update-schedule boundary for the camera handoff from USD projection.
+///
+/// USD projection publishes the authored avatar and site components first;
+/// the camera subsystem then captures the authored pose and commits the
+/// BigSpace migration as one ordered transaction.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct AvatarSceneHandoffSet;
+
 /// Host-only: record that the possessing session now owns the target vessel, so
 /// the authority gate ([`lunco_core::authorize`]) accepts that session's
 /// `SetPorts` control commands (gap G4). Runs for both local-host and wire-applied
@@ -699,6 +707,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<InputBindingsSettings>()
             .init_resource::<CameraDefaults>()
             .init_resource::<SurfaceModeThreshold>();
+        app.configure_sets(Update, AvatarSceneHandoffSet);
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
         // spring arm follows the final rendered body pose in `PostUpdate` below. The
         // time spine is a hard dependency for both paths; guarantee it rather than
@@ -809,25 +818,17 @@ impl Plugin for LunCoAvatarPlugin {
                 collect_camera_zoom,
             ),
         );
-        // The celestial placement system mounts the authored site root but has
-        // no camera ownership. Bind a freshly spawned local camera only after
-        // that root is a live Grid, so terrain and the camera share the same
-        // authoritative site frame from the first renderable update.
+        // USD projection and celestial projection publish scene entities in
+        // Update. The camera subsystem owns the complete handoff after those
+        // publishers have committed their deferred components.
         app.add_systems(
             Update,
-            bind_local_avatar_to_site_grid
-                .run_if(avatar_site_handoff_changed)
-                .before(surface_mode_transition_system),
-        );
-        // Capture the loader-relative pose before celestial placement moves
-        // the authored site root to its body-fixed frame. The camera subsystem
-        // owns both halves of this handoff; celestial placement only mounts
-        // the site root itself.
-        app.add_systems(
-            PreUpdate,
-            capture_site_camera_pose
-                .run_if(site_camera_capture_changed)
-                .before(lunco_celestial::CelestialEpochSet),
+            (
+                capture_site_camera_pose.run_if(site_camera_capture_changed),
+                bind_local_avatar_to_site_grid.run_if(avatar_site_handoff_changed),
+            )
+                .chain()
+                .in_set(AvatarSceneHandoffSet),
         );
         // Mouse-look capture + apply. Pointer intents — gated internally on
         // `EguiFocus.wants_pointer` (look_delta is zeroed while a panel holds the
@@ -975,9 +976,9 @@ fn rebase_freeflight_state(
     }
 }
 
-/// Pose captured before the celestial site mount changes the scene root's
-/// world position. The value is local to `site_root`, so it remains valid when
-/// that root becomes a BigSpace Grid in the same frame.
+/// Pose captured while a local avatar is still attached to the loader's world
+/// Grid. The value is local to the authored site frame, so it remains valid
+/// when the site root becomes or is already a BigSpace Grid.
 #[derive(Component, Clone, Copy, Debug)]
 struct PendingSiteCameraPose {
     site_root: Entity,
@@ -986,24 +987,31 @@ struct PendingSiteCameraPose {
 }
 
 fn site_camera_capture_changed(
-    q_site: Query<(), (With<lunco_celestial::SiteAnchor>, Without<Grid>)>,
+    q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
     q_avatar: Query<
         (),
         (
             With<Avatar>,
             With<LocalAvatar>,
             Without<PendingSiteCameraPose>,
-            Or<(Added<LocalAvatar>, Changed<ChildOf>)>,
+            Or<(
+                Changed<Avatar>,
+                Changed<LocalAvatar>,
+                Changed<ChildOf>,
+                Changed<Transform>,
+            )>,
         ),
     >,
 ) -> bool {
     !q_site.is_empty() && !q_avatar.is_empty()
 }
 
-/// Capture an authored local-camera pose before the celestial epoch chain
-/// migrates the site root away from the loader's world shell.
+/// Capture an authored local-camera pose before the binder migrates the avatar
+/// into the site frame. The shared common-grid conversion also handles a USD
+/// avatar projected after the site root has already moved beneath a celestial
+/// surface Grid.
 fn capture_site_camera_pose(
-    q_site: Query<Entity, (With<lunco_celestial::SiteAnchor>, Without<Grid>)>,
+    q_site: Query<Entity, With<lunco_celestial::SiteAnchor>>,
     q_avatar: Query<
         (Entity, &ChildOf, Option<&PendingSiteCameraPose>),
         (With<Avatar>, With<LocalAvatar>),
@@ -1026,23 +1034,30 @@ fn capture_site_camera_pose(
         if q_grids.get(current_parent).is_ok() && q_world_grid.get(current_parent).is_err() {
             continue;
         }
-        let Some((_, avatar_position, avatar_rotation, site_position, site_rotation)) =
-            lunco_core::coords::common_grid_poses(
-                avatar, site_root, &q_parents, &q_grids, &q_spatial,
-            )
-        else {
+        let pose = lunco_core::coords::common_grid_poses(
+            avatar, site_root, &q_parents, &q_grids, &q_spatial,
+        )
+        .map(
+            |(_, avatar_position, avatar_rotation, site_position, site_rotation)| {
+                let inverse_site_rotation = site_rotation.inverse();
+                (
+                    inverse_site_rotation * (avatar_position - site_position),
+                    (inverse_site_rotation * avatar_rotation).normalize(),
+                )
+            },
+        );
+        let Some((avatar_position, avatar_rotation)) = pose else {
             warn!(
                 ?avatar,
                 ?site_root,
-                "local avatar cannot be composed with the loader-mounted site root"
+                "local avatar cannot be composed with the authored site root"
             );
             continue;
         };
-        let inverse_site_rotation = site_rotation.inverse();
         commands.entity(avatar).try_insert(PendingSiteCameraPose {
             site_root,
-            position: inverse_site_rotation * (avatar_position - site_position),
-            rotation: (inverse_site_rotation * avatar_rotation).normalize(),
+            position: avatar_position,
+            rotation: avatar_rotation.normalize(),
         });
         info!(
             ?avatar,
@@ -5916,6 +5931,191 @@ mod tests {
         assert!(avatar_transform
             .translation
             .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5));
+    }
+
+    #[test]
+    fn late_avatar_projection_is_captured_after_site_grid_creation() {
+        let mut app = App::new();
+        let world_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                lunco_core::WorldGrid,
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                lunco_celestial::SiteAnchor,
+                lunco_celestial::GeodeticAnchor {
+                    body: lunco_celestial::ephemeris_id::MOON,
+                    geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
+                },
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                LocalAvatar,
+                CellCoord::ZERO,
+                Transform::from_xyz(45.0, 22.0, 28.0),
+                ChildOf(world_grid),
+            ))
+            .id();
+
+        // The scene frame is already live, but USD projection has only just
+        // produced the avatar. Its loader-grid pose is still the authored
+        // site-local pose and must be captured before the binder reparents it.
+        app.configure_sets(Update, AvatarSceneHandoffSet);
+        app.add_systems(
+            Update,
+            capture_site_camera_pose
+                .run_if(site_camera_capture_changed)
+                .in_set(AvatarSceneHandoffSet),
+        );
+        app.update();
+
+        let pending = app
+            .world()
+            .get::<PendingSiteCameraPose>(avatar)
+            .expect("late local avatar must retain its loader-relative pose");
+        assert_eq!(pending.site_root, site);
+        assert_eq!(pending.position, DVec3::new(45.0, 22.0, 28.0));
+        assert_eq!(pending.rotation, DQuat::IDENTITY);
+    }
+
+    #[test]
+    fn late_avatar_projection_uses_the_mounted_site_frame() {
+        let mut app = App::new();
+        let world_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                lunco_core::WorldGrid,
+            ))
+            .id();
+        let surface_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                lunco_celestial::SiteAnchor,
+                lunco_celestial::GeodeticAnchor {
+                    body: lunco_celestial::ephemeris_id::MOON,
+                    geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
+                },
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::from_xyz(100.0, 0.0, 0.0),
+                ChildOf(surface_grid),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                LocalAvatar,
+                CellCoord::ZERO,
+                Transform::from_xyz(110.0, 0.0, 0.0),
+                ChildOf(world_grid),
+            ))
+            .id();
+
+        app.configure_sets(Update, AvatarSceneHandoffSet);
+        app.add_systems(
+            Update,
+            capture_site_camera_pose
+                .run_if(site_camera_capture_changed)
+                .in_set(AvatarSceneHandoffSet),
+        );
+        app.update();
+
+        let pending = app
+            .world()
+            .get::<PendingSiteCameraPose>(avatar)
+            .expect("late local avatar must be projected in site coordinates");
+        assert_eq!(pending.site_root, site);
+        assert_eq!(pending.position, DVec3::new(10.0, 0.0, 0.0));
+        assert_eq!(pending.rotation, DQuat::IDENTITY);
+    }
+
+    #[test]
+    fn deferred_avatar_projection_is_captured_at_the_handoff_boundary() {
+        fn project_avatar_once(
+            mut commands: Commands,
+            q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
+            mut projected: Local<bool>,
+        ) {
+            if *projected {
+                return;
+            }
+            *projected = true;
+            let world_grid = q_world_grid.single().unwrap();
+            commands.spawn((
+                Avatar,
+                LocalAvatar,
+                CellCoord::ZERO,
+                Transform::from_xyz(45.0, 22.0, 28.0),
+                ChildOf(world_grid),
+            ));
+        }
+
+        let mut app = App::new();
+        app.configure_sets(Update, AvatarSceneHandoffSet);
+        let world_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                lunco_core::WorldGrid,
+            ))
+            .id();
+        app.world_mut().spawn((
+            lunco_celestial::SiteAnchor,
+            lunco_celestial::GeodeticAnchor {
+                body: lunco_celestial::ephemeris_id::MOON,
+                geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
+            },
+            lunco_core::WorldGridConfig::default().grid(),
+            CellCoord::ZERO,
+            Transform::default(),
+            ChildOf(world_grid),
+        ));
+        app.add_systems(
+            Update,
+            (
+                project_avatar_once,
+                capture_site_camera_pose.run_if(site_camera_capture_changed),
+            )
+                .chain()
+                .in_set(AvatarSceneHandoffSet),
+        );
+
+        app.update();
+
+        let position = {
+            let world = app.world_mut();
+            let mut query = world.query::<&PendingSiteCameraPose>();
+            query.single(world).unwrap().position
+        };
+        assert_eq!(position, DVec3::new(45.0, 22.0, 28.0));
     }
 
     #[test]

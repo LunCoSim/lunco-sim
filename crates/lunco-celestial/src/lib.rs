@@ -415,9 +415,7 @@ impl Plugin for CelestialPlugin {
                 // The solar hierarchy stays inertial. Site content is mounted
                 // once beneath its body's rotating surface grid; no ancestor is
                 // re-posed to make a site coincide with the world origin.
-                placement::attach_site_scene_to_surface_grid
-                    .run_if(cadence::tracked_needs_solve())
-                    .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
+                placement::attach_site_scene_to_surface_grid.run_if(cadence::tracked_needs_solve()),
                 placement::place_celestial_bound_entities.run_if(cadence::tracked_needs_solve()),
                 soi_transition_system,
             )

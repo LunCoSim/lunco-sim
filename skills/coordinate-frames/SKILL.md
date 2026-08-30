@@ -48,21 +48,21 @@ For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
 `FloatingOrigin`; cameras never receive or transfer that marker. For a
-site-anchored scene, the authored site root is the nested scene `Grid` mounted
-under the body-fixed surface Grid. Terrain and rover/lander roots are sibling
-top-level children of that scene Grid; a rover is never parented to terrain.
-Each such top-level prim carries its own `CellCoord`, while its visual and
-collision descendants remain ordinary children rooted in `LowPrecisionRoot`.
-Celestial placement mounts only the authored site root and binds its physical
-descendants; it does not query or migrate an avatar/camera.
-If that mount reparents the selected site Grid, the physics bridge reseeds
-bodies below it from the new site-local hierarchy and rotates only their
-velocity vectors; an active-frame switch without reparenting transports the
-existing physics pose.
-The avatar subsystem captures a loader-relative local-camera pose before that
-mount and applies it after the site root becomes a live Grid. All explicit
-camera frame changes stay with the camera subsystem through the same atomic
-migration helper. For a physical entity, keep it under
+site-anchored scene, celestial placement mounts only the authored site root.
+The root becomes the nested site `Grid` and `ActivePhysicsFrame` as soon as its
+`SiteAnchor` is projected, then is atomically migrated beneath the matching
+body-fixed surface Grid when that hierarchy is ready without changing the
+active frame. Terrain and rover/lander roots are sibling top-level children of
+that scene Grid; a rover is never parented to terrain. Each such top-level prim
+carries its own `CellCoord`, while visual and collision descendants remain
+ordinary children rooted in `LowPrecisionRoot`. Celestial placement does not
+query or migrate an avatar/camera. If the site Grid is reparented, the physics
+bridge reseeds bodies from the new site-local hierarchy and rotates only their
+velocity vectors; a frame switch without reparenting transports the existing
+physics pose. The avatar subsystem captures a loader-relative local-camera pose
+after USD projection has committed and applies it at the explicit scene-handoff
+boundary. All explicit camera frame changes stay with the camera subsystem
+through the same atomic migration helper. For a physical entity, keep it under
 `ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
 or connection line, convert both endpoints into one semantic frame before

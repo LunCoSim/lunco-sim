@@ -164,11 +164,14 @@ switch without frame reparenting transports the complete existing physics pose.
 
 - A scene author supplies a geodetic/body anchor or another physical placement
   fact. The engine resolves the body-fixed frame and performs the mount.
-- Site placement mounts only the authored site root. The site root itself is
-  the nested scene Grid that owns top-level terrain and vehicle siblings. The
-  avatar subsystem owns the event-driven capture and startup handoff from the
-  loader's world shell into that site Grid; celestial placement does not query,
-  bind, or migrate avatars.
+- Site placement mounts only the authored site root. As soon as its `SiteAnchor`
+  is projected, the root itself becomes the nested site `Grid` and the explicit
+  `ActivePhysicsFrame`. It owns top-level terrain and vehicle siblings; when
+  the matching body surface grid is staged, the same root is atomically migrated
+  beneath it without changing the active frame.
+  The avatar subsystem owns the event-driven capture and startup handoff from
+  the loader's world shell into that site Grid; celestial placement does not
+  query, bind, or migrate avatars.
 - A camera request names a target and semantic frame. The camera system resolves
   the target grid and uses the atomic mount operation.
 - A trajectory declares its reference frame. Its samples are converted once
