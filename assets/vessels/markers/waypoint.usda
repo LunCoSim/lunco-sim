@@ -12,8 +12,9 @@
 # poll a duplicate distance tolerance.
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`. Transparency
-# uses the standard `primvars:displayOpacity` (folded into base-color alpha +
-# AlphaMode::Blend by lunco-usd-bevy).
+# uses the standard `primvars:displayOpacity` and the authored additive policy
+# keeps the emissive annotation depth-tested without writing an occluding depth
+# value over a vehicle or terrain behind it.
 def Xform "WaypointMarker" (
     doc = "Reusable mission waypoint marker with a non-solid arrival trigger for rover routes."
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWaypointAPI"]
@@ -80,6 +81,7 @@ def Xform "WaypointMarker" (
         # Was 0.28 — legible at a glance now, still transparent enough to see
         # the terrain (and any vehicle) through the dome.
         float[] primvars:displayOpacity = [0.45]
+        bool lunco:surface:additive = true
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow. The
         # emissive-only UsdPreviewSurface above also makes its appearance
