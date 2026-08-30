@@ -5,7 +5,7 @@
     metersPerUnit = 1
 )
 
-# Reusable mission waypoint marker — an opaque glowing DOME a vehicle is
+# Reusable mission waypoint marker — a softly translucent glowing DOME a vehicle is
 # meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
 # body. The physics Sensor is consumed by the shared route projection, which
 # emits the canonical `waypoint.reached` event for Rhai; mission code does not
@@ -60,10 +60,12 @@ def Xform "WaypointMarker" (
         }
     }
 
-    # Opaque emissive dome. It is visual-only; the trigger volume below is
+    # Translucent emissive dome. It is visual-only; the trigger volume below is
     # ground-anchored so a vehicle approaching a marker on a slope can enter the
     # waypoint without having to overlap the top of a dome floating one radius
-    # above the terrain.
+    # above the terrain. The standard displayOpacity keeps the rover readable
+    # through the annotation while the emissive-only material keeps its colour
+    # independent of scene lighting.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     )
@@ -77,9 +79,10 @@ def Xform "WaypointMarker" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
+        float[] primvars:displayOpacity = [0.45]
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow. The
-        # opaque, emissive-only UsdPreviewSurface above also makes its appearance
+        # emissive-only UsdPreviewSurface above also makes its appearance
         # independent of scene lighting, shadows, and reflections.
         bool primvars:doNotCastShadows = true
     }

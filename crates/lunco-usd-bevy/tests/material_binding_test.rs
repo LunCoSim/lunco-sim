@@ -159,40 +159,46 @@ fn marker_assets_are_emissive_and_shadowless() {
     const PREDICTED_LANDING: &str =
         include_str!("../../../assets/vessels/markers/predicted_landing.usda");
     let markers = [
-        ("waypoint", WAYPOINT, "/WaypointMarker/Dome"),
+        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.45)),
         (
             "landing location",
             LANDING_LOCATION,
             "/LandingLocationMarker/Dome",
+            None,
         ),
         (
             "predicted landing PX",
             PREDICTED_LANDING,
             "/PredictedLandingMarker/Brackets/PX",
+            None,
         ),
         (
             "predicted landing NX",
             PREDICTED_LANDING,
             "/PredictedLandingMarker/Brackets/NX",
+            None,
         ),
         (
             "predicted landing PZ",
             PREDICTED_LANDING,
             "/PredictedLandingMarker/Brackets/PZ",
+            None,
         ),
         (
             "predicted landing NZ",
             PREDICTED_LANDING,
             "/PredictedLandingMarker/Brackets/NZ",
+            None,
         ),
         (
             "predicted landing center",
             PREDICTED_LANDING,
             "/PredictedLandingMarker/Brackets/Center",
+            None,
         ),
     ];
 
-    for (name, usda, prim_path) in markers {
+    for (name, usda, prim_path, expected_opacity) in markers {
         let look = material_for(usda, prim_path);
         assert!(look.no_shadow_cast, "{name} must not cast shadows");
         assert_eq!(look.base_color.red, 0.0, "{name} must have no diffuse red");
@@ -217,10 +223,23 @@ fn marker_assets_are_emissive_and_shadowless() {
             "{name} must have no specular blue"
         );
         assert!(look.emissive != LinearRgba::BLACK, "{name} must emit light");
-        assert!(
-            matches!(look.alpha, SurfaceAlpha::Opaque),
-            "{name} must remain opaque"
-        );
+        match expected_opacity {
+            Some(opacity) => {
+                assert!(
+                    matches!(look.alpha, SurfaceAlpha::Blend),
+                    "{name} must blend"
+                );
+                assert!(
+                    (look.base_color.alpha - opacity).abs() < 1e-4,
+                    "{name} must use authored opacity {opacity}, got {}",
+                    look.base_color.alpha
+                );
+            }
+            None => assert!(
+                matches!(look.alpha, SurfaceAlpha::Opaque),
+                "{name} must remain opaque"
+            ),
+        }
     }
 }
 

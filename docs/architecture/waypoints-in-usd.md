@@ -76,12 +76,14 @@ The marker has one authored USD identity and one runtime arrival path:
   Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
   are separate authored geometry contracts because the dome is lifted for
   presentation while the trigger is anchored to the terrain.
-  The dome is opaque and emissive, so its authored green display remains solid
-  and independent of scene lighting. Its standard
+  The dome is softly translucent and emissive, so its authored green display
+  remains visible while a rover inside it stays readable and its appearance
+  remains independent of scene lighting. Its standard `primvars:displayOpacity`
+  is authored as an array (`float[]`, here `0.45` opacity); the separate Trigger
+  remains invisible and fully independent. The standard
   `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
-  without changing the existing material binding or adding a marker renderer.
-  This keeps the visible dome lifted above terrain while the overlap volume
-  remains useful on slopes.
+  without adding a marker renderer. This keeps the visible dome lifted above
+  terrain while the overlap volume remains useful on slopes.
 - **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
   vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with the marker
   path. The route UI uses that set for visited appearance; an autopilot cursor may
@@ -90,6 +92,12 @@ The marker has one authored USD identity and one runtime arrival path:
 This keeps USD as the source of truth for identity, geometry, placement, and sensor
 size. Rhai consumes the event and sequences mission policy; it does not scale marker
 meshes or poll a duplicate distance tolerance.
+
+The authored graphics companion at `assets/scenes/tests/waypoint_visual.usda`
+reuses the six-wheel rover and places this marker at the rover's terrain anchor.
+Run it through the production binary's offscreen recorder when reviewing marker
+visibility; the expected result is a readable rover silhouette through the green
+dome, with the dome still visibly emissive.
 
 ### Labels follow the waypoint
 

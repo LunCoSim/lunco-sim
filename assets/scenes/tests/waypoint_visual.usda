@@ -1,0 +1,73 @@
+#usda 1.0
+(
+    defaultPrim = "WaypointVisual"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Graphics companion for the reusable waypoint marker. Reuse the six-wheel
+# production test's rover and lunar surface, then place the marker at the same
+# terrain anchor so the capture proves the translucent dome does not hide the
+# rover that it annotates.
+def Xform "WaypointVisual" (
+    prepend references = @lunco://scenes/tests/six_wheel.usda@</SixWheelTest>
+    kind = "assembly"
+)
+{
+    def Xform "Sky" (
+        prepend references = @lunco://components/environment/starfield_sky.usda@</StarfieldSky>
+    )
+    {
+    }
+
+    over "Sun"
+    {
+        float inputs:intensity = 15000.0
+    }
+
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
+    # Keep the rover at its authored pose. The numeric six-wheel scene owns the
+    # live drivetrain test; this companion owns only a stable visual review.
+    over "Rover"
+    {
+        bool physics:rigidBodyEnabled = false
+    }
+
+    def Xform "Waypoint" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        double3 lunco:cameraLookAt = (0.0, 1.2, 0.0)
+        double3 xformOp:translate = (7.0, 4.0, -10.0)
+        float focalLength = 26.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "VisualCamera",
+        }
+    }
+
+    over "Scenario" {
+        over "Test" {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/waypoint_visual.rhai@
+        }
+    }
+}
