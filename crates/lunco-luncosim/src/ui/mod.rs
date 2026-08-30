@@ -598,6 +598,8 @@ fn draw_camera_picker(
     let mut observe_avatar = false;
     let mut resume_director = false;
 
+    // The HUI rectangle anchors the popup only. Let egui measure the content
+    // and constrain the resulting area to the available viewport.
     egui::Popup::new(
         popup_id,
         ctx.clone(),
@@ -606,10 +608,9 @@ fn draw_camera_picker(
     )
     .align(egui::RectAlign::BOTTOM_START)
     .gap(6.0)
-    .width(anchor.width())
     .open_bool(&mut open)
     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-    .layout(egui::Layout::top_down_justified(egui::Align::Min))
+    .layout(egui::Layout::top_down(egui::Align::Min))
     .frame(
         egui::Frame::new()
             .fill(theme.tokens.overlay_backdrop)
