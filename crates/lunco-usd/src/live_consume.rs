@@ -787,7 +787,9 @@ pub(crate) fn refresh_edited_prims_live(
 ///
 /// `resync_paths` is applied in caller order; the caller sorts parent-before-
 /// child so a subtree root spawns first and its `on_usd_prim_added` observer
-/// builds the descendants (the per-path idempotency check then no-ops them).
+/// builds the descendants. The normalized change set and the live-path check
+/// are the only admission gates; the child constructor receives its resolved
+/// parent and does not perform another duplicate lookup.
 ///
 /// [`CanonicalStage`]: lunco_usd_bevy::CanonicalStage
 pub(crate) fn reconcile_structural_live(
@@ -830,6 +832,18 @@ pub(crate) fn reconcile_structural_live(
                 lunco_usd_sim::cosim::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
+                let parent_path =
+                    path.rsplit_once('/')
+                        .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
+                let Some(parent_path) = parent_path else {
+                    continue;
+                };
+                let Some(parent_entity) = find_live_entity(world, id, parent_path) else {
+                    // The parent is not projected yet. The next structural
+                    // reconcile receives the normalized USD change set and
+                    // retries once the parent exists.
+                    continue;
+                };
                 // Pre-read the child's translate under a short borrow; the
                 // observer builds the subtree from the still-present stage.
                 let tf = {
@@ -846,7 +860,7 @@ pub(crate) fn reconcile_structural_live(
                         }
                     }
                 };
-                lunco_usd_sim::cosim::spawn_usd_child_with_translate(world, id, path, tf);
+                lunco_usd_sim::cosim::spawn_usd_child_under_parent(world, parent_entity, path, tf);
             }
             // ALREADY LIVE, AND RESYNCED — not "nothing to do".
             //

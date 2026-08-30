@@ -1,0 +1,75 @@
+#usda 1.0
+(
+    defaultPrim = "BatteryMountsTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Composed geometry regression for every shipped rover that references the
+# reusable battery. The fixture selects the finite realization where a power
+# variant exists; the scenario reads the resulting Battery prims from the live
+# composed stage. It intentionally does not duplicate any electrical topology.
+
+def Xform "BatteryMountsTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Composed battery case dimensions and mount positions for all battery-bearing rover assemblies."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Xform "Skid" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string power = "battery"
+        }
+    )
+    {
+        double3 xformOp:translate = (-10.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "SixWheel" (
+        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+        variants = {
+            string power = "battery"
+        }
+    )
+    {
+        double3 xformOp:translate = (-3.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "RockerBogie" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "battery"
+        }
+    )
+    {
+        double3 xformOp:translate = (4.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rucheyok" (
+        prepend references = @lunco://vessels/rovers/rucheyok/rucheyok.usda@</Rucheyok>
+    )
+    {
+        double3 xformOp:translate = (20.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "battery-mounts"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/battery_mounts.rhai@
+        }
+    }
+}

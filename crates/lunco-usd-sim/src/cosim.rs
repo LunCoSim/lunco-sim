@@ -2293,6 +2293,34 @@ pub struct UsdWiredConnection;
 #[derive(Resource, Default)]
 pub struct WiringDirty(pub bool);
 
+/// Run condition for the derived USD wiring cache.
+///
+/// Keep the expensive composed-stage sweep out of stable frames. The system
+/// itself retains the same guard for direct minimal-app use and for tests; the
+/// production plugin uses this condition so Bevy does not enter that system at
+/// all until an endpoint, identity, authority, removal, or live edit arrives.
+fn wiring_due(
+    arrivals: Query<
+        (),
+        Or<(
+            Added<UsdPrimPath>,
+            Added<ModelicaModel>,
+            Added<SimComponent>,
+            Added<lunco_core::GlobalEntityId>,
+            Added<lunco_core::PortSurface>,
+            Added<lunco_core::PortSurfaceReady>,
+        )>,
+    >,
+    mut removed: RemovedComponents<UsdPrimPath>,
+    dirty: Res<WiringDirty>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+) -> bool {
+    !arrivals.is_empty()
+        || removed.read().next().is_some()
+        || dirty.0
+        || role.is_some_and(|role| role.is_changed())
+}
+
 /// Coalesces endpoint lifecycle events into one settlement decision. It is not
 /// a timer: observers and Modelica change detection are its only writers.
 #[derive(Resource, Default)]
@@ -4488,81 +4516,44 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 /// scene-root mount, used by E2 incremental spawn ([`lunco_usd::live_consume`])
 /// when a `Resync` reports a prim added to the composed document.
 ///
-/// `stage_handle_id` scopes the lookup to one scene; `reader` is the *fresh*
-/// composed stage (the asset store's current reader, so the `on_usd_prim_added`
-/// observer that fires on the new `UsdPrimPath` sees the prim). The parent live
-/// entity is found by composed path; the child is spawned with the same atomic
-/// `(UsdPrimPath, ChildOf, transform, instance-membership)` bundle the loader
-/// uses, so the observer instantiates its geometry + subtree in place without
-/// disturbing siblings. Returns `None` (no-op) if the parent isn't live yet or
-/// the prim is already spawned.
-pub fn spawn_usd_child(
-    world: &mut World,
-    stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
-    reader: &lunco_usd_bevy::StageView<'_>,
-    path: &str,
-) -> Option<Entity> {
-    // Pre-populate the translate so physics sees the spawn offset before the
-    // observer refines the full transform (matches the loader's child branch).
-    let sdf_path = SdfPath::new(path).ok()?;
-    let tf = match lunco_usd_bevy::local_transform_at(reader, &sdf_path, 0.0) {
-        Ok(Some(transform)) => transform,
-        Ok(None) => Transform::IDENTITY,
-        Err(error) => {
-            warn!("[usd-cosim] incremental spawn rejected for {path}: {error}");
-            return None;
-        }
-    };
-    spawn_usd_child_with_translate(world, stage_handle_id, path, tf)
-}
-
-/// Reader-free core of [`spawn_usd_child`]: spawn the stub child entity for
-/// `path` under its already-live parent, with a pre-read transform `tf`,
-/// inheriting grid-anchoring + instance membership from the parent. The
-/// `on_usd_prim_added` observer then builds the subtree from the canonical
-/// stage.
+/// The caller resolves the live parent from the canonical stage identity and
+/// passes that entity through. This keeps the constructor scoped to the
+/// authoritative USD hierarchy instead of making a second world-wide path
+/// lookup (which cannot distinguish separate mounts of the same stage).
+/// It spawns the stub child for `path` under the already-resolved
+/// `parent_entity`, with a pre-read transform `tf`, inheriting grid-anchoring +
+/// instance membership from that parent. The `on_usd_prim_added` observer then
+/// builds the subtree from the canonical stage.
 ///
-/// Split out so the live-stage projection bridge can pre-read the translate
-/// under a *short* immutable borrow of the `!Send` `CanonicalStage` and then
-/// spawn here with `&mut World` — the stage itself can't be held across the
-/// spawn (it aliases the world), but the observer that fires on insert reads it
-/// fresh from `CanonicalStages`.
-pub fn spawn_usd_child_with_translate(
+/// The live-stage projection bridge resolves the parent and checks the changed
+/// path before calling this function. Passing the entity is intentional: the
+/// parent hierarchy is the identity boundary, so this low-level constructor
+/// neither resolves a parent by path nor scans the world for an existing child.
+/// The stage itself cannot be held across the spawn because it aliases the
+/// world; the observer reads it afresh from `CanonicalStages`.
+pub fn spawn_usd_child_under_parent(
     world: &mut World,
-    stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
+    parent_entity: Entity,
     path: &str,
     tf: Transform,
 ) -> Option<Entity> {
-    // Parent path = `path` minus its final `/segment`.
-    let (parent_prefix, _name) = path.rsplit_once('/')?;
-    let parent_path = if parent_prefix.is_empty() {
-        "/"
-    } else {
-        parent_prefix
-    };
-
-    // Resolve the live parent entity (same scene) and bail if it isn't
-    // instantiated yet — a following full load / reconcile will cover it.
-    let parent_entity = {
-        let mut q = world.query::<(Entity, &UsdPrimPath)>();
-        q.iter(world)
-            .find(|(_, upp)| upp.stage_handle.id() == stage_handle_id && upp.path == parent_path)
-            .map(|(e, _)| e)
-    }?;
-    // Idempotent: never double-spawn a path that already has a live entity.
-    let already = {
-        let mut q = world.query::<&UsdPrimPath>();
-        q.iter(world)
-            .any(|upp| upp.stage_handle.id() == stage_handle_id && upp.path == path)
-    };
-    if already {
-        return None;
-    }
-
     let stage_handle = world
         .get::<UsdPrimPath>(parent_entity)?
         .stage_handle
         .clone();
+    let parent_path = world.get::<UsdPrimPath>(parent_entity)?.path.clone();
+    let (parent_prefix, _) = path.rsplit_once('/')?;
+    let expected_parent_path = if parent_prefix.is_empty() {
+        "/"
+    } else {
+        parent_prefix
+    };
+    if parent_path != expected_parent_path {
+        warn!(
+            "[usd-cosim] incremental spawn rejected for {path}: resolved parent is {parent_path}, expected {expected_parent_path}"
+        );
+        return None;
+    }
 
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.
@@ -5079,7 +5070,7 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         Update,
         (
-            rewire_usd_connections,
+            rewire_usd_connections.run_if(wiring_due),
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             seed_usd_input_defaults,
             dispatch_loaded_modelica_sources,
@@ -5189,6 +5180,39 @@ register_commands!(on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct WiringRuns(usize);
+
+    fn count_wiring_runs(mut runs: ResMut<WiringRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn wiring_gate_is_dormant_until_a_real_trigger() {
+        let mut app = App::new();
+        app.init_resource::<WiringDirty>()
+            .init_resource::<WiringRuns>()
+            .add_systems(Update, count_wiring_runs.run_if(wiring_due));
+
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 0);
+
+        app.world_mut().spawn(UsdPrimPath::default());
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 1);
+
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 1);
+
+        app.world_mut().resource_mut::<WiringDirty>().0 = true;
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+
+        app.world_mut().resource_mut::<WiringDirty>().0 = false;
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+    }
 
     #[derive(Resource, Default)]
     struct TelemetryProjectionRuns(usize);

@@ -1206,8 +1206,12 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
+        # The 1.9 x 1.0 x 3.0 m body needs a shorter pack than the nominal
+        # compact-rover module. Its 1.0 x 0.3 x 1.5 m case stays inside the
+        # body envelope, with its upper face flush to the y=0.5 deck plane.
         double3 xformOp:translate = (0, 0.35, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 xformOp:scale = (1.0, 0.3, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
     }
     variantSet "power" = {
         "infinite" {

@@ -38,7 +38,22 @@ Even for joint-based physical rovers, the suspension settings are read from stan
 *   `float physxVehicleSuspension:springDamperRate`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
 *   `float lunco:suspension:restLength`: Uncompressed suspension length (default `0.5` m).
 
-### 4. Drivetrain & Motor Network (Authored in USD)
+### 5. Mounted Battery Geometry
+
+The reusable battery owns the nominal 1.2 m × 0.2 m × 2.0 m case, collision
+facet, and 50 kg mass. Each rover owns the mount translation; a body with a
+different envelope may override the case scale on its `Battery` instance. A
+mounted battery is a child of the rover's single rigid body, so do not add a
+second `PhysicsRigidBodyAPI` or a joint for it.
+
+The compact skid and six-wheel rovers seat the nominal pack on the chassis
+top face at `(0, 0.25, 0)`. Rocker-bogie uses a `1.0 × 0.3 × 1.5 m` case
+inside its shorter body, while Rucheyok uses a `4.0 × 0.8 × 6.0 m` case
+centred in its `15.0 × 4.0 × 20.0 m` body. The authored
+`scenes/tests/battery_mounts.usda` fixture checks these composed transforms for
+all four battery-bearing rover assets.
+
+### 6. Drivetrain & Motor Network (Authored in USD)
 Controlling traction and speed:
 *   `inputs:stall_torque`, `inputs:no_load_speed`, `inputs:rated_power`, and
     `inputs:v_rated` are authored on the Modelica motor. Its measured

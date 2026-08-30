@@ -113,7 +113,10 @@ def Xform "Rucheyok" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        double3 xformOp:translate = (0, 0.8, 0)
+        # The custom 15 x 4 x 20 m chassis spans y=0..4. Centre the larger
+        # pack in that authored body volume so its mass and collider share the
+        # same physical centre as the assembly instead of sitting at the floor.
+        double3 xformOp:translate = (0, 2.0, 0)
         double3 xformOp:scale = (4.0, 0.8, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]

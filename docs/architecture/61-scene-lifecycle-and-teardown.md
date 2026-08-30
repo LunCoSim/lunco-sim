@@ -107,14 +107,18 @@ checks.
 USD visual projection is the deliberate exception to all-at-once scene
 materialisation. `sync_usd_visuals` only moves loaded prims into its queue;
 `UsdVisualProjectionSettings::frame_budget` bounds when the main-thread USD
-read, mesh construction, and recursive child scheduling may start in
-`process_queued_usd_visuals`. The budget is time-based because prim costs are
-not uniform. One prim remains atomic because the live OpenUSD stage is `!Send`
-and Bevy asset mutation is main-thread work. `UsdAwaitingStage` remains on
-queued prims, so the authoritative stage outcome is retained until the queue is
-empty. The workbench reports the indeterminate loading/projecting phase, and a
-clear transaction reports unloading, rather than presenting a partially
-projected scene as ready.
+read and recursive child scheduling may start in `process_queued_usd_visuals`.
+The budget is time-based because prim costs are not uniform. One prim remains
+atomic because the live OpenUSD stage is `!Send`; detached CPU geometry is
+published through the async compute phase, and Bevy asset mutation is committed
+on the main thread. The queue marker is the ownership fence: a USD traversal
+creates one child under its parent, without a world-wide duplicate-path scan.
+The same composed path can legitimately occur in separate mounts or runtime
+instances, where the parent hierarchy and instance identity scope it.
+`UsdAwaitingStage` remains on queued prims, so the authoritative stage outcome
+is retained until the queue is empty. The workbench reports the indeterminate
+loading/projecting phase, and a clear transaction reports unloading, rather than
+presenting a partially projected scene as ready.
 
 The native `--scene` entry point follows the same boundary: `setup_sandbox` only
 resolves the owning root and queues the shared asynchronous Twin scan. The

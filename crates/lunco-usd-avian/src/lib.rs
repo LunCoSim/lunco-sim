@@ -247,8 +247,9 @@ impl Plugin for UsdAvianPlugin {
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
-        //   right after `sync_usd_visuals` translates each prim, so the
-        //   stage is loaded and Mesh3d/Transform exist.
+        //   right after the USD structural projection translates each prim,
+        //   so the stage and Transform exist. CPU visual meshes may still be
+        //   streaming; mesh-backed terrain has its own pending-collider phase.
         // `build_usd_physics_joints`: stays a per-frame system because
         //   it's a deferred state-machine waiting for both referenced bodies
         //   and their bridge-seeded poses.
@@ -1151,10 +1152,12 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// - Become pure visuals — no RigidBody, no Collider
 /// - Their shapes are included in the parent's compound collider
 ///
-/// Observer: fires once per entity, the moment `sync_usd_visuals` finishes
-/// translating the USD prim (signalled by inserting `UsdVisualSynced`).
-/// By that point the stage is loaded and `Mesh3d`/`Transform` are present —
-/// safe to read schemas and attach physics components in one step.
+/// Observer: fires once per entity, the moment the USD structural projection
+/// translates the prim (signalled by inserting `UsdVisualSynced`). CPU visual
+/// meshes may still be streaming; physics reads the canonical USD definition
+/// directly and does not depend on `Mesh3d`.
+/// By that point the stage is loaded and `Transform` is present — safe to read
+/// schemas and attach physics components in one step.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdVisualSynced>,
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,

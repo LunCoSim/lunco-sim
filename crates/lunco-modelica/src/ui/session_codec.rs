@@ -2,7 +2,7 @@
 //! restore).
 //!
 //! Registers a [`DocumentSessionCodec`] so `lunco-workbench` can capture
-//! every open Modelica document's **live editor buffer** into the
+//! every persistable Modelica document's **live editor buffer** into the
 //! per-Twin `workspace-state` file and recreate it on next launch — the
 //! buffer is the source of truth, so unsaved edits survive a restart.
 //!
@@ -21,11 +21,15 @@ use lunco_workbench::{
 };
 
 use crate::model_tabs::ModelTabs;
-use crate::state::ModelicaDocumentRegistry;
+use crate::state::{is_generated_document, is_generated_origin, ModelicaDocumentRegistry};
 use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use crate::ui::MODEL_VIEW_KIND;
 
 const KIND: &str = "modelica";
+
+fn is_persistable_snapshot(snapshot: &DocumentSnapshot) -> bool {
+    !(snapshot.kind == KIND && is_generated_origin(&snapshot.origin))
+}
 
 fn restore_origin(origin: &lunco_doc::DocumentOrigin) -> lunco_doc::DocumentOrigin {
     match origin {
@@ -58,6 +62,13 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         let mut acc = 0u64;
         let mut count = 0u64;
         for (id, host) in reg.iter() {
+            // Generated USD projections are runtime artifacts, not open editor
+            // documents. Including them here makes every scene projection
+            // churn the hot-exit revision and causes the next launch to restore
+            // stale solver wrappers that no longer belong to the active Twin.
+            if is_generated_document(host.document()) {
+                continue;
+            }
             acc ^= revision_term(id.raw(), host.document().generation_owned());
             count += 1;
         }
@@ -91,6 +102,11 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             .map(|cds| {
                 cds.iter_doc_ids()
                     .filter_map(|d| {
+                        let registry = world.get_resource::<ModelicaDocumentRegistry>()?;
+                        let host = registry.host(d)?;
+                        if is_generated_document(host.document()) {
+                            return None;
+                        }
                         cds.get_for_doc(d)
                             .and_then(|s| serde_json::to_value(&s.canvas.viewport).ok())
                             .map(|v| (d, v))
@@ -109,7 +125,11 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
                     .get_resource::<ModelicaDocumentRegistry>()
                     .map(|reg| {
                         reg.iter()
-                            .filter_map(|(id, _)| tabs.primary_tab_for(id).map(|t| (id, t)))
+                            .filter_map(|(id, host)| {
+                                (!is_generated_document(host.document()))
+                                    .then(|| tabs.primary_tab_for(id).map(|t| (id, t)))
+                                    .flatten()
+                            })
                             .collect()
                     })
                     .unwrap_or_default()
@@ -120,6 +140,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             return Vec::new();
         };
         reg.iter()
+            .filter(|(_, host)| !is_generated_document(host.document()))
             .map(|(id, host)| {
                 let doc = host.document();
                 let origin = doc.origin().clone();
@@ -142,6 +163,13 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
     }
 
     fn restore(&self, world: &mut World, snap: &DocumentSnapshot) -> Option<u64> {
+        // Generated USD documents are transient projection artifacts. Older
+        // workspace-state files may still contain them from before the
+        // persistence boundary was enforced; drop those snapshots during
+        // restore so one clean save removes the stale state permanently.
+        if !is_persistable_snapshot(snap) {
+            return None;
+        }
         // `allocate_with_origin` registers the document and fires
         // `DocumentOpened` — which adds the Workspace entry — but it does
         // NOT open a model-view tab. In normal use the package browser
@@ -209,5 +237,51 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
 
     fn dock_tab_kind(&self) -> Option<&'static str> {
         Some(MODEL_VIEW_KIND.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn snapshot(origin: lunco_doc::DocumentOrigin) -> DocumentSnapshot {
+        DocumentSnapshot {
+            kind: KIND.to_string(),
+            title: "test".to_string(),
+            source: "model Test end Test;".to_string(),
+            dirty: false,
+            origin,
+            id: 1,
+            tab_instance: 0,
+            view_state: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn generated_documents_are_not_persisted_or_restored() {
+        let generated = snapshot(lunco_doc::DocumentOrigin::Bundled {
+            filename: "generated/Traverse_System.mo".to_string(),
+        });
+        let authored = snapshot(lunco_doc::DocumentOrigin::File {
+            path: PathBuf::from("/tmp/Test.mo"),
+            writable: true,
+        });
+
+        assert!(!is_persistable_snapshot(&generated));
+        assert!(is_persistable_snapshot(&authored));
+
+        let mut world = World::new();
+        let mut registry = ModelicaDocumentRegistry::default();
+        registry.allocate_with_origin(
+            generated.source.clone(),
+            generated.origin.clone(),
+        );
+        registry.allocate_with_origin(authored.source.clone(), authored.origin.clone());
+        world.insert_resource(registry);
+
+        let captured = ModelicaSessionCodec.capture(&mut world);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1.origin, authored.origin);
     }
 }

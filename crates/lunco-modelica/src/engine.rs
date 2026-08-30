@@ -262,9 +262,13 @@ impl ModelicaEngine {
         self.completed.push((doc_id, gen));
     }
 
-    /// Whether `doc_id` has an async parse in flight right now.
-    pub fn is_doc_pending(&self, doc_id: DocumentId) -> bool {
+    /// Whether `doc_id` has async parse work that the adapter has not fully
+    /// consumed yet. A worker completion remains busy until it is drained;
+    /// otherwise a bounded completion batch could requeue the same document
+    /// while its result was still waiting for the main-thread install.
+    pub fn has_parse_work(&self, doc_id: DocumentId) -> bool {
         self.pending.contains(&doc_id)
+            || self.completed.iter().any(|(completed, _)| *completed == doc_id)
     }
 
     /// Number of async parses currently in flight. Used by
@@ -280,10 +284,15 @@ impl ModelicaEngine {
         self.pending.clear();
     }
 
-    /// Take all completions accumulated since the last drain. Bevy
-    /// adapter calls this once per `Update` tick.
-    pub fn drain_completed(&mut self) -> Vec<(DocumentId, u64)> {
-        std::mem::take(&mut self.completed)
+    /// Take at most `limit` completions accumulated since the last drain.
+    ///
+    /// The Bevy adapter installs each AST into the document registry on the
+    /// main thread. Keeping this queue bounded per update prevents a burst of
+    /// worker completions from turning one frame into an unbounded batch of
+    /// AST/index rebuilds. FIFO order keeps document readiness deterministic.
+    pub fn drain_completed_up_to(&mut self, limit: usize) -> Vec<(DocumentId, u64)> {
+        let count = limit.min(self.completed.len());
+        self.completed.drain(..count).collect()
     }
 
     /// Install a strict AST under `doc_id`'s session URI without
@@ -949,6 +958,28 @@ mod tests {
         assert!(engine.uri_for_doc.contains_key(&DocumentId::new(1)));
         engine.close_document(DocumentId::new(1));
         assert!(!engine.uri_for_doc.contains_key(&DocumentId::new(1)));
+    }
+
+    #[test]
+    fn completion_drain_is_bounded_and_fifo() {
+        let mut engine = ModelicaEngine::new();
+        let first = DocumentId::new(1);
+        let second = DocumentId::new(2);
+        let third = DocumentId::new(3);
+
+        engine.finish_parse(first, 11);
+        engine.finish_parse(second, 22);
+        engine.finish_parse(third, 33);
+
+        assert!(engine.has_parse_work(first));
+
+        assert_eq!(
+            engine.drain_completed_up_to(2),
+            vec![(first, 11), (second, 22)]
+        );
+        assert!(!engine.has_parse_work(first));
+        assert_eq!(engine.drain_completed_up_to(2), vec![(third, 33)]);
+        assert!(engine.drain_completed_up_to(1).is_empty());
     }
 
     #[test]
