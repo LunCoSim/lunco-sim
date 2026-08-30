@@ -61,7 +61,7 @@ dump-only USD probe, historical Rumoca emitter round-trip and bisection suites,
 a compile-only Bevy no-op, an intentionally panicking Avian measurement probe,
 and a legacy waypoint JSON-shape check. It also removed a known-failing MSL
 diagnostic and a duplicate external-bundle presence check; the passing
-Modelica demand-load example remains the maintained MSL contract. The two
+Modelica source-root admission example remains the maintained MSL contract. The two
 selection/drag integration files were also removed because they simulated
 state without invoking the production systems and asserted the retired
 Shift-select/`DragModeActive` contract. Current schema, parser, lifecycle,

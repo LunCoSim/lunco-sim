@@ -97,6 +97,14 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
+Before a USD-owned Modelica participant is submitted to the worker, the
+compiler's source-root admission step seats every dependency discoverable from
+the source text (bundled roots and MSL when available). The worker then performs
+one DAE compile against the settled session. A later compile is valid only for
+an actual authored source/topology change or an explicit library-set change;
+normal scene projection and solver stepping do not recompile an unchanged USD
+participant.
+
 Reusable vehicle accessories keep the same ownership boundary. For example,
 `assets/components/lights/headlight_controller.usda` projects
 `LunCo.Electrical.HeadlightController`: Rhai writes the vehicle's semantic
@@ -185,9 +193,9 @@ Generated source roots use the ordinary Modelica search-path contract. The
 shared `ModelicaEngineHandle` discovers a structured package root by its
 qualified-name first segment and loads it asynchronously; `source_roots` may
 prewarm a policy dependency but is not a library-specific resolver. UI and
-projection code never waits on the engine mutex: cache misses remain explicit
-loading/unresolved states, the worker installs the parsed root, and the
-standard completion event reprojects the same source/AST canvas.
+projection code never waits on the engine mutex: source-root admission settles
+before the worker's single DAE compile, while the standard completion event
+reprojects the same source/AST canvas.
 
 The generated-domain projector is also lifecycle-driven at the ECS boundary.
 It first applies the shared `is_domain_network_root` predicate, then uses

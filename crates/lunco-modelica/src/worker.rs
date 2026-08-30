@@ -1869,11 +1869,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // publishes a new snapshot so plots render without locking or
     // involving the main thread in per-sample work.
     let mut sim_streams: HashMap<Entity, SimStream> = HashMap::default();
-    // Lazy compiler construction. `ModelicaCompiler::new` is now
-    // cheap — it creates an empty session with no MSL loaded.
-    // Actual MSL files are pulled into the session on demand by
-    // `compile_str` based on what each compile's reachable closure
-    // references. No reason to pre-build it.
+    // Lazy compiler construction. `ModelicaCompiler::new` creates an empty
+    // session; each source compile admits its statically discovered roots
+    // before the single DAE call. The worker owns this session and reuses it
+    // for every participant.
     let mut compiler: Option<ModelicaCompiler> = None;
 
     // M3: cached compiled artifacts are valid only for the library set they
@@ -2179,7 +2178,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         let was_first_compile = compiler.is_none();
                         if was_first_compile {
                             bevy::log::info!(
-                                "[worker] first-time compiler init — loading MSL into rumoca session (this can take ~10s on warm cache, minutes on cold `.cache/rumoca`)"
+                                "[worker] first-time compiler init — creating the shared Rumoca session"
                             );
                         }
                         let t_init = web_time::Instant::now();
