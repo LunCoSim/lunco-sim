@@ -532,10 +532,17 @@ every `Camera3d` and uses the default 4,096-cell `FixedZ` configuration when a
 camera has no explicit `ClusterConfig`. The assignment owner only clusters
 point lights, spot lights, light probes, and clustered decals; Apollo's authored
 sun is directional. The render camera binder now uses Bevy's existing
-`ClusterConfig::None` when the ECS topology contains no clusterable object, and
-tracks those four component lifecycles with observers. A live USD light
-projection therefore restores the normal Bevy configuration automatically.
+`ClusterConfig::Single` when the ECS topology contains no clusterable object,
+tracks those four component lifecycles with observers, and the camera
+reconciler waits for positive `Clusters` dimensions before activation. A live
+USD light projection therefore restores the normal Bevy configuration
+automatically without exposing an invalid zero-sized GPU view.
 Explicit camera `ClusterConfig` components remain untouched.
+
+The same production load also exercises the empty scene-root path contract:
+the USD boundary resolves the stage's composed `defaultPrim` before celestial
+projection reads it. This keeps a same-frame deferred visual projection from
+marking the root before its site anchor can be discovered.
 
 The final focused `lunco-render-bevy` suite passed **52/52**, and the plain
 production build passed in `usd/target/debug`. A clean Apollo smoke run on API

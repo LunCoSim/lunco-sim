@@ -68,11 +68,20 @@ The render camera binder applies the same rule to Bevy's clustered-light
 infrastructure. `Camera3d` requires a `Clusters` component, but directional
 lights do not use it and Bevy's default allocates a 4,096-cell grid even when
 the world has no point lights, spot lights, light probes, or clustered decals.
-Automatic render-camera bindings select Bevy's `ClusterConfig::None` in that
-topology, and lifecycle observers restore the normal Bevy configuration when a
-clusterable object appears. An explicit `ClusterConfig` remains authoritative.
-This is a renderer-owned topology decision; it is not an Apollo scene or name
-heuristic and it does not add an alternate lighting path.
+Automatic render-camera bindings select Bevy's `ClusterConfig::Single` in that
+topology and lifecycle observers restore the normal Bevy configuration when a
+clusterable object appears. The camera reconciler also waits for Bevy's
+positive `Clusters` dimensions before activating a newly projected window
+camera, so GPU extraction cannot receive an invalid zero-sized view. An
+explicit `ClusterConfig` remains authoritative. This is a renderer-owned
+topology/readiness decision; it is not an Apollo scene or name heuristic and
+it does not add an alternate lighting path.
+
+The empty scene-root mount path is resolved against the same live composed
+stage, through the USD boundary's shared `defaultPrim` resolver. Visual and
+celestial projection therefore read the identical concrete root even when
+their systems observe the load in the same frame; a deferred visual write
+cannot cause a site anchor to be skipped permanently.
 
 ## 2. The UI must stay responsive
 The user types, drags, and right-clicks into the same event queue

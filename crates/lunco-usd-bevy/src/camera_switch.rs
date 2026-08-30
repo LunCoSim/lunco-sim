@@ -595,6 +595,7 @@ pub fn reconcile_scene_viewport(
             &mut Camera,
             &RenderTarget,
             Has<bevy::camera::Projection>,
+            Option<&bevy::light::cluster::Clusters>,
             Option<&UsdPrimPath>,
             Has<SceneCamera>,
         ),
@@ -602,23 +603,22 @@ pub fn reconcile_scene_viewport(
     >,
 ) {
     // A camera is only ACTIVATABLE once its 3D pipeline (`Camera3d` → required
-    // `Projection`) is bound by `lunco-render-bevy`. A `SceneCamera` spawns as a
-    // bare `Camera` and gets that pipeline a frame or two later; if we activate it
-    // in that window it is extracted as a live view but SKIPPED by Bevy's
-    // `build_directional_light_cascades` (whose query requires `&Projection`), so a
-    // shadow-casting sun's `prepare_lights` then `unwrap()`s a cascade map with no
-    // entry for the view and PANICS the render app. It only bites a scene whose sun
-    // has shadows enabled (e.g. the moonbase `DistantLight`) — a shadowless sandbox
-    // sun skips the cascade path — which is exactly the "headfull crashes on the DEM
-    // project, not the flat sandbox" symptom. Requiring `Projection` here keeps the
-    // sole active window view always cascade-covered and forces any transient
-    // projectionless camera off.
+    // `Projection`) is bound by `lunco-render-bevy` and Bevy has computed a positive
+    // physical target and a positive clustered-light grid. A `SceneCamera` arrives
+    // asynchronously from USD projection; the render binder and `CameraUpdateSystems`
+    // complete on later schedules. If the camera is activated before the target or
+    // cluster grid exists, Bevy's GPU preparation attempts to create a zero-width
+    // dummy texture. wgpu then keeps rejecting the invalid view, so the presentation
+    // ladder eventually deactivates the cameras and leaves an otherwise ready scene
+    // empty. Requiring all three readiness conditions keeps the sole active window
+    // view valid from its first extracted frame.
     let activatable = |q: &Query<
         (
             Entity,
             &mut Camera,
             &RenderTarget,
             Has<bevy::camera::Projection>,
+            Option<&bevy::light::cluster::Clusters>,
             Option<&UsdPrimPath>,
             Has<SceneCamera>,
         ),
@@ -626,9 +626,16 @@ pub fn reconcile_scene_viewport(
     >,
                        e: Entity|
      -> bool {
-        q.get(e).is_ok_and(|(_, _, t, has_proj, _, scene_camera)| {
-            is_window_render_target(t) && has_proj && scene_camera
-        })
+        q.get(e)
+            .is_ok_and(|(_, camera, t, has_proj, clusters, _, scene_camera)| {
+                is_window_render_target(t)
+                    && has_proj
+                    && scene_camera
+                    && camera
+                        .physical_viewport_size()
+                        .is_some_and(|size| size.x > 0 && size.y > 0)
+                    && clusters.is_none_or(|clusters| clusters.dimensions != UVec3::ZERO)
+            })
     };
 
     // ── Resolve only the explicit request ───────────────────────────────
@@ -637,13 +644,13 @@ pub fn reconcile_scene_viewport(
             RequestedCamera::Entity(entity) => Some(*entity),
             RequestedCamera::Authored(wanted) => q_cams
                 .iter()
-                .find(|(_, _, _, _, path, scene_camera)| {
+                .find(|(_, _, _, _, _, path, scene_camera)| {
                     *scene_camera
                         && path.is_some_and(|path| {
                             path.stage_handle.id() == wanted.stage && path.path == wanted.path
                         })
                 })
-                .map(|(entity, _, _, _, _, _)| entity),
+                .map(|(entity, _, _, _, _, _, _)| entity),
         }?;
         activatable(&q_cams, entity).then_some(entity)
     });
@@ -655,13 +662,13 @@ pub fn reconcile_scene_viewport(
     let rect = vp.rect;
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
-    for (e, mut cam, target, _, _, _) in q_cams.iter_mut() {
+    for (e, mut cam, target, _, _, _, _) in q_cams.iter_mut() {
         if !is_window_render_target(target) {
             continue; // RTT/offscreen cameras are self-managed
         }
-        // `active` is already Projection-gated, so a projectionless camera is
-        // never `active` → want_active=false → it is (kept) off until its 3D
-        // pipeline binds. That is the guard against the cascade-unwrap panic.
+        // `active` is gated by pipeline, target, and cluster readiness, so a
+        // camera that is still binding or computing its first render frame is
+        // kept off until the complete window presentation is valid.
         let want_active = Some(e) == active && visible;
         if cam.is_active != want_active {
             cam.is_active = want_active;
@@ -1085,13 +1092,24 @@ mod tests {
     use super::*;
 
     fn window_cam(is_active: bool, name: &str) -> impl Bundle {
+        window_cam_with_target(is_active, name, true)
+    }
+
+    fn window_cam_with_target(is_active: bool, name: &str, target_ready: bool) -> impl Bundle {
+        let mut camera = Camera {
+            is_active,
+            ..default()
+        };
+        if target_ready {
+            camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+                physical_size: UVec2::new(1280, 720),
+                scale_factor: 1.0,
+            });
+        }
         (
             SceneCamera::default(),
             Camera3d::default(),
-            Camera {
-                is_active,
-                ..default()
-            },
+            camera,
             // A `Projection` stands in for the bound 3D pipeline: the reconciler
             // only activates cameras whose pipeline is present (guards the shadow
             // cascade-unwrap panic), so a test camera must carry one to be eligible.
@@ -1109,6 +1127,50 @@ mod tests {
             .filter(|(_, c)| c.is_active)
             .map(|(e, _)| e)
             .collect()
+    }
+
+    #[test]
+    fn reconciler_waits_for_a_positive_physical_viewport() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .add_systems(Update, reconcile_scene_viewport);
+        let camera = app
+            .world_mut()
+            .spawn(window_cam_with_target(false, "A", false))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(camera);
+        app.world_mut()
+            .resource_mut::<ViewportCameraSelection>()
+            .requested = Some(RequestedCamera::Entity(camera));
+
+        app.update();
+
+        assert!(!app.world().get::<Camera>(camera).unwrap().is_active);
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            None,
+            "the requested camera stays pending until Bevy computes its target"
+        );
+
+        app.world_mut()
+            .get_mut::<Camera>(camera)
+            .unwrap()
+            .computed
+            .target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(1280, 720),
+            scale_factor: 1.0,
+        });
+        app.update();
+
+        assert!(app.world().get::<Camera>(camera).unwrap().is_active);
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(camera)
+        );
     }
 
     #[test]
