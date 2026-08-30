@@ -113,28 +113,29 @@
 //! (field names → std140 offsets) and the `//!@` annotations straight out of this
 //! file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
+#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
+#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
+#import bevy_pbr::utils::coords_to_viewport_uv
+#import bevy_render::view::View
+
+// The background pipeline owns a minimal view bind group. It is intentionally
+// not the mesh/PBR view layout: a camera background needs only the camera
+// matrices and does not participate in clustered lights or mesh visibility.
+@group(0) @binding(0) var<uniform> view: View;
+#else
 #import bevy_pbr::{
     forward_io::VertexOutput,
     mesh_view_bindings::view,
     view_transformations::position_world_to_clip,
 }
+#endif
 #import lunco::noise::vnoise_quintic
 
-/// Skybox anchor (`info:wgsl:vertexAsset` points the material's VERTEX stage
-/// here). The fragment below shades purely by view ray, so the dome's geometry
-/// carries no meaning beyond "cover every pixel of sky" — and a world-pinned
-/// sphere cannot do that from everywhere: walk further from the scene origin
-/// than its radius and the sky collapses to the sphere's silhouette (a circle
-/// of stars); author it bigger and it falls outside a chase camera's far plane
-/// and the sky renders EMPTY. This stage removes the coupling instead of tuning
-/// it: each vertex is re-aimed along its own model-space direction 1 m from the
-/// CAMERA, and its clip z is then pinned just inside the far plane (reverse-z:
-/// depth ≈ 0), so the dome rides with every camera and depth-tests behind
-/// everything that actually wrote depth — terrain still hides it, and the
-/// ephemeris bodies now correctly OCCLUDE the stars instead of having them
-/// added on top. The authored sphere's radius and placement become irrelevant
-/// to what is rendered (they still feed the CPU-side culling AABB — see the
-/// scene authoring).
+/// Legacy mesh entry point retained for non-background shader users. The
+/// scene starfield no longer supplies a gprim; its camera background variant
+/// below uses the fullscreen vertex supplied by Bevy.
+#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
+#else
 struct SkyVertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
@@ -143,9 +144,9 @@ struct SkyVertex {
 @vertex
 fn vertex(in: SkyVertex) -> VertexOutput {
     var out: VertexOutput;
-    // Model-space position → sky direction. The dome is authored unrotated, so
-    // model space IS world orientation; skipping the model matrix keeps the sky
-    // fixed to the world even if something translates the prim.
+    // Compatibility path for callers that still provide a sky mesh. The
+    // background scene does not use this entry point; it reconstructs a ray
+    // directly from the camera projection below.
     let dir = normalize(in.position);
     let world = view.world_position + dir;
     out.world_position = vec4(world, 1.0);
@@ -162,6 +163,7 @@ fn vertex(in: SkyVertex) -> VertexOutput {
 #endif
     return out;
 }
+#endif
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.
@@ -527,13 +529,25 @@ fn stars(d: vec3<f32>, px: f32) -> vec3<f32> {
 }
 
 @fragment
+#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
+fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    // Reconstruct the ray from a finite near-plane point. Using the view
+    // inverse keeps this correct for perspective, orthographic, and custom
+    // camera projections without a sphere or far-plane assumption.
+    // FullscreenVertexOutput.uv is intentionally in [0, 2], not [0, 1]. Use
+    // the fragment position and the authoritative viewport so sub-viewports
+    // and resolution overrides reconstruct the same ray as Bevy's skybox.
+    let viewport_uv = coords_to_viewport_uv(in.position.xy, view.viewport);
+    let ndc = vec3(viewport_uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 1.0);
+    let world_point = view.world_from_clip * vec4(ndc, 1.0);
+    let d = normalize(world_point.xyz / world_point.w - view.world_position);
+#else
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    // THE VIEW RAY, not the surface point direction. The sky mesh is a finite
-    // sphere, but shading by `normalize(hit - eye)` makes it behave as one at
-    // infinity: the value at a pixel depends only on where that pixel looks, so
-    // the sky does not parallax as the camera translates inside the dome, and
-    // the dome's radius is free to be whatever keeps it inside the far plane.
+    // Compatibility path for a caller that supplies a sky mesh. The reusable
+    // scene component uses the camera-background branch above, so its result is
+    // independent of mesh radius, culling bounds, and camera far-plane range.
     let d = normalize(in.world_position.xyz - view.world_position);
+#endif
 
     // Angular size of one pixel, in radians. `d` is a unit vector, so the
     // screen-space derivative of it IS the per-pixel angular step, which makes

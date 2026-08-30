@@ -6,28 +6,19 @@
 )
 
 # Reusable lunar night sky. The starfield shader owns the sky appearance; this
-# component owns only the standard USD sphere/material binding and the additive
-# presentation contract that lets terrain in front of it remain visible.
+# component owns the standard USD material binding and the additive presentation
+# contract that lets terrain in front of it remain visible.
 def Xform "StarfieldSky" (
-    doc = "Reusable additive lunar starfield sky dome."
+    doc = "Reusable additive lunar procedural camera background."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "MaterialBindingAPI"]
 )
 {
-    def Sphere "Dome" (
-        prepend apiSchemas = ["MaterialBindingAPI"]
-    )
-    {
-        # The shader re-anchors the vertices at the active camera's far depth,
-        # so this is only a culling volume. Keep it inside the renderer's
-        # practical scene range; an enormous sphere can be rejected by the
-        # camera frustum before the custom vertex stage gets to move it.
-        double radius = 1000000.0
-        uniform bool doubleSided = true
-        bool primvars:doNotCastShadows = true
-        bool lunco:surface:additive = true
-        rel material:binding = </StarfieldSky/Looks/Starfield>
-    }
+    # The sky is a camera background, not a finite enclosing gprim. This
+    # explicit owner marker selects the renderer's fullscreen procedural path;
+    # there is no radius, culling AABB, or mesh to couple to the camera range.
+    bool lunco:surface:skybox = true
+    rel material:binding = </StarfieldSky/Looks/Starfield>
 
     def Scope "Looks"
     {
@@ -39,7 +30,6 @@ def Xform "StarfieldSky" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                uniform asset info:wgsl:vertexAsset = @lunco://shaders/starfield.wgsl@
                 color3f inputs:core_color = (1.0, 0.86, 0.62)
                 color3f inputs:arm_color = (0.84, 0.90, 1.0)
                 float inputs:star_density = 46.0
@@ -51,10 +41,10 @@ def Xform "StarfieldSky" (
                 # presentation profile gives the star points enough integrated
                 # flux to survive the display transform without turning the
                 # galaxy into a flat white backdrop.
-                float inputs:brightness = 0.12
-                float inputs:band_intensity = 0.14
-                float inputs:point_size = 2.50
-                float inputs:glow = 0.12
+                float inputs:brightness = 0.50
+                float inputs:band_intensity = 0.35
+                float inputs:point_size = 3.00
+                float inputs:glow = 0.35
                 float inputs:seed = 37.0
                 float inputs:core_boost = 3.0
                 float inputs:band_width = 5.0

@@ -40,7 +40,8 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
 use lunco_materials::{
-    ParamSchema, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer,
+    ParamSchema, ProceduralSkybox, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
+    TextureLayer,
 };
 use lunco_render::SurfaceAlpha;
 use std::sync::Arc;
@@ -261,6 +262,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook) -> bool {
 fn bind_shader_look(
     add: On<Add, ShaderLook>,
     looks: Query<&ShaderLook>,
+    skyboxes: Query<(), With<ProceduralSkybox>>,
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
@@ -275,11 +277,45 @@ fn bind_shader_look(
     // `ShaderLook`. Remove that stale draw before adding ours: leaving both
     // material component types on one mesh submits it twice with incompatible
     // pipelines (visible as bright, serrated fragments at wheel silhouettes).
+    let skybox = skyboxes.get(e).is_ok();
+    let mut entity = commands.entity(e);
+    entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
+    entity.try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
+    if skybox {
+        entity.try_insert(crate::procedural_sky::ProceduralSkyboxMaterial::new(
+            handle,
+            &look.shader,
+            &asset_server,
+        ));
+    }
+    apply_shadow_intent(&mut commands, e, look);
+}
+
+/// If the USD reader adds the explicit sky marker after the shader look, move
+/// the already-resolved look onto the same render-side sky material contract.
+fn bind_added_skybox_shader_look(
+    add: On<Add, ProceduralSkybox>,
+    looks: Query<&ShaderLook>,
+    mut cache: ResMut<ShaderLookCache>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let e = add.entity;
+    let Ok(look) = looks.get(e) else { return };
+    let handle = material_for(look, &mut cache, &mut materials, &asset_server);
     commands
         .entity(e)
         .try_remove::<MeshMaterial3d<StandardMaterial>>()
-        .try_insert((MeshMaterial3d(handle), ShaderLookBound));
-    apply_shadow_intent(&mut commands, e, look);
+        .try_insert((
+            MeshMaterial3d(handle.clone()),
+            ShaderLookBound,
+            crate::procedural_sky::ProceduralSkyboxMaterial::new(
+                handle,
+                &look.shader,
+                &asset_server,
+            ),
+        ));
 }
 
 /// Mirror [`ShaderLook::no_shadow_cast`] onto the entity as `NotShadowCaster`.
@@ -311,6 +347,7 @@ fn rebind_changed_shader_look(
             &ShaderLook,
             Option<&MeshMaterial3d<ShaderMaterial>>,
             Has<ShaderLookReady>,
+            Has<ProceduralSkybox>,
         ),
         Changed<ShaderLook>,
     >,
@@ -333,11 +370,12 @@ fn rebind_changed_shader_look(
     // re-packed once per tile per change — hundreds of redundant writes per frame.
     let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
 
-    for (e, look, current, was_ready) in &changed {
+    for (e, look, current, was_ready, skybox) in &changed {
         apply_shadow_intent(&mut commands, e, look);
         if look.unshared {
             // Private material: overwrite the asset it already owns, rather than
             // adding one per change (that would leak a material per frame).
+            let current_handle = current.map(|material| material.0.clone());
             if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
                 // A driven look changes EVERY tick, so this is the hot path, and a
                 // full rebuild here is wrong twice over.
@@ -391,15 +429,38 @@ fn rebind_changed_shader_look(
                             .map(|(k, v)| (k.as_str(), *v)),
                     );
                 }
+                if skybox {
+                    if let Some(handle) = current_handle {
+                        commands.entity(e).try_insert(
+                            crate::procedural_sky::ProceduralSkyboxMaterial::new(
+                                handle,
+                                &look.shader,
+                                &asset_server,
+                            ),
+                        );
+                    }
+                } else {
+                    commands
+                        .entity(e)
+                        .try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
+                }
                 continue;
             }
         }
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
         let mut entity = commands.entity(e);
-        entity
-            .try_remove::<MeshMaterial3d<StandardMaterial>>()
-            .try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
+        entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
+        entity.try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
+        if skybox {
+            entity.try_insert(crate::procedural_sky::ProceduralSkyboxMaterial::new(
+                handle.clone(),
+                &look.shader,
+                &asset_server,
+            ));
+        } else {
+            entity.try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
+        }
         // A content-key change normally needs to clear the entity's readiness
         // latch: the replacement material may still be waiting for reflection
         // or one of its declared images. Edge-stitch updates are the important
@@ -467,6 +528,7 @@ pub(crate) fn build(app: &mut App) {
     }
     app.init_resource::<ShaderLookCache>()
         .add_observer(bind_shader_look)
+        .add_observer(bind_added_skybox_shader_look)
         .add_systems(
             Update,
             (

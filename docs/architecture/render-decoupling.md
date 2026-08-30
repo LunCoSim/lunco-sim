@@ -113,6 +113,16 @@ would let a look reflect like diamond and refract like glass, and would need to 
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom + Bevy `ClusterConfig` | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question**; the render binder uses Bevy's single-cluster topology when no clusterable object exists and follows light lifecycle events |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
+`ProceduralSkybox` is a render-free scene intent that may accompany `ShaderLook`.
+The `lunco-render-bevy` binder keeps the same reflected `ShaderMaterial` and
+parameter values, but submits that material through a fullscreen `Core3d`
+background pass after opaque geometry. Reverse-Z depth testing leaves the
+already-rendered scene in front while the clear value admits the background. It
+therefore has no mesh, radius, culling
+bound, or camera far-plane dependency. A scene must have at most one active
+procedural background owner; multiple owners disable the pass until authoring is
+corrected. Textured `DomeLight` remains the separate environment-lighting path.
+
 `ShaderLookReady` is the render binder's dependency-presence latch. A shader
 `Added`/`Modified` event invalidates the latch because reflection and material
 packing may have changed; a referenced image `Removed`/`Unused` event does the
