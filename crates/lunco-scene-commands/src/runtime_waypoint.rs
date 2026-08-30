@@ -166,7 +166,7 @@ fn spawn_runtime_waypoint_marker(
     let scene_root = spawner.q_scene_root.single().map_err(|_| {
         "runtime waypoint marker requires exactly one mounted scene root".to_string()
     })?;
-    let (position, rotation) = lunco_core::coords::pose_in_parent_local(
+    let Some((Some(cell), position, rotation)) = lunco_core::coords::pose_in_grid_to_parent_storage(
         position,
         DQuat::IDENTITY,
         scene_root,
@@ -174,18 +174,18 @@ fn spawn_runtime_waypoint_marker(
         &spawner.q_parents,
         &spawner.q_grids,
         &spawner.q_spatial,
-    )
-    .ok_or_else(|| {
-        format!(
+    ) else {
+        return Err(format!(
             "runtime waypoint marker scene root {:?} is not attached to active physics frame {:?}",
             scene_root, spawner.active_frame.0
-        )
-    })?;
+        ));
+    };
     let marker = spawn_usd_entry(
         commands,
         &spawner.asset_server,
         entry,
-        position.as_vec3(),
+        cell,
+        position,
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );

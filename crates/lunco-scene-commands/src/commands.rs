@@ -405,6 +405,14 @@ pub fn on_spawn_entity_command(
         warn!("SPAWN_ENTITY: non-finite pose for '{}'", cmd.entry_id);
         return;
     }
+    let Ok(scene_grid) = q_grids.get(scene_root) else {
+        warn!(
+            ?scene_root,
+            "SPAWN_ENTITY: scene root is not a BigSpace Grid"
+        );
+        return;
+    };
+    let (spawn_cell, spawn_local_position) = scene_grid.translation_to_grid(position);
 
     // A document-backed running scene is projected from USD. Author the spawn
     // there and let that ONE projection instantiate it. This is also the one
@@ -440,7 +448,8 @@ pub fn on_spawn_entity_command(
         &mut commands,
         &asset_server,
         entry,
-        position.as_vec3(),
+        spawn_cell,
+        spawn_local_position,
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
@@ -455,8 +464,8 @@ pub fn on_spawn_entity_command(
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
             entry_id: cmd.entry_id.clone(),
-            position,
-            rotation,
+            position: requested_position,
+            rotation: requested_rotation,
         },
     ));
 }
@@ -469,7 +478,11 @@ pub fn apply_replicated_spawns(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_scene_root: Query<Entity, With<UsdSceneRoot>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if pending.0.is_empty() {
@@ -510,13 +523,31 @@ pub fn apply_replicated_spawns(
             warn!("REPL_SPAWN: unknown entry '{}'", job.entry_id);
             continue;
         };
-        let pos = job.position;
+        let Some((Some(cell), local_position, local_rotation)) =
+            lunco_core::coords::pose_in_grid_to_parent_storage(
+                job.position,
+                job.rotation,
+                scene_root,
+                active_frame.0,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+        else {
+            warn!(
+                ?scene_root,
+                active_frame = ?active_frame.0,
+                "REPL_SPAWN: cannot express replicated pose in the scene-root Grid"
+            );
+            continue;
+        };
         let result = spawn_usd_entry(
             &mut commands,
             &asset_server,
             entry,
-            pos.as_vec3(),
-            job.rotation.as_quat(),
+            cell,
+            local_position,
+            local_rotation.as_quat(),
             SpawnAnchor::scene_root(scene_root),
         );
         // Pin the host id; mark runtime instance + replication target. Forced

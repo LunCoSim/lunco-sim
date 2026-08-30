@@ -234,14 +234,11 @@ pub struct SpawnResult {
 /// so a call site cannot pass "some entity" and get a different hierarchy than
 /// scene-load produces.
 ///
-/// There is deliberately no second variant. A scene's top-level prims are PLAIN
-/// children of the scene root; a body that instead carries its own `CellCoord`
-/// under the grid fights avian's `Position`→`Transform` writeback (avian derives
-/// the local transform from the parent's `GlobalTransform` and ignores the cell)
-/// and its render freezes at the spawn pose while physics keeps integrating.
-/// Making "grid-direct" unrepresentable is what stops "spawned" and
-/// "scene-loaded" drifting apart again — a caller with no scene root must WAIT
-/// for one, not invent another frame.
+/// There is deliberately no second variant. The scene root is itself a nested
+/// BigSpace `Grid`, and every spawned top-level prim is a grid-direct child with
+/// a `CellCoord`; this keeps runtime and authored scene projections on the same
+/// high-precision path. A caller with no scene root must WAIT for one, not
+/// invent another frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpawnAnchor(Entity);
 
@@ -258,7 +255,11 @@ impl SpawnAnchor {
     }
 }
 
-/// Spawns a USD-based entry at the given world position.
+/// Spawns a USD-based entry at a grid-direct scene position.
+///
+/// `cell` and `local_pos` are the storage representation produced by
+/// `lunco_core::coords::pose_in_grid_to_parent_storage`; they are not a
+/// second semantic coordinate system.
 ///
 /// Returns the root entity that was spawned. The USD asset is loaded
 /// asynchronously — the caller should handle the loading state.
@@ -270,7 +271,8 @@ pub fn spawn_usd_entry(
     commands: &mut Commands,
     asset_server: &AssetServer,
     entry: &SpawnableEntry,
-    world_pos: Vec3,
+    cell: big_space::prelude::CellCoord,
+    local_pos: Vec3,
     rotation: Quat,
     anchor: SpawnAnchor,
 ) -> SpawnResult {
@@ -296,19 +298,19 @@ pub fn spawn_usd_entry(
             path: String::new(),
         },
         Transform {
-            translation: world_pos,
+            translation: local_pos,
             rotation,
             ..default()
         },
+        cell,
         Visibility::Visible,
         InheritedVisibility::VISIBLE,
         ViewVisibility::default(),
     ));
 
-    // Plain child of the scene root — the same shape scene-load gives a scene's
-    // own top-level prims (see [`SpawnAnchor`]). The command boundary has already
-    // converted `world_pos` from the active physics frame into this scene root's
-    // local coordinates.
+    // Grid-direct child of the scene root — the same shape scene-load gives a
+    // scene's own top-level prims (see SpawnAnchor). The command boundary has
+    // already converted the semantic pose into this grid's cell/local storage.
     ent.try_insert(ChildOf(anchor.entity()));
 
     SpawnResult {
@@ -644,6 +646,7 @@ mod spawn_anchor_tests {
             &mut commands,
             &assets,
             &args.entry,
+            big_space::prelude::CellCoord::default(),
             POS,
             Quat::IDENTITY,
             SpawnAnchor::scene_root(args.scene_root),
@@ -659,7 +662,16 @@ mod spawn_anchor_tests {
             .add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<lunco_usd_bevy::UsdStageAsset>();
 
-        let scene_root = app.world_mut().spawn(Name::new("Scene:test")).id();
+        let scene_root = app
+            .world_mut()
+            .spawn((
+                Name::new("Scene:test"),
+                big_space::prelude::Grid::default(),
+                big_space::prelude::CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
 
         app.insert_resource(SpawnArgs {
             entry: SpawnableEntry {
@@ -681,23 +693,22 @@ mod spawn_anchor_tests {
     }
 
     /// A runtime spawn must land in the SAME shape scene-load gives a scene's own
-    /// top-level prims: a plain child of the `UsdSceneRoot`, carrying no
-    /// `CellCoord` of its own. [`SpawnAnchor`] makes the grid-direct shape
-    /// unrepresentable; this pins the components that shape actually produces.
+    /// top-level prims: a grid-direct child of the `UsdSceneRoot`, carrying its
+    /// own `CellCoord`. [`SpawnAnchor`] keeps the runtime and authored paths on
+    /// the same nested scene grid.
     #[test]
-    fn spawn_is_a_plain_child_of_the_scene_root_with_no_cell_of_its_own() {
+    fn spawn_is_a_grid_child_of_the_scene_root_with_its_own_cell() {
         let (app, root, scene_root) = spawn();
         let world = app.world();
 
         assert_eq!(
             world.get::<ChildOf>(root).map(|c| c.parent()),
             Some(scene_root),
-            "a runtime spawn must parent to the scene-root anchor, not the grid"
+            "a runtime spawn must parent to the scene-root grid"
         );
         assert!(
-            world.get::<big_space::prelude::CellCoord>(root).is_none(),
-            "a spawned body must NOT carry its own CellCoord — a grid-direct cell \
-             anchor fights avian's Position→Transform writeback and freezes its render"
+            world.get::<big_space::prelude::CellCoord>(root).is_some(),
+            "a spawned top-level prim must carry a CellCoord in the scene-root grid"
         );
         assert!(
             world.get::<lunco_core::GridAnchor>(root).is_none(),

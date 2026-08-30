@@ -36,9 +36,24 @@ WorldRoot (BigSpace + Grid)
 
 Celestial projection adds named nested grids under that shell. A body-fixed
 grid rotates with its body; its body entity remains an identity child. The
-matching inertial grid is a sibling and does not spin. Surface terrain,
-rovers, and surface cameras are children of the body-fixed surface grid.
-Inertial cameras and inertial trajectories use the non-rotating grid.
+matching inertial grid is a sibling and does not spin. A mounted site has its
+own nested scene Grid below the body-fixed surface Grid:
+
+```text
+body-fixed surface Grid
+└── Site/Scene Grid (UsdSceneRoot)
+    ├── terrain
+    ├── rover or lander root
+    └── surface camera roots
+```
+
+Terrain and vehicles are siblings under that site/scene frame. A vehicle is
+never parented to a terrain mesh: terrain owns the authored ground surface,
+while the vehicle root owns its identity, physics body, and visual subtree.
+Every top-level USD prim below the scene Grid is a direct Grid child with its
+own `CellCoord`; descendants below that prim remain ordinary children rooted
+in `LowPrecisionRoot`. Inertial cameras and inertial trajectories use the
+non-rotating grid.
 
 There is one `FloatingOrigin` per `BigSpace` root. It is permanently owned by
 the grid-direct `OriginAnchor`. The viewport reconciler composes the selected
@@ -76,10 +91,10 @@ semantic f64 pose → target Grid::translation_to_grid → (CellCoord, Transform
 and camera-relative; it is never an ephemeris, telemetry, network, or physics
 source of truth. Use `ActiveFramePoseQuery`, `grid_relative_pose`, or the
 typed frame conversion helpers for reads. For a placement command whose
-semantic input is in one grid but whose entity may be below a plain scene
-parent or a direct Grid, use `position_in_grid_to_parent_local`; it performs
-the complete parent-pose inverse and splits a `CellCoord` only for a Grid
-parent.
+semantic input is in one grid, use `pose_in_grid_to_parent_storage` for a new
+scene child or `position_in_grid_to_parent_local` for an existing entity; both
+perform the complete parent-pose inverse and split a `CellCoord` only for a
+Grid parent.
 
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
@@ -140,15 +155,20 @@ publishes an owning `usd-avian/physics-frame` diagnostic and raises the shared
 binding. The Avian `StepSimulation` set and bridge sync passes are directly
 gated on the same contract, so no solver tick or force accumulation occurs
 while the diagnostic is present.
+When the selected site Grid itself is atomically reparented during scene
+mounting, bodies below it are reseeded from their new site-local hierarchy;
+only their velocity vectors are rotated into the new axes. A normal active-frame
+switch without frame reparenting transports the complete existing physics pose.
 
 ## Placement and view rules
 
 - A scene author supplies a geodetic/body anchor or another physical placement
   fact. The engine resolves the body-fixed frame and performs the mount.
-- Site placement mounts only the authored site root. The avatar subsystem owns
-  the event-driven capture and startup handoff from the loader's world shell
-  into that site Grid; celestial placement does not query, bind, or migrate
-  avatars.
+- Site placement mounts only the authored site root. The site root itself is
+  the nested scene Grid that owns top-level terrain and vehicle siblings. The
+  avatar subsystem owns the event-driven capture and startup handoff from the
+  loader's world shell into that site Grid; celestial placement does not query,
+  bind, or migrate avatars.
 - A camera request names a target and semantic frame. The camera system resolves
   the target grid and uses the atomic mount operation.
 - A trajectory declares its reference frame. Its samples are converted once
@@ -169,6 +189,9 @@ while the diagnostic is present.
    subsystem is the sole owner of camera frame migrations.
 8. No physical entity outside `ActivePhysicsFrame`.
 9. Scene replacement invalidates old roots before deferred despawns.
+10. Terrain is never a vehicle parent; both are owned by the site/scene Grid.
+11. Every scene/Grid-direct top-level prim carries a `CellCoord`; its nested
+    visual and collision descendants use the low-precision subtree.
 
 Celestial globe/site overlap is a surface-ownership problem, not a cell-size
 problem. A site scene designates its finite ground owner through the USD
@@ -181,7 +204,7 @@ Focused regression coverage lives beside the owning crates, notably
 `lunco-core` world/lifecycle tests. The production check is:
 
 ```sh
-RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
+RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 target/debug/luncosim --api 4101
 ```
 

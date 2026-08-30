@@ -48,8 +48,17 @@ For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
 `FloatingOrigin`; cameras never receive or transfer that marker. For a
-site-anchored scene, celestial placement mounts only the authored site root and
-binds its physical descendants; it does not query or migrate an avatar/camera.
+site-anchored scene, the authored site root is the nested scene `Grid` mounted
+under the body-fixed surface Grid. Terrain and rover/lander roots are sibling
+top-level children of that scene Grid; a rover is never parented to terrain.
+Each such top-level prim carries its own `CellCoord`, while its visual and
+collision descendants remain ordinary children rooted in `LowPrecisionRoot`.
+Celestial placement mounts only the authored site root and binds its physical
+descendants; it does not query or migrate an avatar/camera.
+If that mount reparents the selected site Grid, the physics bridge reseeds
+bodies below it from the new site-local hierarchy and rotates only their
+velocity vectors; an active-frame switch without reparenting transports the
+existing physics pose.
 The avatar subsystem captures a loader-relative local-camera pose before that
 mount and applies it after the site root becomes a live Grid. All explicit
 camera frame changes stay with the camera subsystem through the same atomic
@@ -85,6 +94,12 @@ For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
 Read the complete composed local transform through the shared USD transform
 decoder, including scale; do not inspect individual `xformOp:*` attributes in a
 second path.
+
+For a new top-level scene or runtime spawn, convert the semantic f64 pose into
+the scene root's parent-local representation with
+`pose_in_grid_to_parent_storage`. The direct Grid child receives the returned
+`CellCoord` and local `Transform`; do not attach the rover under a terrain
+mesh or write a large parent-local f32 value with a zero cell.
 
 For waypoint labels, author `lunco:billboard*` on the waypoint and let the
 generic billboard renderer consume its propagated `GlobalTransform`. The

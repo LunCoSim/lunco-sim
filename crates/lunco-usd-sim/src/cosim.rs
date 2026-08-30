@@ -24,7 +24,7 @@
 use avian3d::prelude::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{
     on_command, register_commands, Avatar, Command, DiagnosticSeverity, LocalAvatar, OriginAnchor,
@@ -4587,12 +4587,17 @@ pub fn spawn_usd_child_with_translate(
         InheritedVisibility::VISIBLE,
         ViewVisibility::default(),
     );
-    // Plain child of its USD parent, per the anchoring contract: the scene root
-    // is the one grid anchor and everything under it inherits that frame. A prim
-    // carrying its own `CellCoord` under the grid fights avian's writeback and
-    // freezes its render (see `instantiate_usd_prim` / `SpawnAnchor`).
+    // A top-level child of the nested scene Grid carries its own CellCoord.
+    // Deeper USD descendants remain plain children of their authored parent.
+    let parent_is_grid = world.get::<Grid>(parent_entity).is_some();
     let entity = match member {
+        Some(m) if parent_is_grid => world
+            .spawn((base, ChildOf(parent_entity), m, CellCoord::default()))
+            .id(),
         Some(m) => world.spawn((base, ChildOf(parent_entity), m)).id(),
+        None if parent_is_grid => world
+            .spawn((base, ChildOf(parent_entity), CellCoord::default()))
+            .id(),
         None => world.spawn((base, ChildOf(parent_entity))).id(),
     };
     info!("[scene] incremental spawn: `{}` (entity {})", path, entity);
@@ -4709,14 +4714,12 @@ pub fn spawn_scene_root_with_stage(
     // must never become an implicit Avian frame.
     world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
-    // Scene-root entity is itself the Grid-direct `GridAnchor`. Its
-    // children — top-level USD prims (rovers, balls, terrain) — stay
-    // as plain Bevy children, inheriting GlobalTransform from this
-    // anchor via Bevy's normal transform propagation (handled by
-    // big_space's `propagate_low_precision`). This restores the working
-    // hierarchy where avian rigid bodies on rover roots compute
-    // `Position` relative to the scene-root anchor instead of needing
-    // their own CellCoord, which conflicted with avian's writeback.
+    // The scene root is the frame for its top-level USD prims as well as the
+    // scene identity. Making it a nested Grid lets each top-level physical or
+    // visual prim carry its own CellCoord, so a vehicle can cross a cell while
+    // preserving the authored USD parentage and the same identity path.
+    // Descendants remain plain children of their prim and use the low-precision
+    // propagation path below that high-precision prim.
     // Register the mount before inserting `UsdPrimPath`. Adding that component
     // synchronously triggers the USD projection observer, which queues child
     // entities behind the scene-ownership fence. If the path were part of this
@@ -4727,6 +4730,10 @@ pub fn spawn_scene_root_with_stage(
     // `ChildOf(grid)` + `CellCoord` + `Transform` are the same contract as
     // `migrate_to_grid`, avoiding the observer race that mis-tagged rover
     // chassis as `RigidBody::Static`.
+    let scene_grid = world
+        .get::<Grid>(grid)
+        .cloned()
+        .expect("ensure_world_root returned an entity without its Grid");
     let primary = world
         .get_resource::<SceneLoadInFlight>()
         .is_some_and(|load| load.stage_id == new_id && load.path == asset_path);
@@ -4734,6 +4741,7 @@ pub fn spawn_scene_root_with_stage(
         .spawn((
             Name::new(format!("Scene:{}", asset_path)),
             UsdSceneRoot,
+            scene_grid,
             Transform::default(),
             GlobalTransform::default(),
             Visibility::Visible,

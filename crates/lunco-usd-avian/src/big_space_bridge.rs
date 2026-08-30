@@ -709,6 +709,7 @@ fn pose_to_position(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_frame_boundary_changes: Query<(), Or<(Changed<ChildOf>, Changed<CellCoord>)>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut frame_state: ResMut<PhysicsFrameTransportState>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
@@ -770,6 +771,13 @@ fn pose_to_position(
     // this owner instead of trying to infer and repair an old coordinate frame.
     let first_read = frame_state.frame.is_none();
     let previous_frame = frame_state.take_transition(active_frame);
+    // A frame handoff normally transports Avian's existing state into a new
+    // set of axes. A site mount is different: the selected frame itself has
+    // just moved in the hierarchy, so every body below it now has a new
+    // authoritative local pose in that frame. Preserve only the velocity
+    // vector rebase for those bodies and seed their positions from the live
+    // `(CellCoord, Transform)` chain below.
+    let frame_reanchored = q_frame_boundary_changes.contains(active_frame);
     let handoff = previous_frame.and_then(|previous| {
         // `grid_transform_between_grids(previous, active)` maps a pose in the
         // old Avian frame into the new one.  It is the same typed hierarchy
@@ -877,16 +885,19 @@ fn pose_to_position(
         // translation.  Motion above the selected frame remains render-only;
         // its transport belongs to the inertial celestial presentation, not
         // to this local Avian world.
+        let hierarchy_reanchored = handoff.is_some()
+            && frame_reanchored
+            && is_below_active_frame(e, active_frame, &q_parents);
         if let Some(frame_transform) = handoff {
             if shadow.is_seeded() {
-                let old_position = pos.0;
                 let old_linear = linear.0;
                 let old_angular = angular.0;
-                let new_position = frame_transform.transform_position(old_position);
-                pos.0 = new_position;
                 rot.0 = frame_transform.transform_rotation(rot.0);
                 linear.0 = frame_transform.transform_vector(old_linear);
                 angular.0 = frame_transform.transform_vector(old_angular);
+                if !hierarchy_reanchored {
+                    pos.0 = frame_transform.transform_position(pos.0);
+                }
             }
         }
         let parent_grid = q_parents
@@ -899,7 +910,7 @@ fn pose_to_position(
             shadow.capture(cell, tf, active_frame);
             continue;
         }
-        let direct_move = moved.contains(&e);
+        let direct_move = moved.contains(&e) || hierarchy_reanchored;
         let ancestor_move = {
             let mut cur = e;
             let mut hit = false;
