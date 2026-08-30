@@ -115,11 +115,12 @@ would let a look reflect like diamond and refract like glass, and would need to 
 
 `ProceduralSkybox` is a render-free scene intent that may accompany `ShaderLook`.
 The `lunco-render-bevy` binder keeps the same reflected `ShaderMaterial` and
-parameter values, but submits that material through a fullscreen `Core3d`
-background pass after opaque geometry. Reverse-Z depth testing leaves the
-already-rendered scene in front while the clear value admits the background. It
-therefore has no mesh, radius, culling
-bound, or camera far-plane dependency. A scene must have at most one active
+parameter values, but queues that material as one non-mesh item in Bevy's built-in
+`Opaque3d` phase. The phase renders it after opaque geometry in the same render
+pass, so Bevy owns the color/depth lifecycle and reverse-Z depth testing leaves
+the already-rendered scene in front while the clear value admits the background.
+It therefore has no mesh, radius, culling bound, or camera far-plane dependency.
+A scene must have at most one active
 procedural background owner; multiple owners disable the pass until authoring is
 corrected. Textured `DomeLight` remains the separate environment-lighting path.
 

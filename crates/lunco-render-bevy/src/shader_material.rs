@@ -383,9 +383,9 @@ impl Material for ShaderMaterial {
             if let Some(vertex) = &key.bind_group_data.vertex_shader {
                 descriptor.vertex.shader = vertex.clone();
                 // Only the CDLOD tiles carry the morph attributes; a plain mesh
-                // with a custom vertex stage (the starfield's skybox anchor) keeps
-                // the default P/N/UV layout — asking `get_layout` for attributes
-                // the mesh doesn't have is an error, not a fallback.
+                // with a custom vertex stage keeps the default P/N/UV layout —
+                // asking `get_layout` for attributes the mesh doesn't have is an
+                // error, not a fallback.
                 if layout.0.contains(ATTRIBUTE_MORPH_TARGET) {
                     let vertex_layout = layout.0.get_layout(&[
                         Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
