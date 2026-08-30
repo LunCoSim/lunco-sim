@@ -1,0 +1,63 @@
+#usda 1.0
+(
+    defaultPrim = "LanderPlumeVisual"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Graphics companion for the production lander plume path. The visual observer
+# owns only a stable top-level camera; the lander, plume, and Modelica network
+# remain the same composed assets used by the numeric activity fixture.
+def Xform "LanderPlumeVisual" (
+    prepend references = @lunco://scenes/tests/lander_controls.usda@</LanderControlsTest>
+    kind = "assembly"
+)
+{
+    over "Lander"
+    {
+        bool physics:rigidBodyEnabled = false
+        double3 xformOp:translate = (0, 8.0, 0)
+    }
+
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
+    def Xform "Sky" (
+        prepend references = @lunco://components/environment/starfield_sky.usda@</StarfieldSky>
+    )
+    {
+    }
+
+    over "Sun"
+    {
+        float inputs:intensity = 15000.0
+    }
+
+    # A top-level authored camera is ready before the nested lander children
+    # stream in, so the capture cannot fall back to the early Avatar camera.
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        # The offscreen recorder promotes the authored LocalAvatar camera to
+        # its image target. Possession then uses the same camera/authority
+        # contract as the interactive lander controls.
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 8.0, 0.0)
+        double3 xformOp:translate = (14.0, 12.0, 20.0)
+        float focalLength = 24.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    over "Scenario"
+    {
+        over "Mission"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/lander_plume_visual.rhai@
+        }
+    }
+}
