@@ -244,7 +244,6 @@ pub fn request_app_close(world: &mut World) {
 
 fn fire_app_exit(world: &mut World) {
     cancel_inflight_runs(world);
-    arm_shutdown_watchdog();
     if let Some(mut messages) =
         world.get_resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
     {
@@ -253,34 +252,9 @@ fn fire_app_exit(world: &mut World) {
     }
 }
 
-/// Hard-exit safety net. The graceful `AppExit` path waits for Bevy's
-/// schedule + TaskPool to wind down; a runaway compute thread (e.g. a
-/// rumoca compile that never yields) can block that join indefinitely,
-/// forcing the user to SIGKILL. Once we're committed to exiting we arm a
-/// detached watchdog that force-terminates the process after a short grace
-/// period if the clean shutdown hasn't finished. Idempotent via `Once`, so
-/// arming it from both exit commit points (no-dirty path + finalizer) is safe.
-pub(crate) fn arm_shutdown_watchdog() {
-    use std::sync::Once;
-    static WATCHDOG: Once = Once::new();
-    WATCHDOG.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("shutdown-watchdog".into())
-            .spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(4));
-                bevy::log::warn!(
-                    "[AppClose] graceful exit stalled >4s (busy compute thread) — forcing process exit"
-                );
-                std::process::exit(0);
-            });
-    });
-}
-
-/// Best-effort: signal every in-flight experiment to cancel so worker
-/// threads stop at their next solver-step / compile boundary. Speeds the
-/// graceful path so the watchdog rarely has to fire; it can't interrupt a
-/// thread stuck inside a rumoca compile (no cancel hook there) — that's what
-/// the watchdog is for.
+/// Signal every in-flight experiment to cancel before the graceful app exit.
+/// Workers stop at their next solver-step or compile boundary; the normal
+/// lifecycle remains responsible for reporting a worker that does not stop.
 pub(crate) fn cancel_inflight_runs(world: &World) {
     if let Some(pending) = world.get_resource::<crate::experiments_runner::PendingHandles>() {
         if !pending.0.is_empty() {
@@ -386,7 +360,6 @@ pub fn finalize_app_close(
             }
         }
     }
-    arm_shutdown_watchdog();
     exit_events.write(bevy::app::AppExit::Success);
 }
 
