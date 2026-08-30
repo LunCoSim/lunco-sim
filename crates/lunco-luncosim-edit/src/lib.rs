@@ -81,6 +81,7 @@ impl Plugin for SceneEditPlugin {
             .init_resource::<lunco_core::WaypointMenuOpen>()
             .init_resource::<lunco_core::ArmedScriptTool>()
             .init_resource::<gizmo::GizmoDragSession>()
+            .init_resource::<gizmo::GizmoVisibilityState>()
             .init_resource::<terrain_tools::TerrainToolState>()
             // Shader source is a journaled domain: edits record to the Twin
             // journal + hot-reload. The recorder attaches when the journal appears.

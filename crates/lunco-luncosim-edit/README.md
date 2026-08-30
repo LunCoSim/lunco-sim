@@ -12,6 +12,13 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 
 ## Gizmo System
 
+The transform gizmo follows `lunco_celestial::OrbitalViewPin.active`, the
+existing planetary presentation fact. While it is active, the editor clears
+the maintained transform-gizmo modes so the frontend produces no handles or
+picking hits, then restores the user's modes when local scene editing returns.
+Selection remains intact; no second planetary-mode flag or proxy visibility
+path is introduced.
+
 ### How It Works
 
 The gizmo system uses `transform-gizmo-bevy` as a render-space frontend. Its
