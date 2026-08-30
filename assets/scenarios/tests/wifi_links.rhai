@@ -98,6 +98,13 @@ fn on_tick(me) {
         let checks = [];
         checks.push(t_true(wifi.nodes.len() == 2,
             "expected two Wi-Fi endpoints, got " + wifi.nodes.len()));
+        let named_radios = 0;
+        for node in wifi.nodes {
+            print("[wifi-links] endpoint name=" + node.name);
+            if node.name.contains("/WifiRadio") { named_radios += 1; }
+        }
+        checks.push(t_true(named_radios == 2,
+            "Wi-Fi graph endpoints are not the two separate WifiRadio devices"));
         checks.push(t_true(wifi.edges.len() == 1,
             "expected one Wi-Fi edge, got " + wifi.edges.len()));
         checks.push(t_true(direct.edges.len() == 0,

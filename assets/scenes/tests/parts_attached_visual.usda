@@ -1,0 +1,73 @@
+#usda 1.0
+(
+    defaultPrim = "PartsAttachedVisual"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Visual companion for the numeric attachment tests. The Skid pair is composed
+# from the numeric fixture; the Ackermann pair is authored here so the visual
+# scene has one stable four-rover presentation without nesting another test
+# scenario.
+def Xform "PartsAttachedVisual" (
+    prepend references = @lunco://scenes/tests/parts_attached.usda@</PartsAttached>
+    kind = "assembly"
+)
+{
+    def Xform "Sky" (
+        prepend references = @lunco://components/environment/starfield_sky.usda@</StarfieldSky>
+    )
+    {
+    }
+
+    over "Sun"
+    {
+        float inputs:intensity = 15000.0
+    }
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
+        double3 xformOp:translate = (0.0, 10.0, 70.0)
+        # The four visual lanes are compacted below, so use a longer lens to
+        # make wheels, suspension, and antenna mounts legible in one frame.
+        float focalLength = 32.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    over "SkidRaycast"
+    {
+        double3 xformOp:translate = (-7.5, 1.0, 50.0)
+    }
+    over "SkidPhysical"
+    {
+        double3 xformOp:translate = (-2.5, 1.0, 50.0)
+    }
+    def Xform "AckermannRaycast" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = { string drivetrain = "raycast" }
+    )
+    {
+        double3 xformOp:translate = (2.5, 1.0, 50.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "AckermannPhysical" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = { string drivetrain = "physical" }
+    )
+    {
+        double3 xformOp:translate = (7.5, 1.0, 50.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    over "Scenario" {
+        over "PartsTest" {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached_visual.rhai@
+        }
+    }
+}

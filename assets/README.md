@@ -64,6 +64,7 @@ stays in the asset and its `defaultPrim`.
 | powered transmitter | `components/comms/transmitter_power.usda` |
 | radio endpoint/link math | `components/comms/radio.usda` |
 | steerable dish | `components/comms/antenna.usda` |
+| chassis-mounted Wi-Fi radio | `components/comms/wifi_radio.usda` |
 | powered science imager | `components/payload/science_camera.usda` |
 | lunar navigation camera grade | `components/cameras/lunar_surface_camera.usda` |
 | mount-system demo part | `components/mounting/demo_probe.usda` |

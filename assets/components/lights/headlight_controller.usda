@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "HeadlightController"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable no-geometry facet for a vehicle headlight. Mount it beside a
+# `components/lights/headlight.usda` visual lamp and connect its `light_intensity`
+# output to the lamp's `light_intensity` LunCo light port. The runtime maps that port to
+# standard USD `inputs:intensity`. The containing vehicle supplies the
+# enable command and electrical pin connection.
+def Xform "HeadlightController" (
+    doc = "Reusable Modelica headlight enable, photometry, and electrical-load facet."
+    kind = "component"
+    prepend apiSchemas = [
+        "LunCoCatalogAPI",
+        "LunCoProgramAPI",
+        "LunCoModelicaTopologyAPI",
+    ]
+)
+{
+    uniform token lunco:modelica:topologyRole = "load"
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/HeadlightController.mo@
+
+    float inputs:nominal_power_w = 24.0
+    float inputs:luminous_intensity_lm = 120000.0
+    float inputs:enable = 0.0
+
+    float outputs:enabled
+    float outputs:light_intensity
+    float outputs:power_draw_w
+    custom token connectors:p
+}

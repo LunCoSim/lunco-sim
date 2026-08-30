@@ -1,0 +1,53 @@
+#usda 1.0
+(
+    defaultPrim = "WifiRadio"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A short-range rover radio is a separate device from the steerable high-gain
+# antenna.  The generic link node supplies reusable range/occlusion geometry;
+# LunCoWifiAPI projects that geometry into the independent WifiLinks graph.
+# This component deliberately has no link-beam template: a local radio's graph
+# state is not the directional antenna's Earth/relay presentation.
+def Xform "WifiRadio" (
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI", "LunCoWifiAPI"]
+    doc = "Chassis-mounted short-range rover radio with an independent Wi-Fi endpoint."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # The generic geometry kernel is the shared substrate used by the separate
+    # Wi-Fi projection. A rover role keeps the direct link policy from exposing
+    # rover-to-rover pairs in Links; WifiLinks owns those pairs.
+    bool lunco:linkNode = true
+    string lunco:link:class = "rover"
+    double lunco:link:maxRangeM = 5000.0
+    double lunco:link:minElevationDeg = -90.0
+    bool lunco:wifiNode = true
+    double lunco:wifi:maxRangeM = 5000.0
+
+    # Small authored hardware representation. The host supplies the mount
+    # transform; no rigid body is added because this device rides the chassis.
+    def Cube "RadioHousing"
+    {
+        double size = 1.0
+        double3 xformOp:scale = (0.12, 0.06, 0.16)
+        double3 xformOp:translate = (0.0, 0.06, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.12, 0.14, 0.16)]
+        bool physics:collisionEnabled = false
+    }
+
+    def Cylinder "Whip"
+    {
+        uniform token axis = "Y"
+        double radius = 0.015
+        double height = 0.24
+        double3 xformOp:translate = (0.0, 0.21, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.72, 0.74, 0.76)]
+        bool physics:collisionEnabled = false
+    }
+}

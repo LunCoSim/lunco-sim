@@ -16,6 +16,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[PDU.mo](../assets/models/LunCo/Electrical/PDU.mo)**: EPS Power Distribution Unit, 28V regulated main bus, and under-voltage load shedding.
 - **[OnboardComputer.mo](../assets/models/LunCo/Electrical/OnboardComputer.mo)**: Flight computer baseline power draw ($P_{\text{base}} = 12\text{ W}$) + active GNC processing load ($P_{\text{gnc}} = 8\text{ W}$).
 - **[CameraPayload.mo](../assets/models/LunCo/Electrical/CameraPayload.mo)**: Active camera capture streaming power draw ($4.5\text{ W}$) and data output rate ($15\text{ Mbps}$).
+- **[HeadlightController.mo](../assets/models/LunCo/Electrical/HeadlightController.mo)**: Rhai-commanded enable clamp, USD-facing luminous output, and solved electrical load for a reusable vehicle headlight.
 
 ### 1.2 Thermal Control Subsystem (`LunCo.Thermal`)
 - **[HeatPort.mo](../assets/models/LunCo/Thermal/HeatPort.mo)**: Acausal thermal connector (`Real T; flow Real Q;`, enforcing $\sum Q = 0$).
@@ -68,21 +69,25 @@ assets/components/
 │   └── obc_lander.usda
 ├── cameras/
 │   ├── lunar_surface_camera.usda
-│   └── rover_front_camera.usda
+│   ├── rover_front_camera.usda
+│   └── visual_review_camera.usda
 ├── comms/
 │   ├── antenna.usda
 │   ├── ground_station.usda
 │   ├── link_beam.usda
 │   ├── radio.usda
-│   └── transmitter_power.usda
+│   ├── transmitter_power.usda
+│   └── wifi_radio.usda
 ├── environment/
-│   └── probe.usda
+│   ├── probe.usda
+│   └── starfield_sky.usda
 ├── gnc/
 │   ├── descent_guidance.usda
 │   ├── landing_target.usda
 │   └── position_pid_guidance.usda
 ├── lights/
-│   └── headlight.usda
+│   ├── headlight.usda
+│   └── headlight_controller.usda
 ├── mobility/
 │   ├── chassis/box_chassis.usda
 │   ├── drive_laws/{modelica_ackermann,modelica_six_independent,modelica_skid}.usda

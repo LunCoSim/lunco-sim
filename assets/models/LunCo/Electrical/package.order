@@ -5,4 +5,5 @@ SolarPanel
 DCMotor
 CameraPayload
 OnboardComputer
+HeadlightController
 PDU

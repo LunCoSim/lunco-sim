@@ -466,8 +466,6 @@ def Xform "SkidRover" (
                 over "DishHead" {
                     over "LinkAperture" {
                         string lunco:link:class = "rover"
-                        bool lunco:wifiNode = true
-                        double lunco:wifi:maxRangeM = 5000.0
                         over "LinkBeam" {
                             over "Up" {
                                 over "Driver" {
@@ -479,6 +477,16 @@ def Xform "SkidRover" (
                 }
             }
         }
+    }
+
+    # Separate short-range radio device. The steerable dish remains the
+    # directional link endpoint; Wi-Fi is an independent chassis-mounted node.
+    def Xform "WifiRadio" (
+        prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.65, 0.35)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     # --- Drivetrain variant set ---------------------------------------
