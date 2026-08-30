@@ -72,7 +72,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn(
             '"https://github.com/LunCoSim/lunco-sim-updates"', updater
         )
-        self.assertIn("TimeoutGithubSource::new(UPDATE_REPOSITORY, true)", updater)
+        self.assertIn("TimeoutGithubSource::new(UPDATE_REPOSITORY, true,", updater)
         self.assertIn("UPDATE_HTTP_TIMEOUT", updater)
         self.assertIn('.header("Range", &range)', updater)
         self.assertIn('const UPDATE_CHANNEL: &str = "linux-x64";', updater)
@@ -116,6 +116,18 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("write_linux_icons", icon_builder)
         self.assertIn("LUNCOSIM_ICON_OUTPUT_DIR", icon_builder)
         self.assertIn("LUNCOSIM_ICON_OUTPUT_STAMP", icon_builder)
+
+    def test_linux_package_identity_reaches_the_compiled_window_and_final_appimage(self) -> None:
+        package_builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
+        window_source = (ROOT / "crates/lunco-luncosim/src/lib.rs").read_text(encoding="utf-8")
+        verifier = (ROOT / "scripts/verify_linux_appimage.sh").read_text(encoding="utf-8")
+
+        self.assertIn('VPK_PACK_ID="luncosim"', package_builder)
+        self.assertIn('window.name = Some("luncosim".to_string());', window_source)
+        self.assertIn('verify_linux_appimage "$VELOPACK_OUT"', package_builder)
+        self.assertIn('"$appimage" --appimage-extract', verifier)
+        self.assertIn('StartupWMClass', verifier)
+        self.assertIn('.DirIcon', verifier)
 
 
 if __name__ == "__main__":
