@@ -189,7 +189,7 @@ struct RunnerState {
     /// `set_model_source` evict only the edited model's entries.
     dae_cache: HashMap<u64, (ModelIdent, Arc<Dae>)>,
     /// Persistent compiler reused across runs, so MSL installs **once** for
-    /// the runner (lazily, demand-driven via `ModelicaCompiler`) instead of
+    /// the runner (on first source-root admission via `ModelicaCompiler`) instead of
     /// rebuilding a fresh session per run. Behind its **own** lock, not the
     /// `state` mutex: a compile can take seconds, and holding `state` across
     /// it would stall the scheduler and every parallel run (which only need

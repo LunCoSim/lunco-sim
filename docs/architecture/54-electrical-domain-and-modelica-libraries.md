@@ -354,12 +354,12 @@ The application now builds one generic inventory of structured package roots und
 Modelica search-path key. `LunCo` is therefore ordinary package data; there is no
 library-specific installer or root-name branch.
 
-- **Bundled packages load demand-driven in the compiler.** On an unresolved
-  `ER002`/`ER003`, the compiler seats the discovered structured package roots through
-  the same source-root path used by other libraries, then retries. MSL remains a
-  separate, larger demand-driven root and is installed only if the reference remains
-  unresolved. This preserves lazy startup without making a particular library a Rust
-  special case.
+- **Bundled packages load on first compile admission.** The compiler scans the
+  source's qualified roots and seats each known structured package before the
+  DAE call. MSL follows the same admission contract through its shared parsed
+  bundle. The DAE pipeline therefore runs once; an unknown or unavailable root
+  is a visible compile error rather than an implicit retry. This preserves lazy
+  startup without making a particular library a Rust special case.
 - **The editor uses the same root-segment rule.** A cold qualified class requests its
   package root from the shared engine asynchronously; the canvas shows Loading and
   reprojects when that root is ready. Generated `source_roots` are dependency metadata

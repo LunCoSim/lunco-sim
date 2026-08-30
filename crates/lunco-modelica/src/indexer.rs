@@ -1463,7 +1463,8 @@ fn warm_compile_pass(opts: &Options) {
     let mut compiler = crate::ModelicaCompiler::new();
     // The warm pass compiles MSL classes by name, so it needs the full
     // library resident up front. `new()` no longer preloads MSL (Layer A:
-    // demand-driven), so install it explicitly here.
+    // source compilation admits roots from source text), so install it
+    // explicitly here.
     compiler.ensure_msl_installed();
 
     // Resolve work units. Each entry: (display_label, kind). The
