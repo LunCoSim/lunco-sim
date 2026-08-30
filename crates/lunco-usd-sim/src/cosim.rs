@@ -50,7 +50,8 @@ use lunco_scripting::{
 };
 use lunco_usd_bevy::{
     read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
+    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset, UsdVisualMeshPending,
+    UsdVisualProjectionQueued,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -343,8 +344,8 @@ struct ValidatedUsdModelicaPortContract {
 }
 
 /// Scene transition transaction: set when a scene load is dispatched, cleared
-/// once sync_usd_visuals has drained every UsdAwaitingStage prim for that
-/// scene's stage asset.
+/// once the stage's awaiting, queued-projection, and pending-mesh visual phases
+/// have all drained.
 ///
 /// Admission is serialized by [`SceneTransitionCoordinator`]. A second request
 /// never reclaims entities still owned by this asset/projection phase; it starts
@@ -456,15 +457,18 @@ fn publish_failed_scene_stage_outcomes(
 ///
 /// Loaded outcomes arrive after `sync_usd_visuals`; failure outcomes arrive
 /// after the USD asset boundary has retired parked prims. A loaded outcome is
-/// retained when the bounded visual projection queue is still draining and is
-/// committed at the first later `Last` edge with no awaiting prims. Camera
-/// presentation is validated by `lunco-usd-bevy` as a separate host-facing
-/// contract; it must not redefine whether the USD scene itself loaded.
+/// retained while any awaiting prim, queued projection, or pending generated
+/// mesh remains and is committed at the first later `Last` edge with no visual
+/// phase outstanding. Camera presentation is validated by `lunco-usd-bevy` as
+/// a separate host-facing contract; it must not redefine whether the USD scene
+/// itself loaded.
 fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     coordinator: Res<SceneTransitionCoordinator>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
+    q_projecting: Query<&UsdPrimPath, With<UsdVisualProjectionQueued>>,
+    q_pending_meshes: Query<&UsdPrimPath, With<UsdVisualMeshPending>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
@@ -531,10 +535,17 @@ fn record_scene_load_terminal_outcome(
     let still_awaiting = q_awaiting
         .iter()
         .any(|prim| prim.stage_handle.id() == g.stage_id);
-    if still_awaiting {
-        // The asset is loaded, but visual projection is intentionally paced.
-        // Keep the outcome until the queue has drained; this is a normal
-        // multi-frame phase, not a lifecycle failure.
+    let still_projecting = q_projecting
+        .iter()
+        .any(|prim| prim.stage_handle.id() == g.stage_id);
+    let still_pending_meshes = q_pending_meshes
+        .iter()
+        .any(|prim| prim.stage_handle.id() == g.stage_id);
+    if still_awaiting || still_projecting || still_pending_meshes {
+        // The asset is loaded, but visual projection is intentionally paced and
+        // CPU-generated meshes may still be streaming. Keep the outcome until
+        // every phase of this stage's visual projection has drained; a scene
+        // load is not presentable while any of these ownership markers remain.
         return;
     }
 
@@ -6022,6 +6033,17 @@ mod tests {
                     path: "/World/HeavyMesh".to_owned(),
                 },
                 UsdAwaitingStage,
+                UsdVisualProjectionQueued,
+            ))
+            .id();
+        let pending_mesh = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World/HeavyMeshMesh".to_owned(),
+                },
+                UsdVisualMeshPending,
             ))
             .id();
         app.insert_resource(SceneLoadInFlight {
@@ -6038,6 +6060,20 @@ mod tests {
         app.world_mut()
             .entity_mut(awaiting)
             .remove::<UsdAwaitingStage>();
+        app.update();
+        assert!(app.world().contains_resource::<SceneLoadInFlight>());
+        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
+
+        app.world_mut()
+            .entity_mut(awaiting)
+            .remove::<UsdVisualProjectionQueued>();
+        app.update();
+        assert!(app.world().contains_resource::<SceneLoadInFlight>());
+        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
+
+        app.world_mut()
+            .entity_mut(pending_mesh)
+            .remove::<UsdVisualMeshPending>();
         app.update();
         assert!(!app.world().contains_resource::<SceneLoadInFlight>());
         assert_eq!(

@@ -36,6 +36,13 @@
 //! render-bound commands. A binary without this plugin never registers the types, so requests
 //! resolve as ordinary `CommandNotFound` errors.
 
+/// Update-schedule boundary for the offline recorder's aggregate visual
+/// readiness consumer. Domain publishers that mirror scene/terrain/render
+/// lifecycle state must run before this set so the gate reads the state produced
+/// by the current projection frame rather than one frame of stale progress.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OfflineRecordingReadinessSet;
+
 use std::io::Cursor;
 
 use bevy::asset::RenderAssetUsages;
@@ -88,6 +95,7 @@ impl Plugin for ScreenshotPlugin {
 
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core::KeepAwake>()
+            .init_resource::<OfflineRenderReadiness>()
             .init_resource::<OfflineRecordingState>()
             .init_resource::<OfflineVideoSettings>()
             .init_resource::<OfflineVideoSink>()
@@ -95,7 +103,10 @@ impl Plugin for ScreenshotPlugin {
             // The readiness gate. `Update` (not `Last`): it must run before
             // `drive_offline_clock`, which only acts once `state.active` is set —
             // so the shot begins on the same frame it was cleared to begin.
-            .add_systems(Update, start_recording_when_scene_ready)
+            .add_systems(
+                Update,
+                start_recording_when_scene_ready.in_set(OfflineRecordingReadinessSet),
+            )
             .add_systems(Startup, arm_cli_recording)
             // One-shot contracts: `--record-frames <n>` bounds the take, and
             // `--offscreen` exits the process once the take is on disk.
@@ -913,6 +924,28 @@ pub fn output_is_video(path: &std::path::Path) -> bool {
 #[derive(Resource)]
 pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
 
+/// Render-world acknowledgement for the active offscreen scene camera.
+///
+/// The main world can prove that USD projection and material assets exist, but
+/// only the render world can prove that the camera's visibility pass submitted
+/// a mesh phase item. The offscreen binary publishes this acknowledgement from
+/// its render boundary; the readiness gate consumes it before activating the
+/// deterministic recording clock.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct OfflineRenderReadiness {
+    /// Main-world camera entity represented by the acknowledged render view.
+    pub camera: Option<Entity>,
+    /// Number of entities admitted to the view's visibility pass.
+    pub visible_entities: usize,
+    /// Number of submitted opaque phase items.
+    pub opaque_items: usize,
+    /// Number of submitted transparent phase items.
+    pub transparent_items: usize,
+    /// Whether every queued color-phase pipeline for the capture view is ready
+    /// for the render pass.
+    pub pipelines_ready: bool,
+}
+
 /// Stop the recording automatically once `frame_index` reaches this count —
 /// the CLI `--record-frames <n>` one-shot contract. Routed through the SAME
 /// `StopOfflineRecording` command a scenario would send, so the teardown and
@@ -1065,7 +1098,7 @@ impl VideoSink {
 ///
 /// So this validates the destination, stashes the config in [`PendingShotStart`],
 /// and returns. [`start_recording_when_scene_ready`] does the actual activation
-/// once [`scene_visuals_ready`] says so (or the deadline passes).
+/// once [`scene_visuals_ready`] says so.
 ///
 /// **The clock is deliberately left alone here.** `TimeUpdateStrategy` has exactly
 /// ONE writer — `drive_offline_clock` — and that is load-bearing (two writers once
@@ -1119,7 +1152,7 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
 }
 
 /// Flip the armed recorder live. Split out of [`on_start_offline_recording`] so the
-/// ready path and the timeout path cannot drift apart.
+/// ready path cannot drift apart.
 fn activate_recording(
     pending: &PendingShotStart,
     state: &mut OfflineRecordingState,
@@ -1284,29 +1317,16 @@ fn on_stop_offline_recording(
 
 /// A `StartOfflineRecording` that has been accepted but not yet started, because
 /// [`scene_visuals_ready`] has not cleared it. Removed when the recorder activates
-/// (either ready or timed out) and on `StopOfflineRecording`.
+/// or on `StopOfflineRecording`.
 #[derive(Resource, Debug, Clone)]
 struct PendingShotStart {
     output_dir: std::path::PathBuf,
     fps: u32,
-    /// When the request arrived — drives the hard timeout only.
+    /// When the request arrived — reported when the recorder activates.
     requested_at: web_time::Instant,
-    /// The most recent reason readiness was refused, kept for the start/timeout
-    /// log line. Without it a timeout could only say "not ready", which is exactly
-    /// the diagnosis a human needs and cannot reconstruct after the fact.
+    /// The most recent reason readiness was refused, kept for the next wait log.
     last_blocker: Option<String>,
 }
-
-/// How long the gate will hold a shot before recording anyway.
-///
-/// It MUST give up. A scene that never becomes ready — an asset that fails to load,
-/// a scene with no terrain when terrain was expected — would otherwise hang the shot
-/// forever, and because the scenario polls `shot_frame()` (which reports `-1` while
-/// we are armed) it would never reach its `StopOfflineRecording` either. The user
-/// gets an empty episode with no explanation, which is strictly worse than a
-/// slightly-early first frame plus a loud `warn!`. The campaign scripts have their
-/// own outer timeout; this sits comfortably inside it.
-const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// [`StatusBus`](crate::status_bus::StatusBus) sources whose in-flight work makes the
 /// scene un-presentable, for clause (3) of [`scene_visuals_ready`].
@@ -1315,8 +1335,8 @@ const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// nothing to do with what the camera sees — a Modelica compile, a document save, an
 /// MCP request — and the MSL download in particular re-pushes progress every frame
 /// from boot (see `status_bus::tests::mirrored_progress_preserves_start_time_…`). Gating
-/// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
-/// minutes to an episode and burying the timeout `warn!` under false positives.
+/// on the whole bus would therefore stall every shot on unrelated work, adding
+/// minutes to an episode and hiding the actual visual blocker.
 ///
 /// These entries are published by `lunco-luncosim`, which mirrors state this crate
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
@@ -1338,7 +1358,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the
 /// scene's visuals have finished loading, or `Some(reason)` naming what is still
-/// outstanding — the reason string is what the start/timeout log lines report.
+/// outstanding — the reason string is what the readiness log line reports.
 ///
 /// Three clauses, deliberately composed rather than left as scattered ad-hoc checks:
 ///
@@ -1370,7 +1390,8 @@ fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,
     asset_server: &AssetServer,
     bus: Option<&crate::status_bus::StatusBus>,
-    cameras: &Query<(&Camera, &bevy::camera::RenderTarget)>,
+    cameras: &Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
+    render_readiness: Option<&OfflineRenderReadiness>,
     offscreen: bool,
 ) -> Option<String> {
     // (1) Nothing spawned yet — not "ready", just "empty".
@@ -1410,7 +1431,7 @@ fn scene_visuals_ready(
     if offscreen {
         let active_image_cameras = cameras
             .iter()
-            .filter(|(camera, target)| {
+            .filter(|(_, camera, target)| {
                 camera.is_active
                     && matches!(
                         camera.output_mode,
@@ -1427,6 +1448,37 @@ fn scene_visuals_ready(
                     "offscreen render target has {count} active render cameras"
                 ));
             }
+        }
+
+        let Some(readiness) = render_readiness else {
+            return Some("offscreen render boundary has not acknowledged a scene camera".into());
+        };
+        let active_camera = cameras
+            .iter()
+            .find(|(_, camera, target)| {
+                camera.is_active
+                    && matches!(
+                        camera.output_mode,
+                        bevy::camera::CameraOutputMode::Write { .. }
+                    )
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity);
+        if readiness.camera != active_camera {
+            return Some("offscreen scene camera has not reached the render world yet".into());
+        }
+        if !readiness.pipelines_ready {
+            return Some("offscreen render pipelines are still compiling".into());
+        }
+        if readiness.visible_entities == 0
+            || readiness.opaque_items + readiness.transparent_items == 0
+        {
+            return Some(format!(
+                "offscreen scene camera has no submitted mesh phase items (visible={}, opaque={}, transparent={})",
+                readiness.visible_entities,
+                readiness.opaque_items,
+                readiness.transparent_items,
+            ));
         }
     }
 
@@ -1450,11 +1502,9 @@ fn scene_visuals_ready(
 
 /// Start an armed recording as soon as [`scene_visuals_ready`] clears it. The
 /// readiness publishers own the lifecycle transitions; this system only
-/// consumes their aggregate state. [`READY_TIMEOUT`] is the sole escape hatch
-/// for a genuinely broken scene.
-///
-/// Timing out records anyway, loudly. See [`READY_TIMEOUT`] for why silently never
-/// recording is the worse failure.
+/// consumes their aggregate state. A broken scene remains armed and reports its
+/// current blocker; the production scene-test gate owns timeout and failure
+/// reporting rather than emitting an invalid recording.
 fn start_recording_when_scene_ready(
     pending: Option<ResMut<PendingShotStart>>,
     mut state: ResMut<OfflineRecordingState>,
@@ -1462,8 +1512,10 @@ fn start_recording_when_scene_ready(
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
-    cameras: Query<(&Camera, &bevy::camera::RenderTarget)>,
+    cameras: Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
+    viewport: Res<SceneViewport>,
     capture_target: Option<Res<OfflineCaptureTarget>>,
+    render_readiness: Option<Res<OfflineRenderReadiness>>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
     // binary does not add. Absent simply means clause (3) has nothing to say.
     bus: Option<Res<crate::status_bus::StatusBus>>,
@@ -1476,25 +1528,23 @@ fn start_recording_when_scene_ready(
         &asset_server,
         bus.as_deref(),
         &cameras,
+        render_readiness.as_deref(),
         capture_target.is_some(),
     );
-    let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
     if let Some(reason) = blocker {
-        if !timed_out {
-            if pending.last_blocker.as_deref() != Some(reason.as_str()) {
-                pending.last_blocker = Some(reason.clone());
-                debug!("[offline-record] waiting for scene visuals — {reason}");
-            }
-            return;
+        if pending.last_blocker.as_deref() != Some(reason.as_str()) {
+            pending.last_blocker = Some(reason.clone());
+            debug!("[offline-record] waiting for scene visuals — {reason}");
         }
-        warn!(
-            "[offline-record] scene visuals were still not ready after {:.1}s — recording \
-             anyway so the episode is not silently empty. Still waiting on: {}. Expect the \
-             opening frames of this shot to show an unfinished scene.",
-            pending.requested_at.elapsed().as_secs_f32(),
-            reason,
-        );
+        return;
     }
+
+    info!(
+        "[offline-record] readiness snapshot: mesh_entities={} active_camera={:?} render={:?}",
+        meshes.iter().len(),
+        viewport.active_camera,
+        render_readiness.as_deref(),
+    );
 
     activate_recording(
         &pending,
@@ -1560,11 +1610,11 @@ fn drive_offline_clock(
     // captured sequence starts from the state the scene was in when the shot was
     // asked for, no matter how long the assets took.
     //
-    // Safe against deadlock in both directions: the scenario script does not need to
-    // tick during this window (it has already issued `shot_begin` and is polling
-    // `shot_frame()`, which reports `-1` while armed), and [`READY_TIMEOUT`] is
-    // measured on `web_time::Instant` — real time — so a scene that never becomes
-    // ready still starts rather than freezing the app forever.
+    // Safe against a simulation deadlock: the scenario script does not need to tick
+    // during this window (it has already issued `shot_begin` and is polling
+    // `shot_frame()`, which reports `-1` while armed). An incomplete scene stays
+    // visibly armed until the caller stops it or the outer production gate reports
+    // failure.
     if pending.is_some() && !state.active {
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,
