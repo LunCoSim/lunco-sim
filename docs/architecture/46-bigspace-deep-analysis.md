@@ -61,6 +61,9 @@ When a camera, body, rover, trajectory, or line jitters:
    deferred despawn and that projection only accepts the active root.
 9. For physics admission, verify the bridge's frame diagnostic and
    `PhysicsHolds::FRAME_CONTRACT` are clear before `StepSimulation` can run.
+   A one-shot raycast support placement uses Avian's exact collider geometry
+   before the paused broad-phase schedule has built its acceleration tree; the
+   normal spatial-query path remains the reader for all steady-state probes.
 10. For site lighting and solar poses, verify there is no more than one
    `SiteAnchor`; ambiguous authoring must produce a diagnostic and no selected
    site frame.
