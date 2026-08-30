@@ -18,8 +18,9 @@ built from three named plugins composed by a tiny shell:
   Headless-safe, added unconditionally.
 - **`ui::SandboxUiPlugin`** (`ui` feature) — egui workbench, picking, the
   in-scene editor, materials, panels, and authored-camera presentation. Added
-  only when windowed; a scene without an authored camera contract is rejected
-  for presentation rather than receiving an engine-created camera.
+  only when windowed; a scene without an authored camera contract remains
+  visibly camera-less with an owning diagnostic rather than receiving an
+  engine-created camera. USD loading completion is independent of presentation.
 - **`SandboxHeadlessPlugin`** — the `ScheduleRunner` plus the Modelica/spawn
   cores a server needs in the UI plugin's place. Added only when headless.
 

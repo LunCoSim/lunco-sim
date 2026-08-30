@@ -49,9 +49,8 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    camera_switch::CameraContractStatus, read_authored_bool_strict, CanonicalStages,
-    UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot,
-    UsdStageAsset,
+    read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
+    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -458,14 +457,15 @@ fn publish_failed_scene_stage_outcomes(
 /// Loaded outcomes arrive after `sync_usd_visuals`; failure outcomes arrive
 /// after the USD asset boundary has retired parked prims. A loaded outcome is
 /// retained when the bounded visual projection queue is still draining and is
-/// committed at the first later `Last` edge with no awaiting prims.
+/// committed at the first later `Last` edge with no awaiting prims. Camera
+/// presentation is validated by `lunco-usd-bevy` as a separate host-facing
+/// contract; it must not redefine whether the USD scene itself loaded.
 fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     coordinator: Res<SceneTransitionCoordinator>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
-    camera_contract: Option<Res<CameraContractStatus>>,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
 ) {
@@ -536,23 +536,6 @@ fn record_scene_load_terminal_outcome(
         // Keep the outcome until the queue has drained; this is a normal
         // multi-frame phase, not a lifecycle failure.
         return;
-    }
-
-    if let Some(contract) = camera_contract.as_deref() {
-        if contract.required && !contract.ready {
-            let detail = if contract.errors.is_empty() {
-                "authored window presentation has not been validated".to_string()
-            } else {
-                contract.errors.join("; ")
-            };
-            let error = format!("scene `{}` failed camera contract: {detail}", g.path);
-            error!("[scene] {error}");
-            pending.outcome = None;
-            commands.remove_resource::<SceneLoadInFlight>();
-            commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
-            commands.trigger(SceneTransitionFailed { transition, error });
-            return;
-        }
     }
 
     // A scene that is meant to be visible must provide its light through USD
@@ -5953,6 +5936,11 @@ mod tests {
             .init_resource::<SceneTransitionCoordinator>()
             .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<CompletedTransitions>()
+            .insert_resource(lunco_usd_bevy::camera_switch::CameraContractStatus {
+                required: true,
+                ready: false,
+                errors: vec!["presentation is still being validated".to_owned()],
+            })
             .add_observer(on_scene_transition_completed)
             .add_observer(
                 |trigger: On<SceneTransitionCompleted>,

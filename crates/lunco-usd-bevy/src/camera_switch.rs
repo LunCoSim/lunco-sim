@@ -716,18 +716,16 @@ pub fn update_camera_origin(
     // archetype. The camera pose is composed in f64 and split exactly once in
     // the persistent `WorldGrid`; no camera-relative GlobalTransform is read.
     let mut origin_errors = Vec::new();
-    let world_grids: Vec<Entity> = q_world_grid.iter().collect();
+    let mut world_grid_iter = q_world_grid.iter();
+    let world_grid = world_grid_iter.next();
+    let world_grid_count = usize::from(world_grid.is_some()) + world_grid_iter.count();
     if let Ok((mut origin_cell, mut origin_transform)) = q_origin.single_mut() {
-        if let [world_grid] = world_grids.as_slice() {
+        if let Some(world_grid) = world_grid.filter(|_| world_grid_count == 1) {
             if let Some(active) = vp.active_camera {
                 if let Some((camera_position, _camera_rotation)) = lunco_core::coords::pose_in_grid(
-                    active,
-                    *world_grid,
-                    &q_parents,
-                    &q_grids,
-                    &q_spatial,
+                    active, world_grid, &q_parents, &q_grids, &q_spatial,
                 ) {
-                    if let Ok(world_grid_component) = q_grids.get(*world_grid) {
+                    if let Ok(world_grid_component) = q_grids.get(world_grid) {
                         let (new_cell, new_translation) =
                             world_grid_component.translation_to_grid(camera_position);
                         origin_cell.set_if_neq(new_cell);
@@ -755,11 +753,11 @@ pub fn update_camera_origin(
             origin_cell.set_if_neq(CellCoord::default());
             origin_transform.set_if_neq(Transform::IDENTITY);
         }
-        if vp.active_camera.is_some() && world_grids.len() != 1 {
+        if vp.active_camera.is_some() && world_grid_count != 1 {
             origin_errors.push(
                 format!(
                     "[camera-origin] the persistent WorldGrid contract requires exactly one entity, found {}",
-                    world_grids.len()
+                    world_grid_count
                 ),
             );
         }
@@ -850,6 +848,96 @@ pub fn camera_selection_status_changed(
         || !removed_tracks.is_empty()
 }
 
+/// Run the authored camera-contract admission check only when one of its
+/// authoritative inputs changed. The validator owns a structural scan, so an
+/// unconditional `Update` registration would make a settled scene pay for
+/// every camera, track, root, and ancestry lookup on every render frame.
+///
+/// `CameraContractStatus` contains both the host's `required` input and the
+/// validator's verdict. The local cursor watches only `required`, preventing a
+/// verdict write from feeding the validator back into a steady-state loop.
+/// Camera-track plans are mutable because their sampler owns a runtime cut
+/// cursor; only plan insertion/removal is structural input to this validator.
+pub fn camera_contract_inputs_changed(
+    mount: Res<lunco_core::SceneMountState>,
+    revision: Res<crate::UsdStageRevision>,
+    contract: Res<CameraContractStatus>,
+    selection: Res<ViewportCameraSelection>,
+    scene_roots: Query<
+        (),
+        (
+            With<crate::UsdSceneRoot>,
+            Or<(Added<crate::UsdSceneRoot>, Changed<crate::UsdVisualSynced>)>,
+        ),
+    >,
+    pending_added: Query<(), Added<crate::UsdAwaitingStage>>,
+    cameras: Query<
+        (),
+        (
+            With<SceneCamera>,
+            Or<(
+                Added<SceneCamera>,
+                Changed<Name>,
+                Changed<UsdPrimPath>,
+                Changed<LocalAvatar>,
+            )>,
+        ),
+    >,
+    tracks: Query<
+        (),
+        (
+            With<crate::camera_track::CameraTrack>,
+            Or<(
+                Added<crate::camera_track::CameraTrack>,
+                Changed<UsdPrimPath>,
+                Added<crate::camera_track::CameraTrackPlan>,
+            )>,
+        ),
+    >,
+    mut removed_pending: RemovedComponents<crate::UsdAwaitingStage>,
+    mut removed_cameras: RemovedComponents<SceneCamera>,
+    mut removed_tracks: RemovedComponents<crate::camera_track::CameraTrack>,
+    mut removed_plans: RemovedComponents<crate::camera_track::CameraTrackPlan>,
+    mut removed_roots: RemovedComponents<crate::UsdSceneRoot>,
+    mut required: Local<Option<bool>>,
+    mut last_revision: Local<Option<u64>>,
+) -> bool {
+    let first_validation = required.is_none();
+    let required_changed = required
+        .replace(contract.required)
+        .is_some_and(|previous| previous != contract.required);
+    // `bump_usd_stage_revision` owns a `ResMut` because it may publish a new
+    // revision. Bevy consequently marks that resource access as changed even
+    // when the monotonic value stays the same. Compare the value itself so a
+    // harmless mutable borrow cannot reopen this structural scan every frame.
+    let revision_changed = last_revision
+        .replace(revision.0)
+        .is_some_and(|previous| previous != revision.0);
+
+    // Drain every removal reader before evaluating the result. A short-circuit
+    // here would leave an event unread and re-open the structural pass later.
+    let removed_pending = removed_pending.read().next().is_some();
+    let removed_cameras = removed_cameras.read().next().is_some();
+    let removed_tracks = removed_tracks.read().next().is_some();
+    let removed_plans = removed_plans.read().next().is_some();
+    let removed_roots = removed_roots.read().next().is_some();
+
+    first_validation
+        || required_changed
+        || mount.is_changed()
+        || revision_changed
+        || selection.is_changed()
+        || !scene_roots.is_empty()
+        || !pending_added.is_empty()
+        || !cameras.is_empty()
+        || !tracks.is_empty()
+        || removed_pending
+        || removed_cameras
+        || removed_tracks
+        || removed_plans
+        || removed_roots
+}
+
 /// Validate the authored window presentation contract after USD camera-track
 /// plans are derived. This is a structural admission check, not a policy lint:
 /// duplicate tracks, absent cameras, unresolved names, and multiple mounted
@@ -925,7 +1013,10 @@ pub fn validate_authored_camera_contract(
         // reports a real missing/invalid camera contract as an Error.
         publish_camera_contract_diagnostics(&mut diagnostics, &[]);
         if contract.required || contract.ready || !contract.errors.is_empty() {
-            *contract = CameraContractStatus::default();
+            *contract = CameraContractStatus {
+                required: contract.required,
+                ..default()
+            };
         }
         if status
             .last_error
@@ -1091,6 +1182,25 @@ pub fn reset_camera_selection(
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct CameraContractGateRuns(u32);
+
+    fn count_camera_contract_gate_runs(mut runs: ResMut<CameraContractGateRuns>) {
+        runs.0 += 1;
+    }
+
+    fn touch_camera_track_plans(mut plans: Query<&mut crate::camera_track::CameraTrackPlan>) {
+        // The production sampler owns a mutable runtime cursor on this plan.
+        // Merely fetching it mutably must not make the authored contract dirty.
+        for _ in &mut plans {}
+    }
+
+    fn touch_stage_revision(revision: ResMut<crate::UsdStageRevision>) {
+        // A producer may borrow the revision mutably while checking its
+        // structural inputs without actually advancing the value.
+        let _ = revision.0;
+    }
+
     fn window_cam(is_active: bool, name: &str) -> impl Bundle {
         window_cam_with_target(is_active, name, true)
     }
@@ -1117,6 +1227,125 @@ mod tests {
             RenderTarget::Window(bevy::window::WindowRef::Primary),
             Name::new(name.to_string()),
         )
+    }
+
+    #[test]
+    fn camera_contract_gate_is_quiet_until_an_input_changes() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<crate::UsdStageRevision>()
+            .init_resource::<CameraContractStatus>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraContractGateRuns>()
+            .add_systems(
+                Update,
+                (
+                    touch_stage_revision,
+                    count_camera_contract_gate_runs.run_if(camera_contract_inputs_changed),
+                )
+                    .chain(),
+            );
+
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<CameraContractGateRuns>().0,
+            1,
+            "the initial admission is followed by a quiet settled frame"
+        );
+
+        let camera = app
+            .world_mut()
+            .spawn((SceneCamera::default(), Name::new("Wide")))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 2);
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 2);
+
+        app.world_mut().despawn(camera);
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 3);
+
+        app.world_mut()
+            .resource_mut::<CameraContractStatus>()
+            .required = true;
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 4);
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 4);
+    }
+
+    #[test]
+    fn pending_projection_does_not_disable_required_camera_admission() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<CameraContractStatus>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_systems(Update, validate_authored_camera_contract);
+
+        let root = app.world_mut().spawn(crate::UsdSceneRoot).id();
+        let _ = app
+            .world_mut()
+            .spawn((crate::UsdAwaitingStage, ChildOf(root)))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+        app.world_mut()
+            .resource_mut::<CameraContractStatus>()
+            .required = true;
+
+        app.update();
+
+        let contract = app.world().resource::<CameraContractStatus>();
+        assert!(contract.required);
+        assert!(!contract.ready);
+        assert!(contract.errors.is_empty());
+    }
+
+    #[test]
+    fn mutable_camera_track_cursor_does_not_reopen_contract_scan() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<crate::UsdStageRevision>()
+            .init_resource::<CameraContractStatus>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraContractGateRuns>()
+            .add_systems(
+                Update,
+                (
+                    touch_camera_track_plans,
+                    count_camera_contract_gate_runs.run_if(camera_contract_inputs_changed),
+                )
+                    .chain(),
+            );
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<CameraContractGateRuns>().0,
+            1,
+            "the initial admission runs once"
+        );
+
+        app.world_mut().spawn((
+            crate::camera_track::CameraTrack,
+            crate::camera_track::CameraTrackPlan::default(),
+            crate::UsdPrimPath::default(),
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 2);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<CameraContractGateRuns>().0,
+            2,
+            "sampler-owned cursor writes are not structural camera changes"
+        );
     }
 
     fn active_set(app: &mut App) -> Vec<Entity> {

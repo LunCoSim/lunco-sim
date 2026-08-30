@@ -57,7 +57,14 @@ pub struct UsdShaderResolved;
 /// `Shader` prim's `info:wgsl:sourceAsset` and its `inputs:`. Runs between
 /// `sync_usd_visuals` and the sim consumers (see module docs).
 pub fn apply_usd_shader_materials(
-    q: Query<(Entity, &UsdPrimPath), (With<UsdVisualSynced>, Without<UsdShaderResolved>)>,
+    q: Query<
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&lunco_usd_bevy::UsdVisualMeshTarget>,
+        ),
+        (With<UsdVisualSynced>, Without<UsdShaderResolved>),
+    >,
     stages: Res<Assets<UsdStageAsset>>,
     // Read the LIVE canonical stage (source of truth), built on demand from
     // the asset's recipe.
@@ -71,7 +78,7 @@ pub fn apply_usd_shader_materials(
     asset_server: Res<AssetServer>,
 ) {
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    for (entity, prim_path) in q.iter() {
+    for (entity, prim_path, visual_target) in q.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -98,6 +105,7 @@ pub fn apply_usd_shader_materials(
             &mut commands,
             enable_shaders,
             &asset_server,
+            visual_target.map(|target| target.0),
         );
     }
 }
@@ -114,6 +122,7 @@ fn apply_usd_shader_material_read(
     commands: &mut Commands,
     enable_shaders: bool,
     asset_server: &AssetServer,
+    visual_target: Option<Entity>,
 ) {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
@@ -364,10 +373,15 @@ fn apply_usd_shader_material_read(
     // the bound gprim (for example a plume's `inputs:throttle`) are admitted by
     // the wiring pass. `UsdVisualSynced` only says that a prim was projected; it
     // is not proof that the prim owns a named port surface.
-    let mut entity_commands = commands.entity(entity);
+    let material_entity = visual_target.unwrap_or(entity);
+    let mut entity_commands = commands.entity(material_entity);
     entity_commands
         .remove::<PbrLook>()
-        .try_insert((look, lunco_core::PortSurfaceReady));
+        .try_insert((
+            look,
+            lunco_core::PortSurfaceReady,
+            lunco_usd_bevy::UsdVisualShaderBound,
+        ));
     if procedural_skybox {
         entity_commands.try_insert(ProceduralSkybox);
     }

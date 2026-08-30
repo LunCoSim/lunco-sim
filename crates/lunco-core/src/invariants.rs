@@ -68,8 +68,10 @@ fn warn_on_soi_migrant_without_anchor(
     }
 }
 
-/// Warns when a `GridAnchor` is nested under another `GridAnchor`. Anchors
-/// must be Grid-direct; nesting them breaks selection / SOI semantics.
+/// Warns when a `GridAnchor` is nested under another `GridAnchor` without an
+/// intervening nested `Grid`. A site frame is both a `Grid` and a scene-level
+/// anchor, so its direct Grid children are valid anchors for that precision
+/// frame; only plain-transform nesting breaks selection / SOI semantics.
 fn warn_on_nested_grid_anchor(
     q: Query<(Entity, &ChildOf, Option<&Name>), Added<GridAnchor>>,
     q_parents: Query<&ChildOf>,

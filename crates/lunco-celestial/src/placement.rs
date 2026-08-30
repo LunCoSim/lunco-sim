@@ -1,12 +1,14 @@
 //! Site-anchored solar hierarchy + celestial-bound entity placement (doc 43
 //! §2.6).
 //!
-//! **Site anchoring**: the site scene is re-branched under its body's surface
-//! grid once that frame exists. During the handoff the authored ENU pose is
-//! converted exactly into the body's fixed Cartesian frame; preserving the old
-//! world pose would keep ecliptic axes and rotate the ground away from gravity.
-//! Keeping the DEM, globe handoff, camera, and surface operations in one
-//! body-fixed precision branch avoids an AU-scale hierarchy joint between
+//! **Site anchoring**: as soon as the projected scene root has a `SiteAnchor`,
+//! it becomes the scene's nested BigSpace grid and the active physics frame.
+//! Once the matching celestial body surface grid exists, that same root is
+//! atomically re-branched beneath it. During the handoff the authored ENU pose
+//! is converted exactly into the body's fixed Cartesian frame; preserving the
+//! old world pose would keep ecliptic axes and rotate the ground away from
+//! gravity. Keeping the DEM, globe handoff, camera, and surface operations in
+//! one body-fixed precision branch avoids an AU-scale hierarchy joint between
 //! moving surface pieces. The solar grid remains inertial and is never re-posed
 //! to make the site coincide with the world origin. The caller applies the one
 //! shared celestial solve gate; this module has no private epoch gate.
@@ -105,12 +107,13 @@ pub struct OrbitalViewPin {
 /// Attach the site scene to the body's body-fixed surface frame.
 ///
 /// The scene is initially mounted under `WorldGrid` because the USD loader has
-/// no celestial knowledge at mount time. The root is atomically placed under
-/// the body's rotating surface grid and becomes a nested BigSpace [`Grid`].
-/// That nested grid is the authored ENU site frame and Avian's one stable
-/// [`lunco_core::ActivePhysicsFrame`]. The Moon/Earth rotation remains above it,
-/// so celestial motion changes rendering but never rewrites local physics
-/// position, velocity, contacts, or joints.
+/// no celestial knowledge at mount time. As soon as the root's `SiteAnchor` is
+/// projected, it becomes a nested BigSpace [`Grid`] and Avian's one stable
+/// [`lunco_core::ActivePhysicsFrame`]. When the body's rotating surface grid is
+/// ready, the same root is atomically migrated beneath it; the active frame
+/// does not change. The Moon/Earth rotation remains above it, so celestial
+/// motion changes rendering but never rewrites local physics position,
+/// velocity, contacts, or joints.
 pub fn attach_site_scene_to_surface_grid(
     q_site: Query<(Entity, &GeodeticAnchor, &ChildOf), With<SiteAnchor>>,
     q_bodies: Query<(
@@ -149,6 +152,24 @@ pub fn attach_site_scene_to_surface_grid(
     let Ok((scene_root, anchor, child_of)) = q_site.single() else {
         return;
     };
+    let make_site_grid = || grid_config.grid();
+    // Establish the authored scene frame as soon as its SiteAnchor is
+    // projected. The celestial hierarchy is itself staged: the USD scene can
+    // materialise physical descendants before the SolarSystem payload has
+    // finished projecting its body declarations. Leaving the root under the
+    // WorldGrid during that window lets Avian seed early bodies in a different
+    // frame from later bodies, which makes an otherwise valid joint start with
+    // astronomical-scale error. The root Grid is the stable semantic frame;
+    // its parent is upgraded to the body's surface Grid below when that Grid
+    // becomes available, without changing ActivePhysicsFrame.
+    if q_grids.get(scene_root).is_err() {
+        commands.entity(scene_root).try_insert(make_site_grid());
+        stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
+    }
+    if active_physics_frame.is_none_or(|frame| frame.0 != scene_root) {
+        commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
+    }
+
     let Some((body_entity, body, lod)) = q_bodies
         .iter()
         .find(|(_, body, _)| body.ephemeris_id == anchor.body)
@@ -159,8 +180,8 @@ pub fn attach_site_scene_to_surface_grid(
     let Ok(body_surface_grid_component) = q_grids.get(body_surface_grid) else {
         return;
     };
-    let make_site_grid = || grid_config.grid();
-    if child_of.parent() != body_surface_grid {
+    let needs_surface_mount = child_of.parent() != body_surface_grid;
+    if needs_surface_mount {
         let Some((scene_position, scene_rotation)) =
             direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
         else {
@@ -176,21 +197,13 @@ pub fn attach_site_scene_to_surface_grid(
             cell,
             Transform::from_translation(translation).with_rotation(body_rotation.as_quat()),
         );
+    }
 
-        // The site root is both the authored frame identity (`SiteAnchor`) and
-        // its BigSpace precision representation. No parallel frame entity or
-        // lookup table can drift away from it. The root is already a Grid when
-        // mounted, so its top-level USD children retain their own cell pairs.
-        commands.entity(scene_root).try_insert(make_site_grid());
-        stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
+    if needs_surface_mount {
         info!(
             "[celestial] site scene mounted as ENU physics grid {:?} on body surface grid {:?} (body {})",
             scene_root, body_surface_grid, anchor.body
         );
-    }
-
-    if active_physics_frame.is_none_or(|frame| frame.0 != scene_root) {
-        commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
     }
 
     // Surface gravity is a property of every physical body mounted under the
@@ -987,6 +1000,170 @@ mod tests {
         let world = app.world();
         assert_eq!(*world.get::<CellCoord>(site).unwrap(), site_cell);
         assert_eq!(*world.get::<Transform>(site).unwrap(), site_transform);
+    }
+
+    #[test]
+    fn site_frame_is_stable_while_celestial_hierarchy_loads() {
+        let mut app = App::new();
+        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.add_systems(Update, attach_site_scene_to_surface_grid);
+
+        let world_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                lunco_core::WorldGrid,
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                SiteAnchor,
+                GeodeticAnchor {
+                    body: crate::ephemeris_id::MOON,
+                    geodetic: Geodetic::new(25.28, 307.60, 0.0),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+
+        // The USD scene root is available before the celestial payload creates
+        // the body and its surface grid. It must still become the one local
+        // physics frame immediately, so early and late rigid bodies share it.
+        app.update();
+        assert!(app.world().get::<Grid>(site).is_some());
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            site
+        );
+        assert_eq!(
+            app.world().get::<ChildOf>(site).unwrap().parent(),
+            world_grid
+        );
+
+        let body_fixed_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let surface_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(body_fixed_grid),
+            ))
+            .id();
+        app.world_mut().spawn((
+            crate::CelestialBody {
+                name: "Moon".into(),
+                ephemeris_id: crate::ephemeris_id::MOON,
+                radius_m: crate::MOON_MEAN_RADIUS_M,
+            },
+            crate::globe_lod::GlobeLod {
+                radius_m: crate::MOON_MEAN_RADIUS_M,
+                surface_grid,
+                look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                res: 8,
+                max_lod: 1,
+                lod_distance_factor: 1.0,
+            },
+        ));
+
+        app.update();
+        assert_eq!(
+            app.world().get::<ChildOf>(site).unwrap().parent(),
+            surface_grid
+        );
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            site
+        );
+    }
+
+    #[test]
+    fn site_frame_is_published_before_declared_surface_grid_is_ready() {
+        let mut app = App::new();
+        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.add_systems(Update, attach_site_scene_to_surface_grid);
+
+        let world_grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                lunco_core::WorldGrid,
+            ))
+            .id();
+        let surface_grid = app.world_mut().spawn(ChildOf(world_grid)).id();
+        let site = app
+            .world_mut()
+            .spawn((
+                SiteAnchor,
+                GeodeticAnchor {
+                    body: crate::ephemeris_id::MOON,
+                    geodetic: Geodetic::new(25.28, 307.60, 0.0),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        app.world_mut().spawn((
+            crate::CelestialBody {
+                name: "Moon".into(),
+                ephemeris_id: crate::ephemeris_id::MOON,
+                radius_m: crate::MOON_MEAN_RADIUS_M,
+            },
+            crate::globe_lod::GlobeLod {
+                radius_m: crate::MOON_MEAN_RADIUS_M,
+                surface_grid,
+                look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                res: 8,
+                max_lod: 1,
+                lod_distance_factor: 1.0,
+            },
+        ));
+
+        // The body declaration exists, but its surface Grid is still being
+        // projected. The site frame must already own the physics boundary.
+        app.update();
+        assert!(app.world().get::<Grid>(site).is_some());
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            site
+        );
+        assert_eq!(
+            app.world().get::<ChildOf>(site).unwrap().parent(),
+            world_grid
+        );
+
+        app.world_mut().entity_mut(surface_grid).insert((
+            lunco_core::WorldGridConfig::default().grid(),
+            CellCoord::ZERO,
+            Transform::default(),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<ChildOf>(site).unwrap().parent(),
+            surface_grid
+        );
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            site
+        );
     }
 
     #[test]

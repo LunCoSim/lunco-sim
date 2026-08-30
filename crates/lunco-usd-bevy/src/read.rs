@@ -987,7 +987,10 @@ def Xform "World" (
             .expect("stage builds");
         let view = cs.view();
 
-        assert_eq!(crate::resolve_stage_prim_path(&view, ""), Some("/Apollo".into()));
+        assert_eq!(
+            crate::resolve_stage_prim_path(&view, ""),
+            Some("/Apollo".into())
+        );
         assert_eq!(
             crate::resolve_stage_prim_path(&view, "/Apollo/Avatar"),
             Some("/Apollo/Avatar".into())

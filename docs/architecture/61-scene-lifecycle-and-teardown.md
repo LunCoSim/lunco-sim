@@ -74,9 +74,10 @@ Windowed presentation state follows the same ownership rule. A scene must
 author its initial camera selection through `CameraTrack`; avatar or scene-root
 projection never creates an implicit view. If the authored camera contract is
 missing or unresolved, the viewport remains inactive and the scene-scoped
-diagnostic identifies the missing producer/consumer contract. Scene teardown
-resets the selection intent, and no engine-created camera can survive into the
-next Twin.
+diagnostic identifies the missing producer/consumer contract. This runtime
+presentation check observes the composed, projected result; it is not the
+generic loading completion signal. Scene teardown resets the selection intent,
+and no engine-created camera can survive into the next Twin.
 
 The retained runtime UI uses the same invariant. When an exposure, perspective,
 gate, or placement makes a surface invisible, the bridge removes the whole
@@ -102,7 +103,9 @@ publishes `SceneTransitionCompleted` or `SceneTransitionFailed` and admits any
 pending request; only the following frame's `First` lifecycle phase can execute
 it. A second request therefore cannot replace an in-flight stage, and consumers
 do not need staging markers, stale-entity guards, retries, or per-frame recovery
-checks.
+checks. Presentation is a separate admission concern: a missing authored
+camera leaves the loaded scene in an explicit no-camera state and does not turn
+successful USD projection into a false asset-load failure.
 
 USD visual projection is the deliberate exception to all-at-once scene
 materialisation. `sync_usd_visuals` only moves loaded prims into its queue;
