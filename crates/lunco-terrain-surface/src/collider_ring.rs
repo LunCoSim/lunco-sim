@@ -27,7 +27,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use avian3d::prelude::{
-    Collider, ColliderAabb, ColliderDisabled, ColliderOf, CollisionLayers, Position, RayHitData,
+    Collider, ColliderAabb, ColliderDisabled, ColliderOf, ColliderTransform, CollisionLayers,
+    Position, RayHitData,
     RayHits, RigidBody, Rotation, SimpleCollider, SpatialQueryFilter,
 };
 use bevy::ecs::system::SystemParam;
@@ -1472,6 +1473,7 @@ fn cast_initial_support_ray(
             &Rotation,
             Option<&ColliderAabb>,
             Option<&ColliderOf>,
+            Option<&ColliderTransform>,
             Option<&CollisionLayers>,
             Option<&ColliderDisabled>,
         ),
@@ -1482,7 +1484,7 @@ fn cast_initial_support_ray(
     filter: &SpatialQueryFilter,
 ) -> Option<RayHitData> {
     let mut closest = None;
-    for (entity, collider, position, rotation, _, owner, layers, disabled) in colliders.iter() {
+    for (entity, collider, position, rotation, _, owner, _, layers, disabled) in colliders.iter() {
         if disabled.is_some() {
             continue;
         }
@@ -1519,6 +1521,24 @@ fn cast_initial_support_ray(
     closest
 }
 
+fn static_support_lift(
+    body_bounds: (DVec3, DVec3),
+    support_bounds: &[(DVec3, DVec3)],
+) -> Option<f64> {
+    let (body_min, body_max) = body_bounds;
+    let mut lift = None;
+    for &(support_min, support_max) in support_bounds {
+        let overlaps_x = body_min.x <= support_max.x && body_max.x >= support_min.x;
+        let overlaps_z = body_min.z <= support_max.z && body_max.z >= support_min.z;
+        if !overlaps_x || !overlaps_z {
+            continue;
+        }
+        let required = support_max.y + SETTLE_CLEARANCE - body_min.y;
+        lift = Some(lift.map_or(required, |previous: f64| previous.max(required)));
+    }
+    lift
+}
+
 // A raycast contact is the *wheel axle*, not a rigid tyre volume. At the
 // authored suspension rest length the strut top is exactly one cast length
 // above the DEM, so placement must put the tyre tangent to the surface: zero
@@ -1528,16 +1548,11 @@ fn cast_initial_support_ray(
 /// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
 /// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
 ///
-/// Authored physical rovers put the chassis at the surface with the wheels hanging
-/// below it, so at the authored pose the wheels start EMBEDDED in the one-sided
-/// terrain heightfield and sink forever (no upward contact — proven: a rover that
-/// DROPS onto the same heightfield rests perfectly). This translates the whole
-/// joint-connected assembly, in the grid-absolute frame avian `Position` lives in,
-/// to the authored support condition, then consumes the marker. A probe-based
-/// assembly may move either up or down: its probe length is the authored rest
-/// condition, not merely a minimum clearance. It is NOT a per-frame rescue — it
-/// fires exactly once per assembly, at activation, and is pure initial PLACEMENT
-/// (the same job the command-spawn rest-depth lift does for GUI spawns).
+/// Place a freshly activated joint-connected assembly at its authored support
+/// condition in the grid-absolute frame used by Avian `Position`, then consume
+/// the marker. Probe-based assemblies use their authored probe distance; rigid
+/// assemblies use the deepest live support clearance. This is a one-time
+/// activation transaction, not a per-frame correction.
 pub fn settle_grounded_assemblies(
     terrains: Query<(Entity, &DemHeightField, &TerrainColliderRing)>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
@@ -1548,6 +1563,7 @@ pub fn settle_grounded_assemblies(
         Query<(
             Entity,
             &mut avian3d::prelude::Position,
+            &avian3d::prelude::Rotation,
             Option<&RigidBody>,
             Option<&mut avian3d::prelude::LinearVelocity>,
             Option<&mut avian3d::prelude::AngularVelocity>,
@@ -1560,6 +1576,7 @@ pub fn settle_grounded_assemblies(
             &Rotation,
             Option<&ColliderAabb>,
             Option<&ColliderOf>,
+            Option<&ColliderTransform>,
             Option<&CollisionLayers>,
             Option<&ColliderDisabled>,
         )>,
@@ -1638,33 +1655,52 @@ pub fn settle_grounded_assemblies(
 
     // Pass 1 (read-only): snapshot every body's grid-absolute Position.
     let mut pos_of: HashMap<Entity, GridPos> = HashMap::default();
-    for (e, pos, _, _, _, _) in avian.p0().iter() {
+    let mut rotation_of: HashMap<Entity, DQuat> = HashMap::default();
+    for (e, pos, rotation, _, _, _, _) in avian.p0().iter() {
         pos_of.insert(e, GridPos(pos.0));
+        rotation_of.insert(e, rotation.0);
     }
-    // Use the same broad-phase geometry Avian will solve. A compound collider
-    // owns its AABB directly; child colliders point to their body through
-    // `ColliderOf`. This avoids turning initial placement into a metre-scale
-    // drop merely because a body has a small wheel or a long leg.
+    // Evaluate each Avian shape at its current authoritative pose. Child
+    // colliders point to their body through `ColliderOf`, so aggregate their
+    // live bounds without changing the authored assembly geometry.
     let mut collider_bounds: HashMap<Entity, (DVec3, DVec3)> = HashMap::default();
     let mut static_support_present = false;
     let mut static_support_live = false;
     let mut static_support_bounds = Vec::new();
-    for (collider, _, _, _, aabb, owner, _, _) in avian.p1().iter() {
-        let body = owner.map_or(collider, |owner| owner.body);
-        let bounds_live = aabb.is_some_and(|aabb| aabb.min.is_finite() && aabb.max.is_finite());
+    for (entity, collider, position, rotation, _, owner, collider_transform, _, _) in
+        avian.p1().iter()
+    {
+        let body = owner.map_or(entity, |owner| owner.body);
+        let (shape_position, shape_rotation) = if let Some(owner) = owner {
+            let (Some(body_position), Some(body_rotation), Some(collider_transform)) = (
+                pos_of.get(&owner.body),
+                rotation_of.get(&owner.body),
+                collider_transform,
+            ) else {
+                continue;
+            };
+            (
+                body_position.0 + *body_rotation * collider_transform.translation,
+                *body_rotation * collider_transform.rotation.0,
+            )
+        } else {
+            (position.0, rotation.0)
+        };
+        let aabb = collider.aabb(shape_position, shape_rotation);
+        let bounds_live = aabb.min.is_finite() && aabb.max.is_finite();
         if dynamics
             .get(body)
             .is_ok_and(|rb| matches!(rb, RigidBody::Static | RigidBody::Kinematic))
         {
             static_support_present = true;
             static_support_live |= bounds_live;
-            if let Some(aabb) = aabb.filter(|_| bounds_live) {
+            if bounds_live {
                 static_support_bounds.push((aabb.min, aabb.max));
             }
         }
-        let Some(aabb) = aabb.filter(|_| bounds_live) else {
+        if !bounds_live {
             continue;
-        };
+        }
         collider_bounds
             .entry(body)
             .and_modify(|(min, max)| {
@@ -1764,7 +1800,7 @@ pub fn settle_grounded_assemblies(
             let root_rot = avian
                 .p1()
                 .get(footprint_owner)
-                .map(|(_, _, _, rotation, _, _, _, _)| rotation.0)
+                .map(|(_, _, _, rotation, _, _, _, _, _)| rotation.0)
                 .unwrap_or(DQuat::IDENTITY);
             let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
                 !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
@@ -1835,18 +1871,24 @@ pub fn settle_grounded_assemblies(
             }
         } else {
             // Physical wheels are real bodies, so lift from the deepest dynamic
-            // member. Prefer the actual collider lower edge; the centre-based
-            // fallback is only for a body whose AABB has not published yet.
+            // member. Prefer a live terrain oracle; otherwise use the live
+            // static support AABB that Avian will use for contact admission.
             for &m in &members {
-                let Some(p) = pos_of.get(&m) else { continue };
                 let Some((aabb_min, aabb_max)) = collider_bounds.get(&m).copied() else {
-                    let Some((local, surface)) = sample_height(p.0) else {
-                        continue;
-                    };
-                    over_terrain = true;
-                    rigid_lift = rigid_lift.max(surface + SETTLE_CLEARANCE - local.y);
                     continue;
                 };
+                if terrain_context.is_none() {
+                    if static_support_present && !static_support_live {
+                        continue;
+                    }
+                    if let Some(lift) =
+                        static_support_lift((aabb_min, aabb_max), &static_support_bounds)
+                    {
+                        over_terrain = true;
+                        rigid_lift = rigid_lift.max(lift);
+                    }
+                    continue;
+                }
                 // A ColliderAabb is expressed in the same physics frame as
                 // Position. Test all corners in the terrain frame; using only
                 // its global-Y lower corner is wrong for a rotated terrain.
@@ -1908,7 +1950,7 @@ pub fn settle_grounded_assemblies(
         };
         let placement_vector = placement_up * displacement;
         for &m in &members {
-            if let Ok((_, mut pos, _, lin, ang, hits)) = avian.p0().get_mut(m) {
+            if let Ok((_, mut pos, _, _, lin, ang, hits)) = avian.p0().get_mut(m) {
                 pos.0 += placement_vector;
                 if let Some(mut v) = lin {
                     v.0 = DVec3::ZERO;
@@ -1932,7 +1974,7 @@ pub fn settle_grounded_assemblies(
         // is up. Move descendant probes in the same placement transaction so the
         // first released raycast cannot use the pre-lift, embedded pose.
         let members_set: HashSet<Entity> = members.iter().copied().collect();
-        for (entity, mut pos, rigid_body, _, _, hits) in avian.p0().iter_mut() {
+        for (entity, mut pos, _, rigid_body, _, _, hits) in avian.p0().iter_mut() {
             if let Some(mut hits) = hits {
                 hits.clear();
             }
@@ -1963,14 +2005,8 @@ pub fn settle_grounded_assemblies(
 /// Right one overturned vessel, NOW — the primitive behind the Recover tool and
 /// the rhai `recover::vessel(id)` verb.
 ///
-/// USER-INVOKED ONLY. This used to run itself: a `KeepUpright` marker plus a
-/// `FixedUpdate` system (`rescue_overturned_vessels`) that watched every marked
-/// vessel, waited 3 s of near-motionless overturned rest, and rotated it upright
-/// — up to three times before giving up. That is gone, deliberately. A rover
-/// ending up on its roof is *information* about the terrain, the suspension or
-/// the driving, and a runtime that quietly undoes it hides the very thing worth
-/// looking at; it also fought any scene whose pose is authored elsewhere. When a
-/// vessel is stuck, someone now says so.
+/// USER-INVOKED ONLY. Recovery is an explicit command because an overturned
+/// vessel is observable simulation state and must not be changed implicitly.
 ///
 /// Rotates the whole joint-connected assembly upright about the target's own
 /// position (shortest arc, so heading is approximately preserved), reseats it
@@ -2329,6 +2365,17 @@ mod tests {
         assert!(cache.observe_joint(joint, replacement));
         assert!(cache.remove_joint(joint));
         assert!(!cache.remove_joint(joint));
+    }
+
+    #[test]
+    fn static_support_lift_uses_only_overlapping_support_bounds() {
+        let body = (DVec3::new(-0.4, -0.05, -0.4), DVec3::new(0.4, 0.75, 0.4));
+        let supports = [
+            (DVec3::new(-2.0, -1.0, -2.0), DVec3::new(2.0, 0.0, 2.0)),
+            (DVec3::new(10.0, -1.0, 10.0), DVec3::new(12.0, 0.0, 12.0)),
+        ];
+
+        assert_eq!(static_support_lift(body, &supports), Some(0.1));
     }
 
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at

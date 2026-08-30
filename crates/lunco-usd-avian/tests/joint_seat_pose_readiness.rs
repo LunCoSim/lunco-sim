@@ -1,37 +1,11 @@
-//! Regression: what does a joint-seating system actually READ from `Position`?
+//! Regression coverage for authored joint seating and the bridge's transform
+//! ownership contract.
 //!
-//! `build_usd_physics_joints` seats USD-authored joints by comparing each body's
-//! world anchor, `p + r * localPos`. That is only meaningful if `p` is the body's
-//! authored pose. `Position` is a REQUIRED component of `RigidBody`, so it exists
-//! at its default `(0,0,0)` from the instant the body spawns — a system that runs
-//! too early reads zeros, the anchor delta degenerates to
-//! `localPos0 - localPos1`, and the seat silently measures the wrong thing: a
-//! scene misplaced by metres scores as fine, a correctly-placed one is nudged by
-//! the anchor offset. Neither failure produces a log line.
-//!
-//! The measured cause was NOT a race. Two independent things made the read
-//! unconditionally wrong, and both are asserted here:
-//!
-//! 1. `BigSpacePhysicsBridgePlugin` sets
-//!    `PhysicsTransformConfig { transform_to_position: false, .. }`, and avian
-//!    gates its `transform_to_position` on exactly that flag
-//!    (`avian3d-0.7.0/src/physics_transform/mod.rs:108-110`). The system never
-//!    runs, so `PhysicsTransformSystems::TransformToPosition` is an EMPTY set and
-//!    ordering `.after` it constrains nothing. The bridge's
-//!    [`PhysicsBridgeSystems::Read`] pass is what writes `Position` instead.
-//!
-//! 2. `PhysicsSchedule` is a SEPARATE schedule, run by avian's
-//!    `run_physics_schedule` from inside `FixedPostUpdate`'s
-//!    `PhysicsSystems::StepSimulation` (`avian3d-0.7.0/src/schedule/mod.rs`). A
-//!    readiness hold pauses that nested schedule. The bridge therefore publishes
-//!    the same READ contract in the enclosing schedule as well, where joint
-//!    preparation can resolve authored endpoints without integrating them.
-//!
-//! Both probes below record the first pose they see. Joint preparation uses the
-//! enclosing bridge READ slot; the nested probe proves the two read paths agree
-//! when physics is live.
+//! `build_usd_physics_joints` seats USD-authored joints from each body's world
+//! anchor, `p + r * localPos`. The bridge must publish the authored body pose at
+//! the joint-preparation slot, including while readiness holds physics.
 
-use avian3d::physics_transform::{PhysicsTransformSystems, Position};
+use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -47,25 +21,12 @@ const EDGE: f32 = 2000.0;
 /// motivated this (`episode_01_recording.usda` puts its lander at y = 70).
 const AUTHORED_Y: f32 = 70.0;
 
-/// First `Position` observed by a probe at the OLD joint-builder slot
-/// (`FixedPostUpdate`, `PhysicsSystems::Prepare`, after `TransformToPosition`).
-#[derive(Resource, Default)]
-struct SeenInFixedPostUpdate(Option<DVec3>);
-
 /// First `Position` observed at the hold-safe joint-preparation slot.
 #[derive(Resource, Default)]
 struct SeenInJointPreparation(Option<DVec3>);
 
 #[derive(Component)]
 struct Probe;
-
-fn record_old_slot(mut seen: ResMut<SeenInFixedPostUpdate>, q: Query<&Position, With<Probe>>) {
-    if seen.0.is_none() {
-        if let Ok(p) = q.single() {
-            seen.0 = Some(p.0);
-        }
-    }
-}
 
 fn record_joint_slot(mut seen: ResMut<SeenInJointPreparation>, q: Query<&Position, With<Probe>>) {
     if seen.0.is_none() {
@@ -86,17 +47,8 @@ fn make_app() -> App {
         PhysicsPlugins::default(),
         BigSpacePhysicsBridgePlugin,
     ));
-    app.init_resource::<SeenInFixedPostUpdate>()
-        .init_resource::<SeenInJointPreparation>();
+    app.init_resource::<SeenInJointPreparation>();
 
-    // Probe at the slot the joint builder USED to occupy.
-    app.add_systems(
-        FixedPostUpdate,
-        record_old_slot
-            .in_set(PhysicsSystems::Prepare)
-            .after(PhysicsTransformSystems::TransformToPosition),
-    );
-    // Probe at the hold-safe slot the joint builder occupies now.
     app.add_systems(
         FixedPostUpdate,
         record_joint_slot
@@ -151,49 +103,26 @@ fn spawn_scene(app: &mut App) {
     ));
 }
 
-/// The fix: at the joint builder's slot, `Position` is the AUTHORED pose.
-/// At the old slot it is still the required-component default of zero — which is
-/// the bug, asserted so that anyone re-introducing that placement fails here
-/// instead of shipping a seat that silently measures `localPos0 - localPos1`.
 #[test]
-fn joint_slot_reads_the_authored_pose_not_the_required_component_default() {
+fn joint_preparation_reads_the_authored_pose() {
     let mut app = make_app();
     spawn_scene(&mut app);
-    // A few frames, because `Time<Fixed>` has to accumulate before `FixedPostUpdate`
-    // (and with it the whole `PhysicsSchedule`) runs at all. Both probes latch the
-    // FIRST `Position` they ever see, so extra frames cannot mask an early zero —
-    // they only give each slot a chance to observe the body once.
+    // A few frames allow `Time<Fixed>` to accumulate before the preparation slot
+    // runs.
     for _ in 0..4 {
         app.update();
     }
 
-    let new_slot = app
+    let observed = app
         .world()
         .resource::<SeenInJointPreparation>()
         .0
         .expect("the PhysicsSchedule probe must observe the body on the first tick");
     assert!(
-        (new_slot.y - AUTHORED_Y as f64).abs() < 1e-6,
-        "joint-seating slot must read the AUTHORED pose, got {new_slot:?} \
-         (expected y = {AUTHORED_Y}). If this is (0,0,0) the seat is measuring \
-         `localPos0 - localPos1` and every anchor verdict it prints is fiction."
+        (observed.y - AUTHORED_Y as f64).abs() < 1e-6,
+        "joint-seating slot must read the authored pose, got {observed:?} \
+         (expected y = {AUTHORED_Y})"
     );
-
-    // WHY THE SYSTEM MOVED, recorded as prose rather than as an assertion.
-    //
-    // The old placement was `FixedPostUpdate`, which runs before the whole
-    // `PhysicsSchedule` — so the bridge had not written `Position` yet and the
-    // seat measured zeros. An earlier version of this test pinned that by
-    // asserting the old slot still reads `DVec3::ZERO`.
-    //
-    // That assertion is deleted on purpose. It tested AVIAN'S SCHEDULING, not
-    // our contract: any upstream reordering would fail it on an unrelated PR,
-    // and "the dependency changed" is not a defect in this crate. What we own is
-    // the assertion above — the joint-seating slot reads the AUTHORED pose — and
-    // that one fails loudly if the fix regresses, whatever avian does internally.
-    //
-    // `SeenInFixedPostUpdate` is still populated by the probe, so a debugger can
-    // read both slots when diagnosing a seating bug; nothing depends on its value.
 }
 
 #[test]

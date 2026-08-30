@@ -3024,34 +3024,18 @@ fn build_usd_physics_joints(
 ///    graph.** The joint is parked as a [`PendingJoint`] and installed by
 ///    [`admit_pending_joints`] on the first tick where that holds.
 ///
-/// Rule 2 was the one that used to be a comment. Authored joints honoured it
-/// through their own resolve gate; the synthesized wheel joint inserted straight
-/// into the world and took the whole app down whenever a scene was swapped while
-/// a rover was still spawning ("Neither body … is in an island"). One entry
-/// point means a second call site cannot re-open that door — there is no
-/// argument shape in which it can ask for the joint *now*.
+/// The two construction paths share this entry point, so no caller can bypass
+/// the island-admission gate or request immediate installation.
 ///
 /// Why the bundle, specifically. Bevy writes a whole bundle before firing any
 /// hook or observer, so `add_joint_to_graph` (`joint_graph/plugin.rs:135-143`)
-/// reads `Has<JointCollisionDisabled> == true` and the `JointGraphEdge` is BORN
-/// with `collision_disabled`. The broad phase then never creates the pair at all
-/// (`bvh_broad_phase.rs:275-283`), so no contact between the jointed bodies ever
-/// exists. Add the marker one command later and you take the other road:
-/// `on_disable_joint_collision` (`joint_graph/plugin.rs:290-295`) walks the
-/// EXISTING contacts and deletes them with `remove_edge_by_id` while never
-/// calling `IslandManager::remove_contact` — leaving a freed `ContactId` in the
-/// island's linked list, which a later island op unwraps and dies on
-/// (`islands/mod.rs:547`/`:608`). That is an upstream avian bug we cannot patch
-/// from here; the bundle is how we stay out of its reach.
+/// reads `Has<JointCollisionDisabled> == true` and the `JointGraphEdge` is born
+/// with collision disabled. The broad phase therefore never creates a contact
+/// pair for the jointed bodies.
 ///
-/// This is only half the contract. The other half is TIMING and it belongs to
-/// the caller: the bundle must land BEFORE the first narrow phase that could put
-/// the two bodies in contact. Born-disabled prevents the pair from ever forming;
-/// it does NOT clean up a contact that already exists — and if one does, this
-/// bundle walks straight into the same corrupting path. See
-/// `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs`, where
-/// `joint_and_collision_disabled_inserted_as_one_bundle` panics for exactly that
-/// reason: correct bundle, too late.
+/// The bundle must land before the first narrow phase that could put its bodies
+/// in contact. The admission gate and each caller's startup ordering establish
+/// that timing.
 pub fn attach_joint<J: Component + Clone>(
     commands: &mut Commands,
     joint_entity: Entity,
@@ -3818,7 +3802,7 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
@@ -3924,11 +3908,11 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
-    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
+    use super::{CollisionGroupTable, extract_avian_prim, read_physics_material};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -4180,7 +4164,7 @@ mod joint_typed_tests {
     //! *dynamics* need a rover boot.
     use super::read_joint_spec_typed;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0

@@ -7,57 +7,18 @@ description = "Physics readiness gate: suspend rigid-body integration (avian's T
 
 [features]
 # OFF by default — a DIAGNOSTIC, not a runtime setting. Turns on avian's own
-# `validate`, which runs `PhysicsIsland::validate` after every island mutation
-# (`islands/mod.rs:567,650,719,790,970,1011,1249,1362`) and walks the body /
-# contact / joint linked lists for consistency.
-#
-# Why it exists: the `islands/mod.rs:547` unwrap panic ("called `Option::unwrap()`
-# on a `None` value" inside `update_narrow_phase`) fires LATE — at the next
-# `add_contact` that trips over an `island.head_contact` pointing at a freed
-# `ContactId`, arbitrarily far from whatever corrupted it. `validate` asserts AT
-# the corrupting mutation, so the backtrace names the real culprit. Three isolated
-# repro attempts for that crash all came back green — see the module docs of
-# `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs` — so the remaining
-# route is to catch it in the live app.
+# `validate`, which checks body, contact, and joint island invariants after each
+# island mutation. Enable it only when investigating an Avian invariant report;
+# it is not a runtime setting and is not part of performance measurements.
 #
 #   cargo run -j2 -p luncosim --features lunco-physics/avian-validate
 #
 # Cargo unifies features across the graph, so naming it on ANY crate that pulls
 # avian turns it on for the whole build — this crate is the choke point every
 # physics-bearing binary already depends on. Expect it to be SLOW (the linked-list
-# walks are O(island) per mutation); it is for reproducing, not for benchmarking
+# walks are O(island) per mutation); it is for investigation, not benchmarking
 # or shipping.
 #
-# ⚠ IT PANICS ON EVERY SCENE CHANGE — CAUSE NOT YET ESTABLISHED.
-# `LoadScene`/`ClearScene` under this feature dies with "Island IslandId(N) does
-# not exist" at `islands/mod.rs:1403`. The same build WITHOUT the feature
-# survives repeated scene switches cleanly (verified 17-Jul-2026), so it is
-# validate-only — but validate-only does NOT mean harmless: it may be avian's
-# instrumentation being wrong, or it may be OUR teardown leaving a stale island
-# id that only an assertion notices. Both remain open.
-#
-# The live backtrace is all-avian: the panicking frame is
-# `islands::{impl#8}::on_remove::{closure_env#1}` — the cfg(validate) block —
-# reached via `apply_or_drop_queued` inside `despawn_no_free_with_caller`. No
-# lunco frame appears in the unwind path.
-#
-# The tempting theory — that `on_remove` (`:1338`) frees islands SYNCHRONOUSLY
-# (`remove_island`, `:1374-1376`) while queueing its validation DEFERRED
-# (`world.commands().queue(...)`, `:1390`), so one body's check outlives an island
-# another body freed — is UNCONFIRMED. `pure_avian_recursive_despawn_of_one_island`
-# in `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs` drives exactly that
-# in pure avian and does NOT panic — nor does any variant tried: flat despawn,
-# recursive despawn, asleep, awake, or with joints in the island. The retained
-# touching-stack assertions establish the production-shaped precondition, so the
-# greens are not the "precondition never held" trap. The theory predicts a panic
-# in all of those and gets none. Do not repeat it as fact.
-#
-# Worth knowing either way: `IslandId` is an arena index from `next_push_index()`
-# (`:463`) and is RECYCLED, so a deferred check can land on a different island
-# than the one queued for. Treat validate's verdict on despawn-heavy paths as
-# unreliable in BOTH directions until the above is settled; it is what this
-# feature was added for on steady-state and joint work. Turn it OFF for scene
-# loads.
 avian-validate = ["avian3d/validate"]
 
 [dependencies]

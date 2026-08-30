@@ -1,11 +1,9 @@
 //! Headless integration tests for the Phase 5 avian↔big_space bridge.
 //!
 //! Full `app.update()` frames with manually-advanced time — the production
-//! path including big_space propagation/recentring and avian's physics step —
-//! with `BigSpacePhysicsBridgePlugin` owning the transform sync (all of
-//! avian's f32 sync disabled). The 2026-07-09 island panic
-//! (`islands/mod.rs:547` via `update_narrow_phase`) reproduced under the old
-//! every-tick static writes; any regression panics these tests.
+//! path including big_space propagation/recentring and Avian's physics step,
+//! with `BigSpacePhysicsBridgePlugin` owning transform sync. Static bodies
+//! remain stable while dynamic bodies round-trip through the active frame.
 
 use avian3d::math::Vector;
 use avian3d::physics_transform::Position;
@@ -18,10 +16,9 @@ use core::time::Duration;
 use lunco_core::ActivePhysicsFrame;
 use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
-// This fixture is a high-resolution numerical reproduction of the nested
-// body/contact mass-frame failure. It is not a second production configuration;
-// production luncosim owns the eight-substep contract through lunco-physics.
-const NESTED_BODY_REPRODUCTION_SUBSTEPS: u32 = 32;
+// Exercise the nested body/contact mass-frame contract at a high-resolution
+// solver cadence without creating a second production configuration.
+const NESTED_BODY_SUBSTEPS: u32 = 32;
 
 const EDGE: f32 = 2000.0;
 
@@ -762,8 +759,7 @@ fn active_frame_handoff_transports_velocity_into_the_new_grid() {
 
     // Scene loading seeds bodies while WorldRoot is still the active Avian
     // frame. Celestial placement then promotes the authored site Grid to the
-    // active frame. This is the production handoff that used to rewrite only
-    // Position/Rotation and leave the velocity components in root axes.
+    // active frame and transports the complete body state into it.
     let site = app
         .world_mut()
         .spawn((
@@ -1163,7 +1159,7 @@ fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
 fn nested_body_strut_contact_preserves_mass_frame() {
     let mut app = make_app_with_usd_collision_hooks();
     app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
-    app.insert_resource(SubstepCount(NESTED_BODY_REPRODUCTION_SUBSTEPS));
+    app.insert_resource(SubstepCount(NESTED_BODY_SUBSTEPS));
     let grid = shell(&mut app);
 
     app.world_mut().spawn((
