@@ -238,6 +238,11 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
 - Alpha: `opacity < 1` or a connected `inputs:opacity` → Blend;
   `opacityThreshold > 0` → Mask. No blend-mode control, no unlit from USD (use an
   emissive-only surface: `diffuseColor` 0, `emissiveColor` C).
+- Opaque navigational markers (waypoints, landing locations, and predicted
+  landing annotations) omit `primvars:displayOpacity` and
+  `lunco:surface:additive`; use the emissive-only surface with
+  `primvars:doNotCastShadows = true` instead. Their visible surface must stay
+  `SurfaceAlpha::Opaque` while remaining independent of scene lighting.
 - For an emissive annotation that must remain visible without occluding geometry
   behind it, author `bool lunco:surface:additive = true` on the gprim. This uses
   the existing additive, depth-tested/non-depth-writing render intent; do not
