@@ -42,6 +42,8 @@
 
 const EXPECTED_TRAVEL = 0.1835;   // metres, magnitude
 const EXPECTED_FORCE = 734.1;     // newtons along the strut axis, magnitude
+const SCENE_ROOT_NAME = "Scene:twin://tests/prismatic_spring.usda";
+const SCENE_ROOT_PATH = "/PrismaticSpringTest";
 
 fn on_start(me) {
     this.t = 0.0;
@@ -57,14 +59,12 @@ fn on_start(me) {
     this.leglike = find("/PrismaticSpringTest/StrutLegLike");
     this.bob_leglike = find("/PrismaticSpringTest/BobLegLike");
     this.leglike_x0 = ();
-    this.scene_mounts = 0;
-    this.scene_mount_name = "";
-    for entity in list_entities() {
-        if entity.name.starts_with("Scene:") {
-            this.scene_mounts += 1;
-            this.scene_mount_name = entity.name;
-        }
-    }
+    this.scene_root_id = find(SCENE_ROOT_NAME);
+    this.scene_root_path = if this.scene_root_id >= 0 {
+        usd_path(this.scene_root_id)
+    } else {
+        ()
+    };
 
     print("[strut] ── raked prismatic springs, isolated ─────────────────");
     print("[strut] extension joint gid=" + this.ext + "  compression gid=" + this.comp);
@@ -106,8 +106,8 @@ fn on_tick(me) {
             comp_pos: world_pos(this.bob_comp),
             leglike_stroke: xl,
             leglike_dx: if pl == () || this.leglike_x0 == () { () } else { pl[0] - this.leglike_x0 },
-            scene_mounts: this.scene_mounts,
-            scene_mount_name: this.scene_mount_name,
+            scene_root_id: this.scene_root_id,
+            scene_root_path: this.scene_root_path,
         });
     }
 }
@@ -128,11 +128,11 @@ fn on_tick(me) {
 //                    means the joint failed open rather than stiff.
 fn verdict(s) {
     let f = [];
-    f.push(t_true(s.scene_mounts == 1,
-        "expected exactly one active scene root, got " + s.scene_mounts +
-        " — competing raw/doc-backed mounts indicate a broken loading sequence"));
-    f.push(t_true(s.scene_mount_name.starts_with("Scene:twin://"),
-        "active scene root was not mounted through its Twin URI: " + s.scene_mount_name));
+    f.push(t_true(s.scene_root_id >= 0,
+        "canonical Twin scene root is not registered: " + SCENE_ROOT_NAME));
+    f.push(t_true(s.scene_root_path == SCENE_ROOT_PATH,
+        "mounted scene root did not resolve authored defaultPrim " + SCENE_ROOT_PATH +
+        ": " + s.scene_root_path));
     f.push(t_present(s.ext_stroke, "extension strut displacement port"));
     f.push(t_present(s.ext_force, "extension strut force port"));
     f.push(t_present(s.comp_stroke, "compression strut displacement port"));
