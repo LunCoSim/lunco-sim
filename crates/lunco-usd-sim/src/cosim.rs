@@ -4520,10 +4520,10 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 /// passes that entity through. This keeps the constructor scoped to the
 /// authoritative USD hierarchy instead of making a second world-wide path
 /// lookup (which cannot distinguish separate mounts of the same stage).
-/// Spawn the stub child for `path` under the already-resolved `parent_entity`,
-/// with a pre-read transform `tf`, inheriting grid-anchoring + instance
-/// membership from that parent. The `on_usd_prim_added` observer then builds
-/// the subtree from the canonical stage.
+/// It spawns the stub child for `path` under the already-resolved
+/// `parent_entity`, with a pre-read transform `tf`, inheriting grid-anchoring +
+/// instance membership from that parent. The `on_usd_prim_added` observer then
+/// builds the subtree from the canonical stage.
 ///
 /// The live-stage projection bridge resolves the parent and checks the changed
 /// path before calling this function. Passing the entity is intentional: the
