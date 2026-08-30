@@ -118,7 +118,10 @@ def Xform "SkidRover" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        double3 xformOp:translate = (0, 0.55, 0)
+        # The 2.0 x 0.3 x 3.5 m chassis has a 0.15 m top face. The nominal
+        # 0.2 m pack is seated on that face, with its bottom at y=0.15 and
+        # margins on every horizontal side.
+        double3 xformOp:translate = (0, 0.25, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

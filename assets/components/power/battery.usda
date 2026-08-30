@@ -111,8 +111,12 @@ def Xform "Battery" (
     # The enclosing generated electrical domain admits the authored output ports
     # below and presents them back on this physical Battery prim. Solver-only
     # connector values and wrapper aliases are not operator telemetry.
+    # Nominal pack envelope for compact rover assemblies. The host assembly owns
+    # the mount translation and may override this size for a different body
+    # class; keeping the dimensions here makes a standalone reference usable
+    # without making the battery larger than a standard rover chassis.
     double3 xformOp:translate = (0, 0, 0)
-    double3 xformOp:scale = (2.0, 0.5, 3.0)
+    double3 xformOp:scale = (1.2, 0.2, 2.0)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 
     # A mounted pack is part of its parent's body. A detachable pack must gain
