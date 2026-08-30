@@ -147,9 +147,31 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
             path: "/World".to_string(),
         },
     ));
-    // A couple of updates drain any deferred spawns / asset events.
-    app.update();
-    app.update();
+    // Structural projection and CPU geometry have separate completion edges.
+    // Drive the production app until the geometry workers publish all meshes;
+    // a fixed two-update assertion would test an obsolete synchronous loader.
+    for _ in 0..256 {
+        app.update();
+        let all_meshes_ready = {
+            let world = app.world_mut();
+            let mut q = world.query::<(&UsdPrimPath, Option<&Mesh3d>)>();
+            [
+                "/World/Box",
+                "/World/Conduit",
+                "/World/Elbow",
+                "/World/ShellQuarter",
+            ]
+            .iter()
+            .all(|path| {
+                q.iter(world)
+                    .any(|(prim, mesh)| prim.path == *path && mesh.is_some())
+            })
+        };
+        if all_meshes_ready {
+            break;
+        }
+        std::thread::yield_now();
+    }
 
     // (a) THE cutover assertion: the canonical stage was built and cached, which
     // only happens on the LIVE branch (`get_or_build`). If instantiation had
@@ -319,4 +341,69 @@ fn recipeless_asset_builds_no_canonical_and_is_skipped() {
         entity_at(&mut app, "/World/Box").is_none(),
         "a recipe-less asset is skipped — no children instantiated"
     );
+}
+
+#[test]
+fn identical_stage_paths_project_once_per_parent() {
+    const SCENE: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def Xform "Child"
+    {
+    }
+}
+"#;
+
+    let mut app = app();
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<UsdStageAsset>>()
+        .add(UsdStageAsset {
+            recipe: Some(StageRecipe::from_source("scene.usda", SCENE)),
+        });
+
+    // Two mounted owners may legitimately project the same composed stage path.
+    // Path identity is scoped by the USD parent/instance, not by a global scan.
+    let parent_a = app
+        .world_mut()
+        .spawn((
+            Name::new("World A"),
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/World".into(),
+            },
+        ))
+        .id();
+    let parent_b = app
+        .world_mut()
+        .spawn((
+            Name::new("World B"),
+            UsdPrimPath {
+                stage_handle: handle,
+                path: "/World".into(),
+            },
+        ))
+        .id();
+
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let child_count = |app: &mut App, parent: Entity| {
+        app.world()
+            .get::<Children>(parent)
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter(|child| {
+                app.world()
+                    .get::<UsdPrimPath>(*child)
+                    .is_some_and(|prim| prim.path == "/World/Child")
+            })
+            .count()
+    };
+    assert_eq!(child_count(&mut app, parent_a), 1);
+    assert_eq!(child_count(&mut app, parent_b), 1);
 }

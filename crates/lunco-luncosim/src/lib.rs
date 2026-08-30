@@ -3766,6 +3766,9 @@ fn report_terrain_generation_status(
 /// * `UsdAwaitingStage` entities — prims queued on a stage that has not resolved.
 ///   This covers spawns with no `LoadScene` guard behind them (deferred instance
 ///   and reference spawns), which the resource alone would miss.
+/// * `UsdVisualMeshPending` entities — structural projection is complete, but
+///   CPU-generated geometry is still being committed from the async mesh pool.
+///   This is a separate visual-streaming phase, not a second scene load.
 ///
 /// Consumed by the offline recorder's readiness gate as well as the status bar;
 /// see the registration site for why the mirror lives here rather than in
@@ -3775,6 +3778,7 @@ fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
     awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy::UsdVisualProjectionQueued>>,
+    pending_meshes: Query<(), With<lunco_usd_bevy::UsdVisualMeshPending>>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.
@@ -3784,6 +3788,7 @@ fn report_scene_spawn_status(
     const SOURCE: &str = lunco_workbench::status_bus::SCENE_SOURCE;
     let pending = awaiting.iter().count();
     let projecting = projecting.iter().count();
+    let pending_meshes = pending_meshes.iter().count();
     if matches!(
         coordinator.active(),
         Some(lunco_core::SceneTransition::Clear)
@@ -3794,6 +3799,8 @@ fn report_scene_spawn_status(
     if let Some(g) = in_flight {
         let message = if projecting > 0 {
             format!("projecting scene {} ({projecting} prims queued)", g.path)
+        } else if pending_meshes > 0 {
+            format!("loading scene {} (streaming {pending_meshes} meshes)", g.path)
         } else {
             format!("loading scene {}", g.path)
         };
@@ -3804,6 +3811,13 @@ fn report_scene_spawn_status(
         bus.set_progress(
             SOURCE,
             format!("projecting scene ({projecting} queued, {pending} pending)"),
+            0,
+            0,
+        );
+    } else if pending_meshes > 0 {
+        bus.set_progress(
+            SOURCE,
+            format!("streaming scene visuals ({pending_meshes} meshes pending)"),
             0,
             0,
         );

@@ -50,7 +50,11 @@ The `Add, UsdPrimPath` observer and `sync_usd_visuals` both feed the same
 queue with its configured per-frame budget, then calls the same extractor. A
 scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
-window.
+window. The queue marker is the projection ownership fence: one traversal
+creates one child under its USD parent, so the projector does not scan the
+world for duplicate stage paths. The same composed path is valid in separate
+scene mounts and runtime instances; hierarchy and instance identity scope those
+projections.
 
 Generated Modelica domain projection follows the same ownership and change
 set rule: apply the shared `is_domain_network_root` predicate before selecting

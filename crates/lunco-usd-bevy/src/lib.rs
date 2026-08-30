@@ -10,8 +10,9 @@
 //!    external references (e.g., wheel component files) via `UsdComposer::flatten()`.
 //! 2. The `sync_usd_visuals` system moves loaded prims into a bounded projection queue.
 //!    `process_queued_usd_visuals` drains that queue over multiple frames.
-//! 3. For each prim, it creates a mesh based on the prim type (`Cube`, `Cylinder`, `Sphere`)
-//!    using explicit dimensions from the USD file.
+//! 3. For each prim, it reads the authored structure and creates or schedules geometry
+//!    based on the prim type (`Cube`, `Cylinder`, `Sphere`) using explicit dimensions
+//!    from the USD file.
 //! 4. It spawns child entities for each prim child, pre-populating their transforms so
 //!    physics systems see them in the correct positions.
 //!
@@ -30,12 +31,13 @@
 //! ## Why Not Use the Observer?
 //!
 //! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
-//! asset may not be loaded yet (async loading). The `sync_usd_visuals` system runs in
-//! the `Update` schedule and retries every frame until the asset is available, then
-//! marks the entity with `UsdVisualSynced` to prevent re-processing.
+//! asset may not be loaded yet (async loading). The observer and the loaded-stage
+//! event both publish the same queue marker; `process_queued_usd_visuals` is the
+//! single reader and marks each projected entity with `UsdVisualSynced`.
 
 use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
 use lunco_usd_compose::parse_usda;
 // Appearance **intent**, not a material: this crate must never name
@@ -319,7 +321,9 @@ impl Plugin for UsdBevyPlugin {
             // a slider, and a real off-by-one-frame artefact in a recorded take.
             .add_systems(
                 Update,
-                (lathe::relathe_changed, lathe::regenerate_patch_meshes).chain(),
+                (lathe::relathe_changed, lathe::regenerate_patch_meshes)
+                    .chain()
+                    .after(poll_pending_usd_meshes),
             )
             .add_systems(
                 Update,
@@ -423,6 +427,9 @@ impl Plugin for UsdBevyPlugin {
                     process_queued_usd_visuals
                         .run_if(any_queued_usd_visuals)
                         .after(sync_usd_visuals),
+                    poll_pending_usd_meshes
+                        .run_if(any_pending_usd_meshes)
+                        .after(process_queued_usd_visuals),
                     retry_awaiting_usd_visuals_after_quality_change
                         .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
                         // A quality update can coincide with the asset-loaded
@@ -702,11 +709,37 @@ pub fn bump_usd_stage_revision(
     }
 }
 
-/// Marker component indicating that an entity has been processed by `sync_usd_visuals`.
+/// Marker component indicating that the entity's structural USD projection is
+/// committed. Geometry may still be streaming through [`UsdVisualMeshPending`]
+/// when a CPU-generated mesh is being built asynchronously.
 ///
-/// Prevents the system from re-processing the same entity on subsequent frames.
+/// Prevents the projection systems from re-processing the same entity on
+/// subsequent frames and is the lifecycle signal consumed by physics.
 #[derive(Component)]
 pub struct UsdVisualSynced;
+
+/// A NURBS visual whose CPU tessellation is running on Bevy's async compute
+/// pool. Structural USD projection and physics may proceed while the mesh is
+/// being built; the marker is removed when the render asset is committed.
+///
+/// This is an explicit loading phase, not a placeholder or a second loader:
+/// the request is extracted from the live canonical stage once, and the task
+/// only evaluates the already-owned [`lathe::NurbsSurface`] definition.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualMeshPending;
+
+/// Main-thread handle for one asynchronous CPU-generated USD mesh build.
+///
+/// The task owns only Send-safe extracted data. The live OpenUSD stage remains
+/// on the main thread and is never captured by the worker.
+#[derive(Component)]
+pub struct PendingUsdMesh {
+    task: Task<Option<Mesh>>,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    path: SdfPath,
+    stage_generation: u64,
+    profile: lunco_render::RenderQualityProfile,
+}
 
 /// The composed USD prim had malformed authored data and was intentionally not
 /// projected into the visual/physics pipeline. Keeping this explicit failure
@@ -842,22 +875,25 @@ pub struct UsdAwaitingStage;
 /// Marker for a prim whose USD stage is available but whose visual projection
 /// is waiting for the bounded projection pass.
 ///
-/// Keeping [`UsdAwaitingStage`] until projection is committed makes the
-/// scene-readiness contract honest: a loaded stage is not presentable merely
-/// because its root entity exists. The marker is also the queue ownership
-/// fence; a replacement can discard the entity without a late observer trying
-/// to project it.
+/// Keeping [`UsdAwaitingStage`] until structural projection is committed makes
+/// the scene transaction complete only after the canonical hierarchy exists.
+/// CPU-generated geometry has its own [`UsdVisualMeshPending`] phase and is
+/// reported separately while it streams. The marker is also the queue
+/// ownership fence; a replacement can discard the entity without a late
+/// observer trying to project it.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdVisualProjectionQueued;
 
-/// Main-thread budget for USD visual projection.
+/// Main-thread budget for USD structural projection.
 ///
 /// Canonical OpenUSD stages are `!Send` and Bevy render assets are main-thread
 /// resources, so projection cannot be moved wholesale to a worker. This
-/// resource spreads that unavoidable work over multiple frames instead of
-/// monopolising one update. The budget is measured in wall-clock time because
+/// resource keeps the UI responsive while still admitting a complete scene in
+/// a small number of frames. The budget is measured in wall-clock time because
 /// prim projection cost is not uniform; a prim may still overshoot the budget
-/// because its USD read, mesh construction, and child scheduling are atomic.
+/// because its USD read and child scheduling are atomic. CPU geometry that can
+/// be detached from the `!Send` stage is dispatched to the async compute pool
+/// instead of extending this main-thread slice.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct UsdVisualProjectionSettings {
     /// Maximum time the projector may start work in one `Update` pass.
@@ -870,7 +906,10 @@ pub struct UsdVisualProjectionSettings {
 impl Default for UsdVisualProjectionSettings {
     fn default() -> Self {
         Self {
-            frame_budget: std::time::Duration::from_millis(2),
+            // Eight milliseconds leaves the rest of a 60 Hz frame for input,
+            // simulation, and UI while avoiding a hundreds-of-frames load for
+            // ordinary scenes.
+            frame_budget: std::time::Duration::from_millis(8),
         }
     }
 }
@@ -960,14 +999,14 @@ pub fn instance_key(
 /// Translates a single USD prim into Bevy/big_space/avian components on
 /// `entity`. The caller has already verified that the stage is loaded.
 ///
-/// **Steady-state cost: zero** — this is invoked exactly once per entity,
-/// either by `on_usd_prim_added` (entity spawned after stage loaded) or
-/// by `on_stage_loaded` (entity spawned before stage loaded; drained
-/// from the `UsdAwaitingStage` queue when the asset becomes ready). No
-/// per-frame polling.
+/// **Steady-state cost: zero** — this is invoked exactly once per projection
+/// generation, by `process_queued_usd_visuals` after the entity's queue marker
+/// has been admitted. The `Add<UsdPrimPath>` observer and the loaded-stage event
+/// only publish that marker; they do not read or instantiate USD.
 ///
 /// 1. Looks up the prim's attributes from the loaded USD stage.
-/// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere).
+/// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere), or schedules
+///    detached CPU geometry through the async mesh phase.
 /// 3. Applies the prim's transform (position + rotation + scale).
 /// 4. Spawns each prim child below its USD parent. A top-level child of the
 ///    nested scene Grid carries its own `CellCoord`; deeper descendants remain
@@ -1012,6 +1051,7 @@ fn instantiate_usd_prim(
         );
         return;
     };
+    let stage_generation = cs.generation();
     instantiate_usd_prim_from_stage(
         &cs.view(),
         entity,
@@ -1028,6 +1068,7 @@ fn instantiate_usd_prim(
         asset_server,
         meshes,
         quality,
+        stage_generation,
     );
 }
 
@@ -1051,6 +1092,7 @@ fn instantiate_usd_prim_from_stage(
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
+    stage_generation: u64,
 ) {
     let convention = match stage_convention(reader) {
         Ok(convention) => convention,
@@ -1354,16 +1396,44 @@ fn instantiate_usd_prim_from_stage(
             // existing scripting bridge writes them with no new verb, and
             // `crate::lathe`'s `Changed`-filtered systems rebuild the mesh once per
             // edit instead of once per frame.
-            build_usd_nurbs_patch_mesh(reader, &sdf_path, quality).map(|(mesh, def)| {
-                if let Some((surface, lathe_params)) = def {
+            if !has_authored_nurbs_trim(reader, &sdf_path) {
+                if let Some((surface, lathe_params)) = read_patch_surface(reader, &sdf_path) {
+                    let task_surface = surface.clone();
+                    let task = AsyncComputeTaskPool::get()
+                        .spawn(async move { task_surface.mesh(quality) });
                     let mut e = commands.entity(entity);
-                    e.try_insert(surface);
+                    // Publish the definition before the mesh arrives. The
+                    // change-filtered lathe systems then retain their normal
+                    // editable state, but have no Mesh3d yet and cannot repeat
+                    // the worker's tessellation on the load frame.
+                    e.try_insert((
+                        surface,
+                        PendingUsdMesh {
+                            task,
+                            stage_id: prim_path.stage_handle.id(),
+                            path: sdf_path.clone(),
+                            stage_generation,
+                            profile: quality,
+                        },
+                        UsdVisualMeshPending,
+                    ));
                     if let Some(l) = lathe_params {
                         e.try_insert(l);
                     }
                 }
-                meshes.add(mesh)
-            })
+                None
+            } else {
+                build_usd_nurbs_patch_mesh(reader, &sdf_path, quality).map(|(mesh, def)| {
+                    if let Some((surface, lathe_params)) = def {
+                        let mut e = commands.entity(entity);
+                        e.try_insert(surface);
+                        if let Some(l) = lathe_params {
+                            e.try_insert(l);
+                        }
+                    }
+                    meshes.add(mesh)
+                })
+            }
         } else if matches!(
             prim_type.as_deref(),
             Some("BasisCurves") | Some("NurbsCurves")
@@ -1382,14 +1452,28 @@ fn instantiate_usd_prim_from_stage(
             match primitive_shape {
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
                 // Transform below) — that is how UsdGeomCube spells a box.
-                Some(shape) => build_primitive_mesh(shape, quality).map(|mesh| meshes.add(mesh)),
+                Some(shape) => {
+                    let task = AsyncComputeTaskPool::get()
+                        .spawn(async move { build_primitive_mesh(shape, quality) });
+                    commands.entity(entity).try_insert((
+                        PendingUsdMesh {
+                            task,
+                            stage_id: prim_path.stage_handle.id(),
+                            path: sdf_path.clone(),
+                            stage_generation,
+                            profile: quality,
+                        },
+                        UsdVisualMeshPending,
+                    ));
+                    None
+                }
                 None => None,
             }
         };
 
-        if let Some(shape) = primitive_shape.filter(|_| mesh_handle.is_some()) {
+        if let Some(shape) = primitive_shape {
             commands.entity(entity).try_insert(UsdPrimitiveMesh(shape));
-        } else {
+        } else if mesh_handle.is_none() {
             commands.entity(entity).remove::<UsdPrimitiveMesh>();
         }
 
@@ -1812,8 +1896,6 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
                             base_components,
                             (
                                 member.clone(),
@@ -1824,20 +1906,11 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
                             base_components,
                             (member.clone(), CellCoord::default()),
                         )
                     } else {
-                        queue_usd_child_spawn(
-                            commands,
-                            entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
-                            base_components,
-                            (member.clone(),),
-                        )
+                        queue_usd_child_spawn(commands, entity, base_components, (member.clone(),))
                     }
                 }
                 None => {
@@ -1845,8 +1918,6 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
                             base_components,
                             (big_space::grid::propagation::LowPrecisionRoot,),
                         )
@@ -1854,20 +1925,11 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
                             base_components,
                             (CellCoord::default(),),
                         )
                     } else {
-                        queue_usd_child_spawn(
-                            commands,
-                            entity,
-                            prim_path.stage_handle.clone(),
-                            child_path.to_string(),
-                            base_components,
-                            (),
-                        )
+                        queue_usd_child_spawn(commands, entity, base_components, ())
                     }
                 }
             };
@@ -1942,45 +2004,19 @@ fn project_usd_prim_kind(
 /// (parent)))` would still create an unparented orphan when the parent is gone;
 /// worse, its `UsdPrimPath` observer would continue projecting the orphan.  The
 /// empty allocation is harmlessly reclaimed when the check fails, and the
-/// authored bundle is inserted only while the parent is live.
+/// authored bundle is inserted only while the parent is live. Projection
+/// uniqueness comes from the queue marker and USD parent/child traversal; this
+/// command deliberately does not scan the world for a path that may be valid in
+/// another scene mount or runtime instance.
 fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
     commands: &mut Commands,
     parent: Entity,
-    stage_handle: Handle<UsdStageAsset>,
-    path: String,
     base: Base,
     extra: Extra,
 ) -> Entity {
     let child = commands.spawn_empty().id();
     commands.queue(move |world: &mut World| {
         if world.get_entity(parent).is_err() || !scene_mount_entity_is_live(world, parent) {
-            let _ = world.despawn(child);
-            return;
-        }
-        // A composed authored stage has one entity for each absolute prim path,
-        // but a runtime spawn deliberately composes the same stage-relative paths
-        // once per instance. Deduplication must therefore be scoped to the
-        // instance root when this parent belongs to a runtime instance.
-        let instance_root = world
-            .get::<UsdInstanceMember>(parent)
-            .map(|member| member.root)
-            .or_else(|| world.get::<UsdInstanceRoot>(parent).map(|_| parent));
-        let duplicate = {
-            let mut q = world.query::<(&UsdPrimPath, Option<&UsdInstanceMember>)>();
-            q.iter(world).any(|(prim, member)| {
-                if prim.stage_handle.id() != stage_handle.id() || prim.path != path {
-                    return false;
-                }
-                match instance_root {
-                    Some(root) => member.is_some_and(|member| member.root == root),
-                    None => member.is_none(),
-                }
-            })
-        };
-        if duplicate {
-            // A composed authored prim has one live ECS projection. Within a
-            // runtime instance the same invariant applies to the instance-local
-            // path, while a second instance is a distinct projection.
             let _ = world.despawn(child);
             return;
         }
@@ -2150,6 +2186,10 @@ fn any_queued_usd_visuals(q: Query<(), With<UsdVisualProjectionQueued>>) -> bool
     !q.is_empty()
 }
 
+fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
+    !q.is_empty()
+}
+
 /// Project USD prims until the configured wall-clock budget is exhausted.
 ///
 /// This intentionally uses the same `instantiate_usd_prim` path as the
@@ -2172,6 +2212,7 @@ pub fn process_queued_usd_visuals(
             With<UsdVisualProjectionQueued>,
             Without<UsdVisualSynced>,
             Without<UsdVisualSyncFailed>,
+            Without<PendingUsdMesh>,
         ),
     >,
     q_high_precision: Query<
@@ -2269,6 +2310,96 @@ pub fn process_queued_usd_visuals(
             requested_profile,
         );
         projected += 1;
+    }
+}
+
+/// Commit completed CPU-generated USD meshes without reading USD again.
+///
+/// The extraction side owns the live-stage read and publishes the editable
+/// definition. This side only validates the stage generation and quality
+/// snapshot, inserts the worker-produced Bevy mesh, and binds the already
+/// authored material intent. A live edit, quality change, or scene replacement
+/// cancels the result and returns the entity to the canonical projection queue.
+fn poll_pending_usd_meshes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    canonical: NonSend<CanonicalStages>,
+    asset_server: Res<AssetServer>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+    mut q: Query<(
+        Entity,
+        &UsdPrimPath,
+        Has<UsdVisualSynced>,
+        &mut PendingUsdMesh,
+    )>,
+) {
+    let current_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics quality; retaining pending USD meshes: {reason}");
+            return;
+        }
+    };
+
+    for (entity, prim_path, visual_synced, mut pending) in &mut q {
+        let Some(stage) = canonical.get(pending.stage_id) else {
+            continue;
+        };
+        let stale = !visual_synced
+            || prim_path.stage_handle.id() != pending.stage_id
+            || SdfPath::new(&prim_path.path).ok().as_ref() != Some(&pending.path)
+            || stage.generation() != pending.stage_generation
+            || current_profile != pending.profile;
+        if stale {
+            commands
+                .entity(entity)
+                .try_remove::<PendingUsdMesh>()
+                .try_remove::<UsdVisualMeshPending>()
+                .try_insert(UsdVisualProjectionQueued);
+            continue;
+        }
+
+        let Some(result) = block_on(future::poll_once(&mut pending.task)) else {
+            continue;
+        };
+        let Some(result) = result else {
+            warn!(
+                "[usd-bevy] {} CPU mesh build produced no geometry; visual mesh was not created",
+                pending.path.as_str()
+            );
+            commands
+                .entity(entity)
+                .try_remove::<PendingUsdMesh>()
+                .try_remove::<UsdVisualMeshPending>()
+                .try_remove::<UsdPrimitiveMesh>()
+                .try_remove::<UsdCurveMesh>()
+                .try_remove::<lathe::NurbsSurface>()
+                .try_remove::<lathe::UsdLathe>();
+            continue;
+        };
+
+        let mesh_handle = meshes.add(result);
+        let mut entity_commands = commands.entity(entity);
+        entity_commands
+            .try_insert(Mesh3d(mesh_handle.clone()))
+            .try_remove::<PendingUsdMesh>()
+            .try_remove::<UsdVisualMeshPending>();
+        if let Ok(sdf_path) = SdfPath::new(&prim_path.path) {
+            if let Err(err) = apply_standard_material(
+                &stage.view(),
+                &sdf_path,
+                &mesh_handle,
+                &mut entity_commands,
+                &asset_server,
+                pending.stage_id,
+            ) {
+                error!(
+                    "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
+                    sdf_path.as_str(),
+                    err.attribute
+                );
+            }
+        }
     }
 }
 
@@ -6186,6 +6317,19 @@ fn build_usd_curve_mesh(
 /// face value while the code underneath was working, so a missing surface was
 /// blamed on trim support that in fact existed. A doc comment that describes a
 /// capability the code no longer lacks is worse than no comment.)
+fn has_authored_nurbs_trim(reader: &StageView<'_>, path: &SdfPath) -> bool {
+    [
+        "trimCurve:counts",
+        "trimCurve:orders",
+        "trimCurve:vertexCounts",
+        "trimCurve:knots",
+        "trimCurve:points",
+        "trimCurve:ranges",
+    ]
+    .into_iter()
+    .any(|attr| reader.has_authored_attribute(path, attr))
+}
+
 /// Read a `NurbsPatch` prim's definition — either GENERATED from a
 /// `lunco:lathe:*` profile, or read from the authored control arrays.
 ///
@@ -6524,16 +6668,7 @@ fn build_usd_nurbs_patch_mesh(
     // loops are inserted with `add_constraint_and_split` rather than gated with
     // `can_add_constraint` — gating would silently drop part of a loop and leave
     // the hole with a missing side.
-    let trim_authored = [
-        "trimCurve:counts",
-        "trimCurve:orders",
-        "trimCurve:vertexCounts",
-        "trimCurve:knots",
-        "trimCurve:points",
-        "trimCurve:ranges",
-    ]
-    .into_iter()
-    .any(|attr| reader.has_authored_attribute(path, attr));
+    let trim_authored = has_authored_nurbs_trim(reader, path);
     let trim_loops = if !trim_authored {
         None
     } else {

@@ -286,13 +286,14 @@ pub struct EngineSyncCursor {
     registry_revision: u64,
 }
 
-/// UI-supplied pacing hints for the async parse scheduler in
-/// [`drive_engine_sync`]. Core owns this resource with inert defaults — a
-/// headless build never refreshes it, so parses fire eagerly (no input is
-/// ever "active", no focused document to prioritise). The UI layer updates
-/// it each frame from its input-activity / workspace state; core consumes
-/// the hints without ever naming those UI types.
-#[derive(Resource, Default)]
+/// Pacing controls for the async parse scheduler in [`drive_engine_sync`].
+///
+/// The resource is shared by GUI and headless execution so scene loading and
+/// editing have the same bounded scheduling contract. UI code only refreshes
+/// the input/focus hints; the queue and completion budgets remain owned by the
+/// core scheduler. A bounded native queue matters because Modelica parsing
+/// shares Bevy's compute pool with scene projection and other loading work.
+#[derive(Resource)]
 pub struct ParsePacing {
     /// True while the user is actively typing — defers the edit-reparse
     /// debounce so a keystroke burst settles before paying for a parse.
@@ -300,6 +301,24 @@ pub struct ParsePacing {
     /// The focused document, prioritised first in the async parse queue so
     /// the tab the user is staring at reparses ahead of background tabs.
     pub active_document: Option<DocumentId>,
+    /// Maximum number of documents parsed concurrently. This keeps the
+    /// shared compute pool available to scene loading and rendering.
+    pub max_in_flight: usize,
+    /// Maximum wall-clock time spent collecting parse completions in one
+    /// update. At least one completion is collected when work is available;
+    /// this value bounds the normal completion burst without dropping work.
+    pub completion_budget_ms: u64,
+}
+
+impl Default for ParsePacing {
+    fn default() -> Self {
+        Self {
+            input_active: false,
+            active_document: None,
+            max_in_flight: 4,
+            completion_budget_ms: 2,
+        }
+    }
 }
 
 /// Sync open Modelica documents into the engine session. Generation-
@@ -357,26 +376,34 @@ pub fn drive_engine_sync(
     // the UI feeds the hint (headless: always `None` → no reordering).
     let active_doc: Option<DocumentId> = pacing.active_document;
     // ── 1. Drain async-parse completions ──────────────────────────────
-    // Pull every completion the workers have queued since the last
-    // tick. For each, fetch the strict AST from the session and
-    // backfill the doc's local SyntaxCache + AstCache so panels see
-    // the parsed state without needing a separate `ast_refresh` pass.
+    // Pull a bounded completion batch from the workers. For each, fetch the
+    // strict AST from the session and backfill the doc's local SyntaxCache +
+    // AstCache so panels see the parsed state without needing a separate
+    // `ast_refresh` pass. The wall-clock budget keeps a burst of background
+    // parses from monopolising the frame that receives them.
+    let completion_budget = web_time::Duration::from_millis(pacing.completion_budget_ms);
+    let completion_started = web_time::Instant::now();
     let completed_results: Vec<_> = {
         let Some(mut engine) = handle.try_lock() else {
             return;
         };
-        engine
-            .drain_completed()
-            .into_iter()
-            .map(|(doc_id, parse_gen)| {
-                (
-                    doc_id,
-                    parse_gen,
-                    engine.parsed_for_doc(doc_id).cloned(),
-                    engine.take_parse_diags(doc_id),
-                )
-            })
-            .collect()
+        let mut results = Vec::new();
+        loop {
+            if !results.is_empty() && completion_started.elapsed() >= completion_budget {
+                break;
+            }
+            let Some((doc_id, parse_gen)) = engine.drain_completed_up_to(1).into_iter().next()
+            else {
+                break;
+            };
+            results.push((
+                doc_id,
+                parse_gen,
+                engine.parsed_for_doc(doc_id).cloned(),
+                engine.take_parse_diags(doc_id),
+            ));
+        }
+        results
     };
     for (doc_id, parse_gen, parsed_ast, parse_diags) in completed_results {
         // Snapshot current doc gen + URI under a brief engine lock —
@@ -577,21 +604,14 @@ pub fn drive_engine_sync(
     if let Some(active) = active_doc {
         async_only.sort_by_key(|(doc_id, _, _)| if *doc_id == active { 0 } else { 1 });
     }
-    // Wasm throttle: at most 4 worker parses in flight at a time.
-    //
-    // Native: pool has real worker threads; concurrency is fine and
-    // uncapped.
-    #[cfg(target_arch = "wasm32")]
-    let max_in_flight: usize = 4;
-    #[cfg(not(target_arch = "wasm32"))]
-    let max_in_flight: usize = usize::MAX;
+    let max_in_flight = pacing.max_in_flight.max(1);
 
     for (doc_id, gen, source) in async_only {
         let pending_count = {
             let Some(eng) = handle.try_lock() else {
                 return;
             };
-            if eng.is_doc_pending(doc_id) {
+            if eng.has_parse_work(doc_id) {
                 continue;
             }
             eng.pending_count()
