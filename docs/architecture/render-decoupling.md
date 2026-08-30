@@ -171,9 +171,9 @@ GUI binaries already add it.
 
 `lunco-api` keeps only the DISPATCH, because raw-PNG mode must defer the HTTP response until the capture
 lands and only the executor knows the correlation id. That deferral is now **generic**
-(`register_deferred_command::<T>()`), so the substrate no longer names a domain command — and a
-`DeferredRequests` watchdog turns a handler that forgets to answer into an error instead of a hung
-caller.
+(`register_deferred_command::<T>()`), so the substrate no longer names a domain command. The owning
+handler is responsible for emitting exactly one completion event; the executor does not invent a
+result when that contract is violated.
 
 **Feature placement trap:** enable `lunco-workbench/api` from a crate's **`ui`** feature, never from its
 `lunco-api` feature. The headless server enables `lunco-api` too, and hanging the workbench off it drags

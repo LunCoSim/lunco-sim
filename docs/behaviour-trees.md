@@ -46,9 +46,9 @@ Two design rules the codebase holds to:
    what to fall back to) is JSON/rhai data. So behaviour is dynamic and
    hot-swappable, but the numerics stay fast and testable.
 2. **The kernel is clock-free.** `lunco-behavior` has no notion of time, world, or
-   engine. Anything that needs a clock (a timeout), a pose, or sensors lives in the
-   consuming layer that owns a context — e.g. the autopilot's `Timeout` reads
-   `DriveCtx.now` (the mission clock, so it freezes under pause/warp).
+   engine. Anything that needs a clock, a pose, or sensors lives in the consuming
+   layer that owns a context — e.g. the autopilot's `Wait` reads `DriveCtx.now`
+   (the mission clock, so it freezes under pause/warp).
 
 ---
 
@@ -103,7 +103,6 @@ autopilot compiles today.
 | `invert` | `child` | Swap `Success` ↔ `Failure` (`Running` passes through). Turn a condition into its negation. |
 | `force_success` | `child` | Map any terminal to `Success` — a best-effort step that must never fail its parent. |
 | `force_failure` | `child` | Map any terminal to `Failure` — force an abort. |
-| `timeout` | `seconds`, `child` | Abort with `Failure` (and brake) if the child stays `Running` past `seconds` of **mission time**. The watchdog. Lives in the autopilot because it needs the clock. |
 | `cooldown` | `seconds`, `child` | After the child `Success`es, block re-entry (`Failure`) for `seconds` of mission time — rate-limit a one-shot action so it can't re-fire every tick. |
 
 ### Navigation & action leaves (write the `throttle`/`steer`/`brake` setpoint)
@@ -167,15 +166,6 @@ fields when a stop needs no dwell or arrival actions.
     {"kind":"arrived","target":[14,0,8],"radius":2.0},
     {"kind":"brake"}]},
   {"kind":"drive_to","target":[14,0,8],"speed":0.5}]}
-```
-
-**Attempt a drive for 30 s, else fall back to a safe pose** — watchdog + fallback:
-
-```json
-{"kind":"selector","children":[
-  {"kind":"timeout","seconds":30,
-   "child":{"kind":"drive_to","target":[100,0,0]}},
-  {"kind":"brake"}]}
 ```
 
 **Aim, then go** — sequence a pivot with a drive:

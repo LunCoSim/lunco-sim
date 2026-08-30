@@ -423,7 +423,6 @@ impl<'a> Layout<'a> {
             | BehaviorSpec::ForceSuccess { child }
             | BehaviorSpec::ForceFailure { child }
             | BehaviorSpec::Retry { child, .. }
-            | BehaviorSpec::Timeout { child, .. }
             | BehaviorSpec::Cooldown { child, .. } => {
                 let child_id = self.visit(child, &format!("{path}/child"), depth + 1);
                 self.edge(id, child_id);
@@ -558,7 +557,6 @@ fn node_text(spec: &BehaviorSpec) -> (String, String, bool) {
         BehaviorSpec::ForceSuccess { .. } => ("Force success".into(), String::new(), true),
         BehaviorSpec::ForceFailure { .. } => ("Force failure".into(), String::new(), true),
         BehaviorSpec::Retry { times, .. } => ("Retry".into(), format!("{times} attempt(s)"), true),
-        BehaviorSpec::Timeout { seconds, .. } => ("Timeout".into(), format!("{seconds:.1}s"), true),
         BehaviorSpec::Follow {
             target,
             speed,

@@ -83,19 +83,6 @@ fn retry_with_float_times_survives() {
 }
 
 #[test]
-fn integer_seconds_canonicalises_to_float() {
-    roundtrip_to(
-        json!({"kind":"timeout","seconds":5,"child":{"kind":"hold"}}),
-        json!({"kind":"timeout","seconds":5.0,"child":{"kind":"hold"}}),
-    );
-}
-
-#[test]
-fn sub_millisecond_timeout_is_not_rounded_away() {
-    roundtrip(json!({"kind":"timeout","seconds":0.0004,"child":{"kind":"hold"}}));
-}
-
-#[test]
 fn cooldown_roundtrips() {
     roundtrip(json!({"kind":"cooldown","seconds":2.5,"child":{"kind":"brake"}}));
 }
@@ -144,8 +131,8 @@ fn all_control_and_decorator_kinds_roundtrip() {
                     {"kind":"succeed"}
                 ]},
                 {"kind":"parallel","require":"one","children":[
-                    {"kind":"timeout","seconds":5.0,"child":{"kind":"hold"}},
-                    {"kind":"cooldown","seconds":1.0,"child":{"kind":"brake"}}
+                    {"kind":"cooldown","seconds":1.0,"child":{"kind":"brake"}},
+                    {"kind":"hold"}
                 ]},
                 {"kind":"sequence","children":[
                     {"kind":"retry","times":3,"child":{"kind":"drive_to","target":[1.0,0.0,1.0],"speed":0.5,"radius":2.0}},

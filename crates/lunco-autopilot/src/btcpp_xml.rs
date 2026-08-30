@@ -143,7 +143,6 @@ static TABLE: &[KindMap] = &[
     deco("invert", "Inverter"),
     deco("force_success", "ForceSuccess"),
     deco("force_failure", "ForceFailure"),
-    deco("timeout", "Timeout"),
     // Cooldown has no BT.CPP-standard element; emit a custom decorator the reverse map
     // knows, so it still round-trips (Groot shows it as a custom node).
     deco("cooldown", "Cooldown"),
@@ -189,7 +188,6 @@ fn spec_kind(spec: &crate::BehaviorSpec) -> &'static str {
         B::Invert { .. } => "invert",
         B::ForceSuccess { .. } => "force_success",
         B::ForceFailure { .. } => "force_failure",
-        B::Timeout { .. } => "timeout",
         B::Cooldown { .. } => "cooldown",
         B::DriveTo { .. } => "drive_to",
         B::Patrol { .. } => "patrol",
@@ -288,10 +286,6 @@ fn write_known(
         "retry" => (
             vec![("num_attempts", whole_field(obj, "times", kind)?)],
             &["times"],
-        ),
-        "timeout" => (
-            vec![("msec", num_text(secs_field(obj, kind)? * 1000.0))],
-            &["seconds"],
         ),
         "cooldown" => (
             vec![("sec", num_text(secs_field(obj, kind)?))],
@@ -436,8 +430,7 @@ fn secs_field(obj: &Map<String, Value>, kind: &str) -> Result<f64, String> {
     }
 }
 
-/// Shortest lossless decimal: whole values as integers (BT.CPP expects `msec="500"`),
-/// fractional ones in full (so a 0.4 ms timeout is not rounded to zero).
+/// Shortest lossless decimal: whole values as integers, fractional ones in full.
 fn num_text(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 9e15 {
         (v as i64).to_string()
@@ -653,10 +646,6 @@ fn frame_to_value(
                 .unwrap_or(1);
             m.insert("times".into(), Value::from(n.max(0)));
         }
-        "timeout" => {
-            let secs = get("msec").and_then(msec_to_secs).unwrap_or(1.0);
-            m.insert("seconds".into(), Value::from(secs));
-        }
         "cooldown" => {
             let s: f64 = get("sec").and_then(|s| s.parse().ok()).unwrap_or(1.0);
             m.insert("seconds".into(), Value::from(s));
@@ -706,17 +695,6 @@ fn put_attrs(
         m.insert(k.clone(), value_from_attr(v));
     }
     Ok(())
-}
-
-/// Milliseconds text → seconds. Scaled in the DECIMAL domain (`"0.4"` → `"0.4e-3"`),
-/// not by dividing the parsed f64 — a multiply-then-divide double-rounds, and
-/// `seconds: 0.0004` would not come back bit-identical.
-fn msec_to_secs(text: &str) -> Option<f64> {
-    format!("{text}e-3")
-        .parse::<f64>()
-        .ok()
-        .or_else(|| text.parse::<f64>().ok().map(|ms| ms / 1000.0))
-        .filter(|s| s.is_finite())
 }
 
 /// Recover a JSON value from an attribute string: JSON if it parses as JSON (numbers,
@@ -849,10 +827,6 @@ mod tests {
             B::Invert { child: child() },
             B::ForceSuccess { child: child() },
             B::ForceFailure { child: child() },
-            B::Timeout {
-                seconds: 1.0,
-                child: child(),
-            },
             B::Cooldown {
                 seconds: 1.0,
                 child: child(),

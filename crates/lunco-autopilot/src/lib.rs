@@ -289,8 +289,8 @@ pub enum BehaviorSpec {
         children: Vec<BehaviorSpec>,
     },
     /// Tick every child each tick, resolving by `require` (all succeed / any
-    /// succeeds). Use for "do X while monitoring Y" — e.g. drive while a watchdog
-    /// condition races to abort.
+    /// succeeds). Use for "do X while monitoring Y" — e.g. drive while a condition
+    /// races to stop it.
     Parallel {
         /// `all` (default) = succeed when all children succeed, fail on any failure;
         /// `one` = succeed as soon as any child succeeds.
@@ -425,16 +425,6 @@ pub enum BehaviorSpec {
     Retry {
         /// Number of failures tolerated before the retry itself fails.
         times: usize,
-        /// The wrapped subtree.
-        child: Box<BehaviorSpec>,
-    },
-    /// Run the child but abort with `Failure` if it stays `Running` longer than
-    /// `seconds` of mission time (a child terminal before then passes through). The
-    /// watchdog for "attempt X for N seconds, else fall back". On timeout it brakes.
-    Timeout {
-        /// Mission-time budget in seconds.
-        #[serde(default = "default_wait")]
-        seconds: f64,
         /// The wrapped subtree.
         child: Box<BehaviorSpec>,
     },
@@ -620,7 +610,6 @@ impl BehaviorSpec {
             | Self::ForceSuccess { child }
             | Self::ForceFailure { child }
             | Self::Retry { child, .. }
-            | Self::Timeout { child, .. }
             | Self::Cooldown { child, .. } => child.has_motion(),
             Self::Arrived { .. }
             | Self::Wait { .. }
@@ -671,7 +660,6 @@ impl BehaviorSpec {
             | Self::ForceSuccess { child }
             | Self::ForceFailure { child }
             | Self::Retry { child, .. }
-            | Self::Timeout { child, .. }
             | Self::Cooldown { child, .. } => child.tracked_targets(out),
             // Position-targeted / sensor / setpoint leaves: no gid tracking.
             Self::DriveTo { .. }
@@ -738,9 +726,6 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::ForceSuccess { child } => Box::new(Force::succeed(build_tree(child))),
         BehaviorSpec::ForceFailure { child } => Box::new(Force::fail(build_tree(child))),
         BehaviorSpec::Retry { times, child } => Box::new(Retry::times(*times, build_tree(child))),
-        BehaviorSpec::Timeout { seconds, child } => {
-            Box::new(TimeoutNode::new(*seconds, build_tree(child)))
-        }
         BehaviorSpec::Follow {
             target,
             speed,
@@ -1256,52 +1241,6 @@ impl Node<DriveCtx> for RunToolNode {
 
     fn reset(&mut self) {
         self.fired = false;
-    }
-}
-
-/// Decorator: run `child`, but abort with `Failure` if it stays `Running` past
-/// `seconds` of **mission time** (a child terminal before then passes straight
-/// through). The clock is [`DriveCtx::now`], so — like [`WaitNode`] — the budget
-/// freezes under pause/warp. This is a *domain* decorator (it needs the context's
-/// clock, and it brakes on timeout), so it lives here, not in the clock-free kernel.
-pub struct TimeoutNode {
-    seconds: f64,
-    child: BoxNode<DriveCtx>,
-    /// Mission-time instant to abort at; `None` until the first tick latches it.
-    deadline: Option<f64>,
-}
-
-impl TimeoutNode {
-    /// A watchdog that fails `child` if it runs longer than `seconds` of mission time.
-    pub fn new(seconds: f64, child: BoxNode<DriveCtx>) -> Self {
-        Self {
-            seconds,
-            child,
-            deadline: None,
-        }
-    }
-}
-
-impl Node<DriveCtx> for TimeoutNode {
-    fn tick(&mut self, ctx: &mut DriveCtx) -> Status {
-        let deadline = *self.deadline.get_or_insert(ctx.now + self.seconds);
-        if ctx.now >= deadline {
-            self.reset();
-            ctx.out = (0.0, 0.0, 1.0); // timed out → brake instead of the last command
-            return Status::Failure;
-        }
-        match self.child.tick(ctx) {
-            Status::Running => Status::Running,
-            terminal => {
-                self.reset();
-                terminal
-            }
-        }
-    }
-
-    fn reset(&mut self) {
-        self.deadline = None;
-        self.child.reset();
     }
 }
 

@@ -803,22 +803,9 @@ fn execute_request(
             //
             // The visibility, type, and validation gates above deliberately run first. A
             // hidden command cannot bypass its visibility policy, malformed input is rejected
-            // synchronously, and an absent event registration cannot be parked until a
-            // watchdog timeout.
+            // synchronously, and an absent event registration cannot be parked as deferred work.
             if deferred_commands.is_some_and(|d| d.contains(command)) {
                 commands.insert_resource(PendingApiRequest { correlation_id });
-                // Arm the watchdog BEFORE dispatching: if the handler forgets to answer (or
-                // dies trying), the caller gets a clear error instead of hanging forever.
-                commands.queue(move |world: &mut World| {
-                    let now = world
-                        .get_resource::<Time<bevy::time::Real>>()
-                        .map(|t| t.elapsed_secs_f64())
-                        .unwrap_or(0.0);
-                    if let Some(mut deferred) = world.get_resource_mut::<DeferredRequests>() {
-                        let deadline = now + deferred.timeout_secs;
-                        deferred.outstanding.insert(correlation_id, deadline);
-                    }
-                });
                 commands.trigger(ApiCommandEvent {
                     command: command.clone(),
                     params: params.clone(),
@@ -945,95 +932,6 @@ impl DeferredCommands {
     }
 }
 
-/// **The watchdog.** Every deferred response the executor is still waiting for, and when it
-/// gives up.
-///
-/// A deferred command owes the caller exactly one [`ApiResponseEvent`] on its correlation id.
-/// If it never sends one — a handler that forgot, a capture that never landed, a task that
-/// panicked — the caller does not get an error. It gets **nothing**: the HTTP oneshot is
-/// never resolved and the request hangs until some client-side timeout, with no trace in the
-/// log. That is the worst failure mode available, and "the handler must remember" is not a
-/// mechanism — it is a hope.
-///
-/// So the executor holds itself accountable: it records what it deferred, and if no answer
-/// arrives inside [`timeout_secs`](Self::timeout_secs) it sends the error itself. A slow
-/// handler degrades to a clear 500 instead of a silent hang.
-///
-/// This bit *immediately*: making deferral generic moved `save_to_file` screenshots onto this
-/// path, and that branch answers early and never sends a second response — so the first thing
-/// the watchdog caught was a real hang, in a command that had worked for months.
-#[derive(Resource, Debug)]
-pub struct DeferredRequests {
-    /// correlation_id → deadline, in `Time<Real>` seconds. REAL time, deliberately: a paused
-    /// or warped simulation must not change when an HTTP caller gives up.
-    outstanding: std::collections::HashMap<u64, f64>,
-    /// How long a deferred command may take. Generous — a GPU readback is a frame, but a bake
-    /// or an export could be seconds — while still bounded.
-    pub timeout_secs: f64,
-}
-
-impl Default for DeferredRequests {
-    fn default() -> Self {
-        Self {
-            outstanding: std::collections::HashMap::new(),
-            timeout_secs: 15.0,
-        }
-    }
-}
-
-impl DeferredRequests {
-    /// Number of responses still owed (tests / diagnostics).
-    pub fn outstanding(&self) -> usize {
-        self.outstanding.len()
-    }
-}
-
-/// Any response — from a deferred command, a query provider, or an ordinary reply — settles
-/// the debt for its correlation id.
-fn clear_answered_request(
-    trigger: On<ApiResponseEvent>,
-    deferred: Option<ResMut<DeferredRequests>>,
-) {
-    if let Some(mut deferred) = deferred {
-        deferred.outstanding.remove(&trigger.event().correlation_id);
-    }
-}
-
-/// Nobody answered in time — answer for them, so the caller gets an error instead of silence.
-fn expire_deferred_requests(
-    time: Res<Time<bevy::time::Real>>,
-    mut deferred: ResMut<DeferredRequests>,
-    mut commands: Commands,
-) {
-    if deferred.outstanding.is_empty() {
-        return;
-    }
-    let now = time.elapsed_secs_f64();
-    let expired: Vec<u64> = deferred
-        .outstanding
-        .iter()
-        .filter(|(_, &deadline)| now >= deadline)
-        .map(|(&id, _)| id)
-        .collect();
-
-    for correlation_id in expired {
-        deferred.outstanding.remove(&correlation_id);
-        error!(
-            "[lunco-api] a deferred command never answered request {correlation_id} within {}s \
-             — returning an error. The handler must send exactly one ApiResponseEvent on its \
-             correlation id; see DeferredRequests.",
-            deferred.timeout_secs
-        );
-        commands.trigger(ApiResponseEvent {
-            correlation_id,
-            response: ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "the command accepted this request but never produced a response",
-            ),
-        });
-    }
-}
-
 /// The correlation id of the request a deferred command is currently answering.
 ///
 /// Set by the executor immediately before it dispatches the command; read by the handler
@@ -1095,15 +993,10 @@ impl Plugin for ApiExecutorPlugin {
             .add_observer(api_request_observer)
             .add_observer(api_command_dispatcher);
 
-        // Deferred-command plumbing. WHICH commands are deferred is not decided here — a
-        // crate that owns one calls `register_deferred_command::<T>()`.
+        // Deferred-command plumbing. Which commands are deferred is not decided here — a crate
+        // that owns one calls `register_deferred_command::<T>()`.
         app.init_resource::<DeferredCommands>()
-            .init_resource::<PendingApiRequest>()
-            // The watchdog: a deferred response that never arrives becomes an error, not a
-            // hang. See `DeferredRequests`.
-            .init_resource::<DeferredRequests>()
-            .add_observer(clear_answered_request)
-            .add_systems(Update, expire_deferred_requests);
+            .init_resource::<PendingApiRequest>();
     }
 }
 
@@ -1113,109 +1006,6 @@ mod tests {
     use lunco_core::{
         on_command, Ack, ActiveCommandId, Command, CommandOutcome, CommandResults, OpId,
     };
-
-    /// THE WATCHDOG. A deferred command that never answers must produce an ERROR, not
-    /// silence. Before this, a handler that forgot to send its `ApiResponseEvent` left the
-    /// HTTP oneshot unresolved: the caller hung until a client-side timeout, and nothing was
-    /// logged anywhere. "The handler must remember" is a hope, not a mechanism.
-    #[test]
-    fn a_deferred_command_that_never_answers_becomes_an_error() {
-        use bevy::time::TimeUpdateStrategy;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-
-        let mut app = App::new();
-        app.add_plugins(bevy::time::TimePlugin);
-        app.init_resource::<DeferredRequests>();
-        app.add_observer(clear_answered_request);
-        app.add_systems(Update, expire_deferred_requests);
-        // 5 s of real time per update — well past the default 15 s deadline in a few ticks.
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(5)));
-
-        // (correlation_id, is_error) — `ApiResponseEvent` isn't `Clone`.
-        let seen: Arc<Mutex<Vec<(u64, bool)>>> = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&seen);
-        app.add_observer(move |t: On<ApiResponseEvent>| {
-            let e = t.event();
-            sink.lock().unwrap().push((
-                e.correlation_id,
-                matches!(e.response, ApiResponse::Error { .. }),
-            ));
-        });
-
-        // A command deferred at t=0 that nobody ever answers.
-        app.world_mut()
-            .resource_mut::<DeferredRequests>()
-            .outstanding
-            .insert(7, 15.0);
-        assert_eq!(app.world().resource::<DeferredRequests>().outstanding(), 1);
-
-        for _ in 0..5 {
-            app.update();
-        }
-
-        let seen = seen.lock().unwrap();
-        let (_, is_error) = *seen
-            .iter()
-            .find(|(id, _)| *id == 7)
-            .expect("the caller must get AN answer");
-        assert!(
-            is_error,
-            "an unanswered deferred command must surface as an error, not a hang"
-        );
-        assert_eq!(
-            app.world().resource::<DeferredRequests>().outstanding(),
-            0,
-            "the expired request must be dropped, not re-fired every frame"
-        );
-    }
-
-    /// …and a command that DOES answer must not then be second-guessed by the watchdog.
-    #[test]
-    fn an_answered_request_is_not_timed_out() {
-        use bevy::time::TimeUpdateStrategy;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-
-        let mut app = App::new();
-        app.add_plugins(bevy::time::TimePlugin);
-        app.init_resource::<DeferredRequests>();
-        app.add_observer(clear_answered_request);
-        app.add_systems(Update, expire_deferred_requests);
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(5)));
-
-        let count: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-        let sink = Arc::clone(&count);
-        app.add_observer(move |t: On<ApiResponseEvent>| {
-            if t.event().correlation_id == 9 {
-                *sink.lock().unwrap() += 1;
-            }
-        });
-
-        app.world_mut()
-            .resource_mut::<DeferredRequests>()
-            .outstanding
-            .insert(9, 15.0);
-
-        // The handler answers, promptly.
-        app.world_mut().trigger(ApiResponseEvent {
-            correlation_id: 9,
-            response: ApiResponse::ok(serde_json::json!({ "ok": true })),
-        });
-        app.update();
-        assert_eq!(app.world().resource::<DeferredRequests>().outstanding(), 0);
-
-        // Long past the deadline — the watchdog must stay quiet. A SECOND response on the same
-        // id would resolve the caller's oneshot twice.
-        for _ in 0..5 {
-            app.update();
-        }
-        assert_eq!(
-            *count.lock().unwrap(),
-            1,
-            "exactly one response per request"
-        );
-    }
 
     #[test]
     fn internal_command_id_generation() {
