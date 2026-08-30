@@ -5,10 +5,11 @@
 //! **modal popup** (not a dock panel) so it reads as a transient "what
 //! can I do here" overlay rather than another tab to manage.
 //!
-//! The Help menu gets **one entry per registered perspective**
+//! The Help menu gets **one entry per visible perspective**
 //! (`📖 <Perspective> Help`); each opens a popup showing just that
-//! perspective's controls. Closed with Esc or by clicking the dimmed
-//! backdrop.
+//! perspective's controls. The perspective switcher owns the labels and
+//! visibility, so Help cannot drift from the top-right navigation. Closed
+//! with Esc or by clicking the dimmed backdrop.
 
 pub(crate) use crate::{PerspectiveId, WorkbenchLayout};
 use bevy::prelude::*;
@@ -65,8 +66,6 @@ impl LiveHelpSections {
 /// Human-authored help content for a Perspective.
 #[derive(Debug, Clone, Default)]
 pub struct PerspectiveHelp {
-    /// Human-readable title of the perspective.
-    pub title: &'static str,
     /// One-paragraph summary of what this perspective is for.
     pub description: &'static str,
     /// Primary keyboard shortcuts.
@@ -129,17 +128,28 @@ impl Plugin for PerspectiveHelpPlugin {
 /// [`WorkbenchAppExt::register_perspective_help`](crate::WorkbenchAppExt)
 /// so each subsystem contributes its *own* menu item at the point it
 /// registers its perspective — the workbench never hardcodes a list.
+pub(crate) fn visible_perspective_title(
+    layout: &WorkbenchLayout,
+    id: PerspectiveId,
+) -> Option<String> {
+    layout
+        .perspectives
+        .iter()
+        .find(|perspective| perspective.id() == id && perspective.show_in_switcher())
+        .map(|perspective| perspective.title())
+}
+
 pub(crate) fn register_help_menu_item(layout: &mut WorkbenchLayout, id: PerspectiveId) {
+    let Some(title) = visible_perspective_title(layout, id) else {
+        return;
+    };
     layout.register_help_menu(move |ui, ctx| {
-        let label = ctx
+        let available = ctx
             .resource::<PerspectiveHelpRegistry>()
-            .and_then(|registry| registry.get(id))
-            .map(|h| format!("{} Help", h.title));
-        if let Some(label) = label {
-            if ui.button(label).clicked() {
-                ctx.set_resource(HelpPopup(Some(id)));
-                ui.close();
-            }
+            .is_some_and(|registry| registry.get(id).is_some());
+        if available && ui.button(format!("{title} Help")).clicked() {
+            ctx.set_resource(HelpPopup(Some(id)));
+            ui.close();
         }
     });
 }
@@ -167,6 +177,7 @@ fn render_help_popup(
     mut popup: ResMut<HelpPopup>,
     mut tour_req: ResMut<HelpTourRequest>,
     registry: Res<PerspectiveHelpRegistry>,
+    layout: Res<WorkbenchLayout>,
     live_sections: Res<LiveHelpSections>,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
@@ -177,6 +188,10 @@ fn render_help_popup(
         return;
     };
     let Some(help) = registry.get(id) else {
+        popup.0 = None;
+        return;
+    };
+    let Some(title) = visible_perspective_title(&layout, id) else {
         popup.0 = None;
         return;
     };
@@ -228,7 +243,7 @@ fn render_help_popup(
                 .show(ui, |ui| {
                     // Header — title + close button on the same row.
                     ui.horizontal(|ui| {
-                        ui.heading(egui::RichText::new(help.title).color(text));
+                        ui.heading(egui::RichText::new(title.as_str()).color(text));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::icon_button(ui, crate::UiIcon::Close, "Close (Esc)").clicked()
                             {
