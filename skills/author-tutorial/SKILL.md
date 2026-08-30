@@ -98,6 +98,12 @@ That's it. `StartTutorial{id}` mounts the declared world, then loads the script 
 it. The 🎓 Tutorials panel and the host's configured tutorial entry point launch
 the same command.
 
+`RestartScene` is a full scene transaction. The shared launcher stops the
+active host and clears its HUD before teardown, then reattaches the same
+resolved lesson source after the restart completion edge. A failed restart
+abandons the lesson visibly; authored tutorials must not add a second loader or
+polling-based recovery path.
+
 ## Two kinds of lesson
 
 - **Coach-mark tour** (narrated slideshow) — `coach_step(steps, i)` (or

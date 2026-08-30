@@ -504,7 +504,9 @@ struct PendingTutorial {
     /// ordinary `LoadScene` intentionally no-ops for an already-mounted
     /// identity.
     clear_before_load: bool,
-    elapsed_secs: f32,
+    /// A restart reuses the active lesson's resolved source after the scene
+    /// owner publishes its completion edge instead of loading another world.
+    restart: bool,
 }
 
 /// The visible lesson world's ownership claim. A declared world remains owned
@@ -515,6 +517,8 @@ struct PendingTutorial {
 #[derive(Resource, Default)]
 struct TutorialSession {
     world: Option<String>,
+    /// Resolved source for the active host, reused when its scene restarts.
+    source: Option<String>,
 }
 
 /// A completed tutorial is waiting on the user's confirmation before starting its
@@ -652,13 +656,16 @@ fn start_tutorial_scenario(
         }
     }
     info!("[tutorial] starting '{}'", id);
+    let session_source = source.clone();
     world.trigger(lunco_scripting::commands::RunScenario {
         target: host,
         source,
         params: String::new(),
     });
     world.resource_mut::<TutorialProgress>().current = Some(id);
-    world.resource_mut::<TutorialSession>().world = world_path;
+    let mut session = world.resource_mut::<TutorialSession>();
+    session.world = world_path;
+    session.source = Some(session_source);
     if is_first_start {
         // Mark first-run onboarding only after the scene transaction (if any)
         // reached this point and the canonical launcher actually attached the
@@ -789,7 +796,9 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
         world.resource_mut::<TutorialProgress>().current = None;
-        world.resource_mut::<TutorialSession>().world = None;
+        let mut session = world.resource_mut::<TutorialSession>();
+        session.world = None;
+        session.source = None;
         world.resource_mut::<PendingTutorialStart>().0 = None;
 
         if let Some(scene) = meta.world.clone() {
@@ -800,7 +809,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 source,
                 world: Some(scene.clone()),
                 clear_before_load,
-                elapsed_secs: 0.0,
+                restart: false,
             });
             if clear_before_load {
                 // Keep LoadScene's same-stage no-op correct for ordinary scene
@@ -816,7 +825,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 source,
                 world: None,
                 clear_before_load: true,
-                elapsed_secs: 0.0,
+                restart: false,
             });
             world.trigger(lunco_core::SceneTransitionIntent::clear());
         } else {
@@ -842,7 +851,9 @@ fn on_skip_tutorial(_t: On<SkipTutorial>, mut commands: Commands) {
         world.resource_mut::<TutorialProgress>().current = None;
         world.resource_mut::<PendingAdvance>().0 = None;
         world.resource_mut::<PendingTutorialStart>().0 = None;
-        world.resource_mut::<TutorialSession>().world = None;
+        let mut session = world.resource_mut::<TutorialSession>();
+        session.world = None;
+        session.source = None;
         if clear_world {
             // A tutorial that declared a world owns that world. Stopping it
             // therefore winds the viewport down through the normal scene
@@ -1001,6 +1012,7 @@ fn on_mission_complete(
         #[cfg(feature = "ui")]
         clear_tutorial_presentation(world);
         stop_tutorial_host(world);
+        world.resource_mut::<TutorialSession>().source = None;
     });
     if !progress.is_completed(&id) {
         info!("[tutorial] completed '{id}'");
@@ -1019,9 +1031,9 @@ fn on_mission_complete(
     }
 }
 
-/// Wind down an active lesson before any scene transition is applied. The
-/// lifecycle owner emits this edge for Load, Clear, and Restart, so every
-/// scene entry path has identical tutorial cleanup semantics.
+/// Wind down an active lesson before any scene transition is applied. Restart
+/// additionally stages the already-resolved lesson source so the completion
+/// edge can attach the same authored host to the rebuilt scene.
 fn on_scene_transition_started(
     trigger: On<lunco_core::SceneTransitionStarted>,
     mut progress: ResMut<TutorialProgress>,
@@ -1029,6 +1041,34 @@ fn on_scene_transition_started(
     mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
+    let restart_request = if matches!(
+        &trigger.event().transition,
+        lunco_core::SceneTransition::Restart { .. }
+    ) {
+        match (
+            progress.current.clone(),
+            session.source.clone(),
+            session.world.clone(),
+        ) {
+            (Some(id), Some(source), world) => Some(PendingTutorial {
+                id,
+                source,
+                world,
+                clear_before_load: false,
+                restart: true,
+            }),
+            (Some(id), None, _) => {
+                commands.trigger(tutorial_failed(format!(
+                    "tutorial '{}' has no resolved source to reattach after restart",
+                    id
+                )));
+                None
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let is_pending_clear = matches!(
         &trigger.event().transition,
         lunco_core::SceneTransition::Clear
@@ -1044,7 +1084,9 @@ fn on_scene_transition_started(
             .is_some_and(|world| world == path.as_str()),
         lunco_core::SceneTransition::Clear | lunco_core::SceneTransition::Restart { .. } => false,
     };
-    if !belongs_to_pending && !is_pending_clear {
+    if let Some(request) = restart_request {
+        pending.0 = Some(request);
+    } else if !belongs_to_pending && !is_pending_clear {
         pending.0 = None;
     }
     if progress.current.is_none() && session.world.is_none() {
@@ -1052,6 +1094,7 @@ fn on_scene_transition_started(
     }
     progress.current = None;
     session.world = None;
+    session.source = None;
     commands.queue(|world: &mut World| {
         #[cfg(feature = "ui")]
         clear_tutorial_presentation(world);
@@ -1078,6 +1121,7 @@ fn on_active_twin_closed(
     progress.current = None;
     pending.0 = None;
     session.world = None;
+    session.source = None;
     pending_advance.0 = None;
     commands.queue(|world: &mut World| {
         #[cfg(feature = "ui")]
@@ -1114,7 +1158,6 @@ fn on_scene_transition_completed(
                             return;
                         }
                         request.clear_before_load = false;
-                        request.elapsed_secs = 0.0;
                         true
                     };
                     if !should_start {
@@ -1141,7 +1184,6 @@ fn on_scene_transition_completed(
                         return;
                     }
                     request.clear_before_load = false;
-                    request.elapsed_secs = 0.0;
                     true
                 };
                 if !should_load {
@@ -1163,42 +1205,19 @@ fn on_scene_transition_completed(
                 start_tutorial_scenario(world, request.id, request.source, request.world);
             });
         }
-        lunco_core::SceneTransition::Restart { .. } => {}
+        lunco_core::SceneTransition::Restart { .. } => {
+            commands.queue(|world: &mut World| {
+                let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
+                    return;
+                };
+                if !request.restart {
+                    world.resource_mut::<PendingTutorialStart>().0 = Some(request);
+                    return;
+                }
+                start_tutorial_scenario(world, request.id, request.source, request.world);
+            });
+        }
     }
-}
-
-/// Fail a tutorial mount that never publishes a scene-completed/scene-failed
-/// lifecycle edge. This protects the progress state from a lost event or a
-/// loader that wedges after accepting a transition intent.
-fn pending_tutorial_watchdog(
-    time: Res<Time>,
-    mut pending: ResMut<PendingTutorialStart>,
-    mut progress: ResMut<TutorialProgress>,
-    mut pending_advance: ResMut<PendingAdvance>,
-    mut session: ResMut<TutorialSession>,
-    mut commands: Commands,
-) {
-    const MOUNT_TIMEOUT_SECS: f32 = 30.0;
-    let Some(request) = pending.0.as_mut() else {
-        return;
-    };
-    request.elapsed_secs += time.delta_secs();
-    if request.elapsed_secs < MOUNT_TIMEOUT_SECS {
-        return;
-    }
-    let request = pending.0.take().expect("pending tutorial request exists");
-    progress.current = None;
-    pending_advance.0 = None;
-    session.world = None;
-    commands.queue(|world: &mut World| {
-        #[cfg(feature = "ui")]
-        clear_tutorial_presentation(world);
-        stop_tutorial_host(world);
-    });
-    commands.trigger(tutorial_failed(format!(
-        "abandoning '{}' — scene {:?} did not complete within {MOUNT_TIMEOUT_SECS:.0}s",
-        request.id, request.world
-    )));
 }
 
 /// Abandon the running lesson when a scene load fails, so it cannot go on to
@@ -1231,6 +1250,29 @@ fn on_scene_transition_failed(
     mut session: ResMut<TutorialSession>,
     mut commands: Commands,
 ) {
+    if matches!(
+        &trigger.event().transition,
+        lunco_core::SceneTransition::Restart { .. }
+    ) {
+        if let Some(request) = pending_start.0.take().filter(|request| request.restart) {
+            pending_advance.0 = None;
+            progress.current = None;
+            session.world = None;
+            session.source = None;
+            let id = request.id.clone();
+            commands.queue(|world: &mut World| {
+                #[cfg(feature = "ui")]
+                clear_tutorial_presentation(world);
+                stop_tutorial_host(world);
+            });
+            commands.trigger(tutorial_failed(format!(
+                "abandoning '{}' — its scene restart failed ({:?})",
+                id,
+                trigger.event().error
+            )));
+            return;
+        }
+    }
     let path = match &trigger.event().transition {
         lunco_core::SceneTransition::Load { path, .. }
         | lunco_core::SceneTransition::Restart { path, .. } => Some(path.as_str()),
@@ -1254,6 +1296,7 @@ fn on_scene_transition_failed(
             .expect("pending clear request exists");
         pending_advance.0 = None;
         session.world = None;
+        session.source = None;
         commands.queue(|world: &mut World| {
             #[cfg(feature = "ui")]
             clear_tutorial_presentation(world);
@@ -1286,6 +1329,7 @@ fn on_scene_transition_failed(
     };
     pending_advance.0 = None;
     session.world = None;
+    session.source = None;
     commands.queue(|world: &mut World| {
         #[cfg(feature = "ui")]
         clear_tutorial_presentation(world);
@@ -1909,7 +1953,6 @@ impl Plugin for TutorialCorePlugin {
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
         app.add_systems(Update, boot_seam);
-        app.add_systems(Update, pending_tutorial_watchdog);
     }
 }
 
