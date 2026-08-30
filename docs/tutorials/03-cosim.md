@@ -68,9 +68,9 @@ the prim removes it. It does **not** drive the lander — it only reacts, which 
 right shape for cosim orchestration:
 
 The child is the authored attachment point, while the runtime passes the owning
-vessel as `me`. That is why the supervisor resolves `/GNC` from `name(me)`; walking
-to `parent(me)` would address the scene above the vessel and lose the typed latch
-handoff.
+vessel as `me`. The supervisor resolves `/GNC` from `usd_path(me)`, the canonical
+USD topology address; walking to `parent(me)` would address the scene above the
+vessel and lose the typed latch handoff. `name(me)` is only a presentation label.
 
 ```rhai
 fn on_event(me, evt) {

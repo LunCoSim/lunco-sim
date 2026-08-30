@@ -96,6 +96,8 @@ model PositionPID3D
     "Touchdown state; guidance is removed as the vehicle settles on its legs";
   input Real landing_contact = 0.0
     "Physical four-leg contact; remove flight authority before settled touchdown";
+  input Real any_leg_contact = 0.0
+    "Native contact on at least one landing leg; starts a missed-target recovery";
   input Real engine_cutoff_contact = 0.0
     "Qualified low-speed pad contact; close propulsion before the gear absorbs touchdown";
   input Real landing_zone_radius_m = 4.0
@@ -308,13 +310,13 @@ equation
   // The later four-pad handoff records that the passive gear has settled.
   lateral_landing_gate = max(0.0, min(1.0,
     1.0 - max(landing_handoff, landing_engine_cutoff)));
-  // A vehicle that has physically settled outside the final target must command
-  // a real go-around. A low-speed pad contact is already the physical phase
-  // transition that authorizes recovery; waiting for the final quiet four-pad
-  // state is circular because hover thrust unloads the gear and
-  // prevents that state from ever becoming true.
+  // A vehicle that has physically touched down outside the final target must
+  // command a real go-around. Use the first native leg contact as the recovery
+  // phase boundary; waiting for quiet four-pad contact is circular because the
+  // hover thrust and attitude correction keep the vehicle loaded but never
+  // allow the final handoff predicate to become true away from the target.
   contact_recovery_gate = max(0.0, min(1.0,
-    max(engine_cutoff_contact, max(touchdown, landing_contact))));
+    max(any_leg_contact, max(engine_cutoff_contact, max(touchdown, landing_contact)))));
   missed_target_recovery_gate = max(0.0, min(1.0,
     (1.0 - landing_engine_cutoff)
       * (1.0 - landing_handoff_position_gate) * contact_recovery_gate));
@@ -322,12 +324,18 @@ equation
   recovery_vertical_command = missed_target_recovery_gate * 2.5 * g;
   // Target-qualified low-speed pad contact requests engine cutoff so the
   // event supervisor can transfer the vehicle's weight into the shock
-  // absorbers. The event boundary is kept separate from the airframe's own
-  // native contact cutoff, which prevents a feedback loop through the solver.
+  // absorbers. The strict first-pad predicate is preferred, while the already
+  // quiet four-pad predicate is an equivalent physical qualification: it
+  // closes the solver-exchange race where handoff consumes the short-lived
+  // first-pad sample. Neither path can request cutoff without native contact
+  // or the final target-position gate.
   landing_engine_cutoff_request = max(0.0, min(1.0,
     (landing_handoff_position_gate - 0.5 + predicate_band) / predicate_band))
-    * max(0.0, min(1.0,
-      (engine_cutoff_contact - 0.5 + predicate_band) / predicate_band));
+    * max(
+      max(0.0, min(1.0,
+        (engine_cutoff_contact - 0.5 + predicate_band) / predicate_band)),
+      max(0.0, min(1.0,
+        (landing_contact - 0.5 + predicate_band) / predicate_band)));
   landing_engine_cutoff = max(0.0, min(1.0, landing_engine_cutoff_latched));
   target_contact_engine_gate = 1.0 - max(
     max(0.0, min(1.0, (landing_handoff - 0.5 + predicate_band) / predicate_band)),

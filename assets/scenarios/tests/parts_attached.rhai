@@ -51,8 +51,8 @@
 // stiffer spring can flip the verdict.
 const TOL_M = 0.5;
 
-/// Every ECS descendant of `root`, as `#{ id, label }`. `name()` already yields
-/// the full prim path, so the label needs no joining. Iterative rather than
+/// Every ECS descendant of `root`, as `#{ id, label }`. `name()` yields the
+/// presentation label; topology traversal uses the entity ids directly. Iterative rather than
 /// recursive, with a hard visit cap: a hierarchy cycle in a broken scene must
 /// fail this test, not hang the sim.
 fn descendants(root) {

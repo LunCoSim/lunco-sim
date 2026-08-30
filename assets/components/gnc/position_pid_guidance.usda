@@ -57,6 +57,7 @@ def Xform "PositionPIDGuidance" (
         float inputs:piloted = 0.0
         float inputs:touchdown = 0.0
         float inputs:landing_contact = 0.0
+        float inputs:any_leg_contact = 0.0
         float inputs:engine_cutoff_contact = 0.0
 
         # Mission-initialized navigation state. These are authored once at the

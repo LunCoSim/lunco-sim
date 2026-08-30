@@ -138,6 +138,8 @@ model Lander
   output Real torque_z "Requested body torque about Z (N.m)";
   output Real landing_contact
     "Loaded, quiet native four-leg contact ready for flight-control handoff";
+  output Real any_leg_contact
+    "Native contact on at least one landing leg";
   output Real engine_cutoff_contact
     "Low-speed native pad contact used to stop adding propulsion energy";
   output Real touchdown
@@ -171,7 +173,6 @@ model Lander
   Real hold_rate_y;
   Real hold_rate_z;
   Real all_legs_contact;
-  Real any_leg_contact;
   Real pad_contact_phase;
   Real upright_contact_gate;
   Real attitude_authority;
@@ -287,13 +288,13 @@ equation
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
   // Main-engine cutoff and flight-control handoff are separate phases. A
-  // qualified pad-contact cutoff closes every propulsion valve. Before that
-  // event, the first low-speed contact removes the attitude target term but
-  // retains measured-rate damping: RCS may arrest residual rotation, but it
-  // cannot lean a grounded vehicle. Cutoff is accepted only after that rate is
-  // quiet, so no residual yaw is frozen into the passive landing phase.
-  attitude_authority = attitude_hold * max(0.0, min(1.0,
-    1.0 - max(landing_handoff, propulsion_cutoff)));
+  // qualified pad-contact cutoff closes every propulsion valve. The first
+  // low-speed contact removes the attitude target term but retains measured
+  // rate damping: RCS may arrest residual rotation, but it cannot lean a
+  // grounded vehicle. Keep that damping through cutoff, handoff, and settled
+  // touchdown; after contact the position-authority gate removes the attitude
+  // target term, so this is only passive rate damping and cannot reopen thrust.
+  attitude_authority = attitude_hold;
   attitude_position_authority = max(0.0, min(1.0,
     1.0 - max(propulsion_cutoff, pad_contact_phase)));
   // Bound the requested torque at the controller/actuator boundary. Without

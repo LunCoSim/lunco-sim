@@ -17,7 +17,8 @@
 //   list_entities() -> [#{id,name,type,pos,catalog_id,input_surface,...}]  (catalog_id is authored identity)
 //   find(name) -> id              lookup: id of the entity named `name` (-1 if none)
 //   find_catalog(id) -> id        lookup: first entity spawned from catalog id, or -1
-//   name(id) -> string            lookup: reverse of find — id back to its Name, or ()
+//   name(id) -> string            presentation label for an entity, or ()
+//   usd_path(id) -> string        canonical USD path from QueryEntity, or ()
 //   parent(id) -> id              tree:   parent's id, or () if none/unregistered
 //   children(id) -> [id, ...]     tree:   ids of direct registered children
 //   sim_tick() -> i64             time:  current fixed tick (integer)
@@ -29,3 +30,17 @@
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled
 // into core. Add helpers freely — no Rust rebuild required.
+
+/// Resolve an entity's canonical USD topology address.
+///
+/// `name(id)` is deliberately a presentation label and may come from a
+/// display-name override. Topology composition must use the identity returned
+/// by the existing QueryEntity provider instead of reconstructing a path from
+/// UI text.
+fn usd_path(id) {
+    let entity = query("QueryEntity", #{ id: id });
+    if entity == () || entity.usd_prim_path == () || entity.usd_prim_path == "" {
+        return ();
+    }
+    entity.usd_prim_path
+}

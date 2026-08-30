@@ -25,10 +25,12 @@ fn top_of(entity, half_height) {
 }
 
 fn support_measurements(antenna) {
-    let mast = find(name(antenna) + "/Mast");
-    let yaw = find(name(antenna) + "/YawHead");
-    let yoke = find(name(antenna) + "/YawHead/DishGimbal/DishYoke");
-    let dish = find(name(antenna) + "/YawHead/DishGimbal/DishHead");
+    let path = usd_path(antenna);
+    if path == () { return #{}; }
+    let mast = find(path + "/Mast");
+    let yaw = find(path + "/YawHead");
+    let yoke = find(path + "/YawHead/DishGimbal/DishYoke");
+    let dish = find(path + "/YawHead/DishGimbal/DishHead");
 
     let mast_top = top_of(mast, 0.25);
     let yaw_pos = world_pos(yaw);

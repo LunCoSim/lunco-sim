@@ -171,6 +171,10 @@ def Xform "LanderTest" (
             # steering against the legs while its low-speed touchdown filter
             # finishes and emits the mission event.
             float inputs:landing_contact.connect = </LanderTest/Lander.outputs:landing_contact>
+            # A missed-target recovery starts at the first native leg contact;
+            # waiting for quiet four-pad contact would leave a landed vehicle
+            # stuck against the surface before the qualified handoff can occur.
+            float inputs:any_leg_contact.connect = </LanderTest/Lander.outputs:any_leg_contact>
 
             # The estimator starts from these mission-authored initial conditions;
             # after initialization it propagates from IMU and altimeter telemetry.

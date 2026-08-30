@@ -23,9 +23,9 @@
 fn own_gnc(me) {
     // `me` is the vessel owner selected by the LunCoProgramAPI binding, even
     // though the source prim is the vessel's `Subsystems` child.
-    let lander_name = name(me);
-    if lander_name == () { return -1; }
-    find(lander_name + "/GNC")
+    let lander_path = usd_path(me);
+    if lander_path == () { return -1; }
+    find(lander_path + "/GNC")
 }
 
 fn on_event(me, evt) {

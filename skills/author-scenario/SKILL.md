@@ -89,7 +89,7 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | `query(name, #{params})` | **READ** — any read-only query provider (Raycast, Nearest, GroundHeight, …) |
 | `get(id,"Comp.field")` / `set(id,"Comp.field",v)` | reflected component read / write |
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
-| `find(name)` / `name(id)` / `parent`/`children` | entity lookup + hierarchy |
+| `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` **next** tick) |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |

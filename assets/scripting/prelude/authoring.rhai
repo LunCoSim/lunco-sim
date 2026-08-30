@@ -262,7 +262,7 @@ fn modelica_set_parameter(class, component, param, value) {
 // prims and works with the existing typed command surface without a Rust rebuild.
 // Empty string is the logical tombstone used by mission_checkpoint_clear.
 fn mission_checkpoint(me, doc, edit_target, key, value) {
-    let path = name(me);
+    let path = usd_path(me);
     if path == () || doc == () { return false; }
     let result = usd_set_attribute(
         doc, edit_target, path, "lunco:mission:checkpoint:" + key, "string", value
@@ -271,7 +271,7 @@ fn mission_checkpoint(me, doc, edit_target, key, value) {
 }
 
 fn mission_checkpoint_read(me, key) {
-    let path = name(me);
+    let path = usd_path(me);
     if path == () { return (); }
     let attr = "lunco:mission:checkpoint:" + key;
     let result = query("QueryUsdPrim", #{ path: path, attrs: [attr] });

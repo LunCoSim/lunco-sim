@@ -263,6 +263,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
 | `find(name)` | id (`-1` if none) | entity id by canonical `Name` |
 | `name(id)` | string \| `()` | human-readable presentation label; use `QueryEntity` for the canonical USD path |
+| `usd_path(id)` | string \| `()` | prelude helper resolving `QueryEntity.usd_prim_path` for topology addressing |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
 | `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
 | `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |

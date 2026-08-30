@@ -60,6 +60,11 @@ query, reflection, prelude, hook, and tool contracts. Everything ergonomic
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 
+The prelude also provides `usd_path(id)`, which resolves
+`QueryEntity.usd_prim_path` for canonical USD topology addressing. `name(id)`
+remains a human-readable presentation label and must not be used to construct
+scene paths.
+
 `name(id)` and the `name` field from `list_entities()` are presentation labels
 resolved from authored `ui:displayName`, catalog identity, or the `Name` leaf.
 Use the API id for machine identity and `QueryEntity` when a full USD path is
