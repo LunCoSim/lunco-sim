@@ -32,6 +32,12 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+The workbench status history is one shared presentation surface: render Info,
+Progress, Warn, Error, and Attention through the same responsive
+level/source/message/progress/action row. Add diagnostics as an optional body
+under that row and emit the existing typed action for Attention; do not create
+level-specific row layouts or source-specific styling.
+
 For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing
