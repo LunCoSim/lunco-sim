@@ -1271,13 +1271,14 @@ def Xform "DescentLander" (
     # warm metallic `displayColor`, not wrapped in solar cells. The array lives on the
     # deployed side wings, so the body reads as a spacecraft hull, not a battery barrel.
     def Cylinder "Hull" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
         double radius = 2.5
         double height = 3.0
         color3f[] primvars:displayColor = [(0.78, 0.62, 0.27)]
+        rel material:binding = </DescentLander/Looks/MliFoil_Mat>
         # The pads land first in the intended upright pose; this hull collider is
         # the rigid-body safety envelope for tipped and inverted poses.
         bool physics:collisionEnabled = true
