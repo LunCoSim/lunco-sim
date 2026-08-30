@@ -463,7 +463,7 @@ fn on_start(me) {
 
 Available nodes include:
 - **Composites:** `sequence`, `selector`, `parallel`, `reactive_sequence`, `reactive_selector`.
-- **Decorators:** `invert`, `force_success`, `force_failure`, `timeout`, `cooldown`.
+- **Decorators:** `invert`, `force_success`, `force_failure`, `cooldown`.
 - **Actions:** `drive_to`, `follow`, `intercept`, `patrol`, `face`, `cruise`, `brake`, `hold`, `steer_clear`, `wait`, `run_tool`. `patrol` waypoints may each carry an `on_arrival` list of actions (e.g. `run_tool`) — see [`patrol.rhai`](../assets/scripting/prelude/patrol.rhai); `run_tool` fires a registered tool once (latched, re-armed by `repeat`/`cooldown`) and is dispatched by `lunco-tools-bevy`.
 - **Conditions:** `arrived`, `facing`, `obstacle_ahead`, `path_blocked`.
 

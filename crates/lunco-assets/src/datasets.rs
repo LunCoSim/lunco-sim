@@ -908,7 +908,7 @@ fn on_twin_closed(
 
 /// Spawn the complete fetch and processing operation as one registry-owned task.
 /// Transport-level receive deadlines remain in the downloader; operation
-/// lifetime is represented by the owned task rather than a second watchdog.
+/// lifetime is represented by the owned task.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_download(
     entry: &DatasetEntry,

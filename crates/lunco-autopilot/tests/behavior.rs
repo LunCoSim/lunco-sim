@@ -483,46 +483,6 @@ fn reactive_selector_switches_to_brake_the_instant_it_arrives() {
 }
 
 #[test]
-fn timeout_aborts_a_running_child_on_the_mission_clock() {
-    use lunco_behavior::Status;
-    // A cruise never ends on its own; the timeout fails it after 2 mission-seconds
-    // and brakes. The budget is mission time, so a frozen clock never trips it.
-    let mut behavior = AutopilotBehavior::from_json(
-        r#"{"kind":"timeout","seconds":2.0,"child":{"kind":"cruise","throttle":0.5}}"#,
-    )
-    .unwrap();
-    let mut ctx = DriveCtx {
-        pos: GridPos(DVec3::ZERO),
-        fwd: Vec3::X,
-        now: 0.0,
-        self_gid: 0,
-        out: (0.0, 0.0, 0.0),
-        targets: Default::default(),
-        clearance: Default::default(),
-        fired: Vec::new(),
-    };
-    assert_eq!(
-        behavior.0.tick(&mut ctx),
-        Status::Running,
-        "armed at t=0 (deadline 2)"
-    );
-    assert_eq!(
-        behavior.0.tick(&mut ctx),
-        Status::Running,
-        "frozen clock → still running"
-    );
-    ctx.now = 1.9;
-    assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
-    ctx.now = 2.0;
-    assert_eq!(
-        behavior.0.tick(&mut ctx),
-        Status::Failure,
-        "budget spent → abort"
-    );
-    assert!(ctx.out.2 > 0.5, "timeout brakes, got {:?}", ctx.out);
-}
-
-#[test]
 fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
     use lunco_behavior::Status;
     // Follow entity gid 42; the target's live pose is resolved from ctx.targets.
