@@ -160,29 +160,27 @@ pub fn attach_site_scene_to_surface_grid(
         return;
     };
     let make_site_grid = || grid_config.grid();
-    if q_grids.get(scene_root).is_err() {
-        if child_of.parent() != body_surface_grid {
-            let Some((scene_position, scene_rotation)) =
-                direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
-            else {
-                return;
-            };
-            let (body_position, body_rotation) =
-                site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
-            let (cell, translation) =
-                body_surface_grid_component.translation_to_grid(body_position);
-            lunco_core::attach::migrate_to_grid(
-                &mut commands,
-                scene_root,
-                body_surface_grid,
-                cell,
-                Transform::from_translation(translation).with_rotation(body_rotation.as_quat()),
-            );
-        }
+    if child_of.parent() != body_surface_grid {
+        let Some((scene_position, scene_rotation)) =
+            direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
+        else {
+            return;
+        };
+        let (body_position, body_rotation) =
+            site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
+        let (cell, translation) = body_surface_grid_component.translation_to_grid(body_position);
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            scene_root,
+            body_surface_grid,
+            cell,
+            Transform::from_translation(translation).with_rotation(body_rotation.as_quat()),
+        );
 
         // The site root is both the authored frame identity (`SiteAnchor`) and
         // its BigSpace precision representation. No parallel frame entity or
-        // lookup table can drift away from it.
+        // lookup table can drift away from it. The root is already a Grid when
+        // mounted, so its top-level USD children retain their own cell pairs.
         commands.entity(scene_root).try_insert(make_site_grid());
         stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
         info!(

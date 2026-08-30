@@ -17,6 +17,7 @@ Keep this page operational. The complete contract is in
 | Terrain blueprint coordinates | `lunco-render-bevy` | `blueprint_origin` plus the active-frame origin/inverse rotation restore authored flat-grid coordinates |
 | Physics pose bridge | `lunco-usd-avian` | explicitly bound `ActivePhysicsFrame` bridge |
 | Scene ownership | `lunco-core` / `lunco-usd` | `SceneMountState`, typed transitions |
+| Scene top-level precision boundary | `lunco-usd-sim` / `lunco-usd-bevy` | nested scene `Grid`; each top-level prim is a Grid-direct `CellCoord` child, with terrain and vehicles as siblings |
 
 ## Correct data flow
 
@@ -33,6 +34,13 @@ atomic ChildOf + CellCoord + Transform
         ↓
 BigSpace propagation / Avian bridge / renderer
 ```
+
+The mounted `UsdSceneRoot` is itself the nested site/scene `Grid`. Terrain is
+one top-level sibling and a rover or lander is another; a vehicle's visual and
+collision descendants stay below its own root and use the low-precision
+propagation subtree. A terrain mesh is never a vehicle parent. Runtime and
+replicated spawns use the same scene-root Grid storage boundary as authored
+top-level USD prims.
 
 The reverse path returns to the semantic f64 pose before any cross-frame
 calculation. A cell/local pair is private representation state and must not
@@ -73,6 +81,9 @@ When a camera, body, rover, trajectory, or line jitters:
 12. Check shared interaction easing, mounted/path camera followers, and the
     persistent camera-origin tracker as camera pose owners; they must obey the
     same value-idempotent commit rule.
+13. For a mounted scene, verify the scene root is a nested `Grid`, top-level
+    terrain and vehicle roots are siblings with their own `CellCoord`, and
+    descendants are not incorrectly promoted to additional grids.
 
 Do not add a guard that corrects an invalid pose after the fact. Fix the
 producer, frame declaration, or ownership boundary that made the invalid state
@@ -81,10 +92,10 @@ possible.
 ## Focused verification
 
 ```sh
-scripts/run_rust_tests.sh -p lunco-core --lib -j 8
-scripts/run_rust_tests.sh -p lunco-celestial -j 8
-scripts/run_rust_tests.sh -p lunco-usd-avian -j 8
-RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
+scripts/run_rust_tests.sh -p lunco-core --lib -j 4
+scripts/run_rust_tests.sh -p lunco-celestial -j 4
+scripts/run_rust_tests.sh -p lunco-usd-avian -j 4
+RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
 For a production smoke, launch the built binary with an explicit API port.
