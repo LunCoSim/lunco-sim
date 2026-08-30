@@ -207,6 +207,9 @@ fn marker_assets_are_emissive_and_shadowless() {
         assert_eq!(look.specular_tint.blue, 0.0, "{name} must have no specular blue");
         assert!(look.emissive != LinearRgba::BLACK, "{name} must emit light");
     }
+
+    let waypoint = material_for(WAYPOINT, "/WaypointMarker/Dome");
+    assert_eq!(waypoint.alpha, SurfaceAlpha::Add);
 }
 
 const OPACITY_STAGE: &str = r#"#usda 1.0

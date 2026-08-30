@@ -238,6 +238,10 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
 - Alpha: `opacity < 1` or a connected `inputs:opacity` → Blend;
   `opacityThreshold > 0` → Mask. No blend-mode control, no unlit from USD (use an
   emissive-only surface: `diffuseColor` 0, `emissiveColor` C).
+- For an emissive annotation that must remain visible without occluding geometry
+  behind it, author `bool lunco:surface:additive = true` on the gprim. This uses
+  the existing additive, depth-tested/non-depth-writing render intent; do not
+  hide the problem with a camera offset or a second overlay mechanism.
 - Textures: `UsdUVTexture` via `inputs:file`, `wrapS`/`wrapT`,
   `inputs:sourceColorSpace`. **There is no UV primvar reader** —
   `UsdPrimvarReader_float2`/`inputs:st` is inert; UVs come from the mesh's own
