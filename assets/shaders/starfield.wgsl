@@ -113,7 +113,6 @@
 //! (field names → std140 offsets) and the `//!@` annotations straight out of this
 //! file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import bevy_pbr::utils::coords_to_viewport_uv
 #import bevy_render::view::View
@@ -122,48 +121,7 @@
 // not the mesh/PBR view layout: a camera background needs only the camera
 // matrices and does not participate in clustered lights or mesh visibility.
 @group(0) @binding(0) var<uniform> view: View;
-#else
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    mesh_view_bindings::view,
-    view_transformations::position_world_to_clip,
-}
-#endif
 #import lunco::noise::vnoise_quintic
-
-/// Legacy mesh entry point retained for non-background shader users. The
-/// scene starfield no longer supplies a gprim; its camera background variant
-/// below uses the fullscreen vertex supplied by Bevy.
-#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
-#else
-struct SkyVertex {
-    @builtin(instance_index) instance_index: u32,
-    @location(0) position: vec3<f32>,
-}
-
-@vertex
-fn vertex(in: SkyVertex) -> VertexOutput {
-    var out: VertexOutput;
-    // Compatibility path for callers that still provide a sky mesh. The
-    // background scene does not use this entry point; it reconstructs a ray
-    // directly from the camera projection below.
-    let dir = normalize(in.position);
-    let world = view.world_position + dir;
-    out.world_position = vec4(world, 1.0);
-    out.world_normal = -dir;
-    out.position = position_world_to_clip(world);
-    // Reverse-z far plane, minus an epsilon so a strict `Greater` depth test
-    // still passes against the cleared depth buffer.
-    out.position.z = out.position.w * 1.0e-6;
-#ifdef VERTEX_UVS_A
-    out.uv = vec2(0.0);
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = in.instance_index;
-#endif
-    return out;
-}
-#endif
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.
@@ -193,8 +151,8 @@ const EXTINCTION_RGB: vec3<f32> = vec3<f32>(0.72, 1.00, 1.35);
 //!@default point_size      0.25
 //!@ui      glow            0 1     "Star halo strength"
 //!@default glow            0.0
-//!@ui      brightness      0 0.5   "Star brightness"
-//!@default brightness      0.006
+//!@ui      brightness      0 5     "Star brightness"
+//!@default brightness      0.06
 //!@ui      seed            0 999   "Sky seed"
 //!@default seed            37
 //!@ui      band_intensity  0 0.5   "Milky Way intensity"
@@ -529,26 +487,24 @@ fn stars(d: vec3<f32>, px: f32) -> vec3<f32> {
 }
 
 @fragment
-#ifdef LUNCO_PROCEDURAL_SKY_BACKGROUND
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    // Reconstruct the ray from a finite near-plane point. Using the view
-    // inverse keeps this correct for perspective, orthographic, and custom
-    // camera projections without a sphere or far-plane assumption.
+    // Reconstruct the ray from a finite near-plane point, matching Bevy's
+    // built-in skybox path. Using the view inverse keeps this correct for
+    // perspective, orthographic, and custom camera projections without a
+    // sphere or far-plane assumption, and transforming a direction avoids
+    // precision loss at large world translations.
     // FullscreenVertexOutput.uv is intentionally in [0, 2], not [0, 1]. Use
     // the fragment position and the authoritative viewport so sub-viewports
     // and resolution overrides reconstruct the same ray as Bevy's skybox.
     let viewport_uv = coords_to_viewport_uv(in.position.xy, view.viewport);
-    let ndc = vec3(viewport_uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 1.0);
-    let world_point = view.world_from_clip * vec4(ndc, 1.0);
-    let d = normalize(world_point.xyz / world_point.w - view.world_position);
-#else
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Compatibility path for a caller that supplies a sky mesh. The reusable
-    // scene component uses the camera-background branch above, so its result is
-    // independent of mesh radius, culling bounds, and camera far-plane range.
-    let d = normalize(in.world_position.xyz - view.world_position);
-#endif
-
+    let view_position_homogeneous = view.view_from_clip * vec4(
+        viewport_uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0),
+        1.0,
+        1.0,
+    );
+    let view_ray_direction =
+        view_position_homogeneous.xyz / view_position_homogeneous.w;
+    let d = normalize((view.world_from_view * vec4(view_ray_direction, 0.0)).xyz);
     // Angular size of one pixel, in radians. `d` is a unit vector, so the
     // screen-space derivative of it IS the per-pixel angular step, which makes
     // the star anti-aliasing resolution-independent and correct under any FOV,
@@ -562,15 +518,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // emissive backdrop, not a surface. Values above 1.0 are left ALONE so the
     // pipeline's bloom sees them — clamping here is what makes bright stars read
     // as flat white dots. Tonemapping in the post pass is the only thing that
-    // touches this afterwards.
-    //
-    // ⚠ ALPHA IS ZERO, AND THAT IS WHAT MAKES `lunco:surface:additive` ADDITIVE.
-    // `AlphaMode::Add` is PREMULTIPLIED blending in bevy (`BLEND_PREMULTIPLIED_ALPHA`,
-    // bevy_pbr material.rs): `src + dst * (1 - src.a)`. The colour is already
-    // premultiplied (an unlit emissive backdrop), so alpha here means only "how much
-    // of the background do I erase". Returning 1.0 erased ALL of it — the dome came
-    // out an opaque black ball that swallowed the sky from inside and read as a hole
-    // punched in the body from orbit. 0.0 keeps the destination and adds the stars to
-    // it, which is what an emissive sky must do.
-    return vec4(color, 0.0);
+    // touches this afterwards. The opaque background phase writes the colour
+    // only where the reverse-Z depth test finds the clear value, so geometry
+    // remains in front without requiring a sky mesh or a depth override.
+    return vec4(color, 1.0);
 }

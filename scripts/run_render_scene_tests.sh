@@ -216,6 +216,26 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" =~ ^(six_wheel_visual|rocker_bogie_antenna_visual)$ ]]; then
+        # This calibrated three-quarter camera deliberately leaves an open sky
+        # band above the rover. Keep a production assertion on that band so a
+        # renderer change cannot leave the procedural background queued but
+        # visually absent behind an otherwise valid subject capture.
+        sky_height=$((RENDER_HEIGHT / 4))
+        read -r sky_mean sky_std < <(
+            convert "$last" \
+                -crop "${RENDER_WIDTH}x${sky_height}+0+0" \
+                -colorspace Gray \
+                -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        if ! awk -v mean="${sky_mean:-0}" -v std="${sky_std:-0}" \
+            'BEGIN { exit !(mean + 0.0 > 0.12 && std + 0.0 > 0.10) }'; then
+            reason="procedural sky band is black or visually flat (mean=${sky_mean:-unavailable}, std=${sky_std:-unavailable})"
+        else
+            echo "    pixels — sky mean=${sky_mean} std=${sky_std}"
+        fi
+    fi
+
     if [[ -n "$reason" ]]; then
         overall=1
         echo "    FAIL — $reason"
