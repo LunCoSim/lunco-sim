@@ -3438,8 +3438,8 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 /// `disabled_hint` ("No document open", "Nothing to undo", …).
 ///
 /// Extracted because the `add_enabled(…, Button::new("Label\tShortcut"))`
-/// pattern was copy-pasted across Save / Copy Share Link / Close /
-/// Undo / Redo and every copy forgot the disabled hint — with the hint a
+/// pattern is shared by Save / Close / Undo / Redo and every copy needs the
+/// disabled hint — with the hint a
 /// required parameter it can't be forgotten on the next menu item.
 /// Returns the [`egui::Response`] so callers can still chain
 /// `.on_hover_text(…)` and `.clicked()`.
@@ -4069,22 +4069,22 @@ fn render_layout(
 
                 ui.separator();
 
-                // -- Share --------------------------------------------
-                // Copy a link that encodes the active model's source in
-                // the URL fragment — opening it elsewhere recreates the
-                // model. Behaviour lives in the domain crate
-                // (lunco-modelica observes `CopyShareLink`).
-                if menu_item(ui, has_active, "Copy Share Link", "", "No document open")
-                    .on_hover_text(
-                        "Copy a URL that encodes this model's source — \
-                         anyone who opens it gets the model (nothing is uploaded)",
-                    )
-                    .clicked()
+                #[cfg(target_arch = "wasm32")]
                 {
-                    world.trigger(file_ops::CopyShareLink {});
-                    ui.close();
+                    // Browser sharing remains available through the web UI;
+                    // the desktop shell does not expose this action.
+                    if menu_item(ui, has_active, "Copy Share Link", "", "No document open")
+                        .on_hover_text(
+                            "Copy a URL that encodes this model's source — \
+                             anyone who opens it gets the model (nothing is uploaded)",
+                        )
+                        .clicked()
+                    {
+                        world.trigger(file_ops::CopyShareLink {});
+                        ui.close();
+                    }
+                    ui.separator();
                 }
-                ui.separator();
 
                 let callbacks = std::mem::take(&mut layout.file_menu);
                 if !callbacks.is_empty() {
