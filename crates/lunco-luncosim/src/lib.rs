@@ -3347,8 +3347,31 @@ fn release_ground_activation_hold(
             With<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
+    support_colliders: Query<
+        (
+            Option<&avian3d::prelude::RigidBody>,
+            Option<&avian3d::prelude::ColliderOf>,
+        ),
+        With<avian3d::prelude::Collider>,
+    >,
+    bodies: Query<&avian3d::prelude::RigidBody>,
     mut commands: Commands,
 ) {
+    let has_static_support = support_colliders.iter().any(|(body, owner)| {
+        body.is_some_and(|body| {
+            matches!(
+                body,
+                avian3d::prelude::RigidBody::Static | avian3d::prelude::RigidBody::Kinematic
+            )
+        }) || owner.is_some_and(|owner| {
+            bodies.get(owner.body).is_ok_and(|body| {
+                matches!(
+                    body,
+                    avian3d::prelude::RigidBody::Static | avian3d::prelude::RigidBody::Kinematic
+                )
+            })
+        })
+    });
     match activation.0 {
         2 => {
             activation.0 = 1;
@@ -3359,7 +3382,10 @@ fn release_ground_activation_hold(
         // the activation hold until that generic physics contract consumes its
         // marker. Only requests with no support contract are unclaimed and may
         // be retired here.
-        1 if terrain_providers.is_empty() && support_footprints.is_empty() => {
+        1 if terrain_providers.is_empty()
+            && support_footprints.is_empty()
+            && !has_static_support =>
+        {
             for entity in &needs_ground_settle {
                 commands
                     .entity(entity)

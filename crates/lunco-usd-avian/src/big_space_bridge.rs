@@ -36,15 +36,11 @@
 //! instead, so moving a group Xform re-reads the bodies beneath it too. A
 //! `Grid` can be either a paired BigSpace representation re-split or a real
 //! moving physical frame; only the paired re-split is excluded below. Static
-//! bodies at rest are never touched — the previous
-//! bridge dirtied every static's `Position` each tick, and the resulting
-//! whole-world contact churn is what corrupted avian's island bookkeeping
-//! (`islands/mod.rs:547` unwrap on a stale contact edge, reached from
-//! `update_narrow_phase`).
+//! bodies at rest are never touched, so steady-state bridge reads do not dirty
+//! the contact graph.
 //!
 //! Standalone colliders (a `Collider` with no rigid-body ancestor, e.g. a
-//! world-fixed sensor zone) previously got their `Position` from
-//! `transform_to_position` too, so the READ pass covers them as well.
+//! world-fixed sensor zone) are covered by the same READ pass.
 //! Body-attached child colliders keep avian's own `ColliderTransform` path
 //! (`update_child_collider_position` — `Position`-based, unaffected).
 //!
@@ -58,8 +54,7 @@
 //! round-trips through the READ rule to an identical world pose. Jointed
 //! sub-bodies without a `CellCoord` (rover wheels are plain `Transform`
 //! children of the chassis) get their local transform relative to the
-//! chassis' solved pose — the case avian's `position_to_transform` used to
-//! handle via `GlobalTransform` math.
+//! chassis' solved pose, including nested bodies in the active physics frame.
 
 use avian3d::dynamics::solver::xpbd::joints::{
     DistanceJointSolverData, FixedJointSolverData, PrismaticJointSolverData,
