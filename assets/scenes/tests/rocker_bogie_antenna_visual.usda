@@ -106,7 +106,7 @@ def Xform "RockerBogieAntennaVisual" (
                     bool physics:rigidBodyEnabled = false
                     # Aim the parked reflector toward this review camera so
                     # the feed, bowl, and yoke read as one antenna assembly.
-                    double3 xformOp:rotateXYZ = (-55.0, -30.0, 0.0)
+                    double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
                     uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
                     over "DishHead"
                     {
@@ -164,8 +164,8 @@ def Xform "RockerBogieAntennaVisual" (
         # front of the body silhouette while keeping the mast and dish inside
         # the frame.
         double3 lunco:cameraLookAt = (-0.2, 1.4, 0.4)
-        double3 xformOp:translate = (-3.2, 3.0, 5.5)
-        float focalLength = 30.0
+        double3 xformOp:translate = (-3.2, 5.5, 5.5)
+        float focalLength = 35.0
         # The celestial epoch drives the physical lunar sun at its authored
         # intensity. This review camera uses one additional exposure stop so
         # the white antenna reflector and its mast remain separable from the
