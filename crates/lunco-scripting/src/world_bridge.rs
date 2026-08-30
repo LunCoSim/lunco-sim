@@ -318,7 +318,7 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, String> {
 /// Constant propagation rewrites *identifier* uses inside function bodies. A
 /// script that reads its constant as `global::X` is doing a namespaced lookup,
 /// which the optimizer does not touch and which resolves at runtime against the
-/// `GlobalRuntimeState` — see [`top_level_hoist_source`] for the half that makes
+/// `GlobalRuntimeState` — see [`crate::module_resolver::top_level_hoist_source`] for the half that makes
 /// `global::X` work. The two mechanisms are complementary and every script gets
 /// both; there is no per-caller variation.
 ///
@@ -437,121 +437,8 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// literals this is meant for and wrong for `const X = expensive();` — but such a
 /// const is not literal, so it never folded either, and re-running it is strictly
 /// more correct than the previous "throws at runtime".
-fn top_level_hoist_source(source: &str) -> Option<String> {
-    #[derive(PartialEq)]
-    enum S {
-        Code,
-        Line,
-        Block,
-        Str(char),
-    }
-    let b = source.as_bytes();
-    let mut state = S::Code;
-    let mut depth = 0i32;
-    let mut stmt_start: Option<usize> = None;
-    let mut out = String::new();
-    let mut i = 0usize;
-
-    // A statement opens with `kw` as a WHOLE token — `importer_count` and
-    // `constant` must not match `import`/`const`.
-    let opens_with = |stmt: &str, kw: &str| {
-        let head = stmt.trim_start();
-        head.starts_with(kw)
-            && !head[kw.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
-    };
-
-    // Take [start..=end] if it is a top-level `import` or `const` statement.
-    let take = |out: &mut String, start: usize, end: usize| {
-        let stmt = &source[start..=end];
-        if opens_with(stmt, "import") || opens_with(stmt, "const") {
-            out.push_str(stmt.trim());
-            out.push('\n');
-        }
-    };
-
-    while i < b.len() {
-        let c = b[i];
-        match state {
-            S::Line => {
-                if c == b'\n' {
-                    state = S::Code;
-                }
-            }
-            S::Block => {
-                if c == b'*' && b.get(i + 1) == Some(&b'/') {
-                    state = S::Code;
-                    i += 1;
-                }
-            }
-            S::Str(q) => {
-                // Rhai strings use `\` escapes; a literal `\"` must not end the string.
-                if c == b'\\' {
-                    i += 1;
-                } else if c == q as u8 {
-                    state = S::Code;
-                }
-            }
-            S::Code => match c {
-                b'/' if b.get(i + 1) == Some(&b'/') => {
-                    state = S::Line;
-                    i += 1;
-                }
-                b'/' if b.get(i + 1) == Some(&b'*') => {
-                    state = S::Block;
-                    i += 1;
-                }
-                b'"' | b'\'' | b'`' => {
-                    if depth == 0 && stmt_start.is_none() {
-                        stmt_start = Some(i);
-                    }
-                    state = S::Str(c as char);
-                }
-                b'{' | b'(' | b'[' => {
-                    if depth == 0 && stmt_start.is_none() {
-                        stmt_start = Some(i);
-                    }
-                    depth += 1;
-                }
-                b'}' | b')' | b']' => {
-                    depth -= 1;
-                    // A block that closes at top level ends the statement (a `fn`
-                    // definition, an `if`/`while` body): nothing to carry forward.
-                    //
-                    // EXCEPT a hoistable statement whose VALUE is a brace/bracket
-                    // literal — `const P = #{ hover: 0.3 };`, `const R = [1, 2];`.
-                    // Its closing brace is mid-statement, not a block end, and it is
-                    // still waiting for its `;`. Clearing here dropped it silently,
-                    // which is the failure mode this whole function exists to remove.
-                    if depth <= 0 {
-                        depth = 0;
-                        let holds = stmt_start.is_some_and(|s| {
-                            let stmt = &source[s..=i];
-                            opens_with(stmt, "import") || opens_with(stmt, "const")
-                        });
-                        if !holds {
-                            stmt_start = None;
-                        }
-                    }
-                }
-                b';' if depth == 0 => {
-                    if let Some(start) = stmt_start {
-                        take(&mut out, start, i);
-                    }
-                    stmt_start = None;
-                }
-                _ if depth == 0 && stmt_start.is_none() && !c.is_ascii_whitespace() => {
-                    stmt_start = Some(i);
-                }
-                _ => {}
-            },
-        }
-        i += 1;
-    }
-
-    (!out.is_empty()).then_some(out)
-}
-
-/// Build the "hoisted statements only" AST described on [`top_level_hoist_source`]:
+/// Build the "hoisted statements only" AST described on
+/// [`crate::module_resolver::top_level_hoist_source`]:
 /// the script's top-level `import` and `const` statements as the BODY, the full
 /// prelude-merged program's functions as the LIBRARY.
 ///
@@ -569,7 +456,7 @@ fn build_hoisted_ast(
     full: &AST,
     asset_id: Option<&str>,
 ) -> Result<Option<AST>, rhai::ParseError> {
-    let Some(hoisted) = top_level_hoist_source(source) else {
+    let Some(hoisted) = crate::module_resolver::top_level_hoist_source(source) else {
         return Ok(None);
     };
     let head = engine.compile(&hoisted)?;
@@ -1625,7 +1512,8 @@ struct CompiledProgram {
     /// Same functions, but with ONLY the script's top-level `import` statements as
     /// its body — so a hook call can re-run those imports (and nothing else)
     /// before the function executes, making `cam::foo()` resolve inside a `fn`.
-    /// `None` when the script imports nothing. See [`top_level_hoist_source`] for
+    /// `None` when the script imports nothing. See
+    /// [`crate::module_resolver::top_level_hoist_source`] for
     /// why this is the shape of the fix.
     imports_ast: Option<AST>,
     /// Callable task invoker plus the same import/const body as `imports_ast`.
@@ -2180,7 +2068,7 @@ pub fn tick_rhai_scenarios(world: &mut World) {
 /// and must not re-fire its world effects), or the imports-only AST with
 /// `eval_ast=true` so the script's top-level `import`s are on rhai's import stack
 /// while the function body runs. Never mix the two — see
-/// [`top_level_hoist_source`].
+/// [`crate::module_resolver::top_level_hoist_source`].
 fn call_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
@@ -2980,7 +2868,8 @@ mod tests {
             }
             import "b" as b;
         "#;
-        let got = super::top_level_hoist_source(src).expect("two imports + one const");
+        let got =
+            crate::module_resolver::top_level_hoist_source(src).expect("two imports + one const");
         assert!(
             got.contains(r#"import "twin://ep1/a" as a;"#),
             "got:\n{got}"
@@ -3041,10 +2930,12 @@ mod tests {
 
     #[test]
     fn a_script_with_nothing_to_hoist_extracts_nothing() {
-        assert!(super::top_level_hoist_source("fn f() { 1 } let x = 2;").is_none());
+        assert!(
+            crate::module_resolver::top_level_hoist_source("fn f() { 1 } let x = 2;").is_none()
+        );
         // `important`/`constant` are not `import`/`const` — whole-token match only.
-        assert!(super::top_level_hoist_source("let important = 1;").is_none());
-        assert!(super::top_level_hoist_source("let constant = 1;").is_none());
+        assert!(crate::module_resolver::top_level_hoist_source("let important = 1;").is_none());
+        assert!(crate::module_resolver::top_level_hoist_source("let constant = 1;").is_none());
     }
 
     /// A `const` whose value is a map/array literal must survive the scanner.
@@ -3059,7 +2950,8 @@ mod tests {
             const R = [1, 2, 3];
             fn go() { global::P.hover }
         "#;
-        let got = super::top_level_hoist_source(src).expect("two top-level consts");
+        let got =
+            crate::module_resolver::top_level_hoist_source(src).expect("two top-level consts");
         assert!(
             got.contains("const P = #{ hover: 0.327, tip: 40.0 };"),
             "got:\n{got}"

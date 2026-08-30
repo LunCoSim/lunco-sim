@@ -260,7 +260,7 @@ pub fn read_dome_environment(
     }
     let texture_path = texture_value
         .filter(|p| !p.is_empty())
-        .map(|p| crate::resolve_texture_path(asset_server, stage_id, &p));
+        .map(|p| crate::resolve_stage_asset_path(asset_server, stage_id, &p));
     let Some(texture_path) = texture_path else {
         return Ok(None);
     };

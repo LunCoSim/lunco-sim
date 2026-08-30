@@ -20,9 +20,9 @@
 //!
 //! [`ModuleResolver::resolve`] is synchronous and `Send + Sync`, and runs mid-tick
 //! inside script evaluation; asset loading is async and, on wasm, must not block.
-//! So sources are preloaded into [`ScriptSources`] and `resolve` is a pure lookup.
-//! See that type's docs — `LuncoUsdResolver` solves the same problem the same way
-//! for USD layers.
+//! `RhaiSourceLoader` therefore declares each literal import as a normal Bevy asset
+//! dependency. Once the owning scenario is ready, the event-driven publisher has
+//! registered the complete dependency graph and `resolve` is a pure lookup.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -33,6 +33,232 @@ use rhai::{Engine, EvalAltResult, Module, ModuleResolver, Position, Scope, Share
 /// Default extension applied to an extension-less import, so `import "lib"` and
 /// `import "lib.rhai"` resolve to one id.
 const SCRIPT_EXT: &str = "rhai";
+
+#[derive(PartialEq)]
+enum ScanState {
+    Code,
+    LineComment,
+    BlockComment,
+    String(char),
+}
+
+struct ScriptScan<'a> {
+    top_level_statements: Vec<&'a str>,
+    imports: Vec<Result<String, String>>,
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn skip_import_trivia(source: &str, mut index: usize) -> Result<usize, String> {
+    let bytes = source.as_bytes();
+    loop {
+        while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+            index += 1;
+        }
+        if bytes.get(index) == Some(&b'/') && bytes.get(index + 1) == Some(&b'/') {
+            index += 2;
+            while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes.get(index) == Some(&b'/') && bytes.get(index + 1) == Some(&b'*') {
+            let Some(end) = source[index + 2..].find("*/") else {
+                return Err("unterminated block comment after `import`".into());
+            };
+            index += end + 4;
+            continue;
+        }
+        return Ok(index);
+    }
+}
+
+fn parse_import_literal(source: &str, start: usize) -> Result<String, String> {
+    let index = skip_import_trivia(source, start)?;
+    let Some(quote) = source[index..].chars().next() else {
+        return Err("missing string literal after `import`".into());
+    };
+    if !matches!(quote, '"' | '\'' | '`') {
+        return Err("file-backed Rhai imports must use a string literal".into());
+    }
+
+    let content_start = index + quote.len_utf8();
+    let mut value = String::new();
+    let mut segment_start = content_start;
+    let mut chars = source[content_start..].char_indices();
+    while let Some((offset, character)) = chars.next() {
+        let absolute = content_start + offset;
+        if character == quote {
+            value.push_str(&source[segment_start..absolute]);
+            return Ok(value);
+        }
+        if character != '\\' {
+            continue;
+        }
+
+        value.push_str(&source[segment_start..absolute]);
+        let Some((escaped_offset, escaped)) = chars.next() else {
+            return Err("unterminated escape in Rhai import path".into());
+        };
+        let replacement = match escaped {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '\\' => '\\',
+            '"' => '"',
+            '\'' => '\'',
+            '`' => '`',
+            other => {
+                return Err(format!(
+                    "unsupported escape `\\{other}` in Rhai import path"
+                ));
+            }
+        };
+        value.push(replacement);
+        segment_start = content_start + escaped_offset + escaped.len_utf8();
+    }
+
+    Err("unterminated string literal after `import`".into())
+}
+
+fn scan_script(source: &str) -> ScriptScan<'_> {
+    let bytes = source.as_bytes();
+    let mut state = ScanState::Code;
+    let mut depth = 0i32;
+    let mut statement_start: Option<usize> = None;
+    let mut top_level_statements = Vec::new();
+    let mut imports = Vec::new();
+    let mut index = 0usize;
+
+    let starts_with = |statement: &str, keyword: &str| {
+        let head = statement.trim_start();
+        head.starts_with(keyword)
+            && !head[keyword.len()..]
+                .starts_with(|character: char| character.is_alphanumeric() || character == '_')
+    };
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match state {
+            ScanState::LineComment => {
+                if byte == b'\n' {
+                    state = ScanState::Code;
+                }
+            }
+            ScanState::BlockComment => {
+                if byte == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    state = ScanState::Code;
+                    index += 1;
+                }
+            }
+            ScanState::String(quote) => {
+                if byte == b'\\' {
+                    index += 1;
+                } else if byte == quote as u8 {
+                    state = ScanState::Code;
+                }
+            }
+            ScanState::Code => {
+                if bytes.get(index..index + 6) == Some(b"import")
+                    && (index == 0 || !is_identifier_byte(bytes[index - 1]))
+                    && !bytes
+                        .get(index + 6)
+                        .is_some_and(|next| is_identifier_byte(*next))
+                {
+                    imports.push(parse_import_literal(source, index + 6));
+                }
+
+                match byte {
+                    b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                        state = ScanState::LineComment;
+                        index += 1;
+                    }
+                    b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                        state = ScanState::BlockComment;
+                        index += 1;
+                    }
+                    b'"' | b'\'' | b'`' => {
+                        if depth == 0 && statement_start.is_none() {
+                            statement_start = Some(index);
+                        }
+                        state = ScanState::String(byte as char);
+                    }
+                    b'{' | b'(' | b'[' => {
+                        if depth == 0 && statement_start.is_none() {
+                            statement_start = Some(index);
+                        }
+                        depth += 1;
+                    }
+                    b'}' | b')' | b']' => {
+                        depth -= 1;
+                        if depth <= 0 {
+                            depth = 0;
+                            let holds = statement_start.is_some_and(|start| {
+                                let statement = &source[start..=index];
+                                starts_with(statement, "import") || starts_with(statement, "const")
+                            });
+                            if !holds {
+                                statement_start = None;
+                            }
+                        }
+                    }
+                    b';' if depth == 0 => {
+                        if let Some(start) = statement_start {
+                            let statement = &source[start..=index];
+                            if starts_with(statement, "import") || starts_with(statement, "const") {
+                                top_level_statements.push(statement);
+                            }
+                        }
+                        statement_start = None;
+                    }
+                    _ if depth == 0 && statement_start.is_none() && !byte.is_ascii_whitespace() => {
+                        statement_start = Some(index);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        index += 1;
+    }
+
+    ScriptScan {
+        top_level_statements,
+        imports,
+    }
+}
+
+/// Extract the top-level `import` and `const` statements used by the hook
+/// compiler. The scanner is shared with dependency discovery below so authored
+/// source has one lexical interpretation in both paths.
+pub(crate) fn top_level_hoist_source(source: &str) -> Option<String> {
+    let statements = scan_script(source).top_level_statements;
+    (!statements.is_empty()).then(|| {
+        let mut output = String::new();
+        for statement in statements {
+            output.push_str(statement.trim());
+            output.push('\n');
+        }
+        output
+    })
+}
+
+/// Return every literal Rhai import in source order. Imports inside functions
+/// are included because Rhai resolves them when that function executes; making
+/// them Bevy dependencies keeps those later calls synchronous without loading
+/// unrelated scripts at startup.
+pub(crate) fn imported_paths(source: &str) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for result in scan_script(source).imports {
+        let path = result?;
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
 
 /// Resolves `import` against [`ScriptSources`], memoizing compiled modules.
 #[derive(Clone)]
@@ -155,6 +381,41 @@ impl ModuleResolver for AssetModuleResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_scan_follows_all_literal_imports_without_reading_comments_or_strings() {
+        let source = r#"
+            // import "ignored_line";
+            let text = "import \\\"ignored_string\\\";";
+            import "root" as root;
+            fn later() {
+                /* import "ignored_block"; */
+                import "nested" as nested;
+                import "root" as duplicate;
+            }
+        "#;
+
+        assert_eq!(imported_paths(source).unwrap(), ["root", "nested"]);
+    }
+
+    #[test]
+    fn dynamic_imports_fail_dependency_discovery_instead_of_being_loaded_late() {
+        let error = imported_paths("fn load(path) { import path; }").unwrap_err();
+        assert!(
+            error.contains("string literal"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn hoist_and_dependency_scans_share_the_same_statement_lexer() {
+        let source = r#"import "root" as root; fn f() { import "nested" as nested; }"#;
+        assert_eq!(
+            top_level_hoist_source(source).as_deref(),
+            Some("import \"root\" as root;\n")
+        );
+        assert_eq!(imported_paths(source).unwrap(), ["root", "nested"]);
+    }
 
     fn engine_with(sources: ScriptSources) -> Engine {
         let mut e = Engine::new();

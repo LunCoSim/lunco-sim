@@ -1821,6 +1821,7 @@ const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 /// The policy reader has its own inline-over-file rule; it is not a
 /// `LunCoProgramAPI` and is therefore outside the program source resolver.
 struct AuthoredPolicy {
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
     seam: String,
     entry: String,
     deterministic: bool,
@@ -1839,7 +1840,7 @@ struct AuthoredPolicy {
 /// load) happens in [`project_usd_policies`], not here.
 fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
-    for (_, cs) in canonical.iter() {
+    for (stage_id, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
             if view.prim_type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
@@ -1861,6 +1862,7 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
                 continue;
             }
             out.push(AuthoredPolicy {
+                stage_id,
                 seam,
                 entry: view
                     .value::<String>(&prim, "lunco:policy:entry")
@@ -1888,13 +1890,12 @@ enum PolicySource {
 
 /// Resolve a `info:sourceAsset` `.rhai` reference to its text via the
 /// `AssetServer` (wasm-safe — no `std::fs`), caching the handle so the asset isn't
-/// dropped mid-load. Mirrors `lunco_scripting::commands::resolve_embedded_scenario_paths`
-/// — and shares its `TODO(scenario-resolve)`: a `.rhai` fetched into a peer's
-/// scenario cache is loaded against the DEFAULT asset source here, so a
-/// twin/imported file policy syncs (whole-twin content plane) but needs the resolver's
-/// `canonicalize` anchoring to load on the peer. Inline source is unaffected (rides the doc).
+/// dropped mid-load. The stage owns the reference's anchor, and the shared USD
+/// path resolver produces the exact same identity used by the Rhai dependency
+/// loader. Inline source is unaffected (rides the doc).
 fn resolve_policy_source_file(
     path: &str,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_server: &AssetServer,
     sources: Option<&Assets<lunco_scripting::source_asset::RhaiSource>>,
     pending: &mut std::collections::HashMap<
@@ -1906,15 +1907,23 @@ fn resolve_policy_source_file(
         warn!("[policy] sourcePath '{path}' authored but the RhaiSource asset loader is absent");
         return PolicySource::Failed;
     };
-    let handle = pending.entry(path.to_string()).or_insert_with(|| {
-        // The AssetServer root is already `assets/`; strip an authored prefix (mirrors
-        // lunco-usd-sim + resolve_embedded_scenario_paths).
-        let rel = path.strip_prefix("assets/").unwrap_or(path).to_string();
-        asset_server.load(rel)
+    let asset_id = lunco_usd_bevy::resolve_stage_asset_path(asset_server, stage_id, path);
+    let handle = pending.entry(asset_id.clone()).or_insert_with(|| {
+        asset_server.load(bevy::asset::AssetPath::parse(&asset_id).into_owned())
     });
-    if asset_server.load_state(&*handle).is_failed() {
-        warn!("[policy] failed to load sourcePath '{path}' via AssetServer");
+    let root_failed = asset_server.load_state(&*handle).is_failed();
+    let dependencies_failed = asset_server
+        .recursive_dependency_load_state(&*handle)
+        .is_failed();
+    if root_failed || dependencies_failed {
+        warn!(
+            "[policy] failed to load sourcePath '{path}' as '{asset_id}' via AssetServer \
+             (root_failed={root_failed}, dependencies_failed={dependencies_failed})"
+        );
         return PolicySource::Failed;
+    }
+    if !asset_server.is_loaded_with_dependencies(&*handle) {
+        return PolicySource::Loading;
     }
     match sources.get(&*handle) {
         Some(src) => PolicySource::Ready(src.text.clone()),
@@ -1948,15 +1957,26 @@ fn project_usd_policies(
     mut pending: Local<
         std::collections::HashMap<String, Handle<lunco_scripting::source_asset::RhaiSource>>,
     >,
+    mut source_events: MessageReader<AssetEvent<lunco_scripting::source_asset::RhaiSource>>,
     mut last: Local<Option<(usize, u64)>>,
     mut awaiting: Local<bool>,
 ) {
+    let source_changed = source_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. }
+                | AssetEvent::Modified { .. }
+                | AssetEvent::Removed { .. }
+                | AssetEvent::Unused { .. }
+                | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
     let signal = (
         canonical.len(),
         canonical.iter().map(|(_, cs)| cs.generation()).sum(),
     );
     // Re-run when the stage moved OR a file-backed source is still loading.
-    if *last == Some(signal) && !*awaiting {
+    if *last == Some(signal) && !*awaiting && !source_changed {
         return;
     }
     *last = Some(signal);
@@ -1964,9 +1984,13 @@ fn project_usd_policies(
     let authored = extract_usd_policies(&canonical);
     // Drop cached handles for paths no longer authored, so a removed file-policy stops
     // pinning its asset.
-    let live: std::collections::HashSet<&str> = authored
+    let live: std::collections::HashSet<String> = authored
         .iter()
-        .filter_map(|a| a.source_path.as_deref())
+        .filter_map(|a| {
+            a.source_path.as_deref().map(|path| {
+                lunco_usd_bevy::resolve_stage_asset_path(&asset_server, a.stage_id, path)
+            })
+        })
         .collect();
     pending.retain(|p, _| live.contains(p.as_str()));
 
@@ -1978,8 +2002,13 @@ fn project_usd_policies(
         let source = if let Some(src) = &a.inline_source {
             src.clone()
         } else if let Some(path) = &a.source_path {
-            match resolve_policy_source_file(path, &asset_server, sources.as_deref(), &mut pending)
-            {
+            match resolve_policy_source_file(
+                path,
+                a.stage_id,
+                &asset_server,
+                sources.as_deref(),
+                &mut pending,
+            ) {
                 PolicySource::Ready(text) => text,
                 PolicySource::Loading => {
                     unresolved = true;
@@ -3041,7 +3070,10 @@ impl Plugin for SandboxCorePlugin {
         // Policy projection is a core USD→Rhai path, not a networking feature.
         // Network peers receive the same `LunCoPolicy` prim through the journal,
         // while a standalone app can author and hot-replace the same policy locally.
-        app.add_systems(Update, project_usd_policies);
+        app.add_systems(
+            Update,
+            project_usd_policies.after(lunco_scripting::source_asset::RhaiSourceAssetSet),
+        );
         // A just-promoted Dynamic body is not visible to the terrain ring until
         // deferred commands flush. Keep physics held across that fixed-loop
         // boundary, then let the terrain's own liveness gate take sole ownership.

@@ -16,23 +16,14 @@
 // (`lunco-scripting/src/task_tree.rs`), which every scenario already gets for free
 // via `fn task(me)`. No `on_tick` at all — the kernel advances the tree.
 //
-// ── How to import it, and why it is NOT spelled `lunco://` ───────────────────
+// ── How to import it ─────────────────────────────────────────────────────────
 //
 //     import "/scripting/lib/shots" as shots;
 //
-// MEASURED: `import "lunco://scripting/lib/shots"` fails with `Module not found`.
-// Script ids are registered by `asset_path::anchor_of`, which returns a BARE
-// relative path for Bevy's default asset source — the engine library registers as
-// `scripting/lib/shots.rhai`, with no scheme. `lunco://…` has a scheme, so
-// `canonicalize` passes it through untouched and the lookup misses. This is
-// asymmetric with USD references, where `lunco://` IS the way to name an engine
-// asset, so the mistake is an easy one to make twice.
-//
-// The leading slash is what makes the import work from a twin: it is the
-// "absolute from the assets root" form, which `canonicalize` resolves WITHOUT the
-// importing script's anchor. A bare `"scripting/lib/shots"` would instead anchor
-// to the importer's own root and look for
-// `twin://episode_01_lander/scripting/lib/shots.rhai`.
+// `lunco://scripting/lib/shots` is also valid when the engine-library identity is
+// desired explicitly. Relative imports stay under the importing script's source.
+// The Rhai asset loader declares this import as a Bevy dependency before the
+// scenario runs, so no project-wide script preload is needed.
 //
 // ── TEMPORARY LOCATION ───────────────────────────────────────────────────────
 //
@@ -51,8 +42,8 @@
 // ── The closure/import constraint this module is designed around ─────────────
 //
 // A top-level `import` IS visible inside a named `fn` (the runtime re-runs an
-// imports-only AST per hook — see `top_level_import_source` in
-// `lunco-scripting/src/world_bridge.rs`), but it is NOT visible inside a closure
+// imports-only AST per hook — see `top_level_hoist_source` in
+// `lunco-scripting/src/module_resolver.rs`), but it is NOT visible inside a closure
 // invoked through `FnPtr::call`, which is exactly how the task tree runs leaf
 // callbacks: `FnPtr::call` takes an `AST` and has no `eval_ast` switch, so there is
 // nowhere to re-run the imports.

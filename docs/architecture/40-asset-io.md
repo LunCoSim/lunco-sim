@@ -104,10 +104,16 @@ different loading/saving sequences.
 | `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy` | `.usda` |
 | `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` | `.py` |
+| `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting` | `.rhai` |
 
 New source classes get their own `Asset` + `AssetLoader` in the owning
-domain crate. Loaders are dumb (parse to bytes / utf-8 / domain AST);
-the dispatch logic lives in the consumer.
+domain crate. Loaders are normally dumb (parse to bytes / utf-8 / domain AST);
+`RhaiSourceLoader` additionally declares the literal `import` paths it finds as
+Bevy dependencies. That is required because Rhai resolves imports synchronously
+while the scenario is running. The owning scenario handle is not published to
+the runtime until Bevy reports its recursive dependency graph ready, so a
+referenced scenario loads only itself and its imports — never every `.rhai` in
+the manifest or open Twins.
 
 ## Allow-list
 
