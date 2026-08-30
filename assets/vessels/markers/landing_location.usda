@@ -21,9 +21,9 @@ def Xform "LandingLocationMarker" (
     custom string lunco:interaction:left = "pass_through"
     custom string lunco:interaction:right = "context"
 
-    # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
-    # UsdGeomGprim primvars and stay on the geometry; USD has no "display
-    # emissive", so the glow is a UsdPreviewSurface input on a bound Shader.
+    # Emission REQUIRES a material. `displayColor` is a real UsdGeomGprim
+    # primvar and stays on the geometry; USD has no "display emissive", so the
+    # glow is a UsdPreviewSurface input on a bound Shader.
     def Scope "Looks"
     {
         def Material "Dome_Mat"
@@ -60,7 +60,6 @@ def Xform "LandingLocationMarker" (
         double height = 0.04
         rel material:binding = </LandingLocationMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.95, 0.2, 0.2)]
-        float[] primvars:displayOpacity = [0.5]
         # Navigation annotation: never participate in scene shadow maps.
         bool primvars:doNotCastShadows = true
         bool physics:collisionEnabled = false

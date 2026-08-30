@@ -5076,9 +5076,18 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                            if matches!(l.level, StatusLevel::Warn | StatusLevel::Error) {
+                                ui.label(
+                                    egui::RichText::new(status_level_label(l.level))
+                                        .small()
+                                        .strong()
+                                        .color(dot_color),
+                                );
+                            }
                             ui.label(egui::RichText::new(l.source).small().strong());
                             let text = egui::RichText::new(&l.message).small();
-                            ui.add(egui::Label::new(text).truncate());
+                            ui.add(egui::Label::new(text).truncate())
+                                .on_hover_text(&l.message);
                             if l.level == StatusLevel::Progress {
                                 if let Some(pct) = l.progress_pct {
                                     ui.add(
@@ -5197,8 +5206,9 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             .open_memory(None)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_min_width(420.0);
-                ui.set_max_width(560.0);
+                let popup_width = status_popup_width(ui.ctx().content_rect().width());
+                ui.set_min_width(popup_width);
+                ui.set_max_width(popup_width);
                 ui.set_max_height(360.0);
                 ui.heading("Recent status events");
                 ui.separator();
@@ -5208,50 +5218,107 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                         return;
                     }
                     // Newest first.
-                    for ev in history.iter().rev() {
-                        let level_tag = match ev.level {
-                            StatusLevel::Info => egui::RichText::new("INFO ")
-                                .small()
-                                .color(theme.tokens.text_subdued),
-                            StatusLevel::Warn => egui::RichText::new("WARN ")
-                                .small()
-                                .color(theme.tokens.warning),
-                            StatusLevel::Error => egui::RichText::new("ERR  ")
-                                .small()
-                                .color(theme.tokens.error),
-                            StatusLevel::Attention => egui::RichText::new("ACTN ")
-                                .small()
-                                .color(theme.tokens.error),
-                            StatusLevel::Progress => egui::RichText::new("…    ")
-                                .small()
-                                .color(theme.tokens.text_subdued),
-                        };
-                        ui.horizontal(|ui| {
-                            // Reserve the whole row so the message gets the
-                            // remaining width and wraps within the popup,
-                            // rather than making the row only as wide as its
-                            // contents.
-                            ui.set_width(ui.available_width());
-                            ui.label(level_tag.monospace());
-                            ui.label(
-                                egui::RichText::new(format!("[{}]", ev.source))
+                    for (index, ev) in history.iter().rev().enumerate() {
+                        if matches!(ev.level, StatusLevel::Warn | StatusLevel::Error) {
+                            let summary = status_message_summary(&ev.message);
+                            let heading = format!(
+                                "{} · [{}] {}",
+                                status_level_label(ev.level),
+                                ev.source,
+                                summary
+                            );
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new(heading)
                                     .small()
-                                    .strong(),
-                            );
-                            ui.add_sized(
-                                [ui.available_width(), 0.0],
-                                egui::Label::new(egui::RichText::new(&ev.message).small())
-                                    .wrap()
-                                    // `add_sized` uses a centered child layout;
-                                    // keep every wrapped explanation anchored to
-                                    // the start of its message column.
-                                    .halign(egui::Align::LEFT),
-                            );
-                        });
+                                    .color(status_level_color(ev.level, theme)),
+                            )
+                            .id_salt(("workbench_status_event", index))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("Full diagnostics").small().strong(),
+                                    );
+                                    if ui.small_button("Copy diagnostics").clicked() {
+                                        ui.ctx().copy_text(ev.message.clone());
+                                    }
+                                });
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&ev.message).small().monospace(),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                        } else {
+                            let level_tag = status_level_label(ev.level);
+                            ui.horizontal(|ui| {
+                                // Reserve the whole row so the message gets the
+                                // remaining width and wraps within the popup,
+                                // rather than making the row only as wide as its
+                                // contents.
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    egui::RichText::new(level_tag)
+                                        .small()
+                                        .monospace()
+                                        .color(status_level_color(ev.level, theme)),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("[{}]", ev.source))
+                                        .small()
+                                        .strong(),
+                                );
+                                ui.add_sized(
+                                    [ui.available_width(), 0.0],
+                                    egui::Label::new(egui::RichText::new(&ev.message).small())
+                                        .wrap()
+                                        // `add_sized` uses a centered child layout;
+                                        // keep every wrapped explanation anchored to
+                                        // the start of its message column.
+                                        .halign(egui::Align::LEFT),
+                                );
+                            });
+                        }
                     }
                 });
             });
     });
+}
+
+fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
+    match level {
+        status_bus::StatusLevel::Info => "INFO",
+        status_bus::StatusLevel::Warn => "WARN",
+        status_bus::StatusLevel::Error => "ERROR",
+        status_bus::StatusLevel::Attention => "ACTION",
+        status_bus::StatusLevel::Progress => "PROGRESS",
+    }
+}
+
+fn status_level_color(level: status_bus::StatusLevel, theme: &lunco_theme::Theme) -> egui::Color32 {
+    match level {
+        status_bus::StatusLevel::Error | status_bus::StatusLevel::Attention => theme.tokens.error,
+        status_bus::StatusLevel::Warn => theme.tokens.warning,
+        status_bus::StatusLevel::Info | status_bus::StatusLevel::Progress => {
+            theme.tokens.text_subdued
+        }
+    }
+}
+
+fn status_message_summary(message: &str) -> &str {
+    message
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(message)
+}
+
+fn status_popup_width(content_width: f32) -> f32 {
+    let available = (content_width - 24.0).max(0.0);
+    if available < 240.0 {
+        available
+    } else {
+        available.min(560.0)
+    }
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6163,6 +6230,23 @@ mod tests {
         app.world_mut().trigger(FocusPanel {
             id: "not_mounted".into(),
         });
+    }
+
+    #[test]
+    fn status_popup_width_fits_narrow_windows_and_caps_wide_windows() {
+        assert_eq!(status_popup_width(200.0), 176.0);
+        assert_eq!(status_popup_width(320.0), 296.0);
+        assert_eq!(status_popup_width(1024.0), 560.0);
+    }
+
+    #[test]
+    fn status_message_summary_keeps_diagnostic_lines_for_expanded_detail() {
+        let message = "\nmissing prim /World/Terrain\ncaused by: /twins/apollo15/terrain";
+        assert_eq!(
+            status_message_summary(message),
+            "missing prim /World/Terrain"
+        );
+        assert!(message.contains("caused by: /twins/apollo15/terrain"));
     }
 
     #[test]

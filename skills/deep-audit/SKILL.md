@@ -57,7 +57,7 @@ fixed soon graduates to its own `docs/reviews/open-<name>.md`, which stays.
      grid-absolute values), tire/terramechanics fidelity honestly stated, joint lifecycle
      (attach in avian `Prepare`, born-disabled collision), readiness gating.
    - **Resilience** — wedge states (in-flight flags with an early-return that never clears
-     them; every guard needs a wall-clock watchdog), panics on malformed input (checked
+     them; every guard must fail visibly at its owning boundary), panics on malformed input (checked
      arithmetic on header-controlled sizes), all-or-nothing loads (one bad asset must skip
      +report, not stall the scene), infinite per-frame retries with no give-up, failures
      that never reach the UI (`warn!` is not surfacing — trigger an Error-severity

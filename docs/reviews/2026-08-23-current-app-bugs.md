@@ -119,8 +119,8 @@ The `lunokhod2` terrain variant composes a real cached DEM directory and a valid
 2 km / 512-sample request. The production binary now loads the variant, answers
 finite `TerrainHeight` queries, and reports the composed terrain attributes
 including the DEM cache, 512 target resolution, and collider ring. The existing
-generation ownership, cancellation, and watchdog path therefore remains the
-authoritative lifecycle mechanism; no timeout terrain fallback was added.
+generation ownership and scene-teardown cancellation remain the authoritative
+lifecycle mechanisms; no timeout terrain cancellation or fallback was added.
 
 **Status:** verified through the production headless scene/API path. A rendered
 visual capture is still an open acceptance item.

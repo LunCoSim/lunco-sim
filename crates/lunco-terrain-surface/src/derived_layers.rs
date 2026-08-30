@@ -46,7 +46,6 @@ use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 // (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
 // no naga. `bevy::render::render_resource` merely re-exports them, and importing it
 // would drag the whole GPU stack in. See docs/architecture/render-decoupling.md.
-use web_time::Instant;
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use lunco_terrain_core::{
@@ -58,12 +57,7 @@ use crate::band::SurfaceBand;
 use crate::oracle::DemHeightField;
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::TerrainLodViz;
-use crate::terrain::{DemVisualTargetRes, TERRAIN_WORK_MAX_SECS};
-
-/// Telemetry event emitted when an optional visual bake exceeds its liveness
-/// bound. The terrain itself remains a valid scene product; this event reports
-/// only the unavailable refinement.
-pub const TERRAIN_DERIVED_FAILED: &str = "TERRAIN_DERIVED_FAILED";
+use crate::terrain::DemVisualTargetRes;
 
 /// Optional visual products derived from a ready DEM. The terrain surface and
 /// physics become usable before this work finishes; this resource only reports
@@ -78,8 +72,6 @@ pub struct TerrainDerivedStatus {
     pub total: usize,
     /// Bakes that are queued or running.
     pub pending: usize,
-    /// Terrains whose optional visual product was cancelled after the watchdog.
-    pub failed: usize,
 }
 
 /// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
@@ -148,16 +140,9 @@ pub struct TerrainAuthoredMaps {
 /// The in-flight off-thread bake for a terrain's derived layers, plus the
 /// identity (Arc pointer) of the oracle it was started against — a re-compose
 /// mid-bake makes the result stale, and [`finish_derived_bakes`] discards it.
-/// The task's start time is local to this entity; a late queued terrain must not
-/// inherit another terrain's watchdog age.
+/// The task is owned by this terrain entity and is cancelled with the scene.
 #[derive(Component)]
-struct DerivedBakeTask(Task<DerivedMipped>, usize, Instant);
-
-/// A terminal state for the optional visual product. The procedural terrain
-/// material remains a valid authored semantic default, so a failed derived bake
-/// must be reported and stopped rather than restarted forever.
-#[derive(Component)]
-struct DerivedMapsBuildFailed;
+struct DerivedBakeTask(Task<DerivedMipped>, usize);
 
 /// Debounce marker: the surface changed at `since`; wait for a short quiescent
 /// window before re-baking so a burst of brush strokes coalesces into one bake.
@@ -206,12 +191,9 @@ fn mark_derived_stale_on_quality_change(
     }
     signature.0 = Some(next);
     for entity in &terrains {
-        commands
-            .entity(entity)
-            .try_remove::<DerivedMapsBuildFailed>()
-            .try_insert(DerivedMapsStale {
-                since: time.elapsed_secs_f64(),
-            });
+        commands.entity(entity).try_insert(DerivedMapsStale {
+            since: time.elapsed_secs_f64(),
+        });
     }
 }
 
@@ -273,21 +255,11 @@ fn mark_derived_stale(
     mut commands: Commands,
     time: Res<Time>,
     changed: Query<
-        (
-            Entity,
-            Option<&DerivedDirtyRegion>,
-            Has<TerrainDerivedMaps>,
-            Has<DerivedMapsBuildFailed>,
-        ),
+        (Entity, Option<&DerivedDirtyRegion>, Has<TerrainDerivedMaps>),
         Changed<DemHeightField>,
     >,
 ) {
-    for (entity, region, has_maps, has_failed) in &changed {
-        if has_failed {
-            commands
-                .entity(entity)
-                .try_remove::<DerivedMapsBuildFailed>();
-        }
+    for (entity, region, has_maps) in &changed {
         if !has_maps {
             continue;
         }
@@ -321,7 +293,7 @@ fn start_derived_bakes(
             Option<&DemVisualTargetRes>,
             Has<TerrainLodViz>,
         ),
-        (Without<DerivedBakeTask>, Without<DerivedMapsBuildFailed>),
+        Without<DerivedBakeTask>,
     >,
 ) {
     if images.is_none() {
@@ -371,7 +343,7 @@ fn start_derived_bakes(
         commands
             .entity(entity)
             .try_remove::<DerivedMapsStale>()
-            .try_insert(DerivedBakeTask(task, oracle_ptr, Instant::now()));
+            .try_insert(DerivedBakeTask(task, oracle_ptr));
     }
 }
 
@@ -732,7 +704,6 @@ fn cancel_derived_bakes_on_scene_teardown(
             With<TerrainDerivedMaps>,
             With<TerrainAuthoredMaps>,
             With<DerivedLayersBuilt>,
-            With<DerivedMapsBuildFailed>,
         )>,
     >,
     mut status: ResMut<TerrainDerivedStatus>,
@@ -745,25 +716,21 @@ fn cancel_derived_bakes_on_scene_teardown(
             TerrainDerivedMaps,
             TerrainAuthoredMaps,
             DerivedLayersBuilt,
-            DerivedMapsBuildFailed,
         )>();
     }
     *status = TerrainDerivedStatus::default();
 }
 
-/// Publish the optional visual lifecycle and cancel a bake that has stopped
-/// making forward progress. This is the terrain crate's authoritative state;
-/// the application only mirrors it onto the existing status bus.
+/// Publish the optional visual lifecycle. This is the terrain crate's
+/// authoritative state; the application only mirrors it onto the existing
+/// status bus.
 fn update_derived_status(
-    mut commands: Commands,
     images: Option<Res<Assets<Image>>>,
     terrains: Query<
         (
-            Entity,
             Has<TerrainDerivedMaps>,
             Option<&DerivedBakeTask>,
             Has<DerivedMapsStale>,
-            Has<DerivedMapsBuildFailed>,
         ),
         With<DemHeightField>,
     >,
@@ -777,12 +744,10 @@ fn update_derived_status(
     let mut ready = 0;
     let mut total = 0;
     let mut pending = 0;
-    let mut failed = 0;
-    for (_, has_maps, task, stale, build_failed) in &terrains {
+    for (has_maps, task, stale) in &terrains {
         let has_task = task.is_some();
         total += 1;
-        ready += usize::from(has_maps && !has_task && !stale && !build_failed);
-        failed += usize::from(build_failed);
+        ready += usize::from(has_maps && !has_task && !stale);
         pending += usize::from(has_task || stale);
     }
 
@@ -792,50 +757,15 @@ fn update_derived_status(
             ready,
             total,
             pending,
-            failed,
         };
         return;
     }
 
-    let mut cancelled = 0;
-    for (entity, _, task, _, build_failed) in &terrains {
-        let Some(task) = task else {
-            continue;
-        };
-        if Instant::now()
-            .saturating_duration_since(task.2)
-            .as_secs_f32()
-            <= TERRAIN_WORK_MAX_SECS
-        {
-            continue;
-        }
-        commands
-            .entity(entity)
-            .try_remove::<(DerivedBakeTask, DerivedMapsStale)>();
-        if !build_failed {
-            commands.entity(entity).try_insert(DerivedMapsBuildFailed);
-            cancelled += 1;
-        }
-    }
-    if cancelled > 0 {
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: TERRAIN_DERIVED_FAILED.to_owned(),
-            source: 0,
-            severity: lunco_core::Severity::Warning,
-            data: lunco_core::TelemetryValue::String(format!(
-                "{cancelled} terrain visual bake(s) exceeded {TERRAIN_WORK_MAX_SECS:.0}s and were cancelled"
-            )),
-            timestamp: 0.0,
-        });
-    }
-
-    let remaining_pending = pending.saturating_sub(cancelled);
     *status = TerrainDerivedStatus {
-        active: remaining_pending > 0,
+        active: pending > 0,
         ready,
         total,
-        pending: remaining_pending,
-        failed: failed + cancelled,
+        pending,
     };
 }
 
@@ -1049,13 +979,12 @@ mod tests {
             lunco_core::SceneTeardown,
             cancel_derived_bakes_on_scene_teardown,
         );
-        let entity = app.world_mut().spawn(DerivedMapsBuildFailed).id();
+        let entity = app.world_mut().spawn(DerivedLayersBuilt).id();
         *app.world_mut().resource_mut::<TerrainDerivedStatus>() = TerrainDerivedStatus {
             active: true,
             ready: 0,
             total: 1,
             pending: 1,
-            failed: 0,
         };
 
         lunco_core::run_scene_teardown(app.world_mut());
@@ -1063,7 +992,7 @@ mod tests {
         assert!(app
             .world()
             .get_entity(entity)
-            .is_ok_and(|entity| !entity.contains::<DerivedMapsBuildFailed>()));
+            .is_ok_and(|entity| !entity.contains::<DerivedLayersBuilt>()));
         assert_eq!(
             *app.world().resource::<TerrainDerivedStatus>(),
             TerrainDerivedStatus::default()

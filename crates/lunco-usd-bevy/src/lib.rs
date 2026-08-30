@@ -2959,9 +2959,9 @@ fn apply_standard_material(
     //
     // Geometry-baseline transparency: the standard UsdGeomGprim
     // `primvars:displayOpacity` lets a simple prim be translucent WITHOUT a
-    // bound shader network (used by the waypoint-marker asset). A bound shader's
-    // `inputs:opacity` still wins below. A sub-1 value flips `AlphaMode::Blend`
-    // via the rule further down.
+    // bound shader network. A bound shader's `inputs:opacity` still wins below.
+    // A sub-1 value flips `AlphaMode::Blend` via the rule further down; opaque
+    // marker assets omit this optional primvar.
     // `primvars:displayOpacity` ONLY — the bare `displayOpacity` alias is gone.
     // It is not a UsdGeomGprim attribute, and accepting it meant a typo'd primvar
     // still worked here and nowhere else. ARRAY-valued (`float[]`) by schema.
