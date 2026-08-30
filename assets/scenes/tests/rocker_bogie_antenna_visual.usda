@@ -1,0 +1,190 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieAntennaVisual"
+    upAxis = "Y"
+    metersPerUnit = 1
+    timeCodesPerSecond = 1
+)
+
+# Visual companion for the numeric rocker-bogie antenna test. It reuses the
+# production fixture's celestial frame, rover, camera track, and starfield.
+def Xform "RockerBogieAntennaVisual" (
+    prepend references = @lunco://scenes/tests/rocker_bogie_antenna.usda@</RockerBogieAntennaTest>
+    kind = "assembly"
+)
+{
+    def Xform "Sky" (
+        prepend references = @lunco://components/environment/starfield_sky.usda@</StarfieldSky>
+    )
+    {
+    }
+
+    def LunCoEnvironment "Environment"
+    {
+        # The ephemeris owns the sun's physical intensity. This visual
+        # companion owns only its photographic grade, lifting EV above the
+        # numeric fixture's calibrated EV16 so the white antenna does not clip.
+        float lunco:env:exposureEv100 = 17.5
+    }
+
+    # A visual-review fill is a standard textureless DomeLight: it lifts the
+    # camera-facing side of the parked hardware while the numeric scene keeps
+    # its physically lit, no-fill contract.
+    def DomeLight "ReviewFill"
+    {
+        float inputs:intensity = 5000.0
+        float inputs:exposure = 0.0
+        color3f inputs:color = (0.55, 0.60, 0.70)
+    }
+
+    # Connectivity beams are a separate link-state presentation. Hide them in
+    # this hardware review so a long-range link cannot be mistaken for a loose
+    # antenna part; the numeric fixture still verifies the live link component.
+    over "Rover"
+    {
+        # A visual review freezes the authored hardware pose. The numeric
+        # companion remains the sole live articulation gate.
+        bool physics:rigidBodyEnabled = false
+        over "RockerL"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_FL" { bool physics:rigidBodyEnabled = false }
+        }
+        over "RockerR"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_FR" { bool physics:rigidBodyEnabled = false }
+        }
+        over "BogieL"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_ML" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_RL" { bool physics:rigidBodyEnabled = false }
+        }
+        over "BogieR"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_MR" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_RR" { bool physics:rigidBodyEnabled = false }
+        }
+        over "HingeL" (active = false) { }
+        over "HingeR" (active = false) { }
+        over "BogieHingeL" (active = false) { }
+        over "BogieHingeR" (active = false) { }
+
+        # This companion is a hardware composition review, not the pointing
+        # dynamics gate. Replace the live antenna instance with one scenery
+        # instance of the same reusable component; the numeric companion keeps
+        # the controller and both joints live while the rover drives.
+        over "Antenna" (
+            active = false
+        )
+        {
+        }
+
+        def "AntennaReview" (
+            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+        )
+        {
+            double3 xformOp:translate = (-0.35, 0.22, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            over "Mast"
+            {
+                double radius = 0.02
+                double height = 0.5
+                double3 xformOp:translate = (0.0, 0.25, 0.0)
+                color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            }
+            over "YawHead"
+            {
+                double3 xformOp:translate = (0.0, 0.5, 0.0)
+                bool physics:rigidBodyEnabled = false
+
+                over "DishGimbal"
+                {
+                    bool physics:rigidBodyEnabled = false
+                    # Aim the parked reflector toward this review camera so
+                    # the feed, bowl, and yoke read as one antenna assembly.
+                    double3 xformOp:rotateXYZ = (-55.0, -30.0, 0.0)
+                    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+                    over "DishHead"
+                    {
+                        over "LinkAperture"
+                        {
+                            # The visual companion reviews hardware geometry;
+                            # the numeric fixture owns the live link node and
+                            # its beam policy.
+                            bool lunco:linkNode = false
+                            bool lunco:wifiNode = false
+                            over "LinkBeam"
+                            {
+                                over "Up"
+                                {
+                                    over "Driver"
+                                    {
+                                        custom float lunco:param:mode = 2
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            over "EarthTrackerController" (
+                active = false
+            )
+            {
+            }
+            over "YawJoint" (
+                active = false
+            )
+            {
+            }
+            over "ElevationJoint" (
+                active = false
+            )
+            {
+            }
+        }
+    }
+
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        # A rear three-quarter take puts the antenna's rear-deck mount in
+        # front of the body silhouette while keeping the mast and dish inside
+        # the frame.
+        double3 lunco:cameraLookAt = (-0.2, 1.4, 0.4)
+        double3 xformOp:translate = (-3.2, 3.0, 5.5)
+        float focalLength = 30.0
+        # The celestial epoch drives the physical lunar sun at its authored
+        # intensity. This review camera uses one additional exposure stop so
+        # the white antenna reflector and its mast remain separable from the
+        # regolith instead of clipping into one white field.
+        float exposure:fStop = 32.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "VisualCamera",
+        }
+    }
+    over "Scenario" {
+        over "Test" {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie_antenna_visual.rhai@
+        }
+    }
+}

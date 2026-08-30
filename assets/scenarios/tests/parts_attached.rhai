@@ -1,6 +1,7 @@
 // ── Nothing falls off the vehicle ───────────────────────────────────────────
 //
-// TEST-ONLY. Runs against `scenes/tests/parts_attached.usda`.
+// TEST-ONLY. Runs against the Skid and Ackermann pair fixtures in
+// `scenes/tests/parts_attached.usda` and `scenes/tests/parts_attached_ackermann.usda`.
 //
 // WHAT IT GUARDS. That every PART of a vessel is still carried by that vessel
 // after it has settled and driven. The failure it exists for is silent in every
@@ -85,16 +86,24 @@ fn on_start(me) {
     this.next_sample = 0.0;
     this.phase = "settle";
 
-    this.paths = [
+    // The observer is shared by the compact Skid and Ackermann fixtures. A
+    // candidate list is the authored fixture contract; missing candidates are
+    // omitted so each scene can own one physical pair without duplicating this
+    // behavioral policy.
+    let candidates = [
         "/PartsAttached/SkidRaycast",
         "/PartsAttached/SkidPhysical",
         "/PartsAttached/AckermannRaycast",
         "/PartsAttached/AckermannPhysical",
-        "/PartsAttached/SixWheelRaycast",
     ];
+    this.paths = [];
     this.roots = [];
-    for p in this.paths {
-        this.roots.push(find_or_none(p));
+    for p in candidates {
+        let rover = find_or_none(p);
+        if rover != () && rover >= 0 {
+            this.paths.push(p);
+            this.roots.push(rover);
+        }
     }
 
     // Filled at the end of the settle phase: one entry per part, holding the
@@ -116,11 +125,18 @@ fn on_start(me) {
 fn on_tick(me) {
     if this.phase == "done" { return; }
 
-    // A missing rover is the classic silent no-op — fail on tick one.
+    // A missing or incomplete authored pair is the classic silent no-op — fail
+    // on tick one. The same observer is reused by the Skid and Ackermann pair
+    // fixtures, and each must resolve both of its candidate rovers.
+    if this.roots.len() < 2 {
+        fail_fast("expected two authored rover candidates — incomplete attachment fixture?",
+                      "PARTS ATTACHED", "PARTS_ATTACHED");
+        this.phase = "done";
+        return;
+    }
     for r in this.roots {
-        if r == () {
-            fail_fast("rover prims not found — wrong scene? expected " +
-                      "scenes/tests/parts_attached.usda",
+        if r == () || r < 0 {
+            fail_fast("authored rover child did not resolve — malformed attachment fixture",
                       "PARTS ATTACHED", "PARTS_ATTACHED");
             this.phase = "done";
             return;

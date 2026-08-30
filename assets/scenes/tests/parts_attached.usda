@@ -27,7 +27,7 @@
 # stroke without moving the number, while a part that stays behind on the ground
 # changes it by the whole length of the drive.
 #
-# WHY BOTH DRIVETRAIN VARIANTS OF BOTH ROVERS, PLUS THE SIX-WHEEL RAYCAST ROVER.
+# WHY BOTH DRIVETRAIN VARIANTS OF THE SKID ROVER.
 # The `physical` variant DOES give
 # some children their own bodies on purpose (each wheel, jointed by a revolute).
 # A test that only ran `raycast` could be satisfied by a loader that refused
@@ -45,7 +45,7 @@
 def Xform "PartsAttached" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Five rovers driven in a straight line; every descendant part must still be at its authored offset afterwards."
+    doc = "Both Skid rover drivetrain variants are driven in a straight line; every descendant part must still be at its authored offset afterwards."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -98,11 +98,13 @@ def Xform "PartsAttached" (
         float2 clippingRange = (0.1, 100000.0)
     }
 
-    # ── The five vehicles ────────────────────────────────────────────────────
-    # Two assets × two drivetrain realizations plus the six-wheel raycast rover.
-    # The four paired lanes are 40 m apart; the six-wheel control occupies the
-    # centre lane at a different Z. All drive along −Z, so no vehicle can collide
-    # with another and a part left behind is unambiguously its rover's.
+    # ── The two vehicles ─────────────────────────────────────────────────────
+    # The two Skid drivetrain realizations share this compact fixture. The
+    # Ackermann pair has the same contract in `parts_attached_ackermann.usda`.
+    # Keeping each physical pair in its own scene avoids making attachment
+    # coverage depend on the solver's multi-vehicle warmup envelope.
+    # The paired lanes are 40 m apart and both drive along −Z, so no vehicle can
+    # collide with the other and a part left behind is unambiguously its rover's.
 
     def Xform "SkidRaycast" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
@@ -126,42 +128,12 @@ def Xform "PartsAttached" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Xform "AckermannRaycast" (
-        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
-        variants = {
-            string drivetrain = "raycast"
-        }
-    )
-    {
-        double3 xformOp:translate = (20.0, 1.0, 50.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    def Xform "AckermannPhysical" (
-        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
-        variants = {
-            string drivetrain = "physical"
-        }
-    )
-    {
-        double3 xformOp:translate = (60.0, 1.0, 50.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    def Xform "SixWheelRaycast" (
-        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
-    )
-    {
-        double3 xformOp:translate = (0.0, 1.0, 100.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
     # NOT HERE, AND WHY. `vessels/rovers/rucheyok/rucheyok.usda` is another vessel
     # that mounts non-mobility parts — a solar panel and a battery, whose component
     # assets apply `PhysicsRigidBodyAPI` exactly as the motor did. It could be added
     # here, but it does not move: zero displacement
-    # for the hull and every part over a 12 s full-throttle drive, while the five
-    # rovers above cover tens of metres in the same rig. A vehicle that never
+    # for the hull and every part over a 12 s full-throttle drive, while the two
+    # rover variants above cover tens of metres in the same rig. A vehicle that never
     # simulates cannot lose a part, so including it would buy a green square that
     # asserts nothing, and this file's own rule is that a measurement which cannot
     # fail is not a measurement. Put Rucheyok back the day it drives.

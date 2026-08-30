@@ -97,6 +97,17 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
+Reusable vehicle accessories keep the same ownership boundary. For example,
+`assets/components/lights/headlight_controller.usda` projects
+`LunCo.Electrical.HeadlightController`: Rhai writes the vehicle's semantic
+`inputs:headlights` command, Modelica clamps the enable value and solves the
+luminous output and bus power draw, and the USD lamp consumes the resulting
+lamp's `inputs:light_intensity` LunCo light port, which the runtime maps to the
+standard USD light's `inputs:intensity`. The controller's electrical pin is included in the
+vehicle's authored power collection. This makes the light pair reusable in
+other vehicle assemblies without a Rust toggle, a per-frame script, or a
+vehicle-specific electrical equation.
+
 Each policy unit carries both its Modelica class name and its root instance
 name. The shipped facts include a deterministic instance default, but a Rhai
 policy may replace it; Rust validates identifier/collision/uniqueness rules and

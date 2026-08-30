@@ -45,8 +45,9 @@ def Xform "SixWheelTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         # Close freeflight presentation for the six-wheel attachment acceptance
@@ -56,6 +57,15 @@ def Xform "SixWheelTest" (
         double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
         double3 xformOp:translate = (-5.0, 3.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
     }
 
     # The six-wheel rover, referenced from its reusable component definition.

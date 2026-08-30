@@ -59,11 +59,12 @@ def Xform "RockerBogieAntennaTest" (
     }
 
     # The authored local avatar is the single presentation owner for this
-    # fixture. Offscreen capture derives exactly one image camera from this
-    # explicit scene identity, avoiding competing mounted cameras from the
-    # referenced rover.
-    def Xform "Avatar" (
+    # fixture. The canonical camera component gives the window and offscreen
+    # renderer the same projection, while the track makes the initial choice
+    # explicit despite the rover's mounted camera.
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true
@@ -71,6 +72,15 @@ def Xform "RockerBogieAntennaTest" (
         double3 lunco:cameraLookAt = (-0.35, 1.0, 0.6)
         double3 xformOp:translate = (4.0, 3.0, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
     }
 
     def Scope "Scenario"
