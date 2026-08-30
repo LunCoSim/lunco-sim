@@ -834,9 +834,8 @@ def Xform "WaypointMarker"
         double radius = 2.5
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.95, 0.5)
-        color3f primvars:emissiveColor = (0.12, 0.85, 0.42)
-        float primvars:displayOpacity = 0.45
+        color3f[] primvars:displayColor = [(0.2, 0.95, 0.5)]
+        float[] primvars:displayOpacity = [0.45]
     }
     def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {
@@ -855,6 +854,11 @@ marker path in `ReachedWaypoints`, and emits the canonical `waypoint.reached`
 event. The marker stays visible after arrival; the route UI tints only the marker
 recorded as reached. The lower-level Sensor/zone notification is an engine
 mechanism, not the mission completion contract.
+
+For a visual review, use the authored `assets/scenes/tests/waypoint_visual.usda`
+companion with the production `target/debug/luncosim` binary from the tutorial
+checkout. It places the reusable dome around the parked six-wheel rover so the
+green annotation remains visible while the rover stays readable through it.
 
 Drop three markers into the scene:
 
