@@ -76,10 +76,12 @@ The marker has one authored USD identity and one runtime arrival path:
   Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
   are separate authored geometry contracts because the dome is lifted for
   presentation while the trigger is anchored to the terrain.
-  The dome authors `lunco:surface:additive`, so its emissive glow remains
-  depth-tested without writing an occluding depth value over a vehicle or
-  terrain behind it. This keeps the visible dome lifted above terrain while
-  the overlap volume remains useful on slopes.
+  The dome is opaque and emissive, so its authored green display remains solid
+  and independent of scene lighting. Its standard
+  `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
+  without changing the existing material binding or adding a marker renderer.
+  This keeps the visible dome lifted above terrain while the overlap volume
+  remains useful on slopes.
 - **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
   vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with the marker
   path. The route UI uses that set for visited appearance; an autopilot cursor may

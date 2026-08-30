@@ -506,7 +506,7 @@ impl CanonicalStage {
 
     /// Author `active` onto the prim's spec on the root edit target. This is the
     /// live-stage counterpart of the document's `SetActive` op, so a runtime hide
-    /// of a purely-visual prim (a waypoint marker: a translucent dome + a
+    /// of a purely-visual prim (a waypoint marker: an opaque emissive dome + a
     /// non-solid Sensor, no rigid body / collider) reaches the live world without
     /// a whole-scene reload — the projection bridge despawns the prim's subtree via
     /// a `refresh_prim_subtree`. Firing the sink lets
