@@ -317,7 +317,7 @@ def Xform "RockerBogie" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         # Rocker main forward-down link (pivots down/forward to front wheel)
-        # Length: 1.265m, Midpoint: (0.0, -0.2, -0.6), Rotated: +18.43 deg about X
+        # Length: 1.265m, Midpoint: (0.0, -0.2, -0.6), Rotated: -18.43 deg about X
         # Endpoints are the rocker hinge at (0, 0, 0) and the front axle at
         # (0, -0.4, -1.2) in this rocker frame.
         def Cylinder "FrontLink"
@@ -326,7 +326,7 @@ def Xform "RockerBogie" (
             double radius = 0.06
             double height = 1.265
             double3 xformOp:translate = (0.0, -0.2, -0.6)
-            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
@@ -521,7 +521,7 @@ def Xform "RockerBogie" (
             double radius = 0.06
             double height = 1.265
             double3 xformOp:translate = (0.0, -0.2, -0.6)
-            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
@@ -662,7 +662,7 @@ def Xform "RockerBogie" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         # Bogie front-down link (goes down/forward to middle wheel)
-        # Length: 0.447m, Midpoint: (0.0, -0.1, -0.2), Rotated: +26.57 deg about X
+        # Length: 0.447m, Midpoint: (0.0, -0.1, -0.2), Rotated: -26.57 deg about X
         # Endpoints are this bogie's rocker hinge at (0, 0, 0) and the
         # middle axle at (0, -0.2, -0.4) in the bogie frame.
         def Cylinder "FrontLink"
@@ -671,7 +671,7 @@ def Xform "RockerBogie" (
             double radius = 0.05
             double height = 0.447
             double3 xformOp:translate = (0.0, -0.1, -0.2)
-            double3 xformOp:rotateXYZ = (26.57, 0.0, 0.0)
+            double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
@@ -893,7 +893,7 @@ def Xform "RockerBogie" (
             double radius = 0.05
             double height = 0.447
             double3 xformOp:translate = (0.0, -0.1, -0.2)
-            double3 xformOp:rotateXYZ = (26.57, 0.0, 0.0)
+            double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
