@@ -13,9 +13,11 @@
 //! binary) so switching works in a static/headless world with no avatar and no
 //! input. Camera selection is an intent-level operation: a [`SceneCamera`] can
 //! be selected before a render host has attached its [`RenderTarget`] (as in a
-//! headless run or during projection). The renderer later binds only window
-//! targets. RTT (`Image`-target) cameras and the egui `Camera2d` are never
-//! selected for the main viewport.
+//! headless run or during projection). The renderer later binds the selected
+//! camera to its presentation surface. Ordinary RTT (`Image`-target) cameras
+//! and the egui `Camera2d` are never selected; an offscreen recorder may keep a
+//! non-writing authored source camera as the selected pose owner while its
+//! image-target mirror renders the take.
 //!
 //! Switch surfaces, one mechanism — all funnel through [`ActivateCamera`] →
 //! rebind [`SceneViewport::active_camera`](lunco_core::SceneViewport):
@@ -371,6 +373,24 @@ fn is_window_render_target(target: &RenderTarget) -> bool {
     matches!(target, RenderTarget::Window(_))
 }
 
+fn is_offscreen_pose_owner(target: &RenderTarget, camera: &Camera) -> bool {
+    matches!(
+        (&camera.output_mode, target),
+        (bevy::camera::CameraOutputMode::Skip, RenderTarget::Image(_))
+    )
+}
+
+fn is_viewport_render_target(target: &RenderTarget, camera: &Camera) -> bool {
+    is_window_render_target(target) || is_offscreen_pose_owner(target, camera)
+}
+
+fn is_selectable_camera_target(target: Option<&RenderTarget>, camera: Option<&Camera>) -> bool {
+    target.is_none_or(|target| {
+        is_window_render_target(target)
+            || camera.is_some_and(|camera| is_offscreen_pose_owner(target, camera))
+    })
+}
+
 /// Command handler: resolve `SetActiveCamera.name` → a camera entity and fire
 /// [`ActivateCamera`]. Matches the full USD prim path *or* its leaf.
 #[on_command(SetActiveCamera)]
@@ -518,7 +538,10 @@ pub fn cycle_active_camera(
 /// directly (single-writer discipline).
 pub fn on_activate_camera(
     trigger: On<ActivateCamera>,
-    q_cams: Query<(Option<&RenderTarget>, Option<&UsdPrimPath>), With<SceneCamera>>,
+    q_cams: Query<
+        (Option<&RenderTarget>, Option<&UsdPrimPath>, Option<&Camera>),
+        With<SceneCamera>,
+    >,
     q_identity: Query<(Option<&Name>, Option<&UsdPrimPath>, Has<SceneCamera>)>,
     mut selection: ResMut<ViewportCameraSelection>,
     mut status: ResMut<CameraSelectionStatus>,
@@ -530,29 +553,30 @@ pub fn on_activate_camera(
         // SceneCamera is the render-free intent marker. A missing target is
         // valid in --no-ui/headless runs and while the render host is still
         // binding a projected camera; the reconciler will act when the
-        // window-targeted pipeline exists.
-        Ok((None, path)) | Ok((Some(RenderTarget::Window(_)), path)) => {
-            selection.requested = Some(match path {
-                Some(path) => RequestedCamera::Authored(UsdCameraKey {
-                    stage: path.stage_handle.id(),
-                    path: path.path.clone(),
-                }),
-                None => RequestedCamera::Entity(target),
-            });
-            selection.owner = match event.source {
-                CameraActivationSource::Director => CameraSelectionOwner::Director,
-                CameraActivationSource::User => CameraSelectionOwner::User,
-            };
-            clear_camera_error(&mut status, &mut commands);
-            info!(
-                "[camera] viewport → {target:?} (owner={:?})",
-                selection.owner
-            );
-        }
-        Ok((Some(_), _)) => {
-            let message = format!("camera {target:?} is not a window camera");
-            record_camera_error(&mut status, message.clone(), &mut commands);
-            warn!("[camera] {message}");
+        // selected presentation surface exists.
+        Ok((render_target, path, camera)) => {
+            if is_selectable_camera_target(render_target, camera) {
+                selection.requested = Some(match path {
+                    Some(path) => RequestedCamera::Authored(UsdCameraKey {
+                        stage: path.stage_handle.id(),
+                        path: path.path.clone(),
+                    }),
+                    None => RequestedCamera::Entity(target),
+                });
+                selection.owner = match event.source {
+                    CameraActivationSource::Director => CameraSelectionOwner::Director,
+                    CameraActivationSource::User => CameraSelectionOwner::User,
+                };
+                clear_camera_error(&mut status, &mut commands);
+                info!(
+                    "[camera] viewport → {target:?} (owner={:?})",
+                    selection.owner
+                );
+            } else {
+                let message = format!("camera {target:?} is not a window camera");
+                record_camera_error(&mut status, message.clone(), &mut commands);
+                warn!("[camera] {message}");
+            }
         }
         Err(_) => {
             let identity = q_identity
@@ -571,14 +595,17 @@ pub fn on_activate_camera(
     }
 }
 
-/// The **single authority** over window-camera `is_active` + `viewport`.
+/// The **single authority** over presentation-camera binding and window-camera
+/// `is_active` + `viewport`.
 ///
 /// Reads the [`SceneViewport`] (active-camera binding + visibility + rect) and
 /// actuates it: exactly the bound camera is active (and only when visible); all
-/// other window cameras are off. RTT (`Image`-target) cameras are ignored.
-/// Also updates the persistent BigSpace [`OriginAnchor`] to the active camera's
-/// `WorldGrid` cell using the authoritative f64 hierarchy pose. The camera is
-/// a render consumer; it never owns the origin marker.
+/// other window cameras are off. An image-target camera participates in the
+/// binding only when it is an explicit non-writing pose owner; ordinary RTT
+/// cameras remain ignored. Also updates the persistent BigSpace
+/// [`OriginAnchor`] to the active camera's `WorldGrid` cell using the
+/// authoritative f64 hierarchy pose. The camera is a render consumer; it never
+/// owns the origin marker.
 ///
 /// There is deliberately no implicit camera selection here. If the selection
 /// is absent, stale, or still waiting for its authored camera to finish
@@ -628,13 +655,16 @@ pub fn reconcile_scene_viewport(
      -> bool {
         q.get(e)
             .is_ok_and(|(_, camera, t, has_proj, clusters, _, scene_camera)| {
-                is_window_render_target(t)
+                let is_pose_owner = is_viewport_render_target(t, camera);
+                let has_render_clusters =
+                    clusters.is_none_or(|clusters| clusters.dimensions != UVec3::ZERO);
+                is_pose_owner
                     && has_proj
                     && scene_camera
                     && camera
                         .physical_viewport_size()
                         .is_some_and(|size| size.x > 0 && size.y > 0)
-                    && clusters.is_none_or(|clusters| clusters.dimensions != UVec3::ZERO)
+                    && (has_render_clusters || is_offscreen_pose_owner(t, camera))
             })
     };
 
