@@ -38,7 +38,10 @@ tested through its production scene gate in `assets/scenes/tests/` with the
 observer in `assets/scenarios/tests/`. After editing either Rhai file, rerun
 `./scripts/run_scene_tests.sh --no-build --exact <scene-name>` for a single
 scene, or `./scripts/run_scene_tests.sh --no-build <scene-substring>` for a
-group; do not rebuild the
+group; the runner uses four independent headless processes by default, and
+`-j/--jobs N` changes that bound (`-j 1` is the serial diagnostic mode). This
+does not change each gate process's deterministic `--threads 1 --jitter 0`, and
+graphics assertions remain a separate serial offscreen pass. Do not rebuild the
 Rust core for a script-only change. The observer must verify public `cmd:*`
 events plus the resulting live state and emit a real verdict. Parsing or
 `--validate` is only preflight evidence.

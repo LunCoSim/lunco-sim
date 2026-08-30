@@ -16,6 +16,8 @@
 #   ./scripts/run_scene_tests.sh --exact joint # exactly scenes/tests/joint.usda
 #   ./scripts/run_scene_tests.sh --no-build   # reuse target/debug/luncosim
 #   ./scripts/run_scene_tests.sh --bin /path/to/luncosim --no-build
+#   ./scripts/run_scene_tests.sh -j 4         # four headless processes (default)
+#   ./scripts/run_scene_tests.sh -j 1         # serial execution for diagnosis
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
 # Exits non-zero if ANY scene fails, produces no verdict, or hangs past
@@ -45,6 +47,11 @@
 # is diagnostic, not a gate: multi-threading is by construction not run-to-run
 # reproducible, so gating on it would make the build flaky, and until we know
 # what a jittered failure means it must not be able to turn CI red.
+#
+# `-j/--jobs` bounds the number of independent production processes in either
+# headless pass. It does not change the deterministic gate's `--threads 1`
+# setting, and graphics scenes remain a separate serial acceptance pass because
+# they share the offscreen renderer/GPU rather than being independent workers.
 
 set -uo pipefail
 
@@ -58,6 +65,7 @@ STRESS_JITTER=0.4    # +/- 40% dt, i.e. frame times from 10 ms to 23 ms at 60 Hz
 STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 BUILD=1
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
+JOBS=4               # independent production processes, not Bevy test threads
 
 # ── Per-scene wall-clock bound ──────────────────────────────────────────────
 #
@@ -109,6 +117,22 @@ while (($# > 0)); do
             BIN="${1#--bin=}"
             shift
             ;;
+        -j|--jobs)
+            if (($# < 2)); then
+                echo "$1 needs a positive number" >&2
+                exit 2
+            fi
+            JOBS="$2"
+            shift 2
+            ;;
+        -j*)
+            JOBS="${1#-j}"
+            shift
+            ;;
+        --jobs=*)
+            JOBS="${1#--jobs=}"
+            shift
+            ;;
         -h|--help)
             sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
@@ -127,6 +151,11 @@ while (($# > 0)); do
             ;;
     esac
 done
+
+if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--jobs/-j needs a positive integer: $JOBS" >&2
+    exit 2
+fi
 
 if ((EXACT)) && [[ -z "$FILTER" ]]; then
     echo "--exact needs a scene name or path" >&2
@@ -226,50 +255,150 @@ statuses=()
 details=()
 overall=0
 
-echo "==> GATE pass: --threads 1 --jitter 0 (deterministic, this is what gates)"
-for scene in "${SCENES[@]}"; do
-    name="$(basename "$scene" .usda)"
-    log="$LOG_DIR/$name.log"
-    echo "==> $name"
+# One worker writes one result record and one log. The parent owns the ordered
+# summary and exit status, so background processes never mutate shared arrays or
+# interleave diagnostic output. Result files are under target/ and are atomic so
+# a completed process cannot be mistaken for a partially written result.
+run_one_scene() {
+    local index="$1"
+    local scene="$2"
+    local suffix="$3"
+    shift 3
+    local name="$(basename "$scene" .usda)"
+    local log="$LOG_DIR/$name${suffix}.log"
+    local result="$SCENE_RESULTS_DIR/$index"
+    local result_tmp="$result.tmp"
+    local code status summary
 
     # WALL-CLOCK bounded, because `--max-ticks` is not a bound on hanging.
     # `--max-ticks` can only fire between ticks; `scenes/tests/rover_comparison`
-    # spins forever INSIDE a single physics step (a diverged body, one core at
-    # 100%, no tick ever completes), so the runner never reaches its own check and
-    # the gate wedges instead of reporting. A gate that can hang reports nothing at
-    # all, which is strictly worse than reporting the wrong thing.
-    #
-    # The two outcomes stay DISTINGUISHABLE rather than collapsing into exit-2:
-    # `timeout` returns 124, which maps to its own HUNG status below.
-    #
-    # The flags are PASSED EXPLICITLY even though they are the binary's defaults:
-    # the gate's determinism must not silently change if a default ever moves.
+    # can spin forever inside one physics step, so the runner must report a
+    # named hang rather than wedge the complete gate.
     timeout --kill-after=10 "$SCENE_TIMEOUT" \
         "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
-        --threads 1 --jitter 0 --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
+        "$@" --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
     code=$?
 
     # The one-line summary `luncosim test` prints last; falls back to the exit code.
     summary="$(grep -E '^luncosim test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
-
     case $code in
         0) status="PASS" ;;
-        1) status="FAIL" ; overall=1 ;;
-        2) status="NO-VERDICT" ; overall=1 ;;
+        1) status="FAIL" ;;
+        2) status="NO-VERDICT" ;;
         # 124 is `timeout`'s own exit: the scene never finished. Named, not folded
         # into ERROR — a hang and a crash need different investigations.
-        124) status="HUNG(${SCENE_TIMEOUT}s)" ; overall=1 ;;
-        *) status="ERROR($code)" ; overall=1 ;;
+        124) status="HUNG(${SCENE_TIMEOUT}s)" ;;
+        *) status="ERROR($code)" ;;
     esac
 
-    names+=("$name")
-    statuses+=("$status")
-    details+=("${summary:-see $log}")
+    {
+        printf '%s\n' "$status"
+        printf '%s\n' "${summary:-see $log}"
+    } >"$result_tmp"
+    mv -f "$result_tmp" "$result"
+}
 
-    if [[ "$status" != "PASS" ]]; then
-        echo "    $status — last 20 log lines:"
-        tail -20 "$log" | sed 's/^/    | /'
+run_scene_batch() {
+    local phase="$1"
+    local suffix="$2"
+    shift 2
+    local -a test_args=("$@")
+    local result_dir="$LOG_DIR/.results-${phase}-$$"
+    local count="${#SCENES[@]}"
+    local limit="$JOBS"
+    local next=0
+    local running=0
+    local index pid reaped status summary name
+    declare -A active=()
+
+    BATCH_NAMES=()
+    BATCH_STATUSES=()
+    BATCH_DETAILS=()
+    if ((count == 0)); then
+        return
     fi
+    if ((limit > count)); then
+        limit="$count"
+    fi
+
+    mkdir -p "$result_dir"
+    SCENE_RESULTS_DIR="$result_dir"
+    echo "==> $phase pass: ${test_args[*]} ($limit parallel production processes)"
+
+    while ((next < count || running > 0)); do
+        while ((next < count && running < limit)); do
+            echo "==> START $(basename "${SCENES[$next]}" .usda) ($phase)"
+            run_one_scene "$next" "${SCENES[$next]}" "$suffix" "${test_args[@]}" &
+            active[$next]="$!"
+            ((next++))
+            ((running++))
+        done
+
+        if ((running > 0)); then
+            # Bash reaps whichever worker finishes first. The result record is
+            # the stable completion signal; scanning it also collects workers
+            # that finished in the same interval and reaps their PIDs explicitly.
+            wait -n || true
+            reaped=0
+            for index in "${!active[@]}"; do
+                if [[ -f "$result_dir/$index" ]]; then
+                    wait "${active[$index]}" || true
+                    unset "active[$index]"
+                    ((running--))
+                    ((reaped++))
+                fi
+            done
+
+            # A worker that dies before writing its record must not leave the
+            # scheduler waiting forever. Report it as a launcher error and keep
+            # the remaining scenes running.
+            if ((reaped == 0)); then
+                for index in "${!active[@]}"; do
+                    pid="${active[$index]}"
+                    if ! kill -0 "$pid" 2>/dev/null; then
+                        wait "$pid" || true
+                        printf 'ERROR(launcher)\nsee missing result for %s\n' "${SCENES[$index]}" >"$result_dir/$index"
+                        unset "active[$index]"
+                        ((running--))
+                        break
+                    fi
+                done
+            fi
+        fi
+    done
+
+    # Preserve discovery order in the report even though execution completes
+    # out of order.
+    for ((index = 0; index < count; index++)); do
+        name="$(basename "${SCENES[$index]}" .usda)"
+        if [[ -f "$result_dir/$index" ]]; then
+            IFS= read -r status < "$result_dir/$index" || status="ERROR(launcher)"
+            summary="$(sed -n '2p' "$result_dir/$index")"
+        else
+            status="ERROR(launcher)"
+            summary="see missing result for ${SCENES[$index]}"
+        fi
+        BATCH_NAMES+=("$name")
+        BATCH_STATUSES+=("$status")
+        BATCH_DETAILS+=("${summary:-see $LOG_DIR/$name${suffix}.log}")
+
+        if [[ "$status" != "PASS" ]]; then
+            echo "    $name: $status — last 20 log lines:"
+            if [[ -f "$LOG_DIR/$name${suffix}.log" ]]; then
+                tail -20 "$LOG_DIR/$name${suffix}.log" | sed 's/^/    | /'
+            else
+                echo "    | log is missing; inspect the worker launcher and result record"
+            fi
+        fi
+    done
+}
+
+run_scene_batch "gate" "" --threads 1 --jitter 0
+names=("${BATCH_NAMES[@]}")
+statuses=("${BATCH_STATUSES[@]}")
+details=("${BATCH_DETAILS[@]}")
+for status in "${statuses[@]}"; do
+    [[ "$status" == "PASS" ]] || overall=1
 done
 
 # ── GPU render pass ─────────────────────────────────────────────────────────
@@ -308,36 +437,13 @@ if [[ $STRESS -eq 1 ]]; then
     echo "    A scene GREEN in the gate and RED here is dt-sensitive and/or order-sensitive,"
     echo "    which is the class of bug that only shows up under the GUI."
 
-    s_names=()
-    s_statuses=()
-    s_details=()
-
-    for scene in "${SCENES[@]}"; do
-        name="$(basename "$scene" .usda)"
-        log="$LOG_DIR/$name.stress.log"
-        echo "==> $name (stress)"
-
-        timeout --kill-after=10 "$SCENE_TIMEOUT" \
-            "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
-            --threads "$STRESS_THREADS" \
-            --jitter "$STRESS_JITTER" \
-            --seed "$STRESS_SEED" \
-            --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
-        code=$?
-
-        summary="$(grep -E '^luncosim test (PASS|FAIL|NO-VERDICT)' "$log" | tail -1)"
-        case $code in
-            0) status="PASS" ;;
-            1) status="FAIL" ;;
-            2) status="NO-VERDICT" ;;
-            124) status="HUNG(${SCENE_TIMEOUT}s)" ;;
-            *) status="ERROR($code)" ;;
-        esac
-
-        s_names+=("$name")
-        s_statuses+=("$status")
-        s_details+=("${summary:-see $log}")
-    done
+    run_scene_batch "stress" ".stress" \
+        --threads "$STRESS_THREADS" \
+        --jitter "$STRESS_JITTER" \
+        --seed "$STRESS_SEED"
+    s_names=("${BATCH_NAMES[@]}")
+    s_statuses=("${BATCH_STATUSES[@]}")
+    s_details=("${BATCH_DETAILS[@]}")
 
     echo
     echo "============ stress pass (diagnostic, NOT a gate) =========="

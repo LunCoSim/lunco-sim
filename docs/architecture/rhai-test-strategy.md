@@ -87,6 +87,7 @@ separate active-gizmo drag mode.
 
    ```bash
    ./scripts/run_scene_tests.sh --no-build
+   ./scripts/run_scene_tests.sh --no-build -j 4
    ./scripts/run_scene_tests.sh --no-build --exact joint
    ./scripts/run_scene_tests.sh --no-build autopilot
    ```
@@ -105,7 +106,12 @@ separate active-gizmo drag mode.
    `--no-build` is the script/USD iteration path. Discovery still resolves the
    authored scene-to-scenario edge before execution. A scene run is a fresh
    headless test process because the current CLI accepts one scene and exits;
-   that is separate from rebuilding the Rust core.
+   that is separate from rebuilding the Rust core. The runner schedules up to
+   four headless production processes concurrently by default; `-j/--jobs N`
+   changes that process bound (`-j 1` is useful for serial diagnosis). Every
+   gate process still receives `--threads 1 --jitter 0`, so process parallelism
+   does not change the deterministic test contract. Graphics scenes remain a
+   separate serial GPU/offscreen pass.
    Use `--exact <scene-name>` for the smallest edit-loop run; an unqualified
    argument remains a substring group selector (for example, `joint` also
    matches `g7_joints`).

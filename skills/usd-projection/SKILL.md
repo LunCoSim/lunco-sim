@@ -52,6 +52,12 @@ scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
 window.
 
+Generated Modelica domain projection follows the same ownership and change
+set rule: apply the shared `is_domain_network_root` predicate before selecting
+a synthesizer, then use Bevy identity change detection to revisit only changed
+prim entities. Reserve the full root pass for a USD wiring or member-source
+invalidation. Do not add a second stage scan or a name-based candidate list.
+
 ## Law 1 — every edit goes through `ApplyUsdOp`
 
 An edit that does not lower to a `UsdOp` is absent from **save, journal, undo,

@@ -83,6 +83,12 @@ celestial projection therefore read the identical concrete root even when
 their systems observe the load in the same frame; a deferred visual write
 cannot cause a site anchor to be skipped permanently.
 
+Generated Modelica projection follows the same frame-discipline contract. Its
+shared USD root predicate runs before synthesizer selection, and the projector
+uses Bevy identity change detection to reprocess only prims whose path or
+identity changed. USD wiring or member-source invalidation explicitly requests
+the broader root pass; an unrelated descendant identity does not.
+
 ## 2. The UI must stay responsive
 The user types, drags, and right-clicks into the same event queue
 the physics solver empties. Never block that queue:

@@ -2241,9 +2241,18 @@ pub fn project_domain_islands(
     ) {
         return;
     }
+    // Identity assignment is per prim during a runtime-instance spawn. Do
+    // not turn one descendant's identity transition into a re-synthesis of
+    // every existing prim: only a wiring/source invalidation needs the full
+    // stage projection. The query iteration remains cheap, while the stage
+    // and policy reads below are reserved for the changed entities.
+    let full_reprojection = dirty.0 || projection_dirty.0;
     projection_dirty.0 = false;
     let Some(channels) = channels else { return };
     for (entity, prim, previous, installed_model) in &prims {
+        if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
+            continue;
+        }
         // Scope every authored path to the same USD instance as the generated
         // network. Runtime-spawned copies intentionally share stage-relative
         // paths; the instance root identity is the structural disambiguator.
@@ -2275,6 +2284,13 @@ pub fn project_domain_islands(
         let Ok(root_path) = SdfPath::new(&prim.path) else {
             continue;
         };
+        // Domain projection owns only prims with the standard component
+        // collection.  Keep this structural gate ahead of synthesizer
+        // selection: deriving ownership for an ordinary prim would walk its
+        // collection metadata even though it cannot be a network root.
+        if !is_domain_network_root(&view, &root_path) {
+            continue;
+        }
         // Domain ownership is derived from the typed member role schemas. A
         // domain API may still explicitly select a registered non-default
         // policy for a generic Modelica collection; physical actuator

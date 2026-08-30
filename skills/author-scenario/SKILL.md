@@ -199,7 +199,13 @@ For USD/Rhai-only iteration, reuse it without rebuilding:
 
 ```bash
 ./scripts/run_scene_tests.sh --no-build --exact <scene-name>
+./scripts/run_scene_tests.sh --no-build -j 4 <scene-substring>
 ```
+
+The runner defaults to four independent headless production processes.
+`-j/--jobs N` changes only that process bound; each gate process still uses
+`--threads 1 --jitter 0`, and graphics assertions run in their separate serial
+offscreen pass. Use `-j 1` when diagnosing ordering or resource interactions.
 
 For a standalone assertion against a running scene, use the live no-restart
 wrapper:
@@ -410,8 +416,10 @@ libraries → `<twin>/tools/*.rhai`.
 ## The gate set — what the shipped scene tests guard
 
 `./scripts/run_scene_tests.sh` builds `luncosim` once and runs every gate scene through `luncosim test`
-headless and deterministically (`--threads 1 --jitter 0`), exit 0=PASS / 1=FAIL /
-2=no verdict. The set, and what each one is FOR:
+headless and deterministically (`--threads 1 --jitter 0`) using four production
+processes by default. `-j/--jobs N` changes the process bound; it does not
+change the gate's deterministic flags. Exit 0=PASS / 1=FAIL / 2=no verdict.
+The set, and what each one is FOR:
 
 | Scene | Guards |
 |---|---|

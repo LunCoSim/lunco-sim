@@ -127,8 +127,14 @@ Rust test that supplies a fake rover or spy command. After the first Rust build,
 rerun authored scene tests with the existing binary:
 
 ```bash
-./scripts/run_scene_tests.sh --no-build autopilot
+./scripts/run_scene_tests.sh --no-build -j 4 autopilot
 ```
+
+The scene runner defaults to four independent headless production processes.
+`-j/--jobs N` changes that bound without changing each gate process's
+deterministic `--threads 1 --jitter 0`; use `-j 1` when diagnosing ordering or
+resource interactions. Graphics assertions remain a separate serial offscreen
+pass.
 
 For a standalone Rhai assertion that needs a live USD world, keep one API
 session open and run the source through `RunRhai`:

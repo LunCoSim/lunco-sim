@@ -497,6 +497,53 @@ the verification gate for this change. A settled Apollo rerun is still needed
 for an FPS comparison after the independent readiness issue is fixed; no FPS
 gain is claimed from the blocked run.
 
+#### 2026-08-30 generated-domain projection work-set gating
+
+The first trigger gate exposed a second cost: while runtime instance identities
+were being minted, one `Added<GlobalEntityId>` caused the projector to walk all
+USD prims and re-run ownership resolution for each one. The projector now
+keeps the existing full pass only for `WiringDirty` and member-source
+resolution, and processes only prims with an added USD path or identity for
+identity-driven work. The shared `is_domain_network_root` predicate remains
+the first composed-stage check before synthesizer selection.
+
+Before the work-set change, the clean 20-second Tracy capture recorded 179
+frames and `project_domain_islands` at 8.081 s total across 175 calls (46.18 ms
+mean). After it, the same production Apollo High run recorded 362 frames in
+20.29 s, reached `/api/ready`, and shut down through typed `Exit`; the dense
+1.45-million-zone trace was saved as
+`scripts/perf/captures/apollo-high-domain-targeted-20260830.tracy`. Its CSV
+decoder was not used for a post-change per-zone percentile because it exceeded
+the practical decode window, so no unobserved post-change zone timing is
+claimed. The clean runtime gate and focused `lunco-usd-sim` suite passed.
+
+#### 2026-08-30 bounded parallel authored scene runner
+
+`scripts/run_scene_tests.sh` now owns one bounded worker scheduler for both
+headless gate and diagnostic stress runs. `-j/--jobs N` defaults to four and
+limits independent production `luncosim` processes; each gate process still
+uses `--threads 1 --jitter 0`, and the graphics pass remains serial because it
+is a shared offscreen/GPU acceptance path. Results are written atomically and
+reported in discovery order, while worker failures before result publication
+are reported as launcher errors rather than hanging the gate.
+
+Verification:
+
+- The first `./scripts/run_scene_tests.sh --no-build -j 4 rocker_bogie` run:
+  **7/7** headless authored scenes passed.
+- A repeat of the same command exposed a real load-sensitive failure:
+  `rocker_bogie_high_speed` reported `speed_ripple=101.82%` under four
+  concurrent production processes, while
+  `./scripts/run_scene_tests.sh --no-build -j 1 --exact rocker_bogie_high_speed`
+  passed. This is tracked by rover-jitter card 71; no retry, serialization
+  exception, or tolerance relaxation was added.
+- `./scripts/run_scene_tests.sh --no-build`: default **4-process** gate
+  completed all 58 headless scenes with **55/58** passed. The three existing
+  authored failures were `drivetrain_parity`, `landing_legs`, and
+  `prismatic_spring`; both graphics fixtures remained red for the previously
+  recorded missing HDRI and fallback-pixel conditions.
+- No missing-result, scheduler, or process-cleanup error occurred.
+
 #### 2026-08-30 BigSpace stationary streamed visual tiles
 
 The BigSpace dependency already provides `Stationary`, which skips cell

@@ -178,6 +178,14 @@ projection code never waits on the engine mutex: cache misses remain explicit
 loading/unresolved states, the worker installs the parsed root, and the
 standard completion event reprojects the same source/AST canvas.
 
+The generated-domain projector is also lifecycle-driven at the ECS boundary.
+It first applies the shared `is_domain_network_root` predicate, then uses
+Bevy's `Added<UsdPrimPath>` and `Added<GlobalEntityId>` change sets to process
+only prims whose identity can have changed. A full root pass is reserved for
+the existing USD wiring and member-source invalidation signals. This keeps
+ownership resolution on the composed USD reader without scanning every scene
+prim when an unrelated runtime instance descendant receives its identity.
+
 The browser opens generated roots through the normal Modelica document/diagram
 route and exposes the boundary interface, units, member source assets, and
 promoted telemetry in an expandable topology inspector. Bundled class roots
