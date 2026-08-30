@@ -94,26 +94,31 @@ need to symlink external content into the engine tree.
 
 > [!WARNING]
 > **A relative `../` path escapes the twin root (or the asset root) and fails to load.**
-> For `info:sourceAsset` on a `LunCoProgramAPI` prim this failure is **silent**: the
-> prim is simply never driven, with nothing in the log. If a scenario doesn't run, check
-> the path before you debug the script.
+> `info:sourceAsset` is resolved against the stage's logical asset identity before it
+> reaches the scripting loader, so a co-located Twin scenario keeps its Twin source
+> instead of silently falling back to the engine library. A failed root or imported
+> script is reported by the scenario loader and the program is not attached.
 
-### rhai `import` does NOT use `lunco://` — the asymmetry
+### Rhai imports use the shared asset identity
 
-Script module ids are registered by `asset_path::anchor_of`, which returns a **bare relative
-path** for Bevy's default asset source. So the engine script library registers as
-`scripting/lib/shots.rhai`, with **no scheme**, and:
+`RhaiSourceLoader` discovers every literal `import` in the referenced source and
+declares it through Bevy's normal nested-asset dependency API. Dependencies may be
+top-level or inside a function; they are still loaded before the scenario becomes
+executable. The loader canonicalizes each path through
+`ScriptSources::canonical_id`, the same `lunco-assets` path algebra used by the
+synchronous module resolver:
 
 ```rhai
-import "/scripting/lib/shots" as shots;      // ✅ absolute from the assets root
-import "lunco://scripting/lib/shots";        // ❌ MEASURED: "Module not found"
+import "/scripting/lib/shots" as shots;       // assets-root absolute
+import "lunco://scripting/lib/shots" as shots; // engine-library URI
+import "helpers" as helpers;                  // relative to this script
 ```
 
-`lunco://…` has a scheme, so `canonicalize` passes it through untouched and the lookup
-misses. The leading slash is the "absolute from the assets root" form, resolved *without*
-the importing script's anchor — a bare `"scripting/lib/shots"` would instead anchor to the
-importer's own root. Since `lunco://` **is** the right spelling for a USD reference, this
-asymmetry is an easy mistake to make twice.
+There is no global Rhai preload. An unused scenario or library does no I/O, and a
+Twin mount does not trigger a project-wide script scan. The synchronous resolver
+reads only the sources published by those dependency handles. Non-literal imports
+are rejected while loading because an async asset graph cannot make an unknown
+runtime path safe or deterministic.
 
 ## `lunco-assets` owns resolution
 

@@ -121,9 +121,10 @@ assuming a hidden fallback. The guard test
 each `sourceAsset` file exists — but only [`validate-assets`](../validate-assets/SKILL.md)
 catches a broken `references` arc before you launch.
 
-> **rhai `import` does NOT use `lunco://`.** Module ids are bare anchored paths:
-> `import "/scripting/lib/shots"` ✅ / `import "lunco://scripting/lib/shots"` ❌
-> ("Module not found").
+> Rhai `import` uses the same canonical asset identity as USD. Use a logical
+> `lunco://…` or `twin://…` URI, an assets-root `/…` path, or a path relative to
+> the importing script. `RhaiSourceLoader` loads every literal import as a Bevy
+> dependency; unused scripts are not preloaded.
 
 ## Add a USD component
 
@@ -305,7 +306,8 @@ in their own layers. A tutorial only projects metadata from that stage.
   `@lunco://…@`.
 - ❌ `@../../…@` anywhere — `..` escapes the root and returns NotFound. There
   are zero such refs in the tree; keep it that way.
-- ❌ `lunco://` in a rhai `import` — module ids are bare anchored paths.
+- ❌ A dynamic/non-literal Rhai `import` — dependencies must be known while the
+  asset is loading, so the loader rejects it visibly.
 - ❌ `lunco:spawnable` on a prim that is not the stage `defaultPrim` — invisible
   to the palette.
 - ❌ Encoding a category in the filename — the category IS the parent folder.

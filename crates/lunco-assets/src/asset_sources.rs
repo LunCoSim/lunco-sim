@@ -175,10 +175,10 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // here so every app that registers asset sources gets it — a domain crate
     // that had to remember to add it would eventually forget and grow its own
     // downloader.
-    // The same common boundary also owns the library manifest. Script imports,
-    // scene catalogs, and source browsers all require this authoritative file
-    // listing; installing it here prevents a host-specific missing-resource
-    // panic when a domain plugin preloads scripts before its UI is visible.
+    // The same common boundary also owns the library manifest. Scene catalogs
+    // and source browsers require this authoritative listing; script loading
+    // itself follows the referenced Rhai asset's Bevy dependency graph and does
+    // not scan this manifest.
     app.add_plugins(crate::discovery::AssetDiscoveryPlugin);
     app.add_plugins(crate::datasets::DatasetsPlugin);
 

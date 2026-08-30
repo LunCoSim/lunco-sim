@@ -301,26 +301,16 @@ Imports used by a callback must be resolved through the normal scenario
 execution context. Keep shot-library calls on the maintained prelude/library
 surface rather than creating a second import or callback mechanism.
 
-### The import is spelled `/scripting/lib/shots`, not `lunco://`
+### The shot library follows the shared asset identity
 
 ```rhai
 import "/scripting/lib/shots" as shots;
 ```
 
-**MEASURED:** `import "lunco://scripting/lib/shots"` fails with `Module not found`. Script
-ids are registered by `asset_path::anchor_of`, which returns a **bare relative path** for
-Bevy's default asset source — the engine library registers as `scripting/lib/shots.rhai`,
-with no scheme. `lunco://…` has a scheme, so `canonicalize` passes it through untouched and
-the lookup misses.
-
-**This is asymmetric with USD references**, where `lunco://` *is* the way to name an engine
-asset (see [56-asset-resolution-and-cache.md](architecture/56-asset-resolution-and-cache.md)),
-so the mistake is an easy one to make twice.
-
-The **leading slash** is what makes the import work from a twin: it is the "absolute from
-the assets root" form, which `canonicalize` resolves without the importing script's anchor.
-A bare `"scripting/lib/shots"` would anchor to the importer's own root and look for
-`twin://<importer_root>/scripting/lib/shots.rhai`.
+`lunco://scripting/lib/shots` is also valid. The Rhai asset loader resolves the
+import through `lunco-assets` and declares it as a Bevy dependency, so the script
+is ready before the task tree invokes its callback. A relative import stays under
+the importing script's logical source; there is no project-wide Rhai preload.
 
 > [!NOTE]
 > **`lib/shots.rhai` is a temporary location.** It is campaign policy, not engine policy.

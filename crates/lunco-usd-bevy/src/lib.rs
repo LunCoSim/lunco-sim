@@ -1417,7 +1417,14 @@ fn instantiate_usd_prim_from_stage(
         // A program with a source this engine does not run — a `.mo` solved by
         // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
         // ours; extension picks the engine, exactly as USD picks a file format.
-        attach_programs(reader, &sdf_path, entity, commands);
+        attach_programs(
+            reader,
+            &sdf_path,
+            entity,
+            prim_path.stage_handle.id(),
+            asset_server,
+            commands,
+        );
 
         // There is deliberately NO "possessable" tag read here. The generic command
         // surface is authored by `Controls` and projected as `InputPorts`; the avatar
@@ -2480,13 +2487,12 @@ fn resolve_usd_instance_identities(
     }
 }
 
-/// Resolves a USD texture asset path relative to the stage it belongs to.
+/// Resolves an asset path relative to the stage it belongs to.
 ///
 /// The rule is [`lunco_assets::asset_path::canonicalize`] — the same one USD layer
-/// composition uses, so a texture reference and a layer reference spelled the same
-/// way resolve the same way. This used to re-implement it, and the copy had already
-/// drifted: it handled `scheme://` and relative refs but silently mishandled the
-/// absolute-from-assets-root `/…` form that composition accepts.
+/// composition uses, so a texture, scenario, or layer reference spelled the same
+/// way resolves the same way. Keeping the stage anchor lookup here prevents each
+/// projection from inventing a second source-resolution path.
 ///
 /// A stage need not have been loaded from a path — one composed in memory
 /// (`StageRecipe::from_source`, runtime authoring) has none, which the provenance
@@ -2497,7 +2503,7 @@ fn resolve_usd_instance_identities(
 /// which is what a `has_scheme` special case used to (partially) buy.
 ///
 /// [`canonicalize_root`]: lunco_assets::asset_path::canonicalize_root
-fn resolve_texture_path(
+pub fn resolve_stage_asset_path(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
@@ -2834,7 +2840,7 @@ fn apply_standard_material(
                 let asset_path = reader
                     .asset(&texture_path, "inputs:file")
                     .ok_or_else(|| MaterialReadError::new(input))?;
-                let resolved = resolve_texture_path(asset_server, stage_id, &asset_path);
+                let resolved = resolve_stage_asset_path(asset_server, stage_id, &asset_path);
 
                 let is_srgb =
                     match read_material_token(reader, &texture_path, "inputs:sourceColorSpace")?
@@ -4014,6 +4020,8 @@ fn attach_programs(
     reader: &StageView<'_>,
     owner: &SdfPath,
     entity: Entity,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    asset_server: &AssetServer,
     commands: &mut Commands,
 ) {
     let network_members = program::modelica_network_member_paths(reader);
@@ -4111,6 +4119,7 @@ fn attach_programs(
                     .try_insert(lunco_core::EmbeddedScenarioSource(source));
             }
             (program::ProgramBackend::Rhai, program::ProgramSource::Asset(asset)) => {
+                let asset = resolve_stage_asset_path(asset_server, stage_id, &asset);
                 commands
                     .entity(entity)
                     .try_insert(lunco_core::EmbeddedScenarioPath(asset));

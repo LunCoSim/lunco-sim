@@ -5,7 +5,7 @@
 //! than `std::fs::read_to_string` — that path doesn't exist on wasm32.
 //! See `docs/architecture/40-asset-io.md`.
 
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{io::Reader, Asset, AssetLoader, AssetPath, LoadContext};
 use bevy::prelude::*;
 
 /// Raw text of a `.py` file.
@@ -66,11 +66,24 @@ impl Plugin for PythonSourceAssetPlugin {
 pub struct RhaiSource {
     /// Raw `.rhai` text. UTF-8.
     pub text: String,
+    /// Handles for every literal import in this source. Bevy keeps the source
+    /// asset pending until this graph is loaded, so synchronous Rhai resolution
+    /// never needs a discovery scan or a per-tick async bridge.
+    #[dependency]
+    pub dependencies: Vec<Handle<RhaiSource>>,
 }
 
 #[cfg(feature = "rhai")]
 #[derive(Default, TypePath)]
 pub struct RhaiSourceLoader;
+
+/// Schedule boundary for publishing loaded Rhai source into the synchronous
+/// import registry. Consumers that compile file-backed programs from an asset
+/// event must run after this set so the dependency graph is visible to the
+/// resolver.
+#[cfg(feature = "rhai")]
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RhaiSourceAssetSet;
 
 #[cfg(feature = "rhai")]
 impl AssetLoader for RhaiSourceLoader {
@@ -82,17 +95,50 @@ impl AssetLoader for RhaiSourceLoader {
         &self,
         reader: &mut dyn Reader,
         _settings: &Self::Settings,
-        _load_context: &mut LoadContext<'_>,
+        load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let text = String::from_utf8(bytes)?;
-        Ok(RhaiSource { text })
+        let importer = lunco_assets::asset_path::anchor_of(load_context.path());
+        let dependencies = load_import_dependencies(&text, &importer, load_context)?;
+        Ok(RhaiSource { text, dependencies })
     }
 
     fn extensions(&self) -> &[&str] {
         &["rhai"]
     }
+}
+
+#[cfg(feature = "rhai")]
+fn load_import_dependencies(
+    source: &str,
+    importer: &str,
+    load_context: &mut LoadContext<'_>,
+) -> Result<Vec<Handle<RhaiSource>>, anyhow::Error> {
+    import_dependency_ids(source, importer).map(|ids| {
+        ids.into_iter()
+            .map(|id| load_context.load(AssetPath::parse(&id).into_owned()))
+            .collect()
+    })
+}
+
+#[cfg(feature = "rhai")]
+fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, anyhow::Error> {
+    crate::module_resolver::imported_paths(source)
+        .map_err(|error| anyhow::anyhow!("cannot inspect Rhai imports in {importer}: {error}"))
+        .map(|paths| {
+            paths
+                .into_iter()
+                .map(|path| {
+                    lunco_assets::script_source::ScriptSources::canonical_id(
+                        &path,
+                        Some(importer),
+                        "rhai",
+                    )
+                })
+                .collect()
+        })
 }
 
 /// Publish every loaded `.rhai` asset into the registry that backs `import`.
@@ -108,9 +154,10 @@ impl AssetLoader for RhaiSourceLoader {
 /// through whatever source it came from: `lunco://`, `twin://` for a campaign repo
 /// outside the engine tree, or a peer's synced content mounted as a Twin.
 ///
-/// This only works because loaders RETAIN their handles in
-/// [`ScriptSources::retain`](lunco_assets::script_source::ScriptSources::retain).
-/// An asset whose handle was dropped is already gone when the event arrives.
+/// The root scenario handle is owned by the scenario entity's
+/// [`crate::commands::ScenarioAssetHandle`], while imported handles are retained
+/// by `RhaiSource.dependencies`. An asset whose whole dependency chain has been
+/// dropped is removed from the synchronous registry by its `Unused` event.
 #[cfg(feature = "rhai")]
 fn publish_rhai_sources(
     mut events: MessageReader<AssetEvent<RhaiSource>>,
@@ -120,27 +167,41 @@ fn publish_rhai_sources(
     mut registry: ResMut<crate::ScriptRegistry>,
 ) {
     for ev in events.read() {
-        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = ev else {
-            continue;
-        };
-        // Both misses are REPORTED, never skipped: a script that loads but fails to
-        // register makes every `import` of it fail with "not found", which is
-        // indistinguishable from the file not existing. A dropped handle is the
-        // likely cause — see the note on `retain`.
-        let Some(src) = assets.get(*id) else {
-            warn!(
-                "[rhai] change event for {id:?} but the asset is gone — its handle \
-                 was dropped, so it is not importable and will not hot-reload"
-            );
-            continue;
-        };
-        let Some(path) = asset_server.get_path(*id) else {
-            warn!("[rhai] loaded script {id:?} has no asset path — not importable");
-            continue;
-        };
-        let canonical = lunco_assets::asset_path::anchor_of(&path);
-        debug!("[rhai] script available for import: {canonical}");
-        publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
+        match ev {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                // The root and every dependency are held by real ECS owners. A
+                // missing value here is an engine lifecycle violation, not a cache
+                // miss to paper over.
+                let Some(src) = assets.get(*id) else {
+                    warn!(
+                        "[rhai] change event for {id:?} but the asset is gone; \
+                         it is not importable or hot-reloadable"
+                    );
+                    continue;
+                };
+                let Some(path) = asset_server.get_path(*id) else {
+                    warn!("[rhai] loaded script {id:?} has no asset path — not importable");
+                    continue;
+                };
+                let canonical = lunco_assets::asset_path::anchor_of(&path);
+                debug!("[rhai] script available for import: {canonical}");
+                publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                let Some(path) = asset_server.get_path(*id) else {
+                    warn!(
+                        "[rhai] unloaded script {id:?} has no asset path; \
+                         its registry entry cannot be retired"
+                    );
+                    continue;
+                };
+                let canonical = lunco_assets::asset_path::anchor_of(&path);
+                if sources.remove(&canonical) {
+                    debug!("[rhai] retired script source: {canonical}");
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -187,57 +248,6 @@ fn publish_rhai_source(
     }
 }
 
-/// Load every `.rhai` the project has, so any of them can be `import`ed.
-///
-/// A scenario script is loaded because a USD prim names it. A LIBRARY module is
-/// named by nothing but an `import` inside another script — and `import` is
-/// resolved synchronously, mid-tick, so it cannot start a load and wait. Something
-/// has to have loaded it already.
-///
-/// That something is this, and it reuses the pipeline rather than adding one:
-/// [`discovery::list_assets`] is the existing "which files exist" enumerator (the
-/// spawn catalog uses it for `usda`, the shader catalog for `wgsl`), and it already
-/// covers the engine library plus every open Twin — which is exactly the set a
-/// script may import from. Loading goes through the ordinary `AssetServer`, so
-/// every scheme works, including a peer's synced content.
-///
-/// Re-runs whenever the manifest changes (it lands late on the web) or a Twin is
-/// opened, so a campaign repo mounted mid-session becomes importable without a
-/// restart. Already-loaded paths are skipped by the registry's own residency.
-#[cfg(feature = "rhai")]
-fn preload_importable_scripts(
-    asset_server: Res<AssetServer>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    roots: Res<lunco_assets::TwinRoots>,
-    sources: Res<lunco_assets::script_source::ScriptSources>,
-    mut seen: Local<std::collections::HashSet<String>>,
-) {
-    let files = match lunco_assets::discovery::list_assets(&manifest, &roots, "rhai") {
-        Ok(files) => files,
-        Err(error) => {
-            error!("[rhai] Twin registry unavailable during script discovery: {error}");
-            return;
-        }
-    };
-    for file in files {
-        // Load through the ANCHORED uri, not the bare enumerated path. Discovery
-        // reports engine-library files relative (`scenarios/lander_subsystems.rhai`), which the
-        // `AssetServer` loads from the default source — a different `AssetPath` than
-        // the `lunco://scenarios/lander_subsystems.rhai` a reference resolves to. Both
-        // reach the same file, so the same script would register under two ids and
-        // an author would have to guess which one `import` wants.
-        let id = lunco_assets::asset_path::canonicalize_root(&file.asset_path);
-        if !seen.insert(id.clone()) {
-            continue;
-        }
-        // Retained, not merely loaded: a handle dropped on the floor takes the asset
-        // with it, and the module would vanish before anything could import it.
-        // `publish_rhai_sources` registers the text when the load lands.
-        let handle: Handle<RhaiSource> = asset_server.load(id.clone());
-        sources.retain(id, handle.untyped());
-    }
-}
-
 /// Plugin that registers the `.rhai` asset loader. Pulled in by
 /// `LunCoScriptingPlugin`.
 #[cfg(feature = "rhai")]
@@ -250,21 +260,8 @@ impl Plugin for RhaiSourceAssetPlugin {
             .init_asset_loader::<RhaiSourceLoader>()
             .add_systems(
                 Update,
-                (
-                    // Discovery is change-driven: the manifest arrives late on the
-                    // web, and Twins open at runtime.
-                    preload_importable_scripts.run_if(
-                        resource_exists_and_changed::<lunco_assets::discovery::AssetManifest>
-                            // `exists_and_changed`, NOT `resource_changed`: a bare
-                            // `resource_changed` PANICS the schedule when the
-                            // resource is absent, and `TwinRoots` only exists once
-                            // a twin-capable app inserts it (lunica crashed at
-                            // startup on exactly this).
-                            .or_else(resource_exists_and_changed::<lunco_assets::TwinRoots>),
-                    ),
-                    publish_rhai_sources,
-                )
-                    .chain()
+                (publish_rhai_sources,)
+                    .in_set(RhaiSourceAssetSet)
                     .run_if(resource_exists::<lunco_assets::script_source::ScriptSources>),
             );
     }
@@ -344,6 +341,18 @@ mod tests {
                 .document()
                 .generation,
             0
+        );
+    }
+
+    #[test]
+    fn imported_assets_use_the_importers_canonical_source() {
+        assert_eq!(
+            import_dependency_ids(
+                r#"import "helpers" as helpers; import "/scripting/lib/shots" as shots;"#,
+                "twin://mission/main.rhai",
+            )
+            .unwrap(),
+            ["twin://mission/helpers.rhai", "scripting/lib/shots.rhai"]
         );
     }
 }

@@ -308,6 +308,12 @@ pub fn attach_embedded_scenarios(
             .entity(entity)
             .remove::<lunco_core::EmbeddedScenarioSource>()
             .remove::<ScenarioAssetId>();
+        if asset_id.is_none() {
+            // Inline source replaced a previous file-backed scenario. Its old
+            // root handle must leave with the old source; otherwise the Bevy
+            // dependency graph would keep an unrelated Twin asset resident.
+            commands.entity(entity).remove::<ScenarioAssetHandle>();
+        }
     }
 }
 
@@ -331,6 +337,16 @@ pub fn attach_embedded_scenarios(
 #[derive(Component, Debug, Clone)]
 pub struct ScenarioAssetId(pub String);
 
+/// The Bevy ownership edge for a file-backed scenario.
+///
+/// The scenario entity owns its root `RhaiSource` handle for exactly as long as
+/// the scenario is alive. `RhaiSource` owns the handles for its imported sources
+/// through its dependency field, so the asset graph — rather than the global
+/// synchronous import registry — controls residency and Twin teardown.
+#[cfg(feature = "rhai")]
+#[derive(Component, Debug, Clone)]
+pub struct ScenarioAssetHandle(pub Handle<crate::source_asset::RhaiSource>);
+
 /// LOAD half for FILE-backed scenarios: entities the USD loader stamped with
 /// [`lunco_core::EmbeddedScenarioPath`] (an `info:sourceAsset` attribute). Loads
 /// the `.rhai` asset through the `AssetServer` (wasm-safe — no `std::fs`) and,
@@ -338,7 +354,7 @@ pub struct ScenarioAssetId(pub String);
 /// so [`attach_embedded_scenarios`] runs the normal attach path next. Keeps the
 /// USD loader and scripting runtime decoupled via the lunco-core markers (same
 /// pattern as the inline path). The `Local` map holds a strong handle per entity
-/// so the asset isn't dropped mid-load; it's cleared on swap/failure.
+/// while loading; on success ownership moves to [`ScenarioAssetHandle`].
 #[cfg(feature = "rhai")]
 pub fn resolve_embedded_scenario_paths(
     q: Query<
@@ -347,10 +363,13 @@ pub fn resolve_embedded_scenario_paths(
     >,
     sources: Res<Assets<crate::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
-    script_sources: Res<lunco_assets::script_source::ScriptSources>,
     mut pending: Local<std::collections::HashMap<Entity, Handle<crate::source_asset::RhaiSource>>>,
+    mut removed: RemovedComponents<lunco_core::EmbeddedScenarioPath>,
     mut commands: Commands,
 ) {
+    for entity in removed.read() {
+        pending.remove(&entity);
+    }
     for (entity, path) in q.iter() {
         let handle = pending.entry(entity).or_insert_with(|| {
             // Address the script through `lunco://` rather than stripping an
@@ -361,42 +380,38 @@ pub fn resolve_embedded_scenario_paths(
             // carries its own scheme (`twin://…`) is passed through untouched, so
             // a Twin-owned script resolves against the Twin.
             let uri = lunco_assets::engine_asset_uri(&path.0);
-            // TODO(scenario-resolve): a `.rhai` fetched into a peer's scenario cache
-            // is NOT found here — a bare ref resolves to the engine library, not the
-            // loaded scene's `twin://<name>/` source. So a twin/imported policy or
-            // scenario script syncs (whole-twin content plane) but fails to load on
-            // the peer. Fix: author the ref as a USD `asset` attribute (`@…rhai@`)
-            // read through the resolver's `canonicalize`, which anchors it to the
-            // scene's source (like a standard USD payload). Inline `info:sourceCode` /
-            // `LunCoPolicy` sources are unaffected (they ride the doc).
             info!(
                 "[scripting] loading scenario script `{}` as `{uri}`",
                 path.0
             );
             asset_server.load(uri)
         });
-        if asset_server.load_state(&*handle).is_failed() {
+        let root_failed = asset_server.load_state(&*handle).is_failed();
+        let dependencies_failed = asset_server
+            .recursive_dependency_load_state(&*handle)
+            .is_failed();
+        if root_failed || dependencies_failed {
             warn!(
-                "[scripting] failed to load scenario `{}` via AssetServer",
-                path.0
+                "[scripting] failed to load scenario `{}` via AssetServer (root_failed={root_failed}, dependencies_failed={dependencies_failed})",
+                path.0,
             );
             commands
                 .entity(entity)
-                .remove::<lunco_core::EmbeddedScenarioPath>();
+                .remove::<lunco_core::EmbeddedScenarioPath>()
+                .remove::<ScenarioAssetHandle>();
             pending.remove(&entity);
             continue;
         }
+        // `RhaiSource` declares its imports as Bevy dependencies. The source
+        // text is present before those dependencies necessarily finish, but
+        // attaching it at that point would let the synchronous Rhai resolver
+        // race the dependency publisher. Wait on Bevy's authoritative recursive
+        // state so a scenario becomes executable only with its complete import
+        // graph, while the UI and the rest of the ECS keep running.
+        if !asset_server.is_loaded_with_dependencies(&*handle) {
+            continue;
+        }
         if let Some(src) = sources.get(&*handle) {
-            // Hand the handle to the registry instead of letting it die with
-            // `pending` below. Two things depend on the asset staying resident:
-            // it is what lets the event-driven publisher register the script as an
-            // importable module at all, and it is what lets Bevy emit `Modified`
-            // for it — a released asset has no further lifecycle, so dropping the
-            // handle here silently ended hot-reload for every scenario script.
-            script_sources.retain(
-                lunco_assets::asset_path::canonicalize_root(&path.0),
-                handle.clone().untyped(),
-            );
             // Carry the script's IDENTITY alongside its text. Taken from the
             // handle's resolved `AssetPath` via `anchor_of` — the same function
             // `publish_rhai_sources` keys the import registry by — so the id a
@@ -422,13 +437,22 @@ pub fn resolve_embedded_scenario_paths(
                     path.0
                 );
                 pending.remove(&entity);
+                commands
+                    .entity(entity)
+                    .remove::<lunco_core::EmbeddedScenarioPath>()
+                    .remove::<ScenarioAssetHandle>();
                 continue;
             };
+            // Transfer the root handle to the scenario entity. Keeping the
+            // exact resolved id is important: a guessed root spelling can
+            // disagree with the AssetServer path and make relative imports bind
+            // to the wrong source.
             commands
                 .entity(entity)
                 .try_insert((
                     lunco_core::EmbeddedScenarioSource(src.text.clone()),
                     ScenarioAssetId(id),
+                    ScenarioAssetHandle(handle.clone()),
                 ))
                 .remove::<lunco_core::EmbeddedScenarioPath>();
             pending.remove(&entity);
