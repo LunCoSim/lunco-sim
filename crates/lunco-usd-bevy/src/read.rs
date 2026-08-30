@@ -511,26 +511,22 @@ impl UsdRead for StageView<'_> {
     }
 
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
-        if prim.append_property(name).is_err() {
-            return false;
-        }
-        self.stage()
+        let Ok(property_stack) = self
+            .stage()
             .prim(prim.clone())
-            .prim_stack()
-            .ok()
-            .into_iter()
-            .flatten()
-            .any(|(layer_id, authored_path)| {
-                let Some(layer) = self.stage().layer(&layer_id) else {
-                    return false;
-                };
-                let Ok(authored_property) = authored_path.append_property(name) else {
-                    return false;
-                };
-                let data = layer.data();
-                data.has_field(&authored_property, FieldKey::Default.as_str())
-                    || data.has_field(&authored_property, FieldKey::TimeSamples.as_str())
-            })
+            .attribute(name)
+            .property_stack()
+        else {
+            return false;
+        };
+        property_stack.into_iter().any(|(layer_id, authored_path)| {
+            let Some(layer) = self.stage().layer(&layer_id) else {
+                return false;
+            };
+            let data = layer.data();
+            data.has_field(&authored_path, FieldKey::Default.as_str())
+                || data.has_field(&authored_path, FieldKey::TimeSamples.as_str())
+        })
     }
 
     fn documentation(&self, prim: &SdfPath) -> Option<String> {
@@ -953,5 +949,48 @@ mod real_reader_tests {
         let world = SdfPath::new("/World").unwrap();
         assert!(view.has_authored_attribute(&world, "authored"));
         assert!(!view.has_authored_attribute(&world, "missing"));
+    }
+
+    #[test]
+    fn authored_attribute_presence_includes_selected_variant_properties() {
+        let source = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World" (
+    variants = { string site = "apollo" }
+    prepend variantSets = "site"
+)
+{
+    variantSet "site" = {
+        "apollo" {
+            double lunco:anchor:lat = 26.0371
+            double lunco:anchor:lon = 3.6584
+        }
+    }
+}
+"#;
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+
+        assert_eq!(view.real(&world, "lunco:anchor:lat"), Some(26.0371));
+        assert!(view.has_authored_attribute(&world, "lunco:anchor:lat"));
+        assert!(view.has_authored_attribute(&world, "lunco:anchor:lon"));
+    }
+
+    #[test]
+    fn resolve_stage_prim_path_uses_composed_default_prim_for_empty_mounts() {
+        let source = "#usda 1.0\n(\n    defaultPrim = \"Apollo\"\n)\ndef Xform \"Apollo\"\n{\n}\n";
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = cs.view();
+
+        assert_eq!(crate::resolve_stage_prim_path(&view, ""), Some("/Apollo".into()));
+        assert_eq!(
+            crate::resolve_stage_prim_path(&view, "/Apollo/Avatar"),
+            Some("/Apollo/Avatar".into())
+        );
     }
 }

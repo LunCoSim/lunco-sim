@@ -1053,42 +1053,34 @@ fn instantiate_usd_prim_from_stage(
         }
     };
     {
-        // Deferred `defaultPrim` resolution. A scene-root spawned with an
-        // empty path is the "use the stage's defaultPrim" sentinel
-        // (`resolve_root_prim` no longer reads the file with `std::fs` —
-        // that always returned `None` on wasm, so every web scene load
-        // mounted the whole stage at `/` instead of the defaultPrim
-        // subtree). The stage is parsed via the `AssetServer` (works on
-        // web), so we read it here, where the reader is guaranteed loaded,
-        // and write the concrete path back so downstream consumers
-        // (cosim prim scan, dedup) see a real prim instead of the sentinel.
-        let resolved_path = if prim_path.path.is_empty() {
-            let p = match stage_default_prim(reader) {
-                Some(name) => format!("/{name}"),
-                None => {
-                    let message = format!(
-                        "stage for {} has no `defaultPrim`; visual projection refused",
-                        prim_path.stage_handle.id()
-                    );
-                    error!("[usd] {message}");
-                    commands
-                        .entity(entity)
-                        .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
-                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
-                    return;
+        // Resolve the empty scene-root sentinel against the live composed
+        // stage, then publish the concrete path for every downstream projector.
+        let resolved_path = match resolve_stage_prim_path(reader, &prim_path.path) {
+            Some(path) => {
+                if prim_path.path.is_empty() {
+                    // `try_insert` (not `.insert`): one of these prims may have been
+                    // despawned between sync's iterate (above) and ApplyDeferred — the
+                    // moonbase autoload vs first-run tutorial race is the canonical case.
+                    // See `sync_usd_visuals`'s panic-safe note below.
+                    commands.entity(entity).try_insert(UsdPrimPath {
+                        stage_handle: prim_path.stage_handle.clone(),
+                        path: path.clone(),
+                    });
                 }
-            };
-            // `try_insert` (not `.insert`): one of these prims may have been
-            // despawned between sync's iterate (above) and ApplyDeferred — the
-            // moonbase autoload vs first-run tutorial race is the canonical case.
-            // See `sync_usd_visuals`'s panic-safe note below.
-            commands.entity(entity).try_insert(UsdPrimPath {
-                stage_handle: prim_path.stage_handle.clone(),
-                path: p.clone(),
-            });
-            p
-        } else {
-            prim_path.path.clone()
+                path
+            }
+            None => {
+                let message = format!(
+                    "stage for {} has no `defaultPrim`; visual projection refused",
+                    prim_path.stage_handle.id()
+                );
+                error!("[usd] {message}");
+                commands
+                    .entity(entity)
+                    .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
         };
         let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
             return;
@@ -3111,6 +3103,20 @@ pub fn stage_default_prim(reader: &StageView<'_>) -> Option<String> {
     // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
     // `StageView` resolves it through the composed stage.
     reader.default_prim()
+}
+
+/// Resolve a mounted prim path against the live composed stage.
+///
+/// Scene roots use an empty path until their asset is parsed; that sentinel
+/// means the stage's composed `defaultPrim`. Every projection that reads a
+/// [`UsdPrimPath`] must use this resolver so deferred visual projection cannot
+/// race another domain projector and make the root permanently unaddressable.
+pub fn resolve_stage_prim_path(reader: &StageView<'_>, path: &str) -> Option<String> {
+    if path.is_empty() {
+        stage_default_prim(reader).map(|name| format!("/{name}"))
+    } else {
+        Some(path.to_owned())
+    }
 }
 
 /// A single USD layer's source text, parsed once, positioned on the stage's

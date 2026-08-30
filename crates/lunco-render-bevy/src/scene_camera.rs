@@ -106,7 +106,7 @@ impl ClusterableObjectCount {
 
     fn config(&self) -> ClusterConfig {
         if self.0 == 0 {
-            ClusterConfig::None
+            ClusterConfig::Single
         } else {
             ClusterConfig::default()
         }
@@ -134,10 +134,10 @@ fn sync_auto_cluster_configs(
     for mut config in &mut cameras {
         let desired = count.config();
         match (&mut *config, desired) {
-            (current, ClusterConfig::None) if !matches!(current, ClusterConfig::None) => {
-                *current = ClusterConfig::None;
+            (current, ClusterConfig::Single) if !matches!(current, ClusterConfig::Single) => {
+                *current = ClusterConfig::Single;
             }
-            (current, ClusterConfig::FixedZ { .. }) if matches!(current, ClusterConfig::None) => {
+            (current, ClusterConfig::FixedZ { .. }) if matches!(current, ClusterConfig::Single) => {
                 *current = desired;
             }
             _ => {}
@@ -356,7 +356,7 @@ mod tests {
 
         assert!(matches!(
             a.world().entity(e).get::<ClusterConfig>(),
-            Some(ClusterConfig::None)
+            Some(ClusterConfig::Single)
         ));
         assert!(a.world().entity(e).contains::<AutoClusterConfig>());
     }
@@ -369,7 +369,7 @@ mod tests {
 
         assert!(matches!(
             a.world().entity(e).get::<ClusterConfig>(),
-            Some(ClusterConfig::None)
+            Some(ClusterConfig::Single)
         ));
         assert!(a.world().entity(e).contains::<AutoClusterConfig>());
     }
@@ -391,7 +391,7 @@ mod tests {
         a.update();
         assert!(matches!(
             a.world().entity(camera).get::<ClusterConfig>(),
-            Some(ClusterConfig::None)
+            Some(ClusterConfig::Single)
         ));
     }
 

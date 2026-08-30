@@ -56,7 +56,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
-use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
+use lunco_usd_bevy::{instance_key, resolve_stage_prim_path, CanonicalStages, UsdRead};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -4019,13 +4019,20 @@ fn project_celestial_comms_prims(
         let Some(cs) = canonical.get(id) else {
             continue;
         };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+        let Some(resolved_path) = resolve_stage_prim_path(&cs.view(), &prim_path.path) else {
+            warn!(
+                stage = ?id,
+                "USD stage root has no defaultPrim; celestial projection skipped"
+            );
+            continue;
+        };
+        let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
             continue;
         };
         celestial::insert_celestial_comms_components(
             &cs.view(),
             entity,
-            &prim_path.path,
+            &resolved_path,
             &sdf_path,
             &mut commands,
         );

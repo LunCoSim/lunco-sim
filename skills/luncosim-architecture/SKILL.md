@@ -83,11 +83,19 @@ camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
 The render-side camera binder also owns Bevy's clustered-light policy.
-Use Bevy's `ClusterConfig::None` for automatic cameras while the ECS topology
+Use Bevy's `ClusterConfig::Single` for automatic cameras while the ECS topology
 has no point lights, spot lights, light probes, or clustered decals, and follow
 those component lifecycle events back to Bevy's normal configuration when one
-appears. Preserve an explicit `ClusterConfig`; do not add a scene-name check,
-per-frame light scan, or alternate lighting implementation.
+appears. The camera reconciler must also wait for a positive computed viewport
+and positive `Clusters` dimensions before activating a new window camera,
+because GPU extraction receives active cameras before the first cluster
+assignment. Preserve an explicit `ClusterConfig`; do not add a scene-name
+check, per-frame light scan, or alternate lighting implementation.
+
+Scene-root `UsdPrimPath` values may be empty until the stage is parsed. Resolve
+that sentinel through the shared USD `defaultPrim` resolver before any domain
+projector reads the path; visual and celestial projection must not each invent
+their own deferred-path handling or permanently mark an unresolved root.
 
 ## Start with the standard-schema audit
 
