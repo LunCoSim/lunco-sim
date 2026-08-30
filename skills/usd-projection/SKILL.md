@@ -52,6 +52,17 @@ scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
 window.
 
+### Scene precision boundary
+
+The mounted `UsdSceneRoot` is a nested BigSpace `Grid` below the active site
+frame. Its top-level USD prims are direct Grid children and carry their own
+`CellCoord`; their visual and collision descendants remain ordinary children
+under the prim root and use `LowPrecisionRoot`. Terrain and rover/lander roots
+are siblings in this scene frame. Terrain is never the parent of a vehicle,
+because it does not own vehicle identity, physics, or lifecycle. Runtime and
+replicated catalog spawns must enter through the same cell/local placement
+boundary as authored top-level prims.
+
 ## Law 1 — every edit goes through `ApplyUsdOp`
 
 An edit that does not lower to a `UsdOp` is absent from **save, journal, undo,

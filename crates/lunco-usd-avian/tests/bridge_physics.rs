@@ -447,6 +447,108 @@ fn external_teleport_carries_child_body() {
 }
 
 #[test]
+fn grid_direct_body_keeps_its_render_subtree_across_repeated_cell_crossings() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let world_grid = shell(&mut app);
+    let scene_grid = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(world_grid),
+        ))
+        .id();
+    let lander = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            CellCoord::ZERO,
+            Transform::from_xyz(0.0, 20.0, 0.0),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::default(),
+            LinearVelocity(Vector::new(1_200.0, 0.0, 0.0)),
+            ChildOf(scene_grid),
+        ))
+        .id();
+    let visual = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            GlobalTransform::default(),
+            Visibility::Inherited,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            ChildOf(lander),
+        ))
+        .id();
+
+    step(&mut app, 2);
+    step(&mut app, 180);
+
+    let first_cell = *app.world().get::<CellCoord>(lander).unwrap();
+    let first_position = app.world().get::<Position>(lander).unwrap().0;
+    let first_transform = *app.world().get::<Transform>(lander).unwrap();
+    let first_global = app
+        .world()
+        .get::<GlobalTransform>(visual)
+        .unwrap()
+        .translation();
+    assert!(
+        first_cell.x >= 1,
+        "lander did not cross the first BigSpace cell: {first_cell:?}"
+    );
+    assert!(
+        first_position.x > EDGE as f64,
+        "physics stopped at the cell edge: {first_position:?}"
+    );
+    assert!(
+        first_transform.translation.x.abs() < 1_200.0,
+        "lander transform was not recentered: {:?}",
+        first_transform.translation
+    );
+    assert!(
+        app.world().get::<Visibility>(lander) == Some(&Visibility::Visible),
+        "lander visibility changed during the crossing"
+    );
+    assert!(
+        first_global.x > EDGE,
+        "visual subtree did not follow the lander: {first_global:?}"
+    );
+
+    step(&mut app, 180);
+    let second_cell = *app.world().get::<CellCoord>(lander).unwrap();
+    let second_position = app.world().get::<Position>(lander).unwrap().0;
+    let second_global = app
+        .world()
+        .get::<GlobalTransform>(visual)
+        .unwrap()
+        .translation();
+    assert!(
+        second_cell.x > first_cell.x,
+        "repeated crossing did not advance the cell: first={first_cell:?} second={second_cell:?}"
+    );
+    assert!(
+        second_position.x > first_position.x + EDGE as f64,
+        "physics pose stopped after the first crossing: first={first_position:?} second={second_position:?}"
+    );
+    assert!(
+        second_global.x > first_global.x + EDGE,
+        "visual subtree stopped after the first crossing: first={first_global:?} second={second_global:?}"
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(visual).unwrap().parent(),
+        lander,
+        "visual subtree detached from the lander during repeated recentering"
+    );
+}
+
+#[test]
 fn paired_cell_transform_teleport_reaches_physics() {
     let mut app = make_app();
     app.insert_resource(Gravity(Vector::ZERO));
@@ -717,6 +819,74 @@ fn active_frame_handoff_transports_velocity_into_the_new_grid() {
     );
     assert!((actual_linear.length() - old_linear.length()).abs() < 1.0e-6);
     assert!((actual_angular.length() - old_angular.length()).abs() < 1.0e-6);
+}
+
+#[test]
+fn reanchored_active_frame_seeds_existing_bodies_from_the_new_local_hierarchy() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root = shell(&mut app);
+    let host = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::new(100_000, 0, 0),
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let site_rotation = Quat::from_rotation_y(0.7);
+    let site = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::from_rotation(site_rotation),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            LinearVelocity(Vector::new(2.0, 0.0, 3.0)),
+            CellCoord::ZERO,
+            Transform::from_xyz(4.0, 8.0, -2.0),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+
+    // The loader seeds the body while the site is still mounted in the world
+    // shell. This is the same ordering as a scene that is later attached to a
+    // celestial surface Grid.
+    step(&mut app, 2);
+
+    // Moving the selected frame changes the body's semantic world placement;
+    // transporting the old absolute position would leave it many cells away
+    // from its own local hierarchy. The bridge must rebase velocity, then read
+    // the body's position from the now-authoritative site-local chain.
+    app.world_mut().entity_mut(site).insert((
+        ChildOf(host),
+        CellCoord::ZERO,
+        Transform::from_rotation(site_rotation),
+    ));
+    app.world_mut().insert_resource(ActivePhysicsFrame(site));
+    step(&mut app, 1);
+
+    let position = app.world().get::<Position>(body).unwrap().0;
+    let expected = DVec3::new(4.0, 8.0, -2.0);
+    assert!(
+        (position - expected).length() < 0.25,
+        "reanchored frame used the old absolute position: expected={expected:?} actual={position:?}"
+    );
+    assert!(
+        position.x.abs() < 100.0,
+        "body escaped its site frame: {position:?}"
+    );
 }
 
 #[test]

@@ -814,15 +814,13 @@ pub fn pose_in_grid<F: QueryFilter>(
     ))
 }
 
-/// Convert a complete semantic pose into the local coordinates stored on a
-/// plain child of `parent`.
+/// Convert a complete semantic pose into the raw local coordinates of
+/// `parent`, before applying the parent's storage representation.
 ///
-/// User-facing placement commands speak in `target_grid`; runtime USD
-/// instances are deliberately plain children of their spawn-anchor-like
-/// parent rather than grid-direct bodies. This helper owns the one inverse
-/// parent-pose operation those commands need. It does not invent a
-/// [`CellCoord`]; the plain-child storage contract is what keeps authored and
-/// runtime USD hierarchies identical.
+/// User-facing placement commands speak in `target_grid`; this helper owns the
+/// one inverse parent-pose operation those commands need. Callers that are
+/// writing a direct child of a `Grid` must use
+/// [`pose_in_grid_to_parent_storage`] to perform the required cell split.
 pub fn pose_in_parent_local<F: QueryFilter>(
     position: DVec3,
     rotation: DQuat,
@@ -844,6 +842,39 @@ pub fn pose_in_parent_local<F: QueryFilter>(
     ))
 }
 
+/// Convert a complete semantic pose into the representation stored on a new
+/// child of `parent`.
+///
+/// A direct child of a `Grid` stores its position as `(CellCoord, Transform)`;
+/// a descendant below an ordinary entity stores only its parent-local
+/// `Transform`. This is the single placement boundary used by scene spawns,
+/// replicated spawns, and runtime waypoint markers.
+pub fn pose_in_grid_to_parent_storage<F: QueryFilter>(
+    position: DVec3,
+    rotation: DQuat,
+    parent: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(Option<CellCoord>, Vec3, DQuat)> {
+    let (parent_local, local_rotation) = pose_in_parent_local(
+        position,
+        rotation,
+        parent,
+        target_grid,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    if let Ok(grid) = q_grids.get(parent) {
+        let (cell, local_translation) = grid.translation_to_grid(parent_local);
+        Some((Some(cell), local_translation, local_rotation))
+    } else {
+        Some((None, parent_local.as_vec3(), local_rotation))
+    }
+}
+
 /// Convert a point expressed in `target_grid` into the storage coordinates of
 /// `entity`'s actual parent.
 ///
@@ -862,7 +893,7 @@ pub fn position_in_grid_to_parent_local<F: QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(Option<CellCoord>, Vec3)> {
     let parent = q_parents.get(entity).ok()?.parent();
-    let (parent_local, _) = pose_in_parent_local(
+    let (cell, local, _) = pose_in_grid_to_parent_storage(
         position,
         DQuat::IDENTITY,
         parent,
@@ -871,16 +902,13 @@ pub fn position_in_grid_to_parent_local<F: QueryFilter>(
         q_grids,
         q_spatial,
     )?;
-    if let Ok(grid) = q_grids.get(parent) {
-        let (cell, local) = grid.translation_to_grid(parent_local);
-        Some((Some(cell), local))
-    } else {
-        Some((None, parent_local.as_vec3()))
-    }
+    Some((cell, local))
 }
 
 /// Convert an orientation expressed in `target_grid` into the local rotation
-/// stored on `entity` below its actual parent.
+/// stored on `entity` below its actual parent. The returned rotation is the
+/// same regardless of whether that parent is a Grid; position storage and
+/// rotation storage are split independently at the same boundary.
 ///
 /// Rotations are not frame-invariant: a body-fixed parent Grid rotates relative
 /// to an inertial grid, and a nested assembly parent may itself be rotated. This
@@ -896,7 +924,7 @@ pub fn rotation_in_grid_to_parent_local<F: QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<DQuat> {
     let parent = q_parents.get(entity).ok()?.parent();
-    pose_in_parent_local(
+    pose_in_grid_to_parent_storage(
         DVec3::ZERO,
         rotation,
         parent,
@@ -905,7 +933,7 @@ pub fn rotation_in_grid_to_parent_local<F: QueryFilter>(
         q_grids,
         q_spatial,
     )
-    .map(|(_, local_rotation)| local_rotation)
+    .map(|(_, _, local_rotation)| local_rotation)
 }
 
 /// Convert a complete f64 pose from one arbitrary BigSpace Grid to another.

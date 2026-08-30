@@ -73,11 +73,18 @@ fn warn_on_soi_migrant_without_anchor(
 fn warn_on_nested_grid_anchor(
     q: Query<(Entity, &ChildOf, Option<&Name>), Added<GridAnchor>>,
     q_parents: Query<&ChildOf>,
+    q_grids: Query<(), With<Grid>>,
     q_anchors: Query<(), With<GridAnchor>>,
 ) {
     for (e, child_of, name) in q.iter() {
         let mut current = child_of.parent();
         for _ in 0..32 {
+            // A site/scene frame is itself a GridAnchor and its grid-direct
+            // followers are valid siblings in that Grid. Only an anchor found
+            // before the nearest Grid is actually nested in another anchor.
+            if q_grids.contains(current) {
+                break;
+            }
             if q_anchors.contains(current) {
                 warn!(
                     "[bigspace-invariant] GridAnchor on entity {:?} ({}) is nested under \

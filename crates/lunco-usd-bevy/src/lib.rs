@@ -36,6 +36,7 @@
 
 use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
+use big_space::prelude::CellCoord;
 use lunco_usd_compose::parse_usda;
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
@@ -963,9 +964,9 @@ pub fn instance_key(
 /// 1. Looks up the prim's attributes from the loaded USD stage.
 /// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere).
 /// 3. Applies the prim's transform (position + rotation + scale).
-/// 4. Spawns child entities for each prim child as PLAIN Bevy children, so
-///    they inherit the scene root's grid frame (see the anchoring contract
-///    at the child spawn below).
+/// 4. Spawns each prim child below its USD parent. A top-level child of the
+///    nested scene Grid carries its own `CellCoord`; deeper descendants remain
+///    ordinary children rooted in the prim's low-precision subtree.
 /// 5. Marks the entity with `UsdVisualSynced` to prevent re-processing.
 ///
 /// Custom materials (solar panels, blueprint grids, etc.) are applied
@@ -980,6 +981,8 @@ fn instantiate_usd_prim(
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     is_high_precision_parent: bool,
+    parent_is_grid: bool,
+    is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
@@ -1013,6 +1016,8 @@ fn instantiate_usd_prim(
         is_instance_root,
         inherited_member,
         is_high_precision_parent,
+        parent_is_grid,
+        is_grid_entity,
         preview_only,
         commands,
         asset_server,
@@ -1034,6 +1039,8 @@ fn instantiate_usd_prim_from_stage(
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     is_high_precision_parent: bool,
+    parent_is_grid: bool,
+    is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -1694,6 +1701,9 @@ fn instantiate_usd_prim_from_stage(
             existing_vis.cloned().unwrap_or(Visibility::Inherited)
         };
 
+        if parent_is_grid {
+            commands.entity(entity).try_insert(CellCoord::default());
+        }
         commands.entity(entity).try_insert((
             transform,
             UsdVisualSynced,
@@ -1767,15 +1777,12 @@ fn instantiate_usd_prim_from_stage(
                 ViewVisibility::default(),
             );
 
-            // ANCHORING CONTRACT: every prim spawns as a PLAIN child of its USD
-            // parent's Bevy entity. The scene root is the ONE grid anchor;
-            // everything beneath it inherits that frame through big_space's
-            // low-precision propagation. A prim must never carry its own
-            // `CellCoord` under the grid — avian derives a body's local transform
-            // from its parent's `GlobalTransform` and ignores the cell, so a
-            // grid-direct body's render freezes at its spawn pose while physics
-            // keeps integrating. `spawn_usd_entry`'s `SpawnAnchor` encodes the
-            // same rule for runtime spawns.
+            // ANCHORING CONTRACT: every prim spawns as a child of its USD
+            // parent's Bevy entity. A prim whose parent is a Grid is admitted
+            // with its own CellCoord, so its high-precision render and physics
+            // pose can cross cells without changing the authored hierarchy.
+            // Descendants of that prim remain plain children and are rooted in
+            // the low-precision propagation subtree below it.
             //
             // ChildOf must be set atomically with UsdPrimPath so that
             // observers triggered by the spawn (on_usd_prim_added →
@@ -1792,7 +1799,7 @@ fn instantiate_usd_prim_from_stage(
             // bundle: the `on_usd_prim_added` observer reads it to decide the
             // child's identity regime, so a later `insert` would race the
             // observer and let the child take a colliding `Content` id.
-            let is_low_precision_root_target = is_high_precision_parent;
+            let is_low_precision_root_target = is_high_precision_parent && !is_grid_entity;
 
             let child_entity = match &child_member {
                 Some(member) => {
@@ -1807,6 +1814,15 @@ fn instantiate_usd_prim_from_stage(
                                 member.clone(),
                                 big_space::grid::propagation::LowPrecisionRoot,
                             ),
+                        )
+                    } else if is_grid_entity {
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
+                            base_components,
+                            (member.clone(), CellCoord::default()),
                         )
                     } else {
                         queue_usd_child_spawn(
@@ -1828,6 +1844,15 @@ fn instantiate_usd_prim_from_stage(
                             child_path.to_string(),
                             base_components,
                             (big_space::grid::propagation::LowPrecisionRoot,),
+                        )
+                    } else if is_grid_entity {
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
+                            base_components,
+                            (CellCoord::default(),),
                         )
                     } else {
                         queue_usd_child_spawn(
@@ -2151,6 +2176,7 @@ pub fn process_queued_usd_visuals(
             With<big_space::prelude::CellCoord>,
         )>,
     >,
+    q_grid: Query<(), With<big_space::prelude::Grid>>,
     q_child_of: Query<&ChildOf>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
@@ -2208,6 +2234,10 @@ pub fn process_queued_usd_visuals(
                 .get(entity)
                 .ok()
                 .is_some_and(|c| q_high_precision.contains(c.parent()));
+        let parent_is_grid = q_child_of
+            .get(entity)
+            .ok()
+            .is_some_and(|c| q_grid.contains(c.parent()));
         instantiate_usd_prim(
             entity,
             prim_path,
@@ -2216,6 +2246,8 @@ pub fn process_queued_usd_visuals(
             is_instance_root,
             member,
             is_high_precision_parent,
+            parent_is_grid,
+            q_grid.contains(entity),
             preview_only,
             &mut commands,
             &stages,
@@ -4409,8 +4441,9 @@ fn prim_resets_xform_stack(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// entity that carries this stage's world frame in the projection. Reparenting
 /// to that entity rather than to nothing keeps the stage's own placement — a
 /// twin mounted into a grid at a spawn pose stays inside its twin, and the
-/// grid/`big_space` frame contract (a prim is never grid-direct; see the
-/// anchoring contract in the child spawn) is preserved. What the sentinel drops
+/// grid/`big_space` frame contract is preserved: a prim directly below the
+/// nested scene Grid remains grid-direct, while deeper descendants remain
+/// ordinary children. What the sentinel drops
 /// is everything USD-authored between the prim and that root, which is the whole
 /// of the ancestor chain the stage itself defines.
 ///
@@ -4424,6 +4457,7 @@ fn detach_reset_xform_stack_prims(
         (With<UsdResetXformStack>, Without<ResetXformStackApplied>),
     >,
     q_prims: Query<(&UsdPrimPath, Option<&ChildOf>, &Transform)>,
+    q_grids: Query<&big_space::prelude::Grid>,
 ) {
     for (entity, prim, child_of, local) in q_reset.iter() {
         let mut anchor = None;
@@ -4466,9 +4500,23 @@ fn detach_reset_xform_stack_prims(
              onto the stage world frame ({anchor:?})",
             prim.path
         );
-        commands
-            .entity(entity)
-            .try_insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
+        let mut entity_commands = commands.entity(entity);
+        if let Ok(grid) = q_grids.get(anchor) {
+            let (cell, local_translation) =
+                grid.translation_to_grid(reset_local.translation.as_dvec3());
+            entity_commands.try_insert((
+                ChildOf(anchor),
+                Transform {
+                    translation: local_translation,
+                    ..reset_local
+                },
+                cell,
+                ResetXformStackApplied,
+            ));
+        } else {
+            entity_commands.try_insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
+            entity_commands.try_remove::<CellCoord>();
+        }
     }
 }
 

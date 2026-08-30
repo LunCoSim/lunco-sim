@@ -4,11 +4,8 @@
 //! a real big_space world root, and asserts the spawned body's `Transform` tracked
 //! its `Position` after ~2 s — the observable behaviour, not a component shape.
 //!
-//! SCOPE, honestly: this does NOT reproduce the intermittent "spawned body's mesh
-//! freezes at its spawn pose while physics climbs" symptom seen in the running
-//! app, so treat it as a smoke test for the sync path rather than a guard for
-//! that specific freeze. The anchoring shape itself is pinned in
-//! `catalog::spawn_anchor_tests`.
+//! The anchoring shape itself is pinned in `catalog::spawn_anchor_tests`; this
+//! test exercises the same grid-direct root through the Avian transform path.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -32,6 +29,7 @@ fn spawn_once(mut commands: Commands, assets: Res<AssetServer>, args: Res<Args>)
         &mut commands,
         &assets,
         &args.entry,
+        big_space::prelude::CellCoord::default(),
         Vec3::new(0.0, SPAWN_Y, 0.0),
         Quat::IDENTITY,
         SpawnAnchor::scene_root(args.scene_root),
@@ -76,12 +74,13 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
     let grid = lunco_core::ensure_world_root(app.world_mut());
     app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
-    // Production anchoring shape: the scene-root is the ONE grid-direct anchor
-    // (its own cell); everything under it is a plain child that inherits the frame.
+    // Production anchoring shape: the scene-root is the Grid-direct anchor and
+    // frame; every top-level spawn is a Grid-direct child with its own cell.
     let scene_root = app
         .world_mut()
         .spawn((
             Name::new("Scene:test"),
+            big_space::prelude::Grid::default(),
             big_space::prelude::CellCoord::default(),
             lunco_core::GridAnchor,
             Transform::default(),
