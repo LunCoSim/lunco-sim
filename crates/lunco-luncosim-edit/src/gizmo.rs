@@ -43,6 +43,13 @@ pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
     }
 }
 
+/// Saves the user's gizmo configuration while planetary presentation owns the
+/// viewport and the transform frontend is disabled.
+#[derive(Resource, Default)]
+pub(crate) struct GizmoVisibilityState {
+    saved_options: Option<GizmoOptions>,
+}
+
 /// The authoritative lifecycle of a gizmo edit.
 ///
 /// Bevy command insertion is deferred, so a component query is not a drag
@@ -720,11 +727,24 @@ pub fn drive_gizmo_drag_no_shift(
 /// window `Camera3d`s), tagging *every* window camera made the gizmo bind to
 /// the wrong one. So exactly the active window camera (`Camera::is_active`) is
 /// tagged; the rest are untagged as the active view switches.
-pub fn sync_gizmo_camera(
+pub(crate) fn sync_gizmo_camera(
     q_cameras: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
     q_tagged: Query<Entity, With<GizmoCamera>>,
+    orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    mut options: ResMut<GizmoOptions>,
+    mut visibility: ResMut<GizmoVisibilityState>,
     mut commands: Commands,
 ) {
+    if orbital_pin.is_some_and(|pin| pin.active) {
+        if visibility.saved_options.is_none() {
+            visibility.saved_options = Some(*options);
+        }
+        options.gizmo_modes.clear();
+        options.mode_override = None;
+    } else if let Some(saved_options) = visibility.saved_options.take() {
+        *options = saved_options;
+    }
+
     let active = q_cameras
         .iter()
         .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
