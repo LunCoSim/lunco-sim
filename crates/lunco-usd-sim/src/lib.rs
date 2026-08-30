@@ -93,7 +93,7 @@ use wheel_params::{SuspensionParams, WheelParams};
 ///
 /// # Processing Order
 ///
-/// 1. `process_usd_sim_prims` — maps schemas to components (runs after sync_usd_visuals)
+/// 1. `process_usd_sim_prims` — maps schemas to components after visual projection
 /// 2. `try_wire_wheel` — connects wheel drive ports to FSW digital ports
 ///
 /// The observer `on_add_usd_sim_prim` intentionally does minimal work. All processing
@@ -635,15 +635,17 @@ impl Plugin for UsdSimPlugin {
             // `try_wire_wheel` runs in PreUpdate so that the `SimConnection` entities
             // exist before cosim propagation pushes values through them.
             .add_systems(PreUpdate, (try_wire_wheel, resolve_differential_coupling))
-            // USD → ShaderMaterial authoring. Ordered AFTER the visuals exist
-            // and BEFORE `process_usd_sim_prims` consumes them, so the material
-            // is always present before a wheel is split onto its visual child
-            // (Bevy auto-inserts the sync point). Race-free by construction —
-            // see `shader.rs`.
+            // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
+            // projection and BEFORE `process_usd_sim_prims` consumes the prims,
+            // so the material is present before a wheel is split onto its visual
+            // child. The completed projection boundary also prevents the visual
+            // projector from restoring a cylinder-axis rotation after the
+            // simulator has established the wheel's identity physics frame.
+            // See `shader.rs`.
             .add_systems(
                 Update,
                 shader::apply_usd_shader_materials
-                    .after(lunco_usd_bevy::sync_usd_visuals)
+                    .after(lunco_usd_bevy::process_queued_usd_visuals)
                     .before(process_usd_sim_prims),
             )
             // `process_usd_sim_prims` does a per-stage joint scan + per-
@@ -660,7 +662,7 @@ impl Plugin for UsdSimPlugin {
                 (
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
-                        .after(lunco_usd_bevy::sync_usd_visuals),
+                        .after(lunco_usd_bevy::process_queued_usd_visuals),
                     // Resolve behavior targets only after this frame's USD
                     // prim projection has admitted newly spawned waypoint
                     // entities. Running in PreUpdate raced the projection and
@@ -832,10 +834,20 @@ pub struct PendingDifferential {
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `JointTorqueActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the authored Modelica network)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
 ///
-/// Run condition: true when any `UsdPrimPath` entity still lacks
-/// `UsdSimProcessed`. Lets `process_usd_sim_prims` stay dormant after
-/// scene-load is complete instead of running every frame.
-fn any_unprocessed_usd_sim(q: Query<(), (With<UsdPrimPath>, Without<UsdSimProcessed>)>) -> bool {
+/// Run condition: true when any visually projected `UsdPrimPath` entity still
+/// lacks `UsdSimProcessed`. The visual marker is the projection boundary: sim
+/// processing must not race the bounded visual pass that applies primitive-axis
+/// presentation transforms.
+fn any_unprocessed_usd_sim(
+    q: Query<
+        (),
+        (
+            With<UsdPrimPath>,
+            With<lunco_usd_bevy::UsdVisualSynced>,
+            Without<UsdSimProcessed>,
+        ),
+    >,
+) -> bool {
     !q.is_empty()
 }
 
@@ -853,7 +865,10 @@ fn process_usd_sim_prims(
             Option<&PbrLook>,
             Option<&ShaderLook>,
         ),
-        Without<UsdSimProcessed>,
+        (
+            With<lunco_usd_bevy::UsdVisualSynced>,
+            Without<UsdSimProcessed>,
+        ),
     >,
     all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     grid_components: Query<&Grid>,
