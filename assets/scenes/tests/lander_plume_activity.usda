@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "LanderPlumeActivity"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Headless authored acceptance fixture for the production lander plume path.
+# The production lander and Modelica propulsion network are composed unchanged;
+# this layer freezes the subject and supplies only the test observer.
+def Xform "LanderPlumeActivity" (
+    prepend references = @lunco://scenes/tests/lander_controls.usda@</LanderControlsTest>
+    kind = "assembly"
+)
+{
+    over "Lander"
+    {
+        bool physics:rigidBodyEnabled = false
+        double3 xformOp:translate = (0, 8.0, 0)
+    }
+
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
+    over "Scenario"
+    {
+        over "Mission"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/lander_plume_activity.rhai@
+        }
+    }
+}
