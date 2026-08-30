@@ -110,6 +110,9 @@ it with this one.
   `cargo check`/`cargo test` target. Do not run `cargo fmt --all`, a workspace
   format, or a full suite unless the change spans the workspace or that broader
   scope is explicitly requested.
+- Do not run Rust formatters during the edit, debug, or test loop. Run the
+  repository formatter once, only after implementation and validation are
+  complete and immediately before the final diff review and commit.
 - Establish a behavior baseline before physics/vehicle changes and rerun it.
   Use focused tests first, then production luncosim. Use `-j 4`, the repository
   `target/`, and regular `sccache`; never use managed temporary build directories

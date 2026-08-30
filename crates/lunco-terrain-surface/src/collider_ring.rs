@@ -27,8 +27,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use avian3d::prelude::{
-    Collider, ColliderAabb, ColliderOf, Position, RayHits, RigidBody, Rotation, SimpleCollider,
-    SpatialQueryFilter,
+    Collider, ColliderAabb, ColliderDisabled, ColliderOf, CollisionLayers, Position, RayHitData,
+    RayHits, RigidBody, Rotation, SimpleCollider, SpatialQueryFilter,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
@@ -1455,6 +1455,70 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
 /// long landing assemblies by different, arbitrary amounts.
 const SETTLE_CLEARANCE: f64 = 0.05;
 
+/// Cast an initial-placement probe against Avian's authored collider geometry.
+/// The activation hold intentionally pauses Avian's broad-phase schedule, so a
+/// one-shot placement transaction cannot depend on its acceleration tree being
+/// built. `Collider::cast_ray` remains the same maintained shape-intersection
+/// kernel used by Avian's normal spatial query; this pass only supplies the
+/// pre-step admission boundary and never runs during ordinary movement.
+fn cast_initial_support_ray(
+    colliders: &Query<
+        '_,
+        '_,
+        (
+            Entity,
+            &Collider,
+            &Position,
+            &Rotation,
+            Option<&ColliderAabb>,
+            Option<&ColliderOf>,
+            Option<&CollisionLayers>,
+            Option<&ColliderDisabled>,
+        ),
+    >,
+    origin: DVec3,
+    direction: Dir3,
+    max_distance: f64,
+    filter: &SpatialQueryFilter,
+) -> Option<RayHitData> {
+    let mut closest = None;
+    for (entity, collider, position, rotation, _, owner, layers, disabled) in colliders.iter() {
+        if disabled.is_some() {
+            continue;
+        }
+        let body = owner.map_or(entity, |owner| owner.body);
+        if filter.excluded_entities.contains(&entity)
+            || filter.excluded_entities.contains(&body)
+            || !filter.test(entity, layers.copied().unwrap_or_default())
+        {
+            continue;
+        }
+        let Some((distance, normal)) = collider.cast_ray(
+            position.0,
+            rotation.0,
+            origin,
+            direction.as_dvec3(),
+            max_distance,
+            true,
+        ) else {
+            continue;
+        };
+        if !distance.is_finite()
+            || closest
+                .as_ref()
+                .is_some_and(|hit: &RayHitData| distance >= hit.distance)
+        {
+            continue;
+        }
+        closest = Some(RayHitData {
+            entity,
+            distance,
+            normal,
+        });
+    }
+    closest
+}
+
 // A raycast contact is the *wheel axle*, not a rigid tyre volume. At the
 // authored suspension rest length the strut top is exactly one cast length
 // above the DEM, so placement must put the tyre tangent to the surface: zero
@@ -1492,11 +1556,13 @@ pub fn settle_grounded_assemblies(
         Query<(
             Entity,
             &Collider,
+            &Position,
+            &Rotation,
             Option<&ColliderAabb>,
             Option<&ColliderOf>,
+            Option<&CollisionLayers>,
+            Option<&ColliderDisabled>,
         )>,
-        Query<&avian3d::prelude::Rotation>,
-        lunco_physics::GridSpatialQuery,
     )>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
@@ -1583,7 +1649,7 @@ pub fn settle_grounded_assemblies(
     let mut static_support_present = false;
     let mut static_support_live = false;
     let mut static_support_bounds = Vec::new();
-    for (collider, _, aabb, owner) in avian.p1().iter() {
+    for (collider, _, _, _, aabb, owner, _, _) in avian.p1().iter() {
         let body = owner.map_or(collider, |owner| owner.body);
         let bounds_live = aabb.is_some_and(|aabb| aabb.min.is_finite() && aabb.max.is_finite());
         if dynamics
@@ -1648,8 +1714,8 @@ pub fn settle_grounded_assemblies(
         // however, belongs to its DriveMix root. Resolve it from the seed and
         // then across the whole assembly instead of assuming the arbitrary
         // dynamic member owns it. Probe-based vehicles MUST use only this geometry:
-        // their high chassis has no terrain contact, and its near-zero generic
-        // lift used to consume the request before a wheel probe could settle it.
+        // their high chassis has no terrain contact, so its generic collider
+        // clearance is not the support condition for this transaction.
         let raycast_footprint = footprints
             .get(seed)
             .ok()
@@ -1696,9 +1762,9 @@ pub fn settle_grounded_assemblies(
             };
             placement_axis = Some(placement_up);
             let root_rot = avian
-                .p2()
+                .p1()
                 .get(footprint_owner)
-                .map(|rotation| rotation.0)
+                .map(|(_, _, _, rotation, _, _, _, _)| rotation.0)
                 .unwrap_or(DQuat::IDENTITY);
             let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
                 !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
@@ -1717,43 +1783,35 @@ pub fn settle_grounded_assemblies(
                 else {
                     continue;
                 };
-                // Use the live spatial surface, not the analytic oracle. The
-                // streamed collider is a sampled heightfield, so its exact
-                // bilinear surface can differ from the oracle between lattice
-                // points. A search ray is used only for this one-time placement;
-                // its target remains the authored probe rest distance.
-                let hit = avian.p3().cast_ray_grid(
-                    GridPos(origin),
-                    direction,
-                    terrain_context.as_ref().map_or_else(
-                        || {
-                            // Avian's scalar ray length is finite by contract.
-                            // Derive the search interval from the live support
-                            // collider bounds rather than using an arbitrary
-                            // world-distance constant or an infinite ray.
-                            static_support_bounds
-                                .iter()
-                                .flat_map(|(min, max)| {
-                                    [
-                                        DVec3::new(min.x, min.y, min.z),
-                                        DVec3::new(min.x, min.y, max.z),
-                                        DVec3::new(min.x, max.y, min.z),
-                                        DVec3::new(min.x, max.y, max.z),
-                                        DVec3::new(max.x, min.y, min.z),
-                                        DVec3::new(max.x, min.y, max.z),
-                                        DVec3::new(max.x, max.y, min.z),
-                                        DVec3::new(max.x, max.y, max.z),
-                                    ]
-                                })
-                                .map(|corner| (corner - origin).length())
-                                .fold(contact.probe_length, f64::max)
-                        },
-                        |(_, _, _, half, _)| (2.0 * *half).max(contact.probe_length),
-                    ),
-                    true,
-                    &filter,
+                // Use Avian's exact collider geometry, not the analytic oracle.
+                // The streamed collider is a sampled heightfield, so its exact
+                // surface can differ from the oracle between lattice points.
+                // This direct query is limited to one-time placement; its target
+                // remains the authored probe rest distance.
+                let max_distance = terrain_context.as_ref().map_or_else(
+                    || {
+                        static_support_bounds
+                            .iter()
+                            .flat_map(|(min, max)| {
+                                [
+                                    DVec3::new(min.x, min.y, min.z),
+                                    DVec3::new(min.x, min.y, max.z),
+                                    DVec3::new(min.x, max.y, min.z),
+                                    DVec3::new(min.x, max.y, max.z),
+                                    DVec3::new(max.x, min.y, min.z),
+                                    DVec3::new(max.x, min.y, max.z),
+                                    DVec3::new(max.x, max.y, min.z),
+                                    DVec3::new(max.x, max.y, max.z),
+                                ]
+                            })
+                            .map(|corner| (corner - origin).length())
+                            .fold(contact.probe_length, f64::max)
+                    },
+                    |(_, _, _, half, _)| (2.0 * *half).max(contact.probe_length),
                 );
-                let Some(hit) = hit else {
+                let Some(hit) =
+                    cast_initial_support_ray(&avian.p1(), origin, direction, max_distance, &filter)
+                else {
                     continue;
                 };
                 // Translate along the physical support axis, not an assumed
