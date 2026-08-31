@@ -31,9 +31,9 @@ if [ ! -d "$appdir" ]; then
     exit 1
 fi
 
-mapfile -t desktop_files < <(find "$appdir" -maxdepth 1 -type f -name '*.desktop' -print)
-if [ "${#desktop_files[@]}" -ne 1 ]; then
-    echo "expected exactly one root desktop file, found ${#desktop_files[@]}" >&2
+mapfile -t desktop_files < <(find "$appdir" -type f -name '*.desktop' -print)
+if [ "${#desktop_files[@]}" -ne 1 ] || [ "$(dirname "${desktop_files[0]:-}")" != "$appdir" ]; then
+    echo "expected exactly one root desktop file and no nested duplicate, found ${#desktop_files[@]}" >&2
     exit 1
 fi
 
@@ -47,8 +47,24 @@ if [ ! -f "$appdir/$icon_name.png" ] && [ ! -f "$appdir/$icon_name.svg" ]; then
     echo "root desktop Icon has no matching root image: $icon_name" >&2
     exit 1
 fi
+if [ "$(basename "$desktop_file")" != "$icon_name.desktop" ]; then
+    echo "root desktop filename does not match its Icon: $desktop_file" >&2
+    exit 1
+fi
 if [ ! -e "$appdir/.DirIcon" ]; then
     echo "AppImage is missing root .DirIcon" >&2
+    exit 1
+fi
+
+name="$(sed -n 's/^Name=//p' "$desktop_file" | head -n 1)"
+if [ "$name" != "LunCoSim" ]; then
+    echo "Name=$name does not match LunCoSim" >&2
+    exit 1
+fi
+
+exec_target="$(sed -n 's/^Exec=//p' "$desktop_file" | head -n 1)"
+if [ "$exec_target" != "luncosim" ]; then
+    echo "Exec=$exec_target does not match luncosim" >&2
     exit 1
 fi
 

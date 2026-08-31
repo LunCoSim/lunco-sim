@@ -28,8 +28,10 @@ Background #0A0A0F · letters #FFFFFF · S-glyph #4DE3F5. Mark only, no wordmark
 - `svg/lcs-night-linux.svg` — scalable version for
   `/usr/share/icons/hicolor/scalable/apps/luncosim.svg`.
 - Direct archives and Velopack AppImages use `luncosim` as the desktop icon
-  name and window identity. The final AppImage check requires its root icon,
-  `.DirIcon`, and `StartupWMClass` to agree.
+  name and window identity. Velopack emits the single root `luncosim.desktop`
+  entry from that package identity; the staging directory must not add another
+  desktop entry. The final AppImage check requires the root filename, icon,
+  `Exec`, `.DirIcon`, and `StartupWMClass` to agree.
 - Geometry: full-bleed rounded square, r = 24%.
 
 ## Vector sources

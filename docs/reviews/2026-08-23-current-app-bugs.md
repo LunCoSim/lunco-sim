@@ -113,6 +113,15 @@ identity for both the compiled Linux window and Velopack package, then verifies
 the completed AppImage's root desktop/icon contract. A fresh GitHub Actions
 package and platform-native inspection remain required for acceptance.
 
+**Follow-up 2026-09-01:** the exact GitHub AppImage
+`nightly-20260831T111355Z` (target `2b06680aa`) has the correct root
+`luncosim.desktop`, root icon, `.DirIcon`, `Exec=luncosim`, and
+`StartupWMClass=luncosim`, but extraction also found a redundant nested
+`usr/bin/LunCoSim.desktop` left by staging. The packaging path now leaves the
+desktop entry solely to Velopack and fails verification if any nested duplicate
+or identity mismatch exists. A new GitHub Actions package is required to
+confirm the cleaned artifact and complete platform-native acceptance.
+
 ### APP-06 — Lunokhod 2 terrain path needs runtime lifecycle proof
 
 The `lunokhod2` terrain variant composes a real cached DEM directory and a valid

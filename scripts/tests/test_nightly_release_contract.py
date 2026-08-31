@@ -125,7 +125,10 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn('VPK_PACK_ID="luncosim"', package_builder)
         self.assertIn('window.name = Some("luncosim".to_string());', window_source)
         self.assertIn('verify_linux_appimage "$VELOPACK_OUT"', package_builder)
+        self.assertNotIn('cat > "$dir/LunCoSim.desktop"', package_builder)
         self.assertIn('"$appimage" --appimage-extract', verifier)
+        self.assertIn('find "$appdir" -type f -name \'*.desktop\'', verifier)
+        self.assertIn('desktop filename does not match its Icon', verifier)
         self.assertIn('StartupWMClass', verifier)
         self.assertIn('.DirIcon', verifier)
 
