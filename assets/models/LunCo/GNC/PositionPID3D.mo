@@ -305,9 +305,9 @@ equation
   // First-pad engine cutoff is also the end of translational guidance. With no
   // main-engine thrust, a requested tilt cannot create lateral acceleration;
   // keeping that request alive would ask the RCS to lean a grounded vehicle.
-  // The airframe enters rate-only damping at first low-speed pad contact and
-  // closes RCS together with the main engine once the cutoff event is accepted.
-  // The later four-pad handoff records that the passive gear has settled.
+  // The airframe retains only measured rate damping while the gear absorbs
+  // residual motion. Its accepted four-pad handoff is the final landed-state
+  // boundary and closes every RCS request at the actuator owner.
   lateral_landing_gate = max(0.0, min(1.0,
     1.0 - max(landing_handoff, landing_engine_cutoff)));
   // A vehicle that has physically touched down outside the final target must

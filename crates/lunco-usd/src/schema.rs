@@ -720,6 +720,7 @@ mod tests {
             // prim role — see the schema. Pinned here so a schema/generatedSchema
             // drift doesn't silently make them `custom`.
             "LunCoSuspensionAPI",
+            "LunCoPrismaticSuspensionAPI",
             "LunCoWheelAPI",
             "LunCoSuspensionVisualAPI",
             "LunCoMassContributionAPI",

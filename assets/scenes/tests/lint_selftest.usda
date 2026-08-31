@@ -33,6 +33,9 @@
 #                Driven mass cannot make a negative stiffness physically valid.
 #   BadGear      malformed PhysxPhysicsGearJoint drive values → invalid-gear-drive
 #                The USD-sim reader refuses the coupling; policy must surface it.
+#   BadPassiveSuspension  passive cartridge on a non-prismatic prim
+#                → invalid-passive-suspension. The USD-sim reader refuses the
+#                material law; policy must surface the same contract error.
 #   MissingCollisionAPI  collisionEnabled=true without a collision schema
 #                The physics reader ignores the prim, so the intent must fail lint.
 #
@@ -192,6 +195,17 @@ def Xform "LintSelftest" (
         float physxGearJoint:gearRatio = 0.0
         token drive:angular:physics:type = "unsupported"
         float drive:angular:physics:stiffness = -1.0
+    }
+
+    def Xform "BadPassiveSuspension" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear", "LunCoPrismaticSuspensionAPI"]
+    )
+    {
+        token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = -1.0
+        float drive:linear:physics:damping = 0.0
+        float drive:linear:physics:maxForce = 100.0
+        float lunco:prismaticSuspension:yieldForce = 100.0
     }
 
     def Cube "Anchor" (

@@ -88,12 +88,16 @@ touchdown. **When a constant in a `.mo` exists only to translate between two pri
 positions, the wire is wrong.**
 
 **A sprung mechanism belongs to the SOLVER, not to a domain model.** A landing
-leg's shock absorber is `UsdPhysicsDriveAPI:linear` — `physics:type = "force"`,
-`drive:linear:physics:stiffness` in N/m, `:damping` in N·s/m — integrated by
-avian. Its stroke and reaction are then the joint's own `displacement` and
-`force` ports. Do not write a `.mo` for the spring and do not animate it from
-rhai: Modelica earns its keep where a domain equation has no solver already
-integrating it, and this one does.
+leg's passive shock absorber is a `PhysicsPrismaticJoint` with standard
+`PhysicsDriveAPI:linear` coefficients and the narrow
+`LunCoPrismaticSuspensionAPI` yield/role extension. The extension is not a
+second spring: the runtime disables the native bilateral motor and integrates
+the standard stiffness, damping, and capacity as a one-sided elastic/plastic
+material in Avian's existing substep solver. Its stroke and reaction are then
+the joint's own `displacement` and output-only `force` ports. Commandable
+mechanisms may use the standard force drive without the extension. Do not write
+a `.mo` for either spring and do not animate it from rhai: Modelica earns its
+keep where a domain equation has no solver already integrating it.
 
 Sign is a property of the joint. `force = stiffness * (targetPosition -
 displacement)` makes the reaction opposite in sign to the displacement, so a
