@@ -2122,6 +2122,17 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     Some(spec)
 }
 
+/// Read the standard linear drive on a prismatic joint through the same typed
+/// USD/PhysX reader used by joint projection. Passive material extensions use
+/// this to reuse the standard target, stiffness, damping, and force-limit
+/// properties instead of defining duplicate `lunco:*` fields.
+pub fn read_linear_joint_drive(stage: &Stage, path: &SdfPath) -> Result<Option<JointDrive>, ()> {
+    if StageView::new(stage).prim_type_name(path).as_deref() != Some("PhysicsPrismaticJoint") {
+        return Err(());
+    }
+    Ok(read_joint_spec_typed(stage, path).ok_or(())?.drive)
+}
+
 /// Typed-schema sibling of [`reduce_generic_joint`]: reduces a generic
 /// `UsdPhysicsJoint` (D6) to the avian primitive matching its free DOFs by
 /// reading each per-DOF `UsdPhysicsLimitAPI` (`limit:{transX..rotZ}`) off the
@@ -3805,7 +3816,7 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
@@ -3911,11 +3922,11 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
-    use super::{CollisionGroupTable, extract_avian_prim, read_physics_material};
+    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -4167,7 +4178,7 @@ mod joint_typed_tests {
     //! *dynamics* need a rover boot.
     use super::read_joint_spec_typed;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0

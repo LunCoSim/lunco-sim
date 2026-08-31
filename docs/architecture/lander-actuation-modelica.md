@@ -59,6 +59,19 @@ The lander model does not instantiate an RCS cluster and does not calculate a
 world-frame wrench. The controller sees local sensors and asks for local body
 torque. USD decides which physical devices provide that authority.
 
+The accepted `landing_handoff` input is the single landed-state boundary at the
+airframe actuator owner. `landing_engine_cutoff` closes the main-engine request
+when the target-qualified contact event is accepted; the airframe retains only
+measured body-rate damping while the suspension settles. The later accepted
+handoff gates the normalized throttle and every body-torque output, so stale
+filtered commands or late scenario writes cannot reopen the main engine or RCS.
+The remaining motion is therefore resolved by the authored Avian bodies, the
+native prismatic geometry, the authored passive crush cartridges, contact, and
+damping rather than by a transform clamp or controller freeze. A passive
+cartridge is not a Modelica actuator: its constitutive state belongs to the
+`LunCoPrismaticSuspensionAPI` material projected by `lunco-usd-sim` and solved
+in Avian's existing substep schedule.
+
 ## Visualization and live state
 
 Every reusable propulsion component has a semantic Modelica `Icon` and

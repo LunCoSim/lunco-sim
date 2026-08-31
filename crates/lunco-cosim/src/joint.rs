@@ -2,9 +2,12 @@
 //! **joint** half of the avian backend; [`crate::avian`] is the body half).
 //!
 //! Each single-DOF joint exposes one port in **both** directions, named for its
-//! DOF — `angle` (revolute, rad) or `displacement` (prismatic, m). Every
-//! prismatic joint is realized by Avian's native joint and its authored
-//! `PhysicsDriveAPI:linear` drive.
+//! DOF — `angle` (revolute, rad) or `displacement` (prismatic, m).
+//! Commandable prismatic joints are realized by Avian's native joint and their
+//! authored `PhysicsDriveAPI:linear` drive. A passive landing cartridge uses the
+//! same native joint for geometry but an explicit material API for its
+//! one-sided, crushable axial law; the native bilateral motor is disabled for
+//! that marked material role.
 //!
 //! | Joint     | Port           | `In` (commanded → motor) | `Out` (measured)        |
 //! |-----------|----------------|--------------------------|-------------------------|
@@ -45,9 +48,13 @@
 //! joint (e.g. a rover wheel driven by the solved mechanical torque boundary)
 //! is left entirely alone, so the two never fight over `joint.motor`.
 
+use avian3d::dynamics::integrator::IntegrationSystems;
+use avian3d::dynamics::solver::schedule::SubstepSolverSystems;
+use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
+use avian3d::prelude::SubstepSchedule;
 use avian3d::prelude::{
-    AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, MotorModel, Position,
-    PrismaticJoint, RevoluteJoint, Rotation,
+    AngularVelocity, ComputedCenterOfMass, JointDisabled, LinearVelocity, Mass, MotorModel,
+    Position, PrismaticJoint, RevoluteJoint, RigidBody, RigidBodyDisabled, Rotation,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -75,6 +82,34 @@ pub const JOINT_VELOCITY_PORT: &str = "velocity";
 /// spells joint-force readback. Ports are not USD schemas, so a plain name is
 /// right here — inventing a `lunco:*` USD attribute to match would not be.
 pub const JOINT_FORCE_PORT: &str = "force";
+
+/// A passive, crushable suspension attached to a prismatic joint.
+///
+/// This is deliberately not a `LinearMotor`. A motor is a bilateral actuator
+/// that returns a displaced body to its target and therefore stores/reinjects
+/// rebound energy. A landing strut is a material element: it carries load in
+/// compression, dissipates closing motion, and accumulates permanent crush
+/// after its authored yield load. The native prismatic joint remains the sole
+/// geometric constraint; this component contributes only its one-dimensional
+/// constitutive impulse in Avian's substep solver.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Debug)]
+pub struct PassivePrismaticSuspension {
+    /// Unloaded displacement in the joint's signed coordinate (m).
+    pub rest_position: f64,
+    /// Permanent unloaded displacement after material yield (m).
+    pub plastic_position: f64,
+    /// Elastic stiffness (N/m).
+    pub spring_k: f64,
+    /// Closing/rebound damping coefficient (N*s/m).
+    pub damping_c: f64,
+    /// Elastic crush load (N).
+    pub yield_force: f64,
+    /// Maximum compressive reaction (N).
+    pub max_force: f64,
+    /// Last substep reaction for the output-only `force` port (N).
+    pub reaction_force: f64,
+}
 
 /// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
 /// Generous so the joint holds its target against gravity for the structures we
@@ -175,12 +210,22 @@ const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
     },
 ];
 
-/// The standard commandable prismatic-joint port group: measured `displacement`
-/// out, commanded `displacement` in. The drive law is authored with
-/// `PhysicsDriveAPI:linear`; landing legs and actuators use the same native
-/// realization.
+/// The output-only port group for an explicitly authored passive suspension.
+/// A passive material has no commandable displacement input: its stroke and
+/// reaction are physical results, not a setpoint another subsystem may drive.
+pub const PASSIVE_PRISMATIC_SUSPENSION_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| {
+        w.get::<PrismaticJoint>(e).is_some() && w.get::<PassivePrismaticSuspension>(e).is_some()
+    },
+    ports: PRISMATIC_STATE_PORTS,
+};
+
+/// The standard commandable prismatic-joint port group. Passive suspensions are
+/// excluded so a stale wire cannot enable a bilateral motor on a crushable leg.
 pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
-    present: |w, e| w.get::<PrismaticJoint>(e).is_some(),
+    present: |w, e| {
+        w.get::<PrismaticJoint>(e).is_some() && w.get::<PassivePrismaticSuspension>(e).is_none()
+    },
     ports: &[
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
@@ -314,6 +359,9 @@ fn relative_anchor_velocity_along_axis(axis: DVec3, body1: DVec3, body2: DVec3) 
 /// One computation, both consumers: the `force` port and anything else that wants
 /// the strut's load call this, so they cannot drift apart.
 pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
+    if let Some(suspension) = world.get::<PassivePrismaticSuspension>(entity) {
+        return Some(suspension.reaction_force);
+    }
     let j = world.get::<PrismaticJoint>(entity)?;
     if !j.motor.enabled {
         return None;
@@ -360,6 +408,200 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bo
         j.motor.max_force = JOINT_MOTOR_MAX_FORCE;
     }
     true
+}
+
+/// Advance the unloaded reference of an elastic-perfectly-plastic crush
+/// cartridge. Compression is negative in the joint coordinate, so the
+/// reference can move only toward smaller displacement. Keeping the permanent
+/// set on the material component makes crush irreversible without moving a
+/// body or fabricating a settled pose.
+fn plastic_reference_after_compression(
+    displacement: f64,
+    plastic_position: f64,
+    rest_position: f64,
+    spring_k: f64,
+    yield_force: f64,
+) -> f64 {
+    let yield_deflection = yield_force / spring_k;
+    plastic_position
+        .min(rest_position)
+        .min(displacement + yield_deflection)
+}
+
+/// Solve one implicit Euler step of the axial Kelvin-Voigt material.
+///
+/// `position_error` is positive compression relative to the current unloaded
+/// reference and `velocity` is the signed joint-coordinate rate (positive means
+/// rebound). The update uses the full generalized inverse mass of both bodies,
+/// including anchor lever arms and locked axes. The final clamp is the authored
+/// compressive load capacity; it prevents a landing cartridge from becoming a
+/// tensile actuator during rebound.
+fn passive_prismatic_impulse(
+    position_error: f64,
+    velocity: f64,
+    spring_k: f64,
+    damping_c: f64,
+    inverse_mass: f64,
+    dt: f64,
+    max_force: f64,
+) -> f64 {
+    if !position_error.is_finite()
+        || !velocity.is_finite()
+        || !spring_k.is_finite()
+        || !damping_c.is_finite()
+        || !inverse_mass.is_finite()
+        || !dt.is_finite()
+        || spring_k <= 0.0
+        || damping_c < 0.0
+        || inverse_mass <= 0.0
+        || dt <= 0.0
+        || position_error <= 0.0
+    {
+        return 0.0;
+    }
+
+    // Implicitly solve the spring's position update and damper in one scalar
+    // equation. This retains the authored force law without the explicit
+    // stiff-force instability of Avian's ForceBased motor model.
+    let implicit_damping = damping_c + spring_k * dt;
+    let impulse = dt * (spring_k * position_error - implicit_damping * velocity)
+        / (1.0 + dt * implicit_damping * inverse_mass);
+    let capacity = max_force * dt;
+    if max_force.is_finite() && max_force > 0.0 {
+        impulse.clamp(0.0, capacity)
+    } else {
+        impulse.max(0.0)
+    }
+}
+
+/// Solve every authored passive landing cartridge inside Avian's native
+/// substep schedule. The native `PrismaticJoint` remains the sole geometric
+/// constraint; this system contributes only the material impulse on that
+/// joint's one allowed coordinate.
+#[allow(clippy::type_complexity)]
+fn solve_passive_prismatic_material(
+    mut constraints: Query<
+        (&PrismaticJoint, &mut PassivePrismaticSuspension),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    frames: Query<(&Position, &Rotation, &ComputedCenterOfMass)>,
+    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
+    time: Res<Time>,
+) {
+    let dt = time.delta_secs_f64();
+    for (joint, mut suspension) in &mut constraints {
+        suspension.reaction_force = 0.0;
+        let Ok([(position1, rotation1, com1), (position2, rotation2, com2)]) =
+            frames.get_many([joint.body1, joint.body2])
+        else {
+            continue;
+        };
+
+        // Match Avian's native treatment of static and sleeping bodies: a
+        // missing SolverBody is an immovable endpoint, not a reason to skip the
+        // material law entirely.
+        let mut dummy_body1 = SolverBody::DUMMY;
+        let mut dummy_body2 = SolverBody::DUMMY;
+        let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
+        let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body1) } {
+            body1 = body.into_inner();
+            inertia1 = inertia;
+        }
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body2) } {
+            body2 = body.into_inner();
+            inertia2 = inertia;
+        }
+
+        let current_rotation1 = body1.delta_rotation.0 * rotation1.0;
+        let current_rotation2 = body2.delta_rotation.0 * rotation2.0;
+        let local_anchor1 = joint.local_anchor1().unwrap_or(DVec3::ZERO);
+        let local_anchor2 = joint.local_anchor2().unwrap_or(DVec3::ZERO);
+        let r1 = current_rotation1 * (local_anchor1 - com1.0);
+        let r2 = current_rotation2 * (local_anchor2 - com2.0);
+        let axis = (body1.delta_rotation.0 * slider_axis_world_from_rotation(rotation1.0, joint))
+            .normalize_or_zero();
+        if axis == DVec3::ZERO {
+            continue;
+        }
+
+        let center_difference =
+            (position2.0 - position1.0) + (rotation2.0 * com2.0 - rotation1.0 * com1.0);
+        let separation =
+            (body2.delta_position - body1.delta_position) + (r2 - r1) + center_difference;
+        let displacement = separation.dot(axis);
+        let velocity = (body2.velocity_at_point(r2) - body1.velocity_at_point(r1)).dot(axis);
+
+        let plastic_position = plastic_reference_after_compression(
+            displacement,
+            suspension.plastic_position,
+            suspension.rest_position,
+            suspension.spring_k,
+            suspension.yield_force,
+        );
+        if plastic_position < suspension.plastic_position {
+            suspension.plastic_position = plastic_position;
+        }
+
+        let mut inv_mass1 = inertia1.effective_inv_mass();
+        let mut inv_mass2 = inertia2.effective_inv_mass();
+        let mut inv_inertia1 = inertia1.effective_inv_angular_inertia();
+        let mut inv_inertia2 = inertia2.effective_inv_angular_inertia();
+        match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
+            core::cmp::Ordering::Greater => {
+                inv_mass1 = DVec3::ZERO;
+                inv_inertia1 *= 0.0;
+            }
+            core::cmp::Ordering::Less => {
+                inv_mass2 = DVec3::ZERO;
+                inv_inertia2 *= 0.0;
+            }
+            core::cmp::Ordering::Equal => {}
+        }
+        let r1_cross_axis = r1.cross(axis);
+        let r2_cross_axis = r2.cross(axis);
+        let generalized_inverse_mass = axis.dot(inv_mass1 * axis)
+            + r1_cross_axis.dot(inv_inertia1 * r1_cross_axis)
+            + axis.dot(inv_mass2 * axis)
+            + r2_cross_axis.dot(inv_inertia2 * r2_cross_axis);
+        if !generalized_inverse_mass.is_finite() || generalized_inverse_mass <= f64::EPSILON {
+            continue;
+        }
+
+        let impulse_magnitude = passive_prismatic_impulse(
+            suspension.plastic_position - displacement,
+            velocity,
+            suspension.spring_k,
+            suspension.damping_c,
+            generalized_inverse_mass,
+            dt,
+            suspension.max_force,
+        );
+        suspension.reaction_force = impulse_magnitude / dt;
+        if impulse_magnitude == 0.0 {
+            continue;
+        }
+
+        let impulse = axis * impulse_magnitude;
+        body1.linear_velocity -= inv_mass1 * impulse;
+        body1.angular_velocity -= inv_inertia1 * r1.cross(impulse);
+        body2.linear_velocity += inv_mass2 * impulse;
+        body2.angular_velocity += inv_inertia2 * r2.cross(impulse);
+    }
+}
+
+/// Install the passive material after Avian has solved native constraints and
+/// before it integrates positions for the current substep. This uses the
+/// solver's own velocity boundary, not the outer fixed tick's force accumulator.
+pub fn install_passive_prismatic_solver(app: &mut App) {
+    let Some(substeps) = app.get_schedule_mut(SubstepSchedule) else {
+        return;
+    };
+    substeps.add_systems(
+        solve_passive_prismatic_material
+            .after(SubstepSolverSystems::SolveConstraints)
+            .before(IntegrationSystems::Position),
+    );
 }
 
 /// Signed displacement (m) of `body2` relative to `body1` along `axis_world`,
@@ -536,6 +778,56 @@ mod tests {
         assert!(
             (rate - 0.35).abs() < 1e-12,
             "expected anchor rate 0.35, got {rate}"
+        );
+    }
+
+    #[test]
+    fn passive_crush_reference_is_irreversible_and_compression_only() {
+        let rest = 0.0;
+        let yield_force = 20_000.0;
+        let spring_k = 1_800_000.0;
+        let yielded = plastic_reference_after_compression(-0.20, rest, rest, spring_k, yield_force);
+        assert!((yielded + 0.1888888888888889).abs() < 1.0e-12);
+
+        // Unloading does not restore the crushed material.
+        assert_eq!(
+            plastic_reference_after_compression(-0.15, yielded, rest, spring_k, yield_force,),
+            yielded
+        );
+        // Extension beyond the unloaded position cannot create a new crush set.
+        assert_eq!(
+            plastic_reference_after_compression(0.05, yielded, rest, spring_k, yield_force,),
+            yielded
+        );
+    }
+
+    #[test]
+    fn passive_material_impulse_is_compressive_and_capacity_bounded() {
+        let dt = 1.0 / 480.0;
+        let impulse = passive_prismatic_impulse(
+            0.02,
+            -0.4,
+            1_800_000.0,
+            90_000.0,
+            1.0 / 1_000.0,
+            dt,
+            42_000.0,
+        );
+        assert!(impulse > 0.0);
+        assert!(impulse <= 42_000.0 * dt);
+
+        // Rebound cannot turn a landing cartridge into a tensile actuator.
+        assert_eq!(
+            passive_prismatic_impulse(
+                0.02,
+                0.4,
+                1_800_000.0,
+                90_000.0,
+                1.0 / 1_000.0,
+                dt,
+                42_000.0,
+            ),
+            0.0
         );
     }
 }
