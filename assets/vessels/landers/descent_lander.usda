@@ -2584,14 +2584,13 @@ def Xform "DescentLander" (
     # travel.
     #
     # The SHOCK ABSORBER is the standard `PhysicsDriveAPI:linear` spring-damper
-    # extended by `LunCoPrismaticSuspensionAPI`'s yield load. The USD/Avian bridge
-    # realizes its one-sided, crushable law in the native substep solver; the joint
-    # still owns the geometric constraint, rotation lock, limits, and stroke. There is
-    # no Modelica equation, Rhai command, transform write, external force pass,
-    # or lander-specific branch. Two layers remain:
+    # on the native Avian prismatic joint. The joint owns the geometric constraint,
+    # rotation lock, limits, stroke, and drive reaction. There is no Modelica
+    # equation, Rhai command, transform write, external force pass, or
+    # lander-specific branch. Two layers remain:
     #   the joint            — the geometric constraint and rotation lock; the
-    #                          passive suspension receives its authored
-    #                          stiffness, damping, yield/max force, and stroke
+    #                          native drive carries its authored
+    #                          stiffness, damping, max force, and stroke
     #                          -0.8..0 m (negative IS compression).
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
@@ -2966,22 +2965,17 @@ def Xform "DescentLander" (
 
     # ── Landing-gear suspension ──
     #
-    # THE SUSPENSION IS HERE, and only here. The applied API is an explicitly
-    # classified axial material constraint; the standard prismatic joint owns
-    # its single translational DOF, upper/lower stops, and all rotation locks.
+    # THE SUSPENSION IS HERE, and only here. The standard prismatic joint owns
+    # its single translational DOF, upper/lower stops, and all rotation locks;
+    # the standard PhysicsDriveAPI:linear owns the axial spring-damper.
     #
     # No `der()` restates this law in Modelica and no script animates it: a second
     # spelling of one shock absorber would put two writers on one fact.
     #
-    # Tuning, per leg: this is an energy-absorbing material, not a commandable
-    # actuator. NASA landing-gear studies describe honeycomb cartridges as
-    # approximately constant-force crush absorbers, so the standard drive carries
-    # k = 1.8 MN/m and capacity = 42 kN, while the LunCo extension carries the
-    # missing yield = 20 kN. The yield stroke is
-    # 20,000 / 1,800,000 = 0.0111 m; after yield, the unloaded reference moves
-    # permanently instead of returning that landing energy as rebound. Damping
-    # is 90 kN s/m and is solved implicitly in every native Avian substep.
-    # `maxForce` is the cartridge capacity, not a solver-stability constant.
+    # Tuning, per leg: this is an energy-absorbing physical drive, not a
+    # commandable flight actuator. The authored 4000 N/m stiffness and 800 N s/m
+    # damping are solved by Avian's implicit native spring-damper realization;
+    # `maxForce = 12000 N` is the physical drive capacity, not a solver setting.
     # SIGN, and it is the physically natural one: a suspension reaction is POSITIVE
     # when the spring is COMPRESSED. Compression therefore reads as NEGATIVE
     # displacement along the hull→foot axis, the direction the strut EXTENDS.
@@ -3018,10 +3012,10 @@ def Xform "DescentLander" (
 
     # Suspension numbers are dimensional and derived from the authored moving
     # mass, not chosen as solver stabilisers. Each leg carries about
-    # 4000 kg * 1.6249 m/s^2 / 4 = 1625 N at rest. The 42 kN cartridge capacity
-    # is 25.8 times that static leg load and the stroke limit remains -0.8..0 m.
+    # 4000 kg * 1.6249 m/s^2 / 4 = 1625 N at rest. The 12 kN drive capacity
+    # is 7.4 times that static leg load and the stroke limit remains -0.8..0 m.
     def PhysicsPrismaticJoint "LegPX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear", "LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3042,13 +3036,12 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 800.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear", "LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3066,13 +3059,12 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 800.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear", "LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3086,13 +3078,12 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 800.0
+        float drive:linear:physics:maxForce = 12000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear", "LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3106,10 +3097,9 @@ def Xform "DescentLander" (
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:targetVelocity = 0.0
-        float drive:linear:physics:stiffness = 1800000.0
-        float drive:linear:physics:damping = 90000.0
-        float drive:linear:physics:maxForce = 42000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 800.0
+        float drive:linear:physics:maxForce = 12000.0
     }
 
 }

@@ -67,8 +67,8 @@ model Lander
   // The prismatic joint state is the landing gear's measured load path. Pad
   // contact can become true at the instant of first touch. The joint states
   // remain measured telemetry, and their rates participate in the quiet-gear
-  // qualification; permanent honeycomb crush is not required because a soft
-  // touchdown can load all four pads without exceeding material yield.
+  // qualification. A soft touchdown may therefore qualify with little stroke;
+  // compression is measured, not invented by the controller.
   input Real leg_displacement_px = 0.0
     "Measured +X suspension displacement along its authored axis (m)";
   input Real leg_displacement_nx = 0.0
@@ -253,11 +253,7 @@ equation
     min(command_upper_bound, cmd_throttle
       * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
         max(0.0, min(1.0, landing_handoff))))))));
-  // Pitch and roll are ATTITUDE requests, not direct torques.  The old
-  // boundary multiplied the normalized guidance value by inertia and applied
-  // it as a constant torque while the upright hold loop applied a competing
-  // torque.  That is not a cascaded flight controller: it leaves the vehicle
-  // tilted while the main engine accelerates it sideways.  Convert the
+  // Pitch and roll are ATTITUDE requests, not direct torques. Convert the
   // normalized request to a physical tilt target and let the measured
   // attitude/rate loop below close the RCS torque loop.
   desired_tilt_x = cmd_pitch * command_tilt_limit_rad;
@@ -373,8 +369,7 @@ equation
   // A negative prismatic displacement is compression by the joint's authored
   // axis convention. Keep the minimum as measured evidence and require all
   // four suspension rates to be quiet. Do not require a minimum displacement:
-  // an elastoplastic absorber only crushes above yield, so that predicate would
-  // reject the physically desirable soft landing.
+  // a soft elastic landing can be physically valid with little stroke.
   minimum_leg_compression = min(
     min(max(0.0, -leg_displacement_px), max(0.0, -leg_displacement_nx)),
     min(max(0.0, -leg_displacement_pz), max(0.0, -leg_displacement_nz)));
@@ -392,7 +387,7 @@ equation
       + predicate_band) / predicate_band));
   // Main-engine cutoff and final flight handoff are different physical events.
   // A qualified low-speed pad switch starts a rate-only contact phase. Once the
-  // measured body rate is quiet, cutoff closes propulsion and the passive gear
+  // measured body rate is quiet, cutoff closes propulsion and the landing gear
   // takes the remaining touchdown energy. The event supervisor supplies the
   // contiguous-time qualification; this model publishes only the measured
   // predicate. Final handoff still requires all four pads, low body rates, and
