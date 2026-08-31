@@ -5259,11 +5259,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
 const STATUS_EVENT_LEVEL_WIDTH: f32 = 64.0;
 const STATUS_EVENT_SOURCE_WIDTH: f32 = 100.0;
 const STATUS_EVENT_PROGRESS_WIDTH: f32 = 120.0;
-const STATUS_EVENT_ACTION_WIDTH: f32 = 80.0;
+const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
+const STATUS_EVENT_DETAILS_WIDTH: f32 = 28.0;
 
-/// Render every history item through the same level/source/message/progress/action
-/// columns. Warn/Error add their complete diagnostic below that row, while
-/// Attention uses the action column to emit the owning status action.
+/// Render every history item through the same level/source/message/progress
+/// columns. Warn/Error add a compact diagnostics control and their complete
+/// diagnostic below that row, while Attention adds the owning status action.
 fn render_status_event_row(
     ui: &mut egui::Ui,
     event: &status_bus::StatusEvent,
@@ -5296,19 +5297,20 @@ fn render_status_event_row(
     } else {
         STATUS_EVENT_PROGRESS_WIDTH
     };
-    let action_width = if compact {
-        56.0
-    } else {
-        STATUS_EVENT_ACTION_WIDTH
-    };
+    let control_width = status_event_control_width(event.level, has_details, compact);
     let column_gap = if compact {
         4.0
     } else {
         ui.spacing().item_spacing.x
     };
-    let message_width =
-        (row_width - level_width - source_width - progress_width - action_width - column_gap * 4.0)
-            .max(1.0);
+    let column_gaps = if control_width > 0.0 { 4.0 } else { 3.0 };
+    let message_width = (row_width
+        - level_width
+        - source_width
+        - progress_width
+        - control_width
+        - column_gap * column_gaps)
+        .max(1.0);
     let display_message = if has_details {
         status_message_summary(&event.message)
     } else {
@@ -5366,23 +5368,33 @@ fn render_status_event_row(
         if event.level == status_bus::StatusLevel::Attention {
             attention_clicked = ui
                 .add_sized(
-                    [action_width, 0.0],
+                    [control_width, 0.0],
                     egui::Button::new(if compact { "Act" } else { "Continue" }),
                 )
                 .on_hover_text("Continue")
                 .clicked();
         } else if has_details && !details.is_open() {
-            if ui
-                .add_sized([action_width, 0.0], egui::Button::new("Details"))
-                .clicked()
+            if icon_button_sized(
+                ui,
+                UiIcon::Info,
+                "Show diagnostics",
+                egui::vec2(control_width, ui.spacing().interact_size.y),
+            )
+            .clicked()
             {
                 details.toggle(ui);
             }
-        } else {
-            ui.allocate_exact_size(
-                egui::vec2(action_width, ui.spacing().interact_size.y),
-                egui::Sense::hover(),
-            );
+        } else if has_details {
+            if icon_button_sized(
+                ui,
+                UiIcon::Close,
+                "Hide diagnostics",
+                egui::vec2(control_width, ui.spacing().interact_size.y),
+            )
+            .clicked()
+            {
+                details.toggle(ui);
+            }
         }
     });
 
@@ -5403,6 +5415,24 @@ fn render_status_event_row(
     }
 
     attention_clicked
+}
+
+fn status_event_control_width(
+    level: status_bus::StatusLevel,
+    has_details: bool,
+    compact: bool,
+) -> f32 {
+    if level == status_bus::StatusLevel::Attention {
+        if compact {
+            56.0
+        } else {
+            STATUS_EVENT_ATTENTION_WIDTH
+        }
+    } else if has_details {
+        STATUS_EVENT_DETAILS_WIDTH
+    } else {
+        0.0
+    }
 }
 
 fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
@@ -6367,6 +6397,22 @@ mod tests {
             "missing prim /World/Terrain"
         );
         assert!(message.contains("caused by: /twins/apollo15/terrain"));
+    }
+
+    #[test]
+    fn status_event_controls_reserve_only_their_required_width() {
+        assert_eq!(
+            status_event_control_width(status_bus::StatusLevel::Info, false, false),
+            0.0
+        );
+        assert_eq!(
+            status_event_control_width(status_bus::StatusLevel::Warn, true, false),
+            STATUS_EVENT_DETAILS_WIDTH
+        );
+        assert_eq!(
+            status_event_control_width(status_bus::StatusLevel::Attention, false, false),
+            STATUS_EVENT_ATTENTION_WIDTH
+        );
     }
 
     #[test]
