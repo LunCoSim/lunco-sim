@@ -73,62 +73,17 @@ def Xform "RockerBogieAntennaVisual" (
         over "BogieHingeR" (active = false) { }
 
         # This companion is a hardware composition review, not the pointing
-        # dynamics gate. Replace the live antenna instance with one scenery
-        # instance of the same reusable component; the numeric companion keeps
-        # the controller and both joints live while the rover drives.
-        over "Antenna" (
-            active = false
-        )
+        # dynamics gate. Keep the rover's single authored antenna instance and
+        # make its existing mechanism inert for this frozen view; the numeric
+        # companion keeps the same instance live while the rover drives.
+        over "Antenna"
         {
-        }
-
-        def "AntennaReview" (
-            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-        )
-        {
-            double3 xformOp:translate = (-0.35, 0.22, 0.6)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-
-            over "Mast"
-            {
-                double radius = 0.02
-                double height = 0.5
-                double3 xformOp:translate = (0.0, 0.25, 0.0)
-                color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
-            }
             over "YawHead"
             {
-                double3 xformOp:translate = (0.0, 0.5, 0.0)
                 bool physics:rigidBodyEnabled = false
-
                 over "DishGimbal"
                 {
                     bool physics:rigidBodyEnabled = false
-                    # Aim the parked reflector toward this review camera so
-                    # the feed, bowl, and yoke read as one antenna assembly.
-                    double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
-                    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-                    over "DishHead"
-                    {
-                        over "LinkAperture"
-                        {
-                            # The visual companion reviews hardware geometry;
-                            # the numeric fixture owns the live link node and
-                            # its beam policy.
-                            bool lunco:linkNode = false
-                            bool lunco:wifiNode = false
-                            over "LinkBeam"
-                            {
-                                over "Up"
-                                {
-                                    over "Driver"
-                                    {
-                                        custom float lunco:param:mode = 2
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
