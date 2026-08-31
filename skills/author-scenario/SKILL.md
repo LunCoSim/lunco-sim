@@ -91,7 +91,7 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
-| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` **next** tick); scalar, array, and map payloads keep their typed structure |
+| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the **next scenario pass**; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded per `(entity,tick,hook)`) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |
@@ -397,7 +397,7 @@ libraries → `<twin>/tools/*.rhai`.
    closures. Keep persistent lifecycle state on `this` only where a hook or
    task closure genuinely needs it; named `Fn("...")` callbacks are not leaves.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
-4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
+4. Wire reactions through `emit`/`on_event` (the next scenario pass delivers the event; paused simulations use `Update` while fixed simulation time is stopped).
 5. `RunScenario` on the target gid through the live API; verify with `ScriptInspect`; iterate by re-running (in-place hot-reload, no app restart).
 6. Persist it as a `LunCoProgramAPI` child prim on the target once it works.
 
@@ -406,7 +406,7 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ Persistent state in top-level `let` or read from a helper — invisible/unbound. Use `this`, in hooks only.
 - ❌ A per-tick control law (PID, force mixing) in rhai — belongs in Modelica.
 - ❌ `goto(...)` — reserved word; use `nav_to`.
-- ❌ Expecting an `emit` to be seen the same tick — it arrives next tick.
+- ❌ Expecting an `emit` to be seen in the same scenario pass — it arrives on the next pass.
 - ❌ Assuming a scenario runs on clients — it's host-authoritative; clients get replicated state, not the script.
 - ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).

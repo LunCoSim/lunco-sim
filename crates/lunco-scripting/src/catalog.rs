@@ -259,7 +259,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "emit",
         "emit(name, value?)",
         "bool",
-        "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks next tick. `value` may be a scalar, array, or map and keeps its typed structure.",
+        "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks on the next scenario pass. `value` may be a scalar, array, or map and keeps its typed structure.",
     ),
     (
         "register_hook",

@@ -442,8 +442,8 @@ impl Plugin for LunCoScriptingPlugin {
             // Mints document ids for scenarios attached via RunScenario.
             app.init_resource::<commands::ScenarioDocAllocator>();
             // Event channel: scenarios subscribe to the existing TelemetryEvent
-            // bus via this observer (frame-delayed into on_event hooks). Neutral —
-            // shared by every backend.
+            // bus via this observer (delivered on the next scenario pass into
+            // on_event hooks). Neutral — shared by every backend.
             app.init_resource::<scenario::ScriptEventInbox>();
             app.add_observer(scenario::collect_script_events);
             // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
@@ -514,6 +514,15 @@ impl Plugin for LunCoScriptingPlugin {
                 world_bridge::tick_rhai_scenarios
                     .in_set(ScriptingSet)
                     .run_if(scenario::scenario_execution_enabled),
+            );
+            app.add_systems(
+                Update,
+                // A paused simulation stops FixedUpdate. Keep lifecycle startup
+                // and discrete event reactions responsive without advancing
+                // fixed-step behavior.
+                world_bridge::tick_rhai_scenarios_while_paused
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_paused),
             );
         }
 

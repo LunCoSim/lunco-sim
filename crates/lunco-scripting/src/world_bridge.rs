@@ -22,7 +22,7 @@
 //!   float-origin-correct (big_space) position read; `get` is the generic
 //!   component-field reader (the finished `EntityProxy`).
 //! - **`emit` / `on_event`** — discrete event production and consumption using
-//!   `TelemetryEvent`; delivery is intentionally one fixed-step late.
+//!   `TelemetryEvent`; delivery occurs on the next scenario pass.
 //!
 //! # Execution context
 //!
@@ -1330,7 +1330,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // emit(name, value) -> bool — fire a TelemetryEvent on the shared bus
     // (reused, not reinvented): existing API-subscription + log observers see
-    // it immediately, and scripts receive it next tick via on_event. `value`
+    // it immediately, and scripts receive it on the next scenario pass via
+    // on_event. `value`
     // may be float / int / bool / string.
     engine.register_fn("emit", |name: ImmutableString, value: Dynamic| -> bool {
         bridge_core::emit(name.as_str(), rhai_to_telemetry(&value))
@@ -2065,6 +2066,15 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 /// its lifecycle via the neutral [`crate::scenario::ScenarioDriver`].
 pub fn tick_rhai_scenarios(world: &mut World) {
     crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run(world, ScriptLanguage::Rhai);
+}
+
+/// Exclusive system (Update while simulation time is paused): deliver scenario
+/// startup and queued discrete events without running fixed-step behavior.
+pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
+    crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
+        world,
+        ScriptLanguage::Rhai,
+    );
 }
 
 /// Call a one-arg hook (`fn name(self)`), binding `this` to the entity's

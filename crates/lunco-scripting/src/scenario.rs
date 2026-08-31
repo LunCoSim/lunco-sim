@@ -4,7 +4,7 @@
 //! policy plus lifecycle hooks (`on_start` / `on_tick` / `on_event` /
 //! `on_stop`). EVERYTHING about *when*
 //! those fire — scheduling, hot-reload on a generation bump, `on_event`
-//! frame-delayed delivery, pause, despawn/detach teardown, diagnostics
+//! delivery, paused-simulation handling, despawn/detach teardown, diagnostics
 //! reporting — is identical across languages. That orchestration lives here, in
 //! [`ScenarioDriver`], free of any interpreter type.
 //!
@@ -109,6 +109,15 @@ pub fn open_scenarios_when_scene_ready(
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
     gate.is_none_or(|gate| gate.enabled)
+}
+
+/// Run condition for the paused-simulation scenario pass.
+///
+/// `Time<Virtual>` is the single owner of simulation pause. The paused pass
+/// keeps discrete lifecycle events responsive while the fixed simulation clock
+/// is stopped; it never advances `on_tick`, task, or mission work.
+pub fn simulation_is_paused(time: Option<Res<Time<Virtual>>>) -> bool {
+    time.is_some_and(|time| time.is_paused())
 }
 
 #[cfg(test)]
@@ -503,9 +512,22 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     }
 
     /// Exclusive-system body: drive every non-paused `ScriptedModel { language }`
-    /// through its lifecycle against the live World. Fully language-neutral — only
-    /// the `R` trait calls touch the interpreter.
+    /// through its lifecycle against the live World, including its fixed-step
+    /// behavior.
     pub fn run(world: &mut World, language: ScriptLanguage) {
+        Self::run_with_tick(world, language, true);
+    }
+
+    /// Exclusive-system body for a paused simulation pass.
+    ///
+    /// Lifecycle startup and queued discrete events remain responsive while
+    /// `Time<Virtual>` stops the fixed simulation schedule. Continuous hooks,
+    /// native tasks, and missions are intentionally left to [`Self::run`].
+    pub fn run_without_simulation_tick(world: &mut World, language: ScriptLanguage) {
+        Self::run_with_tick(world, language, false);
+    }
+
+    fn run_with_tick(world: &mut World, language: ScriptLanguage, run_tick: bool) {
         // 1. Snapshot (entity, doc_id, gid, generation, source), releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
         //    entities (incl. paused) — drives despawn/detach teardown.
@@ -607,7 +629,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
         }
 
-        // Drain events fired since last tick (frame-delayed actor-model delivery)
+        // Drain events fired since the previous driver pass.
         // UNCONDITIONALLY, before the early-return below. `collect_script_events`
         // pushes a clone of every telemetry event into the inbox each frame; if we
         // returned without draining whenever no scenario is active (the common
@@ -693,7 +715,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
 
-                // First runtime error from any hook this tick.
+                // First runtime error from any hook this pass.
                 let mut runtime_err: Option<Diagnostic> = None;
                 if !st.started {
                     st.started = true;
@@ -706,8 +728,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         runtime_err.get_or_insert(d);
                     }
                 }
-                if let Some(d) = runtime.call_hook(entity, ScenarioHook::Tick, gid) {
-                    runtime_err.get_or_insert(d);
+                if run_tick {
+                    if let Some(d) = runtime.call_hook(entity, ScenarioHook::Tick, gid) {
+                        runtime_err.get_or_insert(d);
+                    }
                 }
 
                 // Authoritative commands a client-scoped scenario tried (and was
@@ -802,7 +826,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 // ── Event inbox (neutral) ───────────────────────────────────────────────────
 //
 // TODO(multi-agent coordination): the inbox below is untyped *broadcast* pub/sub
-// (every scenario sees every TelemetryEvent next tick). Two follow-ups, only one
+// (every scenario sees every TelemetryEvent on the next driver pass). Two follow-ups, only one
 // of which is a scripting feature:
 //   1. Shared BLACKBOARD (the real coordination primitive): a neutral
 //      `Blackboard` resource (`HashMap<String, Value>`) + verbs `bb_set`/`bb_get`/
@@ -820,11 +844,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 // relay) is a SIMULATION subsystem, not this substrate — scripts would send/recv
 // over it via the command/query API and get real delays/dropouts back.
 
-/// Frame-delayed inbox of `TelemetryEvent`s destined for scenario `on_event`
+/// Pass-delayed inbox of `TelemetryEvent`s destined for scenario `on_event`
 /// hooks. An observer ([`collect_script_events`]) clones every fired event here;
-/// the driver drains it at the start of the next tick, so an event emitted on
-/// tick N is delivered on tick N+1 (deterministic actor model — order never
-/// depends on system scheduling). Language-neutral: shared by every backend.
+/// the driver drains it at the start of the next driver pass (the next fixed
+/// simulation pass while running, or the next `Update` pass while paused).
+/// Delivery remains deterministic and language-neutral: order never depends on
+/// system scheduling.
 #[derive(Resource, Default)]
 pub struct ScriptEventInbox {
     /// Events awaiting delivery on the next driver pass.

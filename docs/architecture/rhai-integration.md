@@ -74,7 +74,7 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 fn task(me) { ... }            // builds the native task tree once
 fn mission(me) { ... }         // optional objective declaration
 fn on_start(me) { ... }        // optional setup after (re)compile
-fn on_event(me, evt) { ... }   // optional frame-delayed event reaction
+fn on_event(me, evt) { ... }   // optional next-scenario-pass event reaction
 fn on_stop(me) { ... }         // optional teardown
 ```
 
@@ -118,9 +118,10 @@ NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 `emit()` reuses the **`TelemetryEvent`** bus (observer-dispatched; YAMCS
 mnemonic in `name`) — no new event type. External clients receive script events
 via `SubscribeTelemetry` (`lunco-api` `executor.rs` + `subscription.rs`). Scripts
-receive events via `on_event` (frame-delayed: emit on
-tick N → deliver tick N+1 → deterministic actor model). Inter-script interaction
-is bus-only (isolated VMs); see §7f.
+receive events via `on_event` on the next scenario pass: a running simulation
+delivers at the next fixed pass, while a paused simulation uses the next
+`Update` pass without running fixed-step behavior. Inter-script interaction is
+bus-only (isolated VMs); see §7f.
 
 ### Examples
 
@@ -610,11 +611,12 @@ No direct cross-VM calls are offered — by design.
 **Orchestration patterns (same verbs):** *distributed* (each entity runs its own
 behavior) vs *centralized* (one scenario `cmd()`s many entities).
 
-**Determinism — frame-delayed actor model:**
+**Determinism — pass-delayed actor model:**
 1. Iterate `ScriptedModel`s in deterministic order (by `GlobalEntityId`).
-2. Events emitted in tick N delivered at start of tick N+1 (queued, drained
-   deterministically) → "A emits, B reacts" is order-independent. One-tick latency.
-   Same-tick delivery only for explicitly local/non-replicated events.
+2. Events emitted in one driver pass are delivered at the start of the next
+   driver pass (queued, drained deterministically) → "A emits, B reacts" is
+   order-independent. Paused simulations continue discrete delivery from
+   `Update`, while fixed-step behavior remains stopped.
 
 ## 8. Design decisions
 
