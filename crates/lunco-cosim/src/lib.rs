@@ -189,6 +189,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
             .register_type::<avian::JointTorqueActuator>()
+            .register_type::<joint::PassivePrismaticSuspension>()
             .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
@@ -238,6 +239,11 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
             .add_observer(mark_joint_torque_port);
+        // Passive landing cartridges are velocity-level material constraints.
+        // Install them in Avian's substep schedule when this application has an
+        // Avian solver; stripped cosim unit tests intentionally have no such
+        // schedule and therefore have no physics material to install.
+        joint::install_passive_prismatic_solver(app);
         app.add_systems(
             Update,
             sync_model_endpoint_lifecycle

@@ -247,9 +247,12 @@ equation
   // A qualified native contact is a hard propulsion boundary. It is applied
   // at the airframe command interface, so a stale filtered command cannot keep
   // either tank flowing for another spool time or after a suspension rebound.
+  // The accepted handoff is the final landed-state boundary and is included
+  // here so a late command cannot reopen the main engine after the event.
   throttle = noEvent(max(command_lower_bound,
     min(command_upper_bound, cmd_throttle
-      * max(0.0, min(1.0, 1.0 - propulsion_cutoff)))));
+      * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
+        max(0.0, min(1.0, landing_handoff))))))));
   // Pitch and roll are ATTITUDE requests, not direct torques.  The old
   // boundary multiplied the normalized guidance value by inertia and applied
   // it as a constant torque while the upright hold loop applied a competing
@@ -261,7 +264,8 @@ equation
   desired_tilt_z = cmd_roll * command_tilt_limit_rad;
   command_torque_x = 0.0;
   command_torque_y = cmd_yaw * controller_inertia_yy * live_authority
-    * max(0.0, min(1.0, 1.0 - landing_engine_cutoff));
+    * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
+      max(0.0, min(1.0, landing_handoff)))));
   command_torque_z = 0.0;
 
   // Stabilization is expressed entirely in the body frame. AttitudeReference
@@ -288,13 +292,13 @@ equation
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
   // Main-engine cutoff and flight-control handoff are separate phases. A
-  // qualified pad-contact cutoff closes every propulsion valve. The first
-  // low-speed contact removes the attitude target term but retains measured
-  // rate damping: RCS may arrest residual rotation, but it cannot lean a
-  // grounded vehicle. Keep that damping through cutoff, handoff, and settled
-  // touchdown; after contact the position-authority gate removes the attitude
-  // target term, so this is only passive rate damping and cannot reopen thrust.
-  attitude_authority = attitude_hold;
+  // qualified pad-contact cutoff closes the main engine. The first low-speed
+  // contact removes the attitude target term but retains measured rate damping
+  // while the gear absorbs residual motion. The accepted handoff is the final
+  // landed-state boundary: it removes every RCS torque request, including a
+  // stale filtered command or a late Rhai write.
+  attitude_authority = attitude_hold * max(0.0, min(1.0,
+    1.0 - max(0.0, min(1.0, landing_handoff))));
   attitude_position_authority = max(0.0, min(1.0,
     1.0 - max(propulsion_cutoff, pad_contact_phase)));
   // Bound the requested torque at the controller/actuator boundary. Without
@@ -314,9 +318,12 @@ equation
       * (attitude_position_authority * hold_kp * hold_error_z
         - hold_kd * hold_rate_z)));
 
-  torque_x = command_torque_x + hold_torque_x;
-  torque_y = command_torque_y + hold_torque_y;
-  torque_z = command_torque_z + hold_torque_z;
+  torque_x = (command_torque_x + hold_torque_x)
+    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
+  torque_y = (command_torque_y + hold_torque_y)
+    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
+  torque_z = (command_torque_z + hold_torque_z)
+    * max(0.0, min(1.0, 1.0 - max(0.0, min(1.0, landing_handoff))));
 
   // A pad can touch while the hull still has lateral or downward speed. Keep
   // physical four-pad contact separate from settled touchdown so the flight

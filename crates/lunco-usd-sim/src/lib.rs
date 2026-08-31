@@ -71,7 +71,7 @@ use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
     avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, JointTorqueActuator,
-    SimConnection, TorqueActuator,
+    PassivePrismaticSuspension, SimConnection, TorqueActuator,
 };
 use lunco_hardware::SteeringActuator;
 use lunco_materials::ShaderLook;
@@ -122,6 +122,99 @@ const FORCE_MAX_ATTR: &str = "lunco:forceActuator:maxForce";
 const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
 const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
 const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
+const PASSIVE_PRISMATIC_SUSPENSION_API: &str = "LunCoPrismaticSuspensionAPI";
+const PASSIVE_SUSPENSION_YIELD_ATTR: &str = "lunco:prismaticSuspension:yieldForce";
+
+/// Project an authored passive landing cartridge without inventing any missing
+/// physical parameter. The standard prismatic joint and linear drive own the
+/// topology, rest position, elastic coefficients, and force capacity; this
+/// marker adds only the missing yield load and changes the drive realization to
+/// the one-sided elastoplastic material path.
+pub(crate) fn passive_prismatic_suspension_from_usd(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Result<Option<PassivePrismaticSuspension>, String> {
+    if !reader.has_api_schema(prim, PASSIVE_PRISMATIC_SUSPENSION_API) {
+        return Ok(None);
+    }
+    if reader.type_name(prim).as_deref() != Some("PhysicsPrismaticJoint") {
+        return Err(format!(
+            "{PASSIVE_PRISMATIC_SUSPENSION_API} is only valid on PhysicsPrismaticJoint prims"
+        ));
+    }
+    if !reader.has_api_schema(prim, "PhysicsDriveAPI:linear") {
+        return Err(format!(
+            "{PASSIVE_PRISMATIC_SUSPENSION_API} requires the standard PhysicsDriveAPI:linear for rest position, stiffness, damping, and maxForce"
+        ));
+    }
+
+    let drive = lunco_usd_avian::read_linear_joint_drive(reader.stage(), prim)
+        .map_err(|_| "standard linear drive could not be read".to_string())?
+        .ok_or_else(|| "standard linear drive has no authored physical coefficients".to_string())?;
+    let rest_position = drive.target_position.unwrap_or(0.0);
+    let target_velocity = drive.target_velocity.unwrap_or(0.0);
+    if !target_velocity.is_finite() || target_velocity != 0.0 {
+        return Err(
+            "drive:linear:physics:targetVelocity must be zero for a passive cartridge".to_string(),
+        );
+    }
+    if drive
+        .drive_type
+        .is_some_and(|drive_type| drive_type != lunco_usd_avian::DriveType::Force)
+    {
+        return Err("drive:linear:physics:type must be force for a passive cartridge".to_string());
+    }
+    let spring_k = drive
+        .stiffness
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            "drive:linear:physics:stiffness is required and must be finite".to_string()
+        })?;
+    let damping_c = drive
+        .damping
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| "drive:linear:physics:damping is required and must be finite".to_string())?;
+    let max_force = drive
+        .max_force
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            "drive:linear:physics:maxForce is required and must be finite".to_string()
+        })?;
+    let convention = lunco_usd_bevy::stage_convention(reader)
+        .map_err(|error| format!("invalid stage convention: {error}"))?;
+    let yield_force = reader
+        .real(prim, PASSIVE_SUSPENSION_YIELD_ATTR)
+        .filter(|value| value.is_finite())
+        .map(|value| convention.length(value))
+        .ok_or_else(|| format!("{PASSIVE_SUSPENSION_YIELD_ATTR} is required and must be finite"))?;
+
+    if spring_k <= 0.0 {
+        return Err("drive:linear:physics:stiffness must be greater than zero".to_string());
+    }
+    if damping_c < 0.0 {
+        return Err("drive:linear:physics:damping must be nonnegative".to_string());
+    }
+    if yield_force <= 0.0 {
+        return Err(format!(
+            "{PASSIVE_SUSPENSION_YIELD_ATTR} must be greater than zero"
+        ));
+    }
+    if max_force < yield_force {
+        return Err(format!(
+            "drive:linear:physics:maxForce must be at least {PASSIVE_SUSPENSION_YIELD_ATTR}"
+        ));
+    }
+
+    Ok(Some(PassivePrismaticSuspension {
+        rest_position,
+        plastic_position: rest_position,
+        spring_k,
+        damping_c,
+        yield_force,
+        max_force,
+        reaction_force: 0.0,
+    }))
+}
 
 /// Find the USD rigid-body frame that owns a physical actuator. Ownership is
 /// structural: the actuator is a prim under the body, just like a collider or
@@ -676,6 +769,7 @@ impl Plugin for UsdSimPlugin {
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
                         .after(lunco_usd_bevy::process_queued_usd_visuals),
+                    disable_passive_prismatic_drives.after(process_usd_sim_prims),
                     // Resolve behavior targets only after this frame's USD
                     // prim projection has admitted newly spawned waypoint
                     // entities. Running in PreUpdate raced the projection and
@@ -993,6 +1087,18 @@ fn process_usd_sim_prims(
             "[usd-sim] processed {processed} prim(s) in {:.2} ms",
             started.elapsed().as_secs_f64() * 1_000.0
         );
+    }
+}
+
+/// The standard linear drive is the authored coefficient container for a
+/// passive cartridge, not a second bilateral motor. Disable the native motor
+/// after the passive marker is projected and before the next physics step; the
+/// passive material solver owns that one axial DOF from then on.
+fn disable_passive_prismatic_drives(
+    mut joints: Query<&mut PrismaticJoint, With<PassivePrismaticSuspension>>,
+) {
+    for mut joint in &mut joints {
+        joint.motor.enabled = false;
     }
 }
 
@@ -1405,6 +1511,27 @@ fn process_usd_sim_prim_read(
     diagnostics: &mut Vec<lunco_core::RuntimeDiagnostic>,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
+    match passive_prismatic_suspension_from_usd(reader, &sdf_path) {
+        Ok(Some(suspension)) => {
+            commands.entity(entity).try_insert(suspension);
+        }
+        Ok(None) => {}
+        Err(reason) => {
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "passive-suspension-contract",
+                reason.clone(),
+            );
+            error!(
+                "USD passive suspension {} is invalid: {}",
+                sdf_path.as_str(),
+                reason
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        }
+    }
     match raycast_mass_contribution_from_usd(
         reader,
         &sdf_path,

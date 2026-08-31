@@ -12,8 +12,22 @@ description: >
 # Authoring physics in USD
 
 Physics is authored in USD and projected onto avian. USD is the source of
-truth; the ECS is the projection. Nothing below is a LunCo invention — it is
-UsdPhysics, mapped one-to-one onto avian's joint model.
+truth; the ECS is the projection. Use maintained `UsdPhysics` schemas for
+topology, limits, and commandable drives. When USD has no material schema for a
+physical concept, use the narrow LunCo applied API that owns that concept; the
+passive crush cartridge is the `LunCoPrismaticSuspensionAPI` case.
+
+For a passive landing member, apply both `PhysicsDriveAPI:linear` and the narrow
+`LunCoPrismaticSuspensionAPI` to a `PhysicsPrismaticJoint`. Author the standard
+drive's `stiffness`, `damping`, and `maxForce`, plus the extension's required
+`yieldForce`; `targetPosition`, `targetVelocity`, and `type` retain the standard
+USD defaults unless the asset needs to state them explicitly. The extension
+marks the drive as a passive one-sided elastic/plastic material; the runtime
+disables the native bilateral motor and uses those standard coefficients in
+Avian's existing substep schedule. Do not duplicate standard fields under
+`lunco:*`. Missing or invalid fields fail projection; they are never replaced by
+a target, force cap, or solver-resolution workaround. Commandable mechanisms
+may use the standard force drive without the passive extension.
 
 ## 1. A joint is TWO FRAMES, not an axis
 

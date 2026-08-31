@@ -97,6 +97,13 @@
 //   facts.invalid_wheel_attachments[]  paths of malformed attachment prims or
 //       wheels rejected by that canonical topology reader.
 //
+//   facts.passive_suspensions[]  #{ path, valid, error, rest_position,
+//                                    stiffness, damping, yield_force, max_force }
+//       passive landing-cartridge facts produced by the same USD-sim contract
+//       reader as runtime projection. `valid = false` means the API is on the
+//       wrong prim, is missing the standard linear drive, or has malformed
+//       material parameters.
+//
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
 //   #{ rule, severity, subject, message }
@@ -176,6 +183,7 @@ fn lint_usd(facts) {
     for f in conditionally_stable_joint_drive(facts) { out.push(f); }
     for f in invalid_gear_drive(facts) { out.push(f); }
     for f in invalid_wheel_attachment_topology(facts) { out.push(f); }
+    for f in invalid_passive_suspension(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
@@ -368,6 +376,20 @@ fn invalid_wheel_attachment_topology(facts) {
     for path in facts.invalid_wheel_attachments {
         let m = "is an invalid PhysxVehicleWheelAttachmentAPI topology — the canonical runtime resolver refused this attachment instead of selecting a first or last target. Author one singular wheel, suspension, tire and index relationship.";
         out.push(finding("invalid-wheel-attachment-topology", "error", path, m));
+    }
+    out
+}
+
+/// A passive landing cartridge is a material law, not a bilateral motor. The
+/// runtime refuses malformed authoring, so expose the same refusal at lint
+/// time with the authored prim as the subject.
+fn invalid_passive_suspension(facts) {
+    let out = [];
+    for suspension in facts.passive_suspensions {
+        if suspension.valid { continue; }
+        let m = "has invalid LunCoPrismaticSuspensionAPI authoring — the runtime refuses to install the passive material law: ";
+        m += suspension.error;
+        out.push(finding("invalid-passive-suspension", "error", suspension.path, m));
     }
     out
 }
