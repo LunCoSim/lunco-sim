@@ -40,7 +40,8 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict, CanonicalStages, UsdPrimPath, UsdStageAsset, UsdVisualSynced,
+    read_primvar_vec3_strict, CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset,
+    UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
@@ -63,6 +64,7 @@ pub fn apply_usd_shader_materials(
             &UsdPrimPath,
             Option<&lunco_usd_bevy::UsdVisualMeshTarget>,
             Has<ProceduralSkybox>,
+            Option<&UsdInstanceProjection>,
         ),
         (With<UsdVisualSynced>, Without<UsdShaderResolved>),
     >,
@@ -79,12 +81,13 @@ pub fn apply_usd_shader_materials(
     asset_server: Res<AssetServer>,
 ) {
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    for (entity, prim_path, visual_target, procedural_skybox) in q.iter() {
+    for (entity, prim_path, visual_target, procedural_skybox, instance_projection) in q.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let (reader, _generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).try_insert(UsdShaderResolved);
             continue;

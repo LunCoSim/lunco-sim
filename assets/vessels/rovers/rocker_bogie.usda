@@ -254,7 +254,10 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
     )
     {
-        double3 xformOp:translate = (0.0, 0.65, 0.35)
+        # The shared radio's housing starts 0.03 m above its host origin. The
+        # solar deck's top is y=0.23 m, so this host mount places the housing
+        # bottom at y=0.25 m with the intended 0.02 m mating overlap.
+        double3 xformOp:translate = (0.0, 0.22, 0.35)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -1206,11 +1209,11 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        # The 1.9 x 1.0 x 3.0 m body needs a shorter pack than the nominal
-        # compact-rover module. Its 1.0 x 0.3 x 1.5 m case stays inside the
-        # body envelope, with its upper face flush to the y=0.5 deck plane.
-        double3 xformOp:translate = (0, 0.35, 0)
-        double3 xformOp:scale = (1.0, 0.3, 1.5)
+        # The 0.8 x 0.3 x 1.2 m pack is centered inside the composed
+        # 0.95 x 0.5 x 1.5 m body. This keeps it below the solar deck and
+        # panel with a structural margin on every axis.
+        double3 xformOp:translate = (0, 0.0, 0)
+        double3 xformOp:scale = (0.8, 0.3, 1.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
     }
     variantSet "power" = {
@@ -1398,14 +1401,9 @@ def Xform "RockerBogie" (
         }
 
         "solar" {
-            # ONE spec per prim, per layer. The bus connection below used to be a
-            # sibling `over "SolarPanel"` next to this `def`, and the `over` won:
-            # the composed panel kept `connectors:p` and lost EVERYTHING the `def`
-            # brought — the reference, the children, `LunCoProgramAPI`,
-            # `info:sourceAsset`. `read_network` then skips a member with no
-            # program API, and the runtime blames the collection instead:
-            # `SolarPanel is outside the rover-root collection`. See
-            # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+            # The panel is declared and wired in one spec so its reusable
+            # geometry, collision, mass, and electrical facet compose
+            # together under this rover instance.
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
@@ -1414,11 +1412,6 @@ def Xform "RockerBogie" (
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 
-                # The acausal tie to the battery belongs HERE, in the `def` that
-                # introduces the panel — not in a sibling `over "SolarPanel"` in the
-                # same variant block. Two specs for one prim inside one variant is
-                # authoring the same opinion twice and relying on the merge; state it
-                # once, where the prim is declared.
                 custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 float inputs:sun_mount_x.connect = </RockerBogie.inputs:sun_mount_x>
                 float inputs:sun_mount_y.connect = </RockerBogie.inputs:sun_mount_y>
@@ -1430,9 +1423,6 @@ def Xform "RockerBogie" (
                 {
                 }
             }
-                # Environment probes are runtime providers, not generated
-                # Modelica members. Cross the island boundary through typed
-                # inputs, then let the panel consume those boundary values.
                 float inputs:sun_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
                 float inputs:sun_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
                 float inputs:sun_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>

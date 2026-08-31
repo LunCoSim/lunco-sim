@@ -26,6 +26,22 @@ fn authored_rotation_ok(path, expected) {
     close_vec(record.attrs["xformOp:rotateXYZ"], expected)
 }
 
+fn authored_translate_ok(path, expected) {
+    let record = query("QueryUsdPrim", #{
+        path: path,
+        attrs: ["xformOp:translate"],
+    });
+    if record == () || record.ok == false || record.attrs == () {
+        return false;
+    }
+    close_vec(record.attrs["xformOp:translate"], expected)
+}
+
+fn missing(path) {
+    let entity = find(path);
+    entity == () || entity < 0
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -37,6 +53,21 @@ fn on_tick(me) {
     if this.t < 0.5 { return; }
     this.done = true;
 
+    // The visual review uses the same component instance as the production
+    // rover. These authored transforms are the mount contract: the directional
+    // antenna is mounted on the rear deck, and the short-range radio is mounted
+    // on the roof rather than floating above it.
+    let failures = [];
+    failures.push(t_true(
+        authored_translate_ok(ROOT + "/Antenna", [-0.35, 0.22, 0.6]),
+        "the visual review changed the canonical antenna mount"));
+    failures.push(t_true(
+        authored_translate_ok(ROOT + "/WifiRadio", [0.0, 0.22, 0.35]),
+        "the Wi-Fi radio is not authored on the rover roof"));
+    failures.push(t_true(
+        missing(ROOT + "/AntennaReview"),
+        "the visual review contains a second antenna reference"));
+
     // A positive X rotation puts a Z-axis cylinder's front endpoint above its
     // wheel. These authored negative angles are the geometry contract: they
     // bring each forward link's lower endpoint to the wheel hub. The rear links
@@ -47,7 +78,6 @@ fn on_tick(me) {
         ["BogieL/FrontLink", -26.57],
         ["BogieR/FrontLink", -26.57],
     ];
-    let failures = [];
     for link in links {
         let path = ROOT + "/" + link[0];
         failures.push(t_true(

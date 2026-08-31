@@ -57,8 +57,8 @@ use lunco_core::coords::GridPos;
 pub use lunco_usd_bevy::{effective_purpose, Purpose};
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot,
-    UsdVisualSynced,
+    usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated, UsdInstanceProjection, UsdRead,
+    UsdSceneRoot, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -1169,7 +1169,7 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdVisualSynced>,
-    query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
+    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdAvianProcessed>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
@@ -1180,7 +1180,7 @@ fn process_usd_avian_prims(
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = query.get(entity) else {
+    let Ok((prim_path, instance_projection)) = query.get(entity) else {
         return;
     };
     if let Some(mount_state) = mount_state {
@@ -1212,7 +1212,7 @@ fn process_usd_avian_prims(
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
-    let (reader, _generation) = canonical.reader_for(id, stage_asset);
+    let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, instance_projection);
     bevy::log::debug!(
         "[canonical] avian extract from composed reader: {}",
         prim_path.path
@@ -1587,14 +1587,21 @@ fn apply_collision_groups(
 }
 
 /// The composed local-to-world [`Transform`] of `path`: folds the LOCAL transforms
-/// (translate + rotate + **scale**) of every prim from the stage root down to it, so
-/// an ancestor's scale is baked into a descendant's world position — exactly how the
-/// renderer places it. An omitted xform stack composes as USD identity; malformed
-/// authored data is returned as an error.
+/// (translate + rotate + **scale**) of every prim available in the read surface down
+/// to it, so an ancestor's scale is baked into a descendant's world position — exactly
+/// how the renderer places it. A prepared reference reader ends at its asset root;
+/// scene ancestors are outside that read surface and contribute no local transform.
+/// An omitted xform stack composes as USD identity; malformed authored data is returned
+/// as an error.
 pub fn world_transform(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
+    if !reader.has_prim(path) {
+        return Err(TransformReadError {
+            prim: path.to_string(),
+        });
+    }
     let mut chain = Vec::new();
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
@@ -1606,6 +1613,14 @@ pub fn world_transform(
     }
     let mut acc = Transform::IDENTITY;
     for p in chain.iter().rev() {
+        // A prepared reference-instance reader deliberately contains the
+        // composed asset subtree, not the owning scene's ancestors. The first
+        // absent ancestor is therefore the asset boundary and contributes no
+        // local transform. An authored prim that is present still goes through
+        // the strict transform reader below, so malformed USD remains an error.
+        if !reader.has_prim(p) {
+            break;
+        }
         if let Some(local) = reader.local_transform_at(p, 0.0)? {
             acc = acc.mul_transform(local);
         }
@@ -1628,9 +1643,9 @@ fn local_vector_to_world(
 /// Compose a prim's transform in the local frame of an authored body.
 ///
 /// Physical mount points use the body origin and rotation, never the render
-/// world's `GlobalTransform`. The relative transform is derived from the live
-/// composed USD hierarchy so nested component references and intermediate Xforms
-/// remain valid without repeating the mount position in another description.
+/// world's `GlobalTransform`. The relative transform is derived from the composed
+/// USD read surface so nested component references and intermediate Xforms remain
+/// valid without repeating the mount position in another description.
 pub fn transform_in_body_frame(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     body_path: &SdfPath,
@@ -2167,7 +2182,7 @@ fn reduce_generic_joint(
 /// UsdPhysics joint attributes through the shared reader boundary.
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
-    query: Query<&UsdPrimPath>,
+    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>)>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
@@ -2175,7 +2190,7 @@ fn on_add_usd_prim(
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = query.get(entity) else {
+    let Ok((prim_path, instance_projection)) = query.get(entity) else {
         return;
     };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
@@ -2186,7 +2201,7 @@ fn on_add_usd_prim(
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
-    let (reader, _generation) = canonical.reader_for(id, stage_asset);
+    let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, instance_projection);
     let is_physics_joint = reader.type_name(&sdf_path).is_some_and(|type_name| {
         matches!(
             type_name.as_str(),
@@ -2450,6 +2465,7 @@ fn build_usd_physics_joints(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
@@ -2469,7 +2485,13 @@ fn build_usd_physics_joints(
             resolve_ticks.insert(joint_entity, ticks.saturating_add(1));
             continue;
         }
-        let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
+        let joint_root = instance_key(
+            joint_entity,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        );
         // Find body0 and body1 entities by matching USD paths and instance roots.
         // The paths were already resolved to real bodies at parse time (see
         // [`nearest_body_path`]), so this is an exact match by construction. An
@@ -2482,7 +2504,13 @@ fn build_usd_physics_joints(
             .find(|(e, path)| {
                 path.path == pending.body0_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
+                    && instance_key(
+                        *e,
+                        &q_provenance,
+                        &q_gid,
+                        &q_instance_root,
+                        &q_instance_projection,
+                    ) == joint_root
             })
             .map(|(e, _)| e);
         let body1_ent = q_bodies
@@ -2490,7 +2518,13 @@ fn build_usd_physics_joints(
             .find(|(e, path)| {
                 path.path == pending.body1_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
+                    && instance_key(
+                        *e,
+                        &q_provenance,
+                        &q_gid,
+                        &q_instance_root,
+                        &q_instance_projection,
+                    ) == joint_root
             })
             .map(|(e, _)| e);
 
@@ -2517,7 +2551,13 @@ fn build_usd_physics_joints(
                             "entity={entity:?} path={} stage={:?} instance={:?}",
                             path.path,
                             path.stage_handle.id(),
-                            instance_key(entity, &q_provenance, &q_gid, &q_instance_root),
+                            instance_key(
+                                entity,
+                                &q_provenance,
+                                &q_gid,
+                                &q_instance_root,
+                                &q_instance_projection,
+                            ),
                         )
                     })
                     .collect();

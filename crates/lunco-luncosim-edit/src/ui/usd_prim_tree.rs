@@ -25,8 +25,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_usd_bevy::{
-    camera_switch::camera_display_labels, instance_key, CanonicalStages, SdfPath, UsdInstanceRoot,
-    UsdPrimPath, UsdRead, UsdStageAsset,
+    camera_switch::camera_display_labels, instance_key, CanonicalStages, SdfPath,
+    UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdStageAsset,
 };
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -74,6 +74,7 @@ pub fn produce_usd_prim_tree(
     q_callsign: Query<&lunco_core::markers::Callsign>,
     q_catalog_id: Query<&lunco_core::CatalogEntryId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdPrimTreeView>,
@@ -101,7 +102,13 @@ pub fn produce_usd_prim_tree(
     let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
     for (e, p, _) in q.iter() {
         if p.stage_handle.id() == stage_id {
-            let inst = instance_key(e, &q_provenance, &q_gid, &q_instance_root);
+            let inst = instance_key(
+                e,
+                &q_provenance,
+                &q_gid,
+                &q_instance_root,
+                &q_instance_projection,
+            );
             entity_of.insert((inst, p.path.clone()), e);
         }
     }

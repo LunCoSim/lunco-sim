@@ -39,6 +39,22 @@ const TRAIL_MAX_POINTS: usize = 1024;
 const TRAIL_HALF_WIDTH_M: f32 = 0.16;
 const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.09;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrailSurfaceMode {
+    /// The Avian contact point is already the authoritative surface sample.
+    PhysicsContact,
+    /// Reproject the contact's horizontal coordinates through the DEM oracle.
+    AnalyticTerrain,
+}
+
+/// Terrain-owned physics colliders that may produce a trail contact. Other
+/// static bodies, such as a step or a rover-mounted obstacle, are not ground.
+type TerrainCollider = Or<(
+    With<lunco_terrain_surface::ColliderTileOf>,
+    With<lunco_terrain_surface::DemHeightField>,
+    With<lunco_terrain_surface::FlatSiteSurface>,
+)>;
+
 /// Physics-frame contact history for one topology-derived vehicle.
 #[derive(Component, Clone, Debug, Default)]
 pub(crate) struct VehicleTrailHistory {
@@ -142,13 +158,7 @@ fn valid_raycast_contact(
     wheel_transform: &Transform,
     mount: &WheelBodyMount,
     q_bodies: &Query<(&Position, &Rotation)>,
-    ground_colliders: &Query<
-        (),
-        Or<(
-            With<lunco_terrain_surface::ColliderTileOf>,
-            With<lunco_terrain_surface::DemHeightField>,
-        )>,
-    >,
+    ground_colliders: &Query<(), TerrainCollider>,
 ) -> Option<DVec3> {
     if wheel.last_normal_force < 1.0 {
         return None;
@@ -181,13 +191,7 @@ fn valid_raycast_contact(
 fn physical_wheel_contact_point(
     collisions: &Collisions,
     wheel: Entity,
-    ground_colliders: &Query<
-        (),
-        Or<(
-            With<lunco_terrain_surface::ColliderTileOf>,
-            With<lunco_terrain_surface::DemHeightField>,
-        )>,
-    >,
+    ground_colliders: &Query<(), TerrainCollider>,
 ) -> Option<DVec3> {
     let mut weighted = DVec3::ZERO;
     let mut total_impulse = 0.0;
@@ -219,6 +223,33 @@ fn physical_wheel_contact_point(
 #[derive(Resource, Default)]
 pub(crate) struct TrailProjectionRebuildRequested {
     pending: bool,
+}
+
+/// Presentation-only trail systems shared by the interactive viewport and the
+/// GPU offscreen recorder. It has no egui or picking dependency, so visual
+/// acceptance renders the same trail product that the desktop viewport uses.
+pub struct VehicleTrailPlugin;
+
+impl Plugin for VehicleTrailPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<TrailVisualProjection>()
+            .init_resource::<TrailProjectionRebuildRequested>()
+            .add_systems(lunco_core::SceneTeardown, clear_vehicle_trails)
+            .add_systems(
+                Update,
+                (
+                    ensure_vehicle_trail_history.before(sample_vehicle_trails),
+                    sample_vehicle_trails.before(arm_trail_projection_rebuild),
+                    arm_trail_projection_rebuild,
+                    rebuild_vehicle_trail_projection
+                        .after(arm_trail_projection_rebuild)
+                        .run_if(trail_projection_rebuild_is_pending),
+                    sync_vehicle_trail_meshes
+                        .after(rebuild_vehicle_trail_projection)
+                        .run_if(resource_changed::<TrailVisualProjection>),
+                ),
+            );
+    }
 }
 
 /// Add the presentation history to every topology-derived vehicle. `MobilityRoot`
@@ -253,13 +284,7 @@ pub(crate) fn sample_vehicle_trails(
         &WheelBodyMount,
     )>,
     q_physical_wheels: Query<Entity, (With<PhysicalWheel>, With<JointedWheelTire>)>,
-    q_ground_colliders: Query<
-        (),
-        Or<(
-            With<lunco_terrain_surface::ColliderTileOf>,
-            With<lunco_terrain_surface::DemHeightField>,
-        )>,
-    >,
+    q_ground_colliders: Query<(), TerrainCollider>,
     collisions: Collisions,
 ) {
     let mut samples = Vec::new();
@@ -343,20 +368,22 @@ pub(crate) fn trail_projection_rebuild_is_pending(
 fn project_trail_to_surface(
     points: impl Iterator<Item = DVec3>,
     surface: &lunco_terrain_surface::GridSurfaceQuery,
-    surface_present: bool,
+    mode: TrailSurfaceMode,
 ) -> Option<Vec<DVec3>> {
-    if !surface_present {
-        // A trail needs a ground owner. Do not draw an apparently grounded
-        // fallback at the chassis Y when the scene has no analytic surface.
-        return None;
+    if mode == TrailSurfaceMode::PhysicsContact {
+        // The solved physics contact is already on the authored collider when
+        // the scene has no analytic DEM. Keep that contact instead of inventing
+        // a chassis-height or terrain-height fallback.
+        Some(points.collect())
+    } else {
+        points
+            .map(|point| {
+                surface
+                    .height_at(GridPos(point))
+                    .map(|height| DVec3::new(point.x, height, point.z))
+            })
+            .collect()
     }
-    points
-        .map(|point| {
-            surface
-                .height_at(GridPos(point))
-                .map(|height| DVec3::new(point.x, height, point.z))
-        })
-        .collect()
 }
 
 /// Convert all retained physics-frame history into one atomic render snapshot.
@@ -372,29 +399,32 @@ pub(crate) fn rebuild_vehicle_trail_projection(
     request.pending = false;
     let frame = active_frame.0;
     let surface_key = surface.surface_key();
+    let surface_mode = if surface_key.is_some() {
+        TrailSurfaceMode::AnalyticTerrain
+    } else {
+        TrailSurfaceMode::PhysicsContact
+    };
     let mut trails: HashMap<Entity, Vec<TrailLane>> = HashMap::new();
-    if surface_key.is_some() {
-        for (vehicle, history) in q_vehicles.iter() {
-            if history.frame != Some(frame) {
+    for (vehicle, history) in q_vehicles.iter() {
+        if history.frame != Some(frame) {
+            continue;
+        }
+        let mut lanes = history.lanes.iter().collect::<Vec<_>>();
+        lanes.sort_by_key(|(wheel, _)| wheel.to_bits());
+        for (&wheel, lane) in lanes {
+            if lane.points.len() < 2 {
                 continue;
             }
-            let mut lanes = history.lanes.iter().collect::<Vec<_>>();
-            lanes.sort_by_key(|(wheel, _)| wheel.to_bits());
-            for (&wheel, lane) in lanes {
-                if lane.points.len() < 2 {
-                    continue;
-                }
-                let Some(points) =
-                    project_trail_to_surface(lane.points.iter().copied(), &surface, true)
-                else {
-                    continue;
-                };
-                if points.len() >= 2 {
-                    trails
-                        .entry(vehicle)
-                        .or_default()
-                        .push(TrailLane { wheel, points });
-                }
+            let Some(points) =
+                project_trail_to_surface(lane.points.iter().copied(), &surface, surface_mode)
+            else {
+                continue;
+            };
+            if points.len() >= 2 {
+                trails
+                    .entry(vehicle)
+                    .or_default()
+                    .push(TrailLane { wheel, points });
             }
         }
     }
@@ -644,6 +674,63 @@ mod tests {
         assert_eq!(
             mesh.primitive_topology(),
             bevy::mesh::PrimitiveTopology::TriangleList
+        );
+    }
+
+    #[test]
+    fn contact_points_are_retained_without_an_analytic_dem() {
+        let points = [DVec3::new(1.0, 0.25, 2.0), DVec3::new(2.0, 0.5, 2.0)];
+        let mut app = App::new();
+        let system = app.world_mut().register_system(
+            move |surface: lunco_terrain_surface::GridSurfaceQuery| {
+                project_trail_to_surface(
+                    points.into_iter(),
+                    &surface,
+                    TrailSurfaceMode::PhysicsContact,
+                )
+            },
+        );
+        let projected = app.world_mut().run_system(system).unwrap();
+        assert_eq!(projected, Some(points.to_vec()));
+    }
+
+    #[test]
+    fn scene_teardown_clears_history_and_projection() {
+        let frame = Entity::from_bits(21);
+        let wheel = Entity::from_bits(22);
+        let mut history = VehicleTrailHistory::default();
+        history.record(frame, wheel, DVec3::ZERO);
+        history.record(frame, wheel, DVec3::X);
+
+        let mut app = App::new();
+        let vehicle = app.world_mut().spawn((MobilityRoot, history)).id();
+        app.insert_resource(TrailVisualProjection {
+            frame: Some(frame),
+            surface: Some((frame, 1)),
+            trails: HashMap::from([(
+                vehicle,
+                vec![TrailLane {
+                    wheel,
+                    points: vec![DVec3::ZERO, DVec3::X],
+                }],
+            )]),
+        });
+        app.insert_resource(TrailProjectionRebuildRequested::default());
+        app.add_systems(lunco_core::SceneTeardown, clear_vehicle_trails);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        let projection = app.world().resource::<TrailVisualProjection>();
+        assert_eq!(projection.frame, None);
+        assert_eq!(projection.surface, None);
+        assert!(projection.trails.is_empty());
+        let history = app.world().get::<VehicleTrailHistory>(vehicle).unwrap();
+        assert_eq!(history.frame, None);
+        assert!(history.lanes.is_empty());
+        assert!(
+            app.world()
+                .resource::<TrailProjectionRebuildRequested>()
+                .pending
         );
     }
 }

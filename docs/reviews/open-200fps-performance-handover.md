@@ -388,22 +388,21 @@ build were preserved. Do not use those runs to claim a performance gain.
 
 #### 2026-08-30 bridge read change-gating verification
 
-The next measured owner was `lunco-usd-avian::pose_to_position`. Its previous
-steady-state path scanned every synced body twice per physics read even when no
-pose or hierarchy input changed. The bridge now uses Bevy's change detection as
-the wake signal and keeps the exact `BridgeShadow::is_representation_only`
-check as the semantic authority. First reads, active-frame handoffs, and real
-plain-ancestor motion still process the complete body set so descendants and
-frame transport retain their existing semantics. Bodies without the bridge's
-`PhysicsPoseSeeded` marker remain eligible until their initial pose is actually
-written; this preserves late/pre-existing materialization without a recovery
-scan. The unused `BridgeShadow::matches` helper was removed.
+The measured owner is `lunco-usd-avian::pose_to_position`. The bridge uses
+Bevy's change detection as the wake signal, scopes changed plain spatial inputs
+to bodies below the changed physical ancestor, and keeps the exact
+`BridgeShadow::is_representation_only` check as the semantic authority. An
+unrelated render-only branch no longer makes every body enter the pose path.
+First reads and active-frame handoffs still traverse all bodies because they
+transport initial pose or frame state. Bodies without `PhysicsPoseSeeded` remain
+eligible until their initial pose is written; late materialization is handled by
+the authoritative lifecycle query, without a recovery scan.
 
 Focused verification passed:
 
-- `cargo test -p lunco-usd-avian --lib -j 4 -- --nocapture`: **67/67**.
+- `cargo test -p lunco-usd-avian --lib -j 4`: **68/68**.
 - `cargo test -p lunco-usd-avian --test bridge_physics -j 4 -- --nocapture`:
-  **15/15**, including late-body seeding, frame handoff, teleport, ancestor
+  **17/17**, including late-body seeding, frame handoff, teleport, ancestor
   re-split, and rotating-parent invariants.
 - `./scripts/run_scene_tests.sh --no-build --exact allocation_spec`: passed.
 - `./scripts/run_scene_tests.sh --no-build --exact ackermann_parity`: passed.

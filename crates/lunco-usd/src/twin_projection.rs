@@ -55,8 +55,8 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::{
-    UsdAwaitingStage, UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText, UsdStageAsset,
-    UsdVisualProjectionQueued, UsdVisualSynced,
+    UsdAwaitingStage, UsdInstanceProjection, UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText,
+    UsdStageAsset, UsdVisualProjectionQueued, UsdVisualSynced,
 };
 use lunco_usd_sim::cosim::LoadScene;
 
@@ -343,6 +343,38 @@ pub struct PendingRefSpawns {
     failed: HashMap<AssetId<UsdStageAsset>, String>,
 }
 
+/// Prepared source plans waiting for the live-stage sink to create their
+/// corresponding instance root. The key is the canonical scene plus authored
+/// prim path, so a plan can never be attached to another Twin or another
+/// instance with the same asset.
+#[derive(Resource, Default)]
+pub(crate) struct PendingInstanceProjections {
+    plans: HashMap<(AssetId<UsdStageAsset>, String), UsdInstanceProjection>,
+}
+
+impl PendingInstanceProjections {
+    fn insert(
+        &mut self,
+        scene_id: AssetId<UsdStageAsset>,
+        prim_path: String,
+        projection: UsdInstanceProjection,
+    ) {
+        self.plans.insert((scene_id, prim_path), projection);
+    }
+
+    pub(crate) fn take(
+        &mut self,
+        scene_id: AssetId<UsdStageAsset>,
+        prim_path: &str,
+    ) -> Option<UsdInstanceProjection> {
+        self.plans.remove(&(scene_id, prim_path.to_string()))
+    }
+
+    pub(crate) fn remove(&mut self, scene_id: AssetId<UsdStageAsset>, prim_path: &str) {
+        self.plans.remove(&(scene_id, prim_path.to_string()));
+    }
+}
+
 impl PendingRefSpawns {
     fn push(&mut self, item: RefSpawn, ready: bool) {
         if ready {
@@ -372,10 +404,16 @@ impl PendingRefSpawns {
 ///
 /// Pending default-scene document loads are owned by their admitted Twin and
 /// are released through [`PendingTwinDocs::release_root`] when that Twin closes.
-pub(crate) fn reset_scene_projection_state(mut pending_refs: ResMut<PendingRefSpawns>) {
+pub(crate) fn reset_scene_projection_state(
+    mut pending_refs: ResMut<PendingRefSpawns>,
+    mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
+) {
     pending_refs.items.clear();
     pending_refs.ready.clear();
     pending_refs.failed.clear();
+    if let Some(pending_instances) = pending_instances.as_deref_mut() {
+        pending_instances.plans.clear();
+    }
 }
 
 /// Report a terminal failure of the authoritative default-scene source.
@@ -1538,12 +1576,15 @@ fn spawn_prim_op(
         return;
     };
 
-    // Referenced spawn: decide RefNow vs RefFetch under a short borrow, then act.
+    // Referenced spawn: the live stage may already have the source bytes, but
+    // the standalone asset plan is still the projection input for this
+    // instance. Require that plan before authoring so the first frame never
+    // falls back to repeated live-stage reads.
     enum Plan {
-        Now,
-        Fetch(String),
+        Now { projection: UsdInstanceProjection },
+        Fetch { ref_handle: Handle<UsdStageAsset> },
     }
-    let plan = {
+    let (ref_id, has_layer_bytes) = {
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
@@ -1551,14 +1592,36 @@ fn spawn_prim_op(
             return;
         };
         let ref_id = cs.canonical_reference_id(&asset_path);
-        if cs.has_layer_bytes(&ref_id) {
-            Plan::Now
-        } else {
-            Plan::Fetch(ref_id)
-        }
+        (ref_id.clone(), cs.has_layer_bytes(&ref_id))
+    };
+    let ref_handle = world
+        .resource::<AssetServer>()
+        .load::<UsdStageAsset>(ref_id.clone());
+    let plan = if !has_layer_bytes {
+        Plan::Fetch { ref_handle }
+    } else if let Some(asset) = world
+        .resource::<Assets<UsdStageAsset>>()
+        .get(ref_handle.id())
+    {
+        let projection = match asset.projection_plan.for_instance(prim_path) {
+            Ok(plan) => UsdInstanceProjection {
+                root: None,
+                plan: Arc::new(plan),
+                canonical_generation: 0,
+            },
+            Err(error) => {
+                error!(
+                    "[twin] referenced spawn {prim_path} has an invalid prepared projection plan for `{asset_path}`: {error}"
+                );
+                return;
+            }
+        };
+        Plan::Now { projection }
+    } else {
+        Plan::Fetch { ref_handle }
     };
     match plan {
-        Plan::Now => {
+        Plan::Now { projection } => {
             if let Some(cs) = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
@@ -1568,13 +1631,16 @@ fn spawn_prim_op(
                         .author_referenced_prim(&sp, type_name.as_deref(), &asset_path);
                 if let Err(e) = result {
                     warn!("[twin] referenced spawn {prim_path}: {e}");
+                } else {
+                    world.resource_mut::<PendingInstanceProjections>().insert(
+                        scene_id,
+                        prim_path.to_string(),
+                        projection,
+                    );
                 }
             }
         }
-        Plan::Fetch(ref_id) => {
-            let ref_handle = world
-                .resource::<AssetServer>()
-                .load::<UsdStageAsset>(ref_id);
+        Plan::Fetch { ref_handle } => {
             let ref_id = ref_handle.id();
             let ready = world
                 .resource::<Assets<UsdStageAsset>>()
@@ -1826,6 +1892,31 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             );
             continue;
         };
+        let Some(asset) = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(item.ref_handle.id())
+        else {
+            error!(
+                "[twin] referenced spawn {} became ready without its prepared asset for `{}`",
+                item.prim_path, item.asset_path
+            );
+            continue;
+        };
+        let plan = match asset.projection_plan.for_instance(&item.prim_path) {
+            Ok(plan) => plan,
+            Err(error) => {
+                error!(
+                    "[twin] referenced spawn {} has an invalid prepared projection plan for `{}`: {error}",
+                    item.prim_path, item.asset_path
+                );
+                continue;
+            }
+        };
+        let projection = UsdInstanceProjection {
+            root: None,
+            plan: Arc::new(plan),
+            canonical_generation: 0,
+        };
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             continue;
         };
@@ -1868,6 +1959,11 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             );
             continue;
         }
+        world.resource_mut::<PendingInstanceProjections>().insert(
+            item.scene_id,
+            item.prim_path.clone(),
+            projection,
+        );
         // Replay child-owned metadata and relationships only after the
         // referenced root exists on the live stage. The document already owns
         // the complete ordered intent; this is just its delayed live-stage

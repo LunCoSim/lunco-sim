@@ -17,7 +17,7 @@ use lunco_modelica::{
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use rumoca_compile::parsing::Causality;
 
@@ -2519,18 +2519,15 @@ pub fn project_domain_islands(
         &UsdPrimPath,
         Option<&DomainProjectionState>,
         Option<&ModelicaModel>,
+        Option<&UsdInstanceProjection>,
     )>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<lunco_usd_bevy::UsdInstanceRoot>>,
-    // A runtime-instanced descendant is PARKED as `Provenance::Local` until its
-    // root's id is minted (`resolve_usd_instance_identities`), and `instance_key`
-    // answers `None` for the whole window. Projecting then compiles the island
-    // under an unqualified name — which the second, identity-carrying pass
-    // immediately supersedes (a wasted serial compile ahead of everything on the
-    // critical path), and which two spawns of one asset SHARE, so their
-    // `generated://…` worker sessions clobber each other. The marker is the
-    // explicit "identity still pending" signal; it is removed on upgrade.
+    // A runtime-instanced descendant stays out of Modelica synthesis while its
+    // root identity is pending. Once the root GID is available, the durable
+    // instance projection scopes the generated session even after the transient
+    // membership marker is consumed.
     q_instance_member: Query<(), With<lunco_usd_bevy::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -2572,15 +2569,20 @@ pub fn project_domain_islands(
         pending.tasks.clear();
     }
     let Some(channels) = channels else { return };
-    for (entity, prim, previous, installed_model) in &prims {
+    for (entity, prim, previous, installed_model, instance_projection) in &prims {
         if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
             continue;
         }
         // Scope every authored path to the same USD instance as the generated
         // network. Runtime-spawned copies intentionally share stage-relative
         // paths; the instance root identity is the structural disambiguator.
-        let instance_id =
-            lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
+        let instance_id = lunco_usd_bevy::instance_key_from_projection(
+            entity,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            instance_projection,
+        );
         // Identity still pending — wait for it rather than compile under a name
         // that is neither stable nor unique. The upgrade lands a
         // `GlobalEntityId`, which re-triggers this system through
@@ -2595,7 +2597,8 @@ pub fn project_domain_islands(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let (reader, stage_generation) = canonical.reader_for(id, stage_asset);
+        let (reader, stage_generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Ok(root_path) = SdfPath::new(&prim.path) else {
             continue;
         };
