@@ -118,10 +118,9 @@ def Xform "SkidRover" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        # The 2.0 x 0.3 x 3.5 m chassis has a 0.15 m top face. The nominal
-        # 0.2 m pack is seated on that face, with its bottom at y=0.15 and
-        # margins on every horizontal side.
-        double3 xformOp:translate = (0, 0.25, 0)
+        # The nominal 1.2 x 0.2 x 2.0 m pack is centered inside the
+        # 2.0 x 0.3 x 3.5 m chassis, leaving the solar-panel plane clear.
+        double3 xformOp:translate = (0, 0.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -712,13 +711,9 @@ def Xform "SkidRover" (
                 double3 xformOp:translate = (0, 0.45, 0)
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-                # ONE spec per prim, per layer. This was a sibling
-                # `over "SolarPanel"` below, and the `over` won: the composed
-                # panel kept `connectors:p` and lost the reference, the children,
-                # `LunCoProgramAPI` and `info:sourceAsset`. The runtime then
-                # blamed the collection — `SolarPanel is outside collection
-                # rover-root collection` — and every solar rover's island was rejected. See
-                # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+                # The panel is declared and wired in one spec so its reusable
+                # geometry, collision, mass, and electrical facet compose
+                # together under this rover instance.
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
                 # Environment is runtime-provided, not a generated Modelica
                 # component. It crosses the electrical island once through its

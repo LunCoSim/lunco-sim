@@ -37,6 +37,61 @@ def Xform "BatteryMountsVisual" (
     over "Rucheyok"
     {
         bool active = false
+        bool physics:rigidBodyEnabled = false
+        over "Wheel_FL" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_FR" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_RL" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_RR" { bool physics:rigidBodyEnabled = false }
+    }
+
+    # This is a static presentation of the authored assemblies. Disable each
+    # rover's independent wheel bodies as well as its chassis body so gravity
+    # cannot move the subjects out of the review camera before capture.
+    over "Skid"
+    {
+        bool physics:rigidBodyEnabled = false
+        over "Suspension_FL" { over "Wheel_FL" { bool physics:rigidBodyEnabled = false } }
+        over "Suspension_FR" { over "Wheel_FR" { bool physics:rigidBodyEnabled = false } }
+        over "Suspension_RL" { over "Wheel_RL" { bool physics:rigidBodyEnabled = false } }
+        over "Suspension_RR" { over "Wheel_RR" { bool physics:rigidBodyEnabled = false } }
+    }
+
+    over "SixWheel"
+    {
+        bool physics:rigidBodyEnabled = false
+        over "Wheel_L0" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_L1" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_L2" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_R0" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_R1" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_R2" { bool physics:rigidBodyEnabled = false }
+    }
+
+    over "RockerBogie"
+    {
+        bool physics:rigidBodyEnabled = false
+        over "RockerL"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_FL" { bool physics:rigidBodyEnabled = false }
+        }
+        over "RockerR"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_FR" { bool physics:rigidBodyEnabled = false }
+        }
+        over "BogieL"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_ML" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_RL" { bool physics:rigidBodyEnabled = false }
+        }
+        over "BogieR"
+        {
+            bool physics:rigidBodyEnabled = false
+            over "Wheel_MR" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_RR" { bool physics:rigidBodyEnabled = false }
+        }
     }
 
     def Camera "VisualCamera" (

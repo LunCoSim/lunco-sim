@@ -512,9 +512,9 @@ def Xform "SixWheelRover" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        # The 2.0 x 0.3 x 5.0 m chassis uses the nominal compact pack. It is
-        # centred on the chassis centreline and seated on the y=0.15 top face.
-        double3 xformOp:translate = (0, 0.25, 0)
+        # The nominal 1.2 x 0.2 x 2.0 m pack is centered inside the
+        # 2.0 x 0.3 x 5.0 m chassis, leaving the solar-panel plane clear.
+        double3 xformOp:translate = (0, 0.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -742,14 +742,9 @@ def Xform "SixWheelRover" (
         }
 
         "solar" {
-            # ONE spec per prim, per layer. The bus connection below used to be a
-            # sibling `over "SolarPanel"` next to this `def`, and the `over` won:
-            # the composed panel kept `connectors:p` and lost EVERYTHING the `def`
-            # brought — the reference, the children, `LunCoProgramAPI`,
-            # `info:sourceAsset`. `read_network` then skips a member with no
-            # program API, and the runtime blames the collection instead:
-            # `SolarPanel is outside the rover-root collection`. See
-            # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+            # The panel is declared and wired in one spec so its reusable
+            # geometry, collision, mass, and electrical facet compose
+            # together under this rover instance.
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
@@ -758,9 +753,9 @@ def Xform "SixWheelRover" (
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
-                float inputs:sun_mount_x.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_z>
+                float inputs:sun_mount_x.connect = </SixWheelRover.inputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SixWheelRover.inputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SixWheelRover.inputs:sun_mount_z>
 
                 def Xform "Environment" (
                     prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -768,6 +763,9 @@ def Xform "SixWheelRover" (
                 {
                 }
             }
+                float inputs:sun_mount_x.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_x>
+                float inputs:sun_mount_y.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_y>
+                float inputs:sun_mount_z.connect = </SixWheelRover/SolarPanel/Environment.outputs:sun_mount_z>
                 float outputs:solar_power.connect = </SixWheelRover/SolarPanel.outputs:power_out>
                 float outputs:solar_available_power.connect = </SixWheelRover/SolarPanel.outputs:available_power_w>
                 float outputs:solar_incidence.connect = </SixWheelRover/SolarPanel.outputs:cos_incidence>

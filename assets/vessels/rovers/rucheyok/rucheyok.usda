@@ -89,17 +89,12 @@ def Xform "Rucheyok" (
 
         float physics:mass = 15.0
 
-        # ONE spec per prim, per layer. This was a sibling `over "SolarPanel"`
-        # further down this file, and the `over` won: the composed panel kept
-        # `connectors:p` and lost the reference, the children, `LunCoProgramAPI`
-        # and `info:sourceAsset`. The runtime then blamed the collection —
-        # `SolarPanel is outside the rover-root collection` — and the whole
-        # electrical island was rejected. See
-        # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+        # The panel's environment values cross the electrical boundary through
+        # the rover root; the panel remains the sole solar source component.
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        float inputs:sun_mount_x.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_x>
-        float inputs:sun_mount_y.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_y>
-        float inputs:sun_mount_z.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_z>
+        float inputs:sun_mount_x.connect = </Rucheyok.inputs:sun_mount_x>
+        float inputs:sun_mount_y.connect = </Rucheyok.inputs:sun_mount_y>
+        float inputs:sun_mount_z.connect = </Rucheyok.inputs:sun_mount_z>
 
         def Xform "Environment" (
             prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
@@ -107,6 +102,10 @@ def Xform "Rucheyok" (
         {
         }
     }
+
+    float inputs:sun_mount_x.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_x>
+    float inputs:sun_mount_y.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_y>
+    float inputs:sun_mount_z.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_z>
 
     # --- Battery (physical part; its charge is the Electrical circuit's) ---
     def Xform "Battery" (
