@@ -50,8 +50,8 @@ def Xform "SixWheelTest" (
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
-        # Close freeflight presentation for the six-wheel attachment acceptance
-        # capture; the rover's separate onboard camera remains in its component.
+        # Retain the standard avatar shape as inert scene data; the authored
+        # track presents the rover's mounted operator camera.
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
@@ -59,12 +59,21 @@ def Xform "SixWheelTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # The mounted rover camera is the sole presentation owner for this test.
+    # Keep the generic avatar prim available as inert scene data so the track
+    # never races a LocalAvatar fallback during asynchronous projection.
+    over "Avatar"
+    {
+        bool active = false
+        uniform bool lunco:avatar = false
+    }
+
     def Scope "CameraTrack" (
         prepend apiSchemas = ["LunCoCameraTrackAPI"]
     )
     {
         token lunco:activeCamera.timeSamples = {
-            0: "Avatar",
+            0: "/SixWheelTest/Rover/FrontCamera",
         }
     }
 
