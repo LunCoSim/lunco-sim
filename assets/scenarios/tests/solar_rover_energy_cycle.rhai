@@ -25,6 +25,8 @@ const SOC_DROP_MIN = 0.01;
 const SOC_RECOVER_MIN = 0.005;
 const MOTION_MIN_M = 0.25;
 const IDLE_DRIVE_TOL = 0.001;
+const MOTOR_LOAD_MIN_W = 1.0;
+const POWER_TOL_W = 0.1;
 
 // Every observed value is an authored rover-root boundary port. Generated
 // member identifiers are implementation details, not a scenario contract.
@@ -81,6 +83,12 @@ fn on_start(me) {
     this.peak_motor_current = 0.0;
     this.peak_battery_discharge_power = 0.0;
     this.peak_battery_charge_power = 0.0;
+    this.loaded_drive_samples = 0;
+    this.drive_charge_samples = 0;
+    this.drive_charge_observed_samples = 0;
+    this.drive_net_observed_samples = 0;
+    this.peak_drive_charge_power = 0.0;
+    this.max_loaded_drive_net_power = ();
 
     print("[solar-cycle] ── solar rover energy cycle ─────────────────────");
 }
@@ -150,6 +158,27 @@ fn on_tick(me) {
         if discharge != () && discharge > this.peak_battery_discharge_power {
             this.peak_battery_discharge_power = discharge;
         }
+        let charge = get(this.elec, "battery_charge_power");
+        if motor != () && motor > MOTOR_LOAD_MIN_W {
+            this.loaded_drive_samples += 1;
+            if charge != () {
+                this.drive_charge_observed_samples += 1;
+                if charge > this.peak_drive_charge_power {
+                    this.peak_drive_charge_power = charge;
+                }
+                if charge > POWER_TOL_W {
+                    this.drive_charge_samples += 1;
+                }
+            }
+            let net = get(this.elec, "battery_net_power");
+            if net != () {
+                this.drive_net_observed_samples += 1;
+                if this.max_loaded_drive_net_power == () ||
+                   net > this.max_loaded_drive_net_power {
+                    this.max_loaded_drive_net_power = net;
+                }
+            }
+        }
         if phase_t < DRIVE_S { return; }
         this.soc_after_drive = island_value(this.elec, BATTERY_SOC);
         this.position_after_drive = world_pos(this.rover);
@@ -218,6 +247,20 @@ fn verdict(s) {
         "generated motor model reported no terminal current under BT patrol"));
     f.push(t_true(s.peak_battery_discharge_power > 0.0,
         "battery reported no discharge power under motor load"));
+    f.push(t_true(s.loaded_drive_samples > 100,
+        "motor load was not observable for enough drive samples"));
+    f.push(t_true(s.drive_charge_observed_samples > 100,
+        "battery charge power was not observable for enough loaded-drive samples"));
+    f.push(t_true(s.drive_charge_samples == 0,
+        "battery charged while the loaded rover was driving (peak " +
+        r2(s.peak_drive_charge_power) + " W)"));
+    f.push(t_true(s.drive_net_observed_samples > 100,
+        "battery net power was not observable for enough loaded-drive samples"));
+    if s.max_loaded_drive_net_power != () {
+        f.push(t_true(s.max_loaded_drive_net_power < -POWER_TOL_W,
+            "battery net power was not negative while the motors were loaded (maximum " +
+            r2(s.max_loaded_drive_net_power) + " W)"));
+    }
     f.push(t_true(s.peak_battery_charge_power > 0.0,
         "battery reported no charge power after the patrol stopped"));
     if s.soc_before_drive != () && s.soc_after_drive != () {
@@ -245,6 +288,11 @@ fn verdict(s) {
           "W, motor peak=" + r2(s.peak_motor_power) + "W, motor current=" +
           r2(s.peak_motor_current) + "A, battery discharge/charge peak=" +
           r2(s.peak_battery_discharge_power) + "/" + r2(s.peak_battery_charge_power) + "W");
+    print("[solar-cycle] loaded drive samples=" + s.loaded_drive_samples +
+          ", charge observed=" + s.drive_charge_observed_samples +
+          ", charge samples above tolerance=" + s.drive_charge_samples +
+          ", net observed=" + s.drive_net_observed_samples +
+          ", loaded-drive net-power max=" + r2(s.max_loaded_drive_net_power) + "W");
     print("[solar-cycle] post-stop electrical inputs left/right=" +
           r4(s.island_drive_left_after_stop) + "/" + r4(s.island_drive_right_after_stop));
     report_verdict(f, "SOLAR ROVER ENERGY CYCLE", "SOLAR_ROVER_ENERGY_CYCLE");
