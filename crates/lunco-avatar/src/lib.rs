@@ -288,6 +288,23 @@ fn camera_decay_alpha(rate: f32, damping: f32, dt: f32) -> f64 {
     f64::from(1.0 - (-camera_decay_rate(rate, damping) * dt).exp())
 }
 
+#[inline]
+fn resolve_camera_arm_length(
+    current_len: f64,
+    target_len: f64,
+    obstacle_present: bool,
+    position_rate: f32,
+    damping: f32,
+    dt: f32,
+) -> f64 {
+    if !obstacle_present || current_len < 1e-3 {
+        return target_len;
+    }
+
+    let alpha = camera_decay_alpha(position_rate, damping, dt);
+    current_len + (target_len - current_len) * alpha
+}
+
 // ─── Behavior Components ─────────────────────────────────────────────────────
 
 /// Chase camera: follows a ground vehicle with smooth heading-follow.
@@ -2238,13 +2255,10 @@ fn spring_arm_system(
             _ => None,
         };
 
-        // Collision response: only the arm LENGTH is smoothed, and only when an
-        // obstacle forces it shorter than the user asked for. The arm DIRECTION
-        // (ray_dir) already tracks the user's rotation instantly, so orbiting in
-        // open space is 1:1 with the mouse — there the target length equals the
-        // desired length equals the current length, and the lerp is a no-op.
-        // Smoothing kicks in only when a hit pulls the camera in (and eases back
-        // out when the obstacle clears), never on human rotation.
+        // Collision response: only an active obstacle may smooth the arm LENGTH.
+        // On a clear ray, use the requested length directly so target translation
+        // cannot masquerade as camera-distance motion. The arm DIRECTION (ray_dir)
+        // already tracks the user's rotation instantly.
         let desired_len = ray_len;
         let target_len = match hit {
             Some(hit_data) => ((hit_data.distance - 0.5).min(desired_len)).max(0.0),
@@ -2252,13 +2266,14 @@ fn spring_arm_system(
         };
         let current_pos = grid.grid_position_double(&cell, &tf);
         let current_len = current_pos.distance(target_pos);
-        // First frame (camera still at grid origin) or already at target: snap.
-        let final_len = if current_len < 1e-3 {
-            target_len
-        } else {
-            let alpha = camera_decay_alpha(defaults.position_rate, damping, dt);
-            current_len + (target_len - current_len) * alpha
-        };
+        let final_len = resolve_camera_arm_length(
+            current_len,
+            target_len,
+            hit.is_some(),
+            defaults.position_rate,
+            damping,
+            dt,
+        );
         let final_pos = target_pos + ray_dir * final_len;
 
         let (new_cell, new_tf) = grid.translation_to_grid(final_pos);
@@ -5310,6 +5325,21 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn clear_follow_ray_keeps_requested_distance_when_target_moves() {
+        let final_len = resolve_camera_arm_length(47.0, 50.0, false, 30.0, 0.1, 1.0 / 60.0);
+
+        assert_eq!(final_len, 50.0);
+    }
+
+    #[test]
+    fn obstructed_follow_ray_eases_arm_length() {
+        let final_len = resolve_camera_arm_length(50.0, 20.0, true, 30.0, 0.1, 1.0 / 60.0);
+
+        assert!(final_len < 50.0);
+        assert!(final_len > 20.0);
     }
 
     #[test]
