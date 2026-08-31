@@ -835,6 +835,13 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
   workspace document before a user moves nodes.
 - Dot-grid background, pan/zoom, selection, port hit targets, and routed
   wire handles come from the generic `lunco-canvas` substrate.
+- Generated diagram overlays (hover cards, wire tooltips, loading/error cards, and the
+  connection legend) are owned by the canvas leaf. Direct painting uses its
+  clip rectangle and an `egui::Area` overlay uses `constrain_to` with that same
+  measured rectangle; no diagram surface may escape into workbench menus,
+  status, inspectors, or neighbouring leaves. Non-interactive overlays do not
+  claim pointer input, while intentional Modelica dialogs remain in the shared
+  modal host.
 - The diagram toolbar's per-tab `Show nets` toggle is presentation state on
   that canvas. Hiding it suppresses connection rendering, the legend, and
   edge hit-testing while retaining the authored scene topology unchanged;

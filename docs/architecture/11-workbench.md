@@ -170,6 +170,13 @@ When no window `Camera3d` is active at all (Design perspective, the Modelica
 workbench), nothing clears the target — `render_layout` handles that case by
 painting a full-window backdrop on egui's background layer.
 
+Domain-owned diagram overlays remain leaf-local. A direct painter uses the
+owning leaf's clip rectangle, and a separate egui `Area` constrains itself to
+that same measured leaf rectangle. This keeps generated diagram content below
+the workbench's menu, status, inspector, and window-control boundaries without
+inventing per-window screen offsets. Non-interactive overlays do not become
+input owners; modal behavior belongs to the shared modal host.
+
 ### 3.2 Render-time resource ownership
 
 `WorkbenchLayout` is the owner of the dock tree, but `render_workbench` removes

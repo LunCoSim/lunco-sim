@@ -607,7 +607,7 @@ pub(super) fn paint_hover_card(
     // the side panels (the user would otherwise see a tooltip
     // ghost overlapping the Twin Browser when hovering an icon
     // near the canvas's left edge).
-    let canvas_clip = ui.max_rect();
+    let canvas_clip = ui.clip_rect();
     let painter = painter.with_clip_rect(canvas_clip);
 
     // Build text lines first so we can size the card accordingly.
@@ -638,16 +638,9 @@ pub(super) fn paint_hover_card(
     let card_h = lines.len() as f32 * line_h + pad * 2.0;
 
     // Anchor card to the right of the cursor with a small offset;
-    // flip to the left if we'd run off the screen edge.
-    let screen = ui.ctx().content_rect();
-    let mut origin = egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
-    if origin.x + card_w > screen.max.x {
-        origin.x = cursor.x - card_w - 14.0;
-    }
-    if origin.y + card_h > screen.max.y {
-        origin.y = cursor.y - card_h - 14.0;
-    }
-    let card_rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
+    // flip to the left if we'd run off the canvas edge.
+    let card_rect = hover_card_rect(cursor, egui::vec2(card_w, card_h), canvas_clip);
+    let origin = card_rect.min;
     // Drop shadow so the card pops over the diagram.
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 2.0)),
@@ -682,6 +675,62 @@ pub(super) fn paint_hover_card(
             color,
         );
         y += line_h;
+    }
+}
+
+/// Place a canvas-owned hover card near the pointer without crossing the
+/// canvas leaf's visible bounds. The caller's painter supplies the same
+/// bounds as a clip, so this geometry and its rendering boundary have one
+/// owner even when a diagram is docked beside workbench chrome.
+fn hover_card_rect(cursor: egui::Pos2, size: egui::Vec2, bounds: egui::Rect) -> egui::Rect {
+    let size = egui::vec2(size.x.min(bounds.width()), size.y.min(bounds.height()));
+    let preferred = egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
+    let flipped = egui::pos2(cursor.x - size.x - 14.0, cursor.y - size.y - 14.0);
+    let max = bounds.max - size;
+    let x = if preferred.x + size.x <= bounds.right() {
+        preferred.x
+    } else if flipped.x >= bounds.left() {
+        flipped.x
+    } else {
+        preferred.x.clamp(bounds.left(), max.x)
+    };
+    let y = if preferred.y + size.y <= bounds.bottom() {
+        preferred.y
+    } else if flipped.y >= bounds.top() {
+        flipped.y
+    } else {
+        preferred.y.clamp(bounds.top(), max.y)
+    };
+    egui::Rect::from_min_size(egui::pos2(x, y), size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hover_card_rect;
+    use bevy_egui::egui;
+
+    #[test]
+    fn hover_card_stays_inside_canvas_at_each_edge() {
+        let bounds = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 300.0));
+
+        for cursor in [
+            egui::pos2(110.0, 60.0),
+            egui::pos2(490.0, 60.0),
+            egui::pos2(110.0, 340.0),
+            egui::pos2(490.0, 340.0),
+        ] {
+            let card = hover_card_rect(cursor, egui::vec2(120.0, 80.0), bounds);
+            assert!(bounds.contains(card.min));
+            assert!(bounds.contains(card.max - egui::vec2(f32::EPSILON, f32::EPSILON)));
+        }
+    }
+
+    #[test]
+    fn oversized_hover_card_is_clamped_to_canvas() {
+        let bounds = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(120.0, 90.0));
+        let card = hover_card_rect(egui::pos2(100.0, 80.0), egui::vec2(300.0, 200.0), bounds);
+
+        assert_eq!(card, bounds);
     }
 }
 

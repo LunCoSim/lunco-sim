@@ -96,6 +96,11 @@ interactive connection edges without changing authored topology. Keep this
 dynamic graph control in the canvas panel; HUI/Rhai does not provide the
 dynamic list and graph-state contract it would require.
 
+Canvas-owned diagram overlays must stay inside the owning leaf: direct painting
+uses the canvas clip rectangle, while an `egui::Area` uses `constrain_to` with
+the measured leaf rectangle. Non-interactive overlays do not claim pointer
+input, and modal dialogs use the shared `lunco-ui::modal` host.
+
 ## Adding a Panel
 
 ```rust

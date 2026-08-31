@@ -56,6 +56,11 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
     egui::Area::new(egui::Id::new("lunco_modelica_connection_legend"))
         .order(egui::Order::Foreground)
         .interactable(false)
+        // The legend is painted in its own egui layer, so the canvas Ui's
+        // normal clip would otherwise be lost. Keep the generated surface
+        // inside the dock leaf that owns the diagram; the workbench menu,
+        // status bar, and neighbouring panels remain outside this boundary.
+        .constrain_to(rect)
         .fixed_pos(egui::pos2(left, rect.top() + 12.0))
         .show(&ctx, |ui| {
             egui::Frame::new()

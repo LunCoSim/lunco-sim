@@ -112,10 +112,12 @@ pub(super) fn paint_wire_tooltip(
     // top visually), which would otherwise occlude the edge
     // tooltip when the hover point is near a component body.
     let ctx = painter.ctx().clone();
-    let top = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Tooltip,
-        egui::Id::new("lunco_modelica_wire_tooltip"),
-    ));
+    let top = ctx
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("lunco_modelica_wire_tooltip"),
+        ))
+        .with_clip_rect(painter.clip_rect());
     let font = egui::FontId::proportional(11.0);
     let galley = top.layout_no_wrap(
         text.to_string(),
