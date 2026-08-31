@@ -49,21 +49,25 @@ highlight, preserving USD as the sole owner of scene facts.
 ## Motion trails are bounded physics history
 
 A vehicle trail answers a different question from a route ribbon: where the vehicle
-actually travelled. `lunco-luncosim-edit::ui::trail` samples the topology-derived
-vehicle root's Avian `Position` after the solved physics step, in the active physics/grid
-frame. It never samples `GlobalTransform`, controller intent, or the authored route.
-The history is interpolated only to fill a large display-frame gap, capped at 1024
-points, and projected through `GridSurfaceQuery` before mesh generation. A missing
-surface sample fails that trail closed rather than drawing a detached chord through
-unknown ground.
+actually travelled. `lunco-luncosim-edit::ui::trail` records one bounded lane per
+topology-derived wheel after the solved physics step, in the active physics/grid frame.
+Raycast lanes use the wheel's retained Avian `RayHits` and the same mobility-owned
+contact-point geometry used by suspension and tire forces. Jointed lanes use the
+impulse-weighted points in Avian's contact manifolds. It never samples
+`GlobalTransform`, controller intent, or the authored route. The history is
+interpolated only to fill a large display-frame gap, capped at 1024 points per lane,
+and projected through `GridSurfaceQuery` before mesh generation. A missing surface
+sample fails that lane closed rather than drawing a detached chord through unknown
+ground.
 
-The trail mesh reuses the route ribbon's world-space triangle-strip builder, with its
+Each trail lane reuses the route ribbon's world-space triangle-strip builder, with its
 own width and clearance. It is transient Bevy presentation parented to the active
 physics frame; it is not USD topology, terrain deformation, telemetry, or a per-frame
 document edit. Scene teardown clears both the mesh and history, and an active-frame
 change starts a new history, so a later Twin or grid cannot inherit a stale path.
 `MobilityRoot` is the existing topology capability that selects vehicle owners; no
-name-based rover registry or second motion source is introduced.
+name-based rover registry, second motion source, or second contact model is
+introduced.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 
