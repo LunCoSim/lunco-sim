@@ -193,9 +193,12 @@ first, so it is complete and blurry rather than absent).
 
 ## Runtime readiness and derived visual work
 
-The DEM build is the ground-readiness boundary. Once its composed heightfield, visual mesh,
-and collider are published, the Twin has usable ground; optional derived surface/normal maps
-are visual refinement and must not hold scene presentation or replacement hostage.
+The DEM build is the physics ground-readiness boundary. Once its composed heightfield, visual
+mesh, and collider are published, the Twin has usable ground. For streamed Lit terrain, the
+initial visual presentation additionally waits for the USD material projection and for a derived
+surface/normal role only when USD did not author that role, so the first visible tile set has a
+complete, stable material. The bake remains off-thread and the UI continues to run while it is
+pending; later edits use the same source reconciliation without a bulk source transition.
 
 The derived baker uses the existing `RenderingQualitySettings` profile, but a static terrain's
 effective map resolution is also bounded by its authored visual target and source grid. A

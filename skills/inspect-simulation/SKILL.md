@@ -55,9 +55,13 @@ Before interpreting a live read as a finished scene, check
 compiling; that is different from a valid zero.
 
 For DEM terrain, read the typed `TerrainLodStatus` query as the authoritative
-stream state. A settled visual terrain requires `wanted == resident` and
-`pending == 0`; the status-bar text is presentation history and is not a
-readiness signal.
+geometry stream state. A settled visual terrain requires `wanted == resident`
+and `pending == 0`; the status-bar text is presentation history and is not a
+readiness signal. Streamed Lit terrain also waits for its USD material source
+projection and any required off-thread derived surface/normal product before
+exposing the initial tile set; observe the live `terrain-derived` status entry
+during startup rather than treating a historical terrain event as proof that
+materials are settled.
 
 ### Fixed-panel rover readout
 

@@ -1513,41 +1513,120 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
 }
 
-/// Bind a terrain's baked derived maps and physical texel scale onto one tile
-/// look (Lit mode only — the flat/debug shader declares no map bindings).
+/// Bind one terrain's complete material source selection onto a Lit tile.
 ///
-/// The map handles are part of `ShaderLook::key()`, so two terrains with different
-/// baked maps correctly get different materials, while every physical-appearance
-/// parameter is identical across the LODs of one terrain.
-pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps) {
-    look.textures
-        .insert(TextureLayer::Surface, maps.surface.clone());
-    look.textures
-        .insert(TextureLayer::Normal, maps.normal.clone());
-    set_param(look, "map_texel_size_m", ParamValue::F32(maps.texel_size_m));
-    set_param(look, "derived_maps_on", ParamValue::F32(1.0));
-}
+/// USD owns authored layer facts. The engine-derived maps are a per-role
+/// material source for roles USD did not author, so the two sources share the
+/// existing fixed texture slots without ever overwriting one another. The
+/// source decision is made once when the look is built and repeated only when
+/// the terrain's published map components change.
+///
+/// The map handles are part of `ShaderLook::key()`, so two terrains with
+/// different material sources correctly get different materials, while every
+/// physical-appearance parameter is identical across the LODs of one terrain.
+pub(crate) fn apply_terrain_maps_to_look(
+    look: &mut ShaderLook,
+    maps: Option<&TerrainDerivedMaps>,
+    authored: Option<&TerrainAuthoredMaps>,
+) {
+    let authored_surface = authored.is_some_and(TerrainAuthoredMaps::has_active_surface);
+    let authored_normal = authored.is_some_and(TerrainAuthoredMaps::has_active_normal);
 
-/// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)
-/// onto one tile look — the streamed-path counterpart of the static mesh's
-/// `bind_terrain_layers`.
-///
-/// Unlike the derived maps, these weights are NOT per-depth. An authored
-/// orthophoto is the site's actual appearance at every distance; fading it by
-/// LOD would make the ground change colour as the camera moved. The author's
-/// weight is the weight.
-///
-/// A layer the network does not author gets its weight forced to zero as well
-/// as its slot left empty — both, so a stale weight surviving on a reused look
-/// can never sample Bevy's fallback white as though it were terrain.
-pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &TerrainAuthoredMaps) {
-    match &authored.albedo {
+    let surface = if authored_surface {
+        authored.and_then(|maps| maps.surface.as_ref())
+    } else {
+        maps.map(|maps| &maps.surface)
+    };
+    match surface {
+        Some(handle) => {
+            look.textures.insert(TextureLayer::Surface, handle.clone());
+        }
+        None => {
+            look.textures.remove(&TextureLayer::Surface);
+        }
+    }
+    let normal = if authored_normal {
+        authored.and_then(|maps| maps.normal.as_ref())
+    } else {
+        maps.map(|maps| &maps.normal)
+    };
+    match normal {
+        Some(handle) => {
+            look.textures.insert(TextureLayer::Normal, handle.clone());
+        }
+        None => {
+            look.textures.remove(&TextureLayer::Normal);
+        }
+    }
+
+    set_param(
+        look,
+        "map_texel_size_m",
+        ParamValue::F32(maps.map_or(1.0, |maps| maps.texel_size_m)),
+    );
+    set_param(
+        look,
+        "derived_surface_on",
+        ParamValue::F32(if maps.is_some() && !authored_surface {
+            1.0
+        } else {
+            0.0
+        }),
+    );
+    set_param(
+        look,
+        "derived_normal_on",
+        ParamValue::F32(if maps.is_some() && !authored_normal {
+            1.0
+        } else {
+            0.0
+        }),
+    );
+    set_param(
+        look,
+        "authored_surface_on",
+        ParamValue::F32(if authored_surface { 1.0 } else { 0.0 }),
+    );
+    set_param(
+        look,
+        "authored_normal_on",
+        ParamValue::F32(if authored_normal { 1.0 } else { 0.0 }),
+    );
+    set_param(
+        look,
+        "weight_rough",
+        ParamValue::F32(if authored_surface {
+            authored.map_or(0.0, |maps| maps.weight_rough)
+        } else {
+            0.0
+        }),
+    );
+    set_param(
+        look,
+        "weight_ao",
+        ParamValue::F32(if authored_surface {
+            authored.map_or(0.0, |maps| maps.weight_ao)
+        } else {
+            0.0
+        }),
+    );
+    set_param(
+        look,
+        "weight_normal",
+        ParamValue::F32(if authored_normal {
+            authored.map_or(0.0, |maps| maps.weight_normal)
+        } else {
+            0.0
+        }),
+    );
+
+    match authored.and_then(|maps| maps.albedo.as_ref()) {
         Some(h) => {
             look.textures.insert(TextureLayer::Albedo, h.clone());
             set_param(
                 look,
                 "weight_albedo",
-                ParamValue::F32(authored.weight_albedo),
+                ParamValue::F32(authored.map_or(0.0, |maps| maps.weight_albedo)),
             );
         }
         None => {
@@ -1555,13 +1634,13 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
             set_param(look, "weight_albedo", ParamValue::F32(0.0));
         }
     }
-    match &authored.mineral {
+    match authored.and_then(|maps| maps.mineral.as_ref()) {
         Some(h) => {
             look.textures.insert(TextureLayer::Mineral, h.clone());
             set_param(
                 look,
                 "weight_mineral",
-                ParamValue::F32(authored.weight_mineral),
+                ParamValue::F32(authored.map_or(0.0, |maps| maps.weight_mineral)),
             );
         }
         None => {
@@ -1569,6 +1648,20 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
             set_param(look, "weight_mineral", ParamValue::F32(0.0));
         }
     }
+}
+
+/// The first streamed Lit cover is admitted only after the USD material
+/// projection has completed and every role has a stable source. A terrain with
+/// both surface and normal roles authored by USD does not need the derived
+/// product; any missing role does.
+fn initial_lit_material_ready(
+    maps: Option<&TerrainDerivedMaps>,
+    authored: Option<&TerrainAuthoredMaps>,
+) -> bool {
+    let Some(authored) = authored else {
+        return false;
+    };
+    maps.is_some() || !authored.needs_derived_maps()
 }
 
 /// The appearance INTENT of one LOD tile: the geomorph shader (it drives both the
@@ -1621,19 +1714,7 @@ fn tile_look(
                 "terrain_half_extent",
                 ParamValue::F32(terrain_half_extent),
             );
-            set_param(
-                &mut look,
-                "derived_maps_on",
-                ParamValue::F32(if maps.is_some() { 1.0 } else { 0.0 }),
-            );
-            if let Some(maps) = maps {
-                apply_maps_to_look(&mut look, maps);
-            }
-            // AFTER the derived maps: both write `weight_*`, and the author's
-            // opinion is the one that should survive.
-            if let Some(authored) = authored {
-                apply_authored_maps_to_look(&mut look, authored);
-            }
+            apply_terrain_maps_to_look(&mut look, maps, authored);
             if let Some(shadow) = shadow {
                 apply_shadow_cache_to_look(&mut look, shadow);
             }
@@ -2140,6 +2221,18 @@ pub fn update_lod_tiles(
             .unwrap_or_else(TerrainShaderMode::platform_default);
         if !enable_shaders {
             mode = TerrainShaderMode::Plain;
+        }
+        // Do not expose a tile before the USD material projection and any
+        // required engine-derived product have selected every source. Creating
+        // a procedural/derived cover first and rewriting it when either
+        // producer publishes would mint a second set of material keys, upload
+        // the whole terrain again, and visibly change its appearance. The UI
+        // remains active while these off-thread inputs are pending.
+        if mode == TerrainShaderMode::Lit
+            && tiles.tiles.is_empty()
+            && !initial_lit_material_ready(maps, authored)
+        {
+            continue;
         }
         // The frozen cover is ONE tile for the whole terrain, so it carries the
         // detail the whole quadtree used to spread over thousands — mesh it far
@@ -3074,75 +3167,60 @@ pub fn despawn_orphaned_lod_tiles(
     mesh_cache.retain_terrains(|t| !dead(&t));
 }
 
-/// When a terrain's derived maps finish baking AFTER its tiles exist (the
-/// common case — the AO march takes seconds while the first tiles stream in),
-/// restate the maps on every resident Lit tile's look — no tile churn or re-bake.
-/// `Changed` also covers the re-bake that follows a live edit.
-///
-/// D8: **Lit tiles only.** The flat/debug shader declares no map bindings, so
-/// writing them there would only mint pointless material variants.
-pub(crate) fn bind_derived_maps_to_tiles(
-    changed: Query<(&TerrainDerivedMaps, &LodTiles), Changed<TerrainDerivedMaps>>,
+/// Reconcile a terrain's complete material source selection after either USD
+/// authored maps or engine-derived maps change. Keeping one reader path is
+/// essential: two independent late binders could observe the same frame in
+/// opposite orders and let one source overwrite the other.
+pub(crate) fn bind_terrain_maps_to_tiles(
+    changed: Query<
+        (
+            &LodTiles,
+            Option<&TerrainDerivedMaps>,
+            Option<&TerrainAuthoredMaps>,
+        ),
+        Or<(Changed<TerrainDerivedMaps>, Changed<TerrainAuthoredMaps>)>,
+    >,
     mut looks: Query<&mut ShaderLook>,
 ) {
-    for (maps, tiles) in &changed {
+    for (tiles, maps, authored) in &changed {
         if tiles.mode != TerrainShaderMode::Lit {
             continue;
         }
         for entity in tiles.tile_entities() {
             if let Ok(mut look) = looks.get_mut(entity) {
-                apply_maps_to_look(&mut look, maps);
+                apply_terrain_maps_to_look(&mut look, maps, authored);
             }
         }
     }
 }
 
-/// Remove the derived-map contribution from resident tiles when a whole-terrain
-/// recompose invalidates the published product. A bounded edit intentionally
-/// keeps its current maps live while it rebakes; this path is only for the
-/// explicit component removal used when those maps are globally wrong.
-pub(crate) fn unbind_derived_maps_from_tiles(
-    mut removed: RemovedComponents<TerrainDerivedMaps>,
-    terrains: Query<&LodTiles>,
+/// Reconcile resident looks when a published material source is removed. A
+/// whole-terrain recompose may remove the derived product before the replacement
+/// bake publishes; authored USD maps remain eligible in that interval.
+pub(crate) fn sync_removed_terrain_maps_to_tiles(
+    mut removed_derived: RemovedComponents<TerrainDerivedMaps>,
+    mut removed_authored: RemovedComponents<TerrainAuthoredMaps>,
+    terrains: Query<(
+        &LodTiles,
+        Option<&TerrainDerivedMaps>,
+        Option<&TerrainAuthoredMaps>,
+    )>,
     mut looks: Query<&mut ShaderLook>,
 ) {
-    for terrain in removed.read() {
-        let Ok(tiles) = terrains.get(terrain) else {
+    let removed: HashSet<Entity> = removed_derived
+        .read()
+        .chain(removed_authored.read())
+        .collect();
+    for terrain in removed {
+        let Ok((tiles, maps, authored)) = terrains.get(terrain) else {
             continue;
         };
-        for entity in tiles.tile_entities() {
-            let Ok(mut look) = looks.get_mut(entity) else {
-                continue;
-            };
-            look.textures.remove(&TextureLayer::Surface);
-            look.textures.remove(&TextureLayer::Normal);
-            set_param(&mut look, "map_texel_size_m", ParamValue::F32(1.0));
-            set_param(&mut look, "derived_maps_on", ParamValue::F32(0.0));
-        }
-    }
-}
-
-/// The same late-bind for AUTHORED maps. The layer binder needs the composed
-/// stage AND the twin's asset root, so it publishes
-/// [`TerrainAuthoredMaps`] well after the first tiles are already resident —
-/// and it re-publishes whenever the author drags a weight or repoints a map
-/// through the Material network, since those are journaled attribute edits.
-/// Restating in place keeps that live without tile churn or a re-bake.
-///
-/// Lit tiles only, for the same reason as the derived maps: the flat/debug
-/// shader declares no map bindings, so writing them there would only mint
-/// pointless material variants.
-pub(crate) fn bind_authored_maps_to_tiles(
-    changed: Query<(&TerrainAuthoredMaps, &LodTiles), Changed<TerrainAuthoredMaps>>,
-    mut looks: Query<&mut ShaderLook>,
-) {
-    for (authored, tiles) in &changed {
         if tiles.mode != TerrainShaderMode::Lit {
             continue;
         }
         for entity in tiles.tile_entities() {
             if let Ok(mut look) = looks.get_mut(entity) {
-                apply_authored_maps_to_look(&mut look, authored);
+                apply_terrain_maps_to_look(&mut look, maps, authored);
             }
         }
     }
@@ -3217,10 +3295,13 @@ mod draw_partition_tests {
             near.values.get("map_texel_size_m"),
             Some(&ParamValue::F32(maps.texel_size_m))
         );
-        assert_eq!(
-            near.values.get("derived_maps_on"),
-            Some(&ParamValue::F32(1.0))
-        );
+        for name in ["derived_surface_on", "derived_normal_on"] {
+            assert_eq!(
+                near.values.get(name),
+                Some(&ParamValue::F32(1.0)),
+                "{name} must be enabled for a derived-only look"
+            );
+        }
         assert!(!near.values.contains_key("map_ratio"));
 
         let mut near_values = near.values;
@@ -3249,18 +3330,118 @@ mod draw_partition_tests {
             crate::overlay::OverlayUniforms::OFF,
         );
 
-        assert_eq!(
-            look.values.get("derived_maps_on"),
-            Some(&ParamValue::F32(0.0))
-        );
+        for name in [
+            "derived_surface_on",
+            "derived_normal_on",
+            "authored_surface_on",
+            "authored_normal_on",
+        ] {
+            assert_eq!(
+                look.values.get(name),
+                Some(&ParamValue::F32(0.0)),
+                "{name} must be disabled without a published map"
+            );
+        }
         assert!(!look.textures.contains_key(&TextureLayer::Surface));
         assert!(!look.textures.contains_key(&TextureLayer::Normal));
     }
 
     #[test]
-    fn removed_derived_maps_are_unbound_from_resident_tiles() {
+    fn authored_map_sources_survive_derived_map_publication() {
+        let derived = TerrainDerivedMaps {
+            surface: Handle::default(),
+            normal: Handle::default(),
+            res: 1024,
+            texel_size_m: 7.0,
+        };
+        let authored = TerrainAuthoredMaps {
+            surface: Some(Handle::default()),
+            weight_rough: 0.25,
+            weight_ao: 0.75,
+            normal: Some(Handle::default()),
+            weight_normal: 0.5,
+            ..Default::default()
+        };
+        let look = tile_look(
+            TerrainShaderMode::Lit,
+            4,
+            100.0,
+            200.0,
+            Some(&derived),
+            512.0,
+            Some(&authored),
+            None,
+            crate::overlay::OverlayUniforms::OFF,
+        );
+
+        assert_eq!(
+            look.values.get("authored_surface_on"),
+            Some(&ParamValue::F32(1.0))
+        );
+        assert_eq!(
+            look.values.get("authored_normal_on"),
+            Some(&ParamValue::F32(1.0))
+        );
+        assert_eq!(
+            look.values.get("derived_surface_on"),
+            Some(&ParamValue::F32(0.0))
+        );
+        assert_eq!(
+            look.values.get("derived_normal_on"),
+            Some(&ParamValue::F32(0.0))
+        );
+        assert_eq!(
+            look.values.get("weight_rough"),
+            Some(&ParamValue::F32(authored.weight_rough))
+        );
+        assert_eq!(
+            look.values.get("weight_ao"),
+            Some(&ParamValue::F32(authored.weight_ao))
+        );
+        assert_eq!(
+            look.values.get("weight_normal"),
+            Some(&ParamValue::F32(authored.weight_normal))
+        );
+    }
+
+    #[test]
+    fn initial_lit_material_waits_for_the_complete_source_projection() {
+        let authored = TerrainAuthoredMaps {
+            surface: Some(Handle::default()),
+            weight_rough: 0.5,
+            normal: Some(Handle::default()),
+            weight_normal: 0.5,
+            ..Default::default()
+        };
+        let authored_normal_only = TerrainAuthoredMaps {
+            normal: authored.normal.clone(),
+            weight_normal: authored.weight_normal,
+            ..Default::default()
+        };
+        let derived = TerrainDerivedMaps {
+            surface: Handle::default(),
+            normal: Handle::default(),
+            res: 1024,
+            texel_size_m: 7.0,
+        };
+
+        assert!(!initial_lit_material_ready(None, None));
+        assert!(!initial_lit_material_ready(Some(&derived), None));
+        assert!(initial_lit_material_ready(None, Some(&authored)));
+        assert!(!initial_lit_material_ready(
+            None,
+            Some(&authored_normal_only)
+        ));
+        assert!(initial_lit_material_ready(
+            Some(&derived),
+            Some(&authored_normal_only)
+        ));
+    }
+
+    #[test]
+    fn removed_derived_maps_reconcile_resident_tiles() {
         let mut app = App::new();
-        app.add_systems(Update, unbind_derived_maps_from_tiles);
+        app.add_systems(Update, sync_removed_terrain_maps_to_tiles);
 
         let tile = app
             .world_mut()
@@ -3275,7 +3456,8 @@ mod draw_partition_tests {
             .textures
             .insert(TextureLayer::Normal, Handle::default());
         set_param(&mut shader_look, "map_texel_size_m", ParamValue::F32(7.0));
-        set_param(&mut shader_look, "derived_maps_on", ParamValue::F32(1.0));
+        set_param(&mut shader_look, "derived_surface_on", ParamValue::F32(1.0));
+        set_param(&mut shader_look, "derived_normal_on", ParamValue::F32(1.0));
         drop(tile_entity);
 
         let mut tiles = LodTiles::default();
@@ -3317,7 +3499,11 @@ mod draw_partition_tests {
             Some(&ParamValue::F32(1.0))
         );
         assert_eq!(
-            look.values.get("derived_maps_on"),
+            look.values.get("derived_surface_on"),
+            Some(&ParamValue::F32(0.0))
+        );
+        assert_eq!(
+            look.values.get("derived_normal_on"),
             Some(&ParamValue::F32(0.0))
         );
     }

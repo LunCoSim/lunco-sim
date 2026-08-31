@@ -29,12 +29,18 @@ This split is also what makes **real-time tuning free**: bake the *data* once (a
 texture), evaluate the *transfer* every frame from **uniforms**. Changing a critical
 slope angle, a colormap, or an opacity is a uniform write — instant, no re-bake.
 
-The streamed terrain material keeps optional derived products explicit: its CPU
-look binder writes a presence uniform alongside the surface/normal texture handles.
-The renderer may need a valid GPU binding before a bake publishes, but those binding
-texels are not terrain data and cannot contribute to shading. Published maps are
-therefore the only state that enables the derived normal, tone, and AO terms; the
-procedural regolith remains the documented material when no product is available.
+The streamed terrain material keeps its source selection explicit. USD-authored
+albedo, mineral, surface, and normal roles are projected once into
+`TerrainAuthoredMaps`; the engine-derived surface/normal product fills only roles
+that USD did not author with a positive weight. The existing fixed texture slots
+are reused, and source-presence uniforms select the corresponding shader terms.
+Initial Lit tiles are not exposed until the USD material projection is complete
+and every role has a selected source. A fully authored surface/normal pair can
+start immediately; otherwise the streamed terrain waits for the off-thread
+derived product. This prevents either producer from triggering a whole-terrain
+material replacement and GPU upload spike after the scene is already visible.
+Subsequent source changes use the same single reconciliation path for all
+resident tiles.
 
 ## Fields are data; render is one consumer
 

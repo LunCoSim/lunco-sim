@@ -49,16 +49,25 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6  "Albedo mottle"
 //!@default mottle            0.22
-// weight_normal / weight_ao / weight_tone are derived per fragment from the
-// screen-space surface footprint and the map's physical texel size. Mesh LOD is
-// deliberately absent, so replacing a tile by its parent cannot change colour.
+// Derived-map weights come from the screen-space surface footprint and the map's
+// physical texel size. Authored-map weights come from USD. Mesh LOD is deliberately
+// absent, so replacing a tile by its parent cannot change colour.
 //!@default map_texel_size_m 1.0
-//!@default derived_maps_on  0
+//!@default derived_surface_on 0
+//!@default derived_normal_on  0
+//!@default authored_surface_on 0
+//!@default authored_normal_on  0
 //!@default terrain_half_extent 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
 //!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
 //!@default weight_mineral    0
+//!@ui      weight_rough      0 1    "Authored surface roughness weight"
+//!@default weight_rough      0
+//!@ui      weight_ao         0 1    "Authored surface AO weight"
+//!@default weight_ao         0
+//!@ui      weight_normal     0 1    "Authored normal map weight"
+//!@default weight_normal     0
 // --- lunar photometry (lunco::lunar) ---------------------------------------
 // The knobs that decide whether this reads as the Moon or as grey PBR. Defaults
 // are the fitted lunar values from the Chrono/UW-Madison sensor simulator
@@ -97,10 +106,16 @@ struct Material {
     rough_mix:         f32,
     mottle:            f32,
     map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
-    derived_maps_on:   f32,  // engine-filled: 1 = surface/normal maps are published
+    derived_surface_on: f32, // engine-filled: derived surface map is the selected source
+    derived_normal_on:  f32, // engine-filled: derived normal map is the selected source
+    authored_surface_on: f32, // engine-filled: USD surface map is the selected source
+    authored_normal_on:  f32, // engine-filled: USD normal map is the selected source
     terrain_half_extent: f32, // engine-filled: authored DEM half side in terrain metres
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
     weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
+    weight_rough:      f32,  // AUTHORED surface roughness weight
+    weight_ao:         f32,  // AUTHORED surface AO weight
+    weight_normal:     f32,  // AUTHORED normal weight
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
@@ -118,13 +133,11 @@ struct Material {
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
 
-// AUTHORED rasters from the terrain's UsdShade Material network (doc 18 §3.1)
-// — `inputs:albedo_map` / `inputs:mineral_map`, same slots and same whole-DEM
-// planar UV as the static-mesh `terrain_layered.wgsl`. Before these existed a
-// streamed site could bake a real NAC orthophoto, wire it through the network,
-// and still render pure procedural regolith: the maps only ever bound on the
-// static-mesh path, so on a `lodViz = true` site the authored colour was
-// invisible. Weight-gated like everything else, so an unbound map (Bevy's
+// Rasters from the terrain's UsdShade Material network (doc 18 §3.1) use the
+// same slots and whole-DEM planar UV as the static-mesh terrain shader. The
+// CPU material reconciler selects an authored surface/normal role over the
+// engine-derived source for that role; the shader only receives one source in
+// each fixed slot. Weight-gated like everything else, so an unbound map (Bevy's
 // fallback white) contributes nothing at weight 0.
 @group(#{MATERIAL_BIND_GROUP}) @binding(2)
 var albedo_tex: texture_2d<f32>;
@@ -298,12 +311,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // continuous across a CDLOD edge, while an integer tile depth is not.
     let map_footprint = pw / mat.map_texel_size_m;
     // Optional GPU bindings are always populated by the material binder, but
-    // their fallback texels are not terrain data. The CPU presence bit is the
-    // authoritative boundary between procedural material and published maps.
-    let w = map_weights(map_footprint) * mat.derived_maps_on;
-    let weight_normal = w.x;
-    let weight_ao = w.y;
-    let weight_tone = w.z;
+    // their fallback texels are not terrain data. The CPU source bits are the
+    // authoritative boundary between authored, derived, and procedural terms.
+    let derived_weights = map_weights(map_footprint);
+    var weight_normal = derived_weights.x * mat.derived_normal_on;
+    var weight_ao = derived_weights.y * mat.derived_surface_on;
+    var weight_rough = 0.35 * derived_weights.y * mat.derived_surface_on;
+    var weight_tone = derived_weights.z * mat.derived_normal_on;
+    if (mat.authored_normal_on > 0.5) {
+        weight_normal = mat.weight_normal;
+        weight_tone = 0.0;
+    }
+    if (mat.authored_surface_on > 0.5) {
+        weight_rough = mat.weight_rough;
+        weight_ao = mat.weight_ao;
+    }
 
     // Baked meso normal: once a screen pixel covers roughly a map texel, the map
     // carries stable filtered crater slopes. Below that physical scale the mesh
@@ -317,8 +339,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         // angle, often all the way to black.  The tile instance is the
         // authoritative local->render transform, including BigSpace's current
         // floating-origin frame.
-        let n_baked = dem_normal_to_world(map_n.xyz, in.instance_index);
-        n = normalize(mix(n, n_baked, weight_normal));
+        let n_map = dem_normal_to_world(map_n.xyz, in.instance_index);
+        n = normalize(mix(n, n_map, weight_normal));
     }
 
 #ifdef VERTEX_UVS_A
@@ -374,7 +396,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // sky/bounce light. Darkens the diffuse base rather than the direct sun
     // term (lit_n owns that), which visually matches at the distances where
     // this weight is raised.
-    let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, weight_ao);
+    var map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, weight_ao);
+    if (mat.authored_surface_on > 0.5) {
+        map_ao = mix(1.0, map_s.g, weight_ao);
+    }
     albedo *= map_ao;
 
     // AUTHORED albedo (the site's real orthophoto). Applied HERE — after every
@@ -440,8 +465,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     // Regolith is rough and non-metallic; rough_mix nudges it, and the baked
     // slope-derived roughness (surface_tex R) leans in where the maps are live.
-    let roughness =
-        clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * weight_ao), 0.05, 1.0);
+    let roughness = clamp(
+        mix(0.6 + rough_mix * 0.4, map_s.r, weight_rough),
+        0.05,
+        1.0,
+    );
     var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
 
     // Terrain self-shadow: sample the pre-baked sun-visibility cache at every
