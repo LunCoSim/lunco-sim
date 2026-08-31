@@ -222,7 +222,7 @@ pub fn sync_tools_on_twin_added(
     #[cfg(not(target_arch = "wasm32"))]
     let loaded = load_tool_libraries_from_dir(&twin.root);
     #[cfg(target_arch = "wasm32")]
-    let loaded = Vec::new();
+    let loaded: Vec<(String, String)> = Vec::new();
     for (name, source) in &loaded {
         if let Err(error) = scoped.register(twin_id, name, source) {
             error!("[tool_libs] failed to install '{name}' for Twin: {error}");
@@ -261,7 +261,7 @@ pub fn wind_down_tools_on_twin_closed(
     #[cfg(not(target_arch = "wasm32"))]
     let loaded = load_tool_libraries_from_dir(&twin.root);
     #[cfg(target_arch = "wasm32")]
-    let loaded = Vec::new();
+    let loaded: Vec<(String, String)> = Vec::new();
     for (name, source) in &loaded {
         if let Err(error) = scoped.register(active, name, source) {
             error!("[tool_libs] failed to install '{name}' for Twin: {error}");

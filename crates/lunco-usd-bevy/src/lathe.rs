@@ -69,7 +69,6 @@
 //! ROUND instead of an octagon. Dropping those weights turns a 0.58 m rim into a
 //! 0.62 m bulge at the diagonals; see the rationality tests in [`crate::nurbs`].
 
-use crate::read::UsdRead;
 use bevy::prelude::*;
 
 /// √2/2 — the weight on a rational circle's diagonal control points. A quarter
@@ -419,7 +418,7 @@ impl UsdLathe {
 /// `real` throughout, not `scalar::<f64>` — `float lunco:lathe:contour = 0.55` is
 /// the natural authoring and a strict `double` read of it is indistinguishable from
 /// "unauthored", which would silently substitute a default.
-pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> Option<UsdLathe> {
+pub fn read_lathe(reader: &impl crate::UsdRead, path: &openusd::sdf::Path) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
     let p = |name: &str, default: f32, valid: fn(f32) -> bool| -> Option<f32> {
         let value = match reader.real(path, name) {
@@ -494,7 +493,7 @@ pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> O
 /// Read a required standard `NurbsPatch` integer without inventing a sampling
 /// profile when an author omitted or mistyped it.
 pub(crate) fn read_required_nurbs_int(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &openusd::sdf::Path,
     name: &str,
 ) -> Option<usize> {

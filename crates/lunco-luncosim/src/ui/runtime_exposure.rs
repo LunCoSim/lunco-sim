@@ -610,6 +610,17 @@ fn acknowledge_runtime_ui_render_extraction(
         (required_roots, presentation_ready_roots)
     };
 
+    // The acknowledgement exists only for authored surfaces that participate
+    // in offline capture. Normal runtime HUDs are visible without this
+    // cross-world proof, and scenes without an active recording surface have
+    // no presentation contract to validate. Avoid traversing every extracted
+    // UI node in those steady-state frames.
+    if required_roots.is_empty() {
+        render_ack.extracted_revision = 0;
+        render_ack.extracted_surface_count = 0;
+        return;
+    }
+
     let mut extracted_roots = EntityHashSet::default();
     let mut parents = main_world.query::<&ChildOf>();
     for node in &extracted_nodes.uinodes {

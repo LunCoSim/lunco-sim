@@ -301,14 +301,14 @@ fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec
 
 /// The semantic drive facts consumed by `lint_usd`.
 ///
-/// This deliberately calls the same typed USD joint reader that the runtime
+/// This deliberately calls the same composed USD joint reader that the runtime
 /// projection uses. The linter must report the motor model the loader will
 /// actually install, not re-interpret raw `drive:*` attributes through a
 /// second unit-conversion or defaulting path.
 fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
     let mut drives = Vec::new();
     for path in joint_paths {
-        let Some(spec) = crate::read_joint_spec_typed(reader.stage(), path) else {
+        let Some(spec) = crate::read_joint_spec(reader, path) else {
             continue;
         };
         let Some(drive) = spec.drive else {

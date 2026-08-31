@@ -62,8 +62,6 @@ use bevy::log::warn_once;
 use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 
-use crate::read::UsdRead;
-
 /// The stage's declared up axis. USD's default is `Y` (AOUSD); DCC/robotics
 /// stages (Omniverse, Isaac Sim, Blender, ROS) overwhelmingly author `Z`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -140,7 +138,7 @@ impl StageMetrics {
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
     ///   one-shot warning naming what is being converted, so an unexpected
     ///   Omniverse/Isaac stage is visible rather than merely handled.
-    pub fn from_reader(reader: &crate::StageView<'_>) -> Result<Self, StageMetricsError> {
+    pub fn from_reader(reader: &dyn crate::read::UsdReadObject) -> Result<Self, StageMetricsError> {
         let up_axis = match reader.stage_metadata_value("upAxis") {
             None => UpAxis::Y,
             Some(value) => match value.as_str().map(str::to_string).as_deref() {
@@ -876,7 +874,7 @@ impl ConventionTransform {
 /// field reads); the decoders call it per prim rather than threading a gate
 /// through every signature.
 pub fn stage_convention(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
 ) -> Result<ConventionTransform, StageMetricsError> {
     Ok(ConventionTransform::from_stage_metrics(
         &StageMetrics::from_reader(reader)?,

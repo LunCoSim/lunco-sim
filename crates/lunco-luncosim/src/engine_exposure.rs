@@ -25,7 +25,8 @@ use lunco_cosim::SimComponent;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
+use lunco_usd_bevy::read::UsdReadObject;
+use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdStageAsset};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
@@ -849,6 +850,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
     orbital_pin: Option<Res<'w, OrbitalViewPin>>,
+    stages: Res<'w, Assets<UsdStageAsset>>,
     canonical: NonSend<'w, CanonicalStages>,
 }
 
@@ -943,6 +945,7 @@ pub(crate) fn publish_exposure(
             &mut runtime.exposures,
             &runtime.selected,
             &queries.usd_paths,
+            &runtime.stages,
             &runtime.canonical,
         );
         publish_control_exposures(
@@ -958,6 +961,7 @@ pub(crate) fn publish_exposure(
             &runtime.rotation,
             &queries.spatial,
             &queries.usd_paths,
+            &runtime.stages,
             &runtime.canonical,
         );
         publish_celestial_capability(
@@ -1045,6 +1049,7 @@ pub(crate) fn publish_exposure(
         &mut runtime.exposures,
         &runtime.selected,
         &queries.usd_paths,
+        &runtime.stages,
         &runtime.canonical,
     );
     publish_control_exposures(
@@ -1060,6 +1065,7 @@ pub(crate) fn publish_exposure(
         &runtime.rotation,
         &queries.spatial,
         &queries.usd_paths,
+        &runtime.stages,
         &runtime.canonical,
     );
     publish_celestial_capability(
@@ -1104,6 +1110,7 @@ fn publish_lunica_schema_exposure(
     exposures: &mut EngineExposures,
     selected: &SelectedEntities,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> bool {
     let mut ui = exposures.writer("lunica-schema");
@@ -1130,14 +1137,15 @@ fn publish_lunica_schema_exposure(
     let Ok((_, root_path)) = q_paths.get(root) else {
         return false;
     };
-    let Some(stage) = canonical.get(root_path.stage_handle.id()) else {
+    let Some(stage_asset) = stages.get(&root_path.stage_handle) else {
         return false;
     };
+    let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
+    let reader: &dyn UsdReadObject = &reader;
     let Ok(root_sdf) = SdfPath::new(&root_path.path) else {
         return false;
     };
-    let view = stage.view();
-    if view.boolean(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
+    if reader.boolean(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
         return false;
     }
 
@@ -1152,15 +1160,15 @@ fn publish_lunica_schema_exposure(
 
     let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
     let mut cards = Vec::new();
-    for path in view.prim_paths() {
+    for path in reader.prim_paths() {
         let path_text = path.to_string();
         if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
             continue;
         }
-        if !view.is_active(&path) || view.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
+        if !reader.is_active(&path) || reader.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
             continue;
         }
-        let title = view
+        let title = reader
             .text(&path, "ui:displayName")
             .filter(|text| !text.trim().is_empty())
             .unwrap_or_else(|| {
@@ -1174,14 +1182,12 @@ fn publish_lunica_schema_exposure(
         cards.push(SchemaCard {
             path: path_text,
             title,
-            role: view
+            role: reader
                 .text(&path, "lunco:ui:schemaRole")
                 .filter(|text| !text.trim().is_empty())
                 .unwrap_or_else(|| "Connected USD block".to_owned()),
-            column: view
-                .scalar::<i32>(&path, "lunco:ui:schemaColumn")
-                .unwrap_or(0),
-            row: view.scalar::<i32>(&path, "lunco:ui:schemaRow").unwrap_or(0),
+            column: reader.integer(&path, "lunco:ui:schemaColumn").unwrap_or(0),
+            row: reader.integer(&path, "lunco:ui:schemaRow").unwrap_or(0),
         });
     }
     cards.sort_by_key(|card| (card.column, card.row, card.path.clone()));
@@ -1212,11 +1218,11 @@ fn publish_lunica_schema_exposure(
         let Ok(target) = SdfPath::new(&card.path) else {
             continue;
         };
-        for attr in view.attr_names(&target) {
+        for attr in reader.attr_names(&target) {
             if !attr.starts_with("inputs:") {
                 continue;
             }
-            for source in view.connections(&target, &attr) {
+            for source in reader.connections(&target, &attr) {
                 let Some((source_prim, _)) = source.rsplit_once('.') else {
                     continue;
                 };
@@ -1263,9 +1269,10 @@ fn publish_control_exposures(
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) {
-    let mut roots = authored_control_roots(q_paths, canonical);
+    let mut roots = authored_control_roots(q_paths, stages, canonical);
     roots.sort_by_key(|(_, column)| *column);
 
     publish_selected_control_exposure(
@@ -1283,6 +1290,7 @@ fn publish_control_exposures(
         q_rotation,
         q_spatial,
         q_paths,
+        stages,
         canonical,
     );
     publish_selected_control_exposure(
@@ -1300,6 +1308,7 @@ fn publish_control_exposures(
         q_rotation,
         q_spatial,
         q_paths,
+        stages,
         canonical,
     );
 }
@@ -1312,22 +1321,24 @@ fn publish_control_exposures(
 /// vehicles.
 fn authored_control_roots(
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Vec<(Option<Entity>, i32)> {
     let mut roots = Vec::new();
     for (entity, prim_path) in q_paths.iter() {
-        let Some(stage) = canonical.get(prim_path.stage_handle.id()) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
+        let (reader, _generation) = canonical.reader_for(prim_path.stage_handle.id(), stage_asset);
+        let reader: &dyn UsdReadObject = &reader;
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
-        let view = stage.view();
-        if view.boolean(&path, "lunco:ui:controlHud") != Some(true) {
+        if reader.boolean(&path, "lunco:ui:controlHud") != Some(true) {
             continue;
         }
-        let column = view
-            .scalar::<i32>(&path, "lunco:ui:controlHudColumn")
+        let column = reader
+            .integer(&path, "lunco:ui:controlHudColumn")
             .unwrap_or(0);
         roots.push((Some(entity), column));
     }
@@ -1344,25 +1355,27 @@ fn authored_target_positions(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<(lunco_core::coords::GridPos, lunco_core::coords::GridPos)> {
     let (_, root_path) = q_paths.get(root).ok()?;
-    let stage = canonical.get(root_path.stage_handle.id())?;
-    let view = stage.view();
+    let stage_asset = stages.get(&root_path.stage_handle)?;
+    let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
+    let reader: &dyn UsdReadObject = &reader;
     let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
 
     // The guidance boundary is selected by its authored schema column. Its
     // target is then read from the real USD connection, so neither a vehicle
     // path nor a target name is embedded in the producer.
-    let mut guidance_paths: Vec<_> = view
+    let mut guidance_paths: Vec<_> = reader
         .prim_paths()
         .into_iter()
         .filter(|path| {
             let path_text = path.to_string();
             path_text.starts_with(&root_prefix)
-                && view.is_active(path)
-                && view.boolean(path, "lunco:ui:schemaNode") == Some(true)
-                && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
+                && reader.is_active(path)
+                && reader.boolean(path, "lunco:ui:schemaNode") == Some(true)
+                && reader.integer(path, "lunco:ui:schemaColumn") == Some(0)
         })
         .collect();
     guidance_paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -1377,7 +1390,7 @@ fn authored_target_positions(
             return None;
         }
     };
-    let target_source = view
+    let target_source = reader
         .connections(guidance, "inputs:target_x")
         .into_iter()
         .next()?;
@@ -1418,6 +1431,7 @@ fn publish_selected_control_exposure(
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) {
     let mut ui = exposures.writer(namespace);
@@ -1477,7 +1491,7 @@ fn publish_selected_control_exposure(
         if !is_owned_by_vessel(entity, root, q_parents) {
             continue;
         }
-        let authored_outputs = authored_output_names(entity, q_paths, canonical);
+        let authored_outputs = authored_output_names(entity, q_paths, stages, canonical);
         for (name, &value) in &sim.outputs {
             let is_public = authored_outputs
                 .as_ref()
@@ -1545,8 +1559,9 @@ fn publish_selected_control_exposure(
         .copied()
         .zip(outputs.get("range_confidence").copied())
         .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
-    let target_positions =
-        authored_target_positions(root, q_parents, q_grids, q_spatial, q_paths, canonical);
+    let target_positions = authored_target_positions(
+        root, q_parents, q_grids, q_spatial, q_paths, stages, canonical,
+    );
     let target_offset_xy = target_positions.map(|(root_position, target_position)| {
         let offset = root_position.0 - target_position.0;
         (offset.x, offset.z)
@@ -1705,13 +1720,15 @@ fn publish_selected_control_exposure(
 fn authored_output_names(
     entity: Entity,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<std::collections::HashSet<String>> {
     let (_, prim_path) = q_paths.get(entity).ok()?;
-    let stage = canonical.get(prim_path.stage_handle.id())?;
+    let stage_asset = stages.get(&prim_path.stage_handle)?;
+    let (reader, _generation) = canonical.reader_for(prim_path.stage_handle.id(), stage_asset);
+    let reader: &dyn UsdReadObject = &reader;
     let path = SdfPath::new(&prim_path.path).ok()?;
-    let names = stage
-        .view()
+    let names = reader
         .attr_names(&path)
         .into_iter()
         .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))

@@ -48,9 +48,10 @@ use lunco_scripting::{
     world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
+use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
+    UsdInstanceRoot, UsdPrimPath, UsdSceneRoot, UsdStageAsset,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -261,7 +262,7 @@ fn declared_port_name(attr: &str, namespace: &str) -> Option<String> {
 }
 
 fn declared_interface(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     sdf_path: &SdfPath,
 ) -> (HashMap<String, f64>, HashMap<String, f64>) {
     let mut inputs = HashMap::new();
@@ -284,7 +285,7 @@ fn declared_interface(
 /// (for example `controller_inertia_xx`) and a second USD connection to the
 /// same source; there is no backend-precedence alias.
 fn strip_rigid_body_inputs(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     sdf_path: &SdfPath,
     inputs: &mut HashMap<String, f64>,
 ) {
@@ -558,9 +559,9 @@ pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Read the LIVE canonical stage (source of truth), built on demand from
-    // the asset's recipe.
-    mut canonical: NonSendMut<CanonicalStages>,
+    // Initial reads use the worker-produced plan; later authored generations
+    // use the live canonical stage selected by the shared reader boundary.
+    canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut wiring_dirty: ResMut<WiringDirty>,
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
@@ -576,20 +577,7 @@ pub(crate) fn process_usd_cosim_prims(
             continue;
         };
 
-        // Acquire a read source: the live canonical stage, built on demand from
-        // the asset recipe. If it is not available yet the asset is still
-        // loading — retry next frame WITHOUT marking, so the prim stays in the
-        // `Without<UsdSourcedCosim>` query.
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-
         // Mark examined up front so each prim is inspected exactly once.
         // Without this, every *non-cosim* prim (wheels, ground, ramps — the
         // bulk of the scene) failed the active-cosim gate below via the
@@ -600,11 +588,10 @@ pub(crate) fn process_usd_cosim_prims(
         // Safe: every other `UsdSourcedCosim` consumer also requires a
         // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
         // prim never gains, so marking it here matches nothing downstream.
-        // No live stage (asset carries no recipe / build failed) yet — skip,
-        // leaving the prim in the `Without<UsdSourcedCosim>` query to retry.
-        let Some(cs) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
         // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
         // prim between this system's iterate and ApplyDeferred — the canonical
         // race is the moonbase autoload vs a first-run tutorial on web. `.insert`
@@ -613,8 +600,7 @@ pub(crate) fn process_usd_cosim_prims(
         // queued by this pipeline uses the same despawn-safe form for the same
         // reason. See `lunco_usd_bevy::sync_usd_visuals` for the policy.
         commands.entity(entity).try_insert(UsdSourcedCosim);
-        let view = cs.view();
-        if view.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
+        if reader.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
             let declared_outputs = environment_probe_interface();
             commands.entity(entity).try_insert((
                 lunco_environment::EnvironmentProbe,
@@ -631,12 +617,12 @@ pub(crate) fn process_usd_cosim_prims(
             continue;
         }
         let members = members_by_stage.entry(id).or_insert_with(|| {
-            lunco_usd_bevy::program::modelica_network_member_paths(&view)
+            lunco_usd_bevy::program::modelica_network_member_paths(&reader)
                 .into_iter()
                 .collect()
         });
         process_usd_cosim_prim_read(
-            &view,
+            &reader,
             entity,
             prim_path,
             &sdf_path,
@@ -685,7 +671,7 @@ fn reset_python_unavailable(mut diagnostics: ResMut<PythonUnavailablePrograms>) 
 }
 
 fn read_authored_telemetry_string(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn UsdReadObject,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<String>, ()> {
@@ -700,7 +686,7 @@ fn read_authored_telemetry_string(
 }
 
 fn read_authored_telemetry_real(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn UsdReadObject,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<f64>, ()> {
@@ -746,7 +732,7 @@ fn project_usd_telemetry(
         Without<UsdTelemetryProjected>,
     >,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
+    canonical: NonSend<CanonicalStages>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
     diagnostics: Option<ResMut<RuntimeDiagnostics>>,
 ) {
@@ -806,19 +792,11 @@ fn project_usd_telemetry(
     }
 
     for (entity, prim_path, provenance, gid, is_root) in &pending_query {
-        let Some(recipe) = stages
-            .get(&prim_path.stage_handle)
-            .and_then(|asset| asset.recipe.clone())
-        else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            canonical.get_or_build(id, &recipe);
-        }
-        let Some(stage) = canonical.get(id) else {
-            continue;
-        };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             index.diagnostics.insert(
                 (id, prim_path.path.clone()),
@@ -833,8 +811,7 @@ fn project_usd_telemetry(
             commands.entity(entity).try_insert(UsdTelemetryProjected);
             continue;
         };
-        let view = stage.view();
-        let authored = match read_authored_bool_strict(&view, &path, "lunco:telemetry") {
+        let authored = match read_authored_bool_strict(&reader, &path, "lunco:telemetry") {
             Ok(Some(value)) => value,
             Ok(None) => false,
             Err(_) => {
@@ -858,7 +835,7 @@ fn project_usd_telemetry(
             }
         };
         if authored {
-            let target_paths = view.rel_targets(&path, "lunco:telemetry:target");
+            let target_paths = reader.rel_targets(&path, "lunco:telemetry:target");
             let target_path = match target_paths.as_slice() {
                 [] => {
                     let direct_surface = target_surface_query
@@ -932,10 +909,10 @@ fn project_usd_telemetry(
                 continue;
             };
             let declaration = (|| {
-                let port = read_authored_telemetry_string(&view, &path, "lunco:telemetry:port")?
+                let port = read_authored_telemetry_string(&reader, &path, "lunco:telemetry:port")?
                     .filter(|value| !value.is_empty());
                 let reflect =
-                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:reflect")?
+                    read_authored_telemetry_string(&reader, &path, "lunco:telemetry:reflect")?
                         .filter(|value| !value.is_empty());
                 let source = match (port, reflect) {
                     (Some(port), _) => ChannelSource::Port(port),
@@ -949,38 +926,42 @@ fn project_usd_telemetry(
                     }
                     ChannelSource::Diagnostic(path) => path,
                 };
-                let name = read_authored_telemetry_string(&view, &path, "lunco:telemetry:name")?
+                let name = read_authored_telemetry_string(&reader, &path, "lunco:telemetry:name")?
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| source_name.to_string());
-                let display_name = view
+                let display_name = reader
                     .text(&path, "ui:displayName")
                     .filter(|value| !value.trim().is_empty())
                     .map(|value| value.trim().to_owned());
-                let unit = read_authored_telemetry_string(&view, &path, "lunco:telemetry:unit")?
+                let unit = read_authored_telemetry_string(&reader, &path, "lunco:telemetry:unit")?
                     .unwrap_or_default();
                 let description =
-                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:description")?;
+                    read_authored_telemetry_string(&reader, &path, "lunco:telemetry:description")?;
                 let rate_hz =
-                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:rateHz")? {
+                    match read_authored_telemetry_real(&reader, &path, "lunco:telemetry:rateHz")? {
                         None | Some(0.0) => None,
                         Some(value) if value > 0.0 => Some(value),
                         Some(_) => return Err(()),
                     };
                 let enabled =
-                    match read_authored_bool_strict(&view, &path, "lunco:telemetry:enabled") {
+                    match read_authored_bool_strict(&reader, &path, "lunco:telemetry:enabled") {
                         Ok(Some(value)) => value,
                         Ok(None) => true,
                         Err(_) => return Err(()),
                     };
                 let deadband =
-                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:deadband")? {
+                    match read_authored_telemetry_real(&reader, &path, "lunco:telemetry:deadband")?
+                    {
                         None | Some(0.0) => None,
                         Some(value) if value > 0.0 => Some(value),
                         Some(_) => return Err(()),
                     };
-                let retention = match view.scalar::<i64>(&path, "lunco:telemetry:retention") {
+                let retention = match reader
+                    .attr_value(&path, "lunco:telemetry:retention")
+                    .and_then(|value| value.get::<i64>())
+                {
                     Some(0) | None
-                        if !view.has_authored_attribute(&path, "lunco:telemetry:retention") =>
+                        if !reader.has_authored_attribute(&path, "lunco:telemetry:retention") =>
                     {
                         None
                     }
@@ -1085,7 +1066,7 @@ fn project_usd_telemetry(
 /// Reads one cosim prim's attributes and dispatches its model + wires + events
 /// from the live composed [`UsdRead`] surface.
 fn process_usd_cosim_prim_read(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
@@ -1511,7 +1492,7 @@ fn process_usd_cosim_prim_read(
 
 /// A `connectors:*` property declares an acausal Modelica interface. Such a
 /// program is only executable as a member of a component network.
-fn has_acausal_connector(reader: &lunco_usd_bevy::StageView<'_>, sdf_path: &SdfPath) -> bool {
+fn has_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
     reader
         .attr_names(sdf_path)
         .iter()
@@ -1520,10 +1501,7 @@ fn has_acausal_connector(reader: &lunco_usd_bevy::StageView<'_>, sdf_path: &SdfP
 
 /// A bare `connectors:*` property declares an interface; only its connection
 /// list makes an authoring claim about circuit topology.
-fn has_connected_acausal_connector(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    sdf_path: &SdfPath,
-) -> bool {
+fn has_connected_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
     reader.attr_names(sdf_path).iter().any(|name| {
         name.starts_with("connectors:") && !reader.connections(sdf_path, name).is_empty()
     })
@@ -1710,9 +1688,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 } else {
                     warn!(
                         "[usd-cosim] {}: `inputs:{}` is authored but the Modelica source ({}) declares no parameter or input — the value is ignored",
-                        prim_path.path,
-                        name,
-                        model_name,
+                        prim_path.path, name, model_name,
                     );
                 }
             }
@@ -2514,7 +2490,7 @@ const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
 ];
 
 /// Is this `inputs:` port one of [`STRUCTURAL_INPUT_BINDINGS`] on this prim?
-fn is_structural_binding(view: &lunco_usd_bevy::StageView<'_>, sink: &SdfPath, port: &str) -> bool {
+fn is_structural_binding(view: &dyn UsdReadObject, sink: &SdfPath, port: &str) -> bool {
     STRUCTURAL_INPUT_BINDINGS
         .iter()
         .any(|(name, schema)| *name == port && view.has_api_schema(sink, schema))
@@ -2597,7 +2573,7 @@ pub fn rewire_usd_connections(
     // forward onto one has to write there, not onto the producer prim.
     q_outputs: Query<&lunco_core::OutputPorts>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
+    canonical: NonSend<CanonicalStages>,
 ) {
     let client_predicts = matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client));
     let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
@@ -2706,18 +2682,11 @@ pub fn rewire_usd_connections(
 
     for (entity, prim_path, has_modelica, _, _, wheel_endpoints) in q_all.iter() {
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        let Some(cs) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let view = cs.view();
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let view: &dyn UsdReadObject = &reader;
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
             continue;
         };
@@ -2741,7 +2710,7 @@ pub fn rewire_usd_connections(
         // wire both drove it.
         let members = members_by_stage
             .entry(id)
-            .or_insert_with(|| lunco_usd_bevy::program::modelica_network_member_paths(&view));
+            .or_insert_with(|| lunco_usd_bevy::program::modelica_network_member_paths(view));
         if members.contains(&prim_path.path) {
             continue;
         }
@@ -2822,7 +2791,7 @@ pub fn rewire_usd_connections(
             } else {
                 false
             };
-            if is_structural_binding(&view, &sink_sdf, sink_conn)
+            if is_structural_binding(view, &sink_sdf, sink_conn)
                 && (!matches!(sink_conn, "drive" | "steer") || wheel_source_is_structural)
             {
                 continue;
@@ -2848,8 +2817,8 @@ pub fn rewire_usd_connections(
             // skipping that would leave the island's demand inputs permanently
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
-                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
-                && lunco_usd_bevy::program::is_network_boundary_output(&view, &sink_sdf, &attr)
+                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
+                && lunco_usd_bevy::program::is_network_boundary_output(view, &sink_sdf, &attr)
             {
                 continue;
             }
@@ -2860,16 +2829,16 @@ pub fn rewire_usd_connections(
             // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
             // when the contract arrives.
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
                 && lunco_usd_bevy::program::internal_network_input_source(
-                    &view, &sink_sdf, sink_conn,
+                    view, &sink_sdf, sink_conn,
                 )
                 .is_some()
             {
                 continue;
             }
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_domain_network_root(&view, &sink_sdf)
+                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
                 && !has_modelica
             {
                 continue;
@@ -3327,9 +3296,7 @@ pub(crate) fn seed_usd_input_defaults(
                 } else {
                     warn!(
                         "[usd-cosim] {}: `inputs:{}` is authored but the Modelica model ({}) declares no parameter or input — the value is ignored",
-                        prim_path.path,
-                        port,
-                        sim.model_name,
+                        prim_path.path, port, sim.model_name,
                     );
                 }
             } else if modelica_contract.is_some() {
@@ -4848,6 +4815,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<PythonUnavailablePrograms>()
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
+        .init_resource::<crate::domain_projection::PendingDomainProjections>()
         .init_resource::<crate::domain_projection::SynthesizerRegistry>()
         .init_resource::<UsdTelemetryProjectionIndex>()
         .init_resource::<PendingSceneStageOutcome>()
@@ -5003,14 +4971,21 @@ pub(crate) fn install(app: &mut App) {
     );
     app.add_systems(
         Update,
-        mark_usd_telemetry_projection_index_dirty
+        crate::domain_projection::poll_domain_projection_tasks
             .after(crate::domain_projection::project_domain_islands)
+            .in_set(CosimUpdateSet::Projection),
+    );
+    app.add_systems(
+        Update,
+        mark_usd_telemetry_projection_index_dirty
+            .after(crate::domain_projection::poll_domain_projection_tasks)
             .run_if(telemetry_projection_index_changed)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
         crate::domain_projection::sync_generated_network_documents
+            .after(crate::domain_projection::poll_domain_projection_tasks)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(

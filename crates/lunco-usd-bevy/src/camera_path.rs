@@ -438,6 +438,7 @@ pub fn camera_path_transport(
 ///
 /// Non-curve prims retire from the scan after one look — see [`NotACameraPath`].
 pub fn resolve_camera_paths(
+    stages: Res<Assets<crate::UsdStageAsset>>,
     canonical: NonSend<crate::CanonicalStages>,
     clocks: Option<Res<Clocks>>,
     q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
@@ -449,11 +450,11 @@ pub fn resolve_camera_paths(
 ) {
     let Some(clocks) = clocks else { return };
     for (entity, prim) in q_new.iter() {
-        let Some(cs) = canonical.get(prim.stage_handle.id()) else {
+        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let view = cs.view();
-        let reader = &view;
+        let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
+        let reader = &reader;
         let Ok(path) = crate::SdfPath::new(prim.path.as_str()) else {
             continue;
         };

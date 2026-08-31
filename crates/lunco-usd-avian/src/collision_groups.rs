@@ -51,7 +51,6 @@ use std::collections::{HashMap, HashSet};
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lunco_usd_bevy::{StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 
@@ -109,16 +108,14 @@ pub struct CollisionGroupTable {
 impl CollisionGroupTable {
     /// Read every `PhysicsCollisionGroup` on the stage and resolve merges,
     /// membership and the blocked-pair table.
-    pub fn read(reader: &StageView<'_>) -> Self {
+    pub fn read(reader: &dyn lunco_usd_bevy::read::UsdReadObject) -> Self {
         let mut by_key: HashMap<String, Group> = HashMap::new();
         let mut order: Vec<String> = Vec::new();
 
         let mut paths: Vec<String> = reader
             .prim_paths()
             .into_iter()
-            .filter(|p| {
-                reader.prim_type_name(p).as_deref() == Some(ptok::T_PHYSICS_COLLISION_GROUP)
-            })
+            .filter(|p| reader.type_name(p).as_deref() == Some(ptok::T_PHYSICS_COLLISION_GROUP))
             .map(|p| p.to_string())
             .collect();
         // Deterministic bit assignment: the same stage must produce the same
@@ -323,7 +320,11 @@ impl Group {
     }
 }
 
-fn rel_paths(reader: &StageView<'_>, prim: &SdfPath, rel: &str) -> Vec<String> {
+fn rel_paths(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    prim: &SdfPath,
+    rel: &str,
+) -> Vec<String> {
     reader
         .rel_targets(prim, rel)
         .into_iter()
@@ -350,7 +351,7 @@ impl CollisionGroupTables {
     pub fn get_or_read(
         &mut self,
         stage: AssetId<lunco_usd_bevy::UsdStageAsset>,
-        reader: &StageView<'_>,
+        reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     ) -> &CollisionGroupTable {
         let table = self
             .by_stage

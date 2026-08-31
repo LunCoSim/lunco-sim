@@ -61,6 +61,7 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub mod icons;
 pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
@@ -2983,14 +2984,18 @@ fn sanitize_dock_fractions(dock: &mut DockState<TabId>) {
 #[derive(Resource)]
 struct WorkbenchVisualsCache {
     revision: u64,
+    theme: Arc<lunco_theme::Theme>,
     visuals: egui::Visuals,
+    applied_context_revision: u64,
 }
 
 impl Default for WorkbenchVisualsCache {
     fn default() -> Self {
         Self {
             revision: u64::MAX,
+            theme: Arc::new(lunco_theme::Theme::default()),
             visuals: egui::Visuals::dark(),
+            applied_context_revision: u64::MAX,
         }
     }
 }
@@ -3035,37 +3040,56 @@ fn render_workbench(world: &mut World) {
         gate.mark_rendered();
     }
 
-    let (theme, theme_revision, theme_changed) = {
+    let (theme_revision, theme_changed) = {
         let theme_ref = world
             .get_resource_ref::<lunco_theme::Theme>()
             .expect("WorkbenchPlugin requires ThemePlugin");
-        let snapshot = (*theme_ref).clone();
-        (snapshot, theme_ref.revision(), theme_ref.is_changed())
+        (theme_ref.revision(), theme_ref.is_changed())
     };
-    let visuals = {
+    let cache_needs_refresh = world
+        .get_resource::<WorkbenchVisualsCache>()
+        .is_none_or(|cache| cache.revision != theme_revision);
+    let updated_theme = if theme_changed || cache_needs_refresh {
+        Some(
+            world
+                .get_resource::<lunco_theme::Theme>()
+                .expect("WorkbenchPlugin requires ThemePlugin")
+                .clone(),
+        )
+    } else {
+        None
+    };
+    let theme = {
         let mut cache =
             world.get_resource_or_insert_with::<WorkbenchVisualsCache>(Default::default);
         // The revision is the normal invalidation contract. Bevy change
-        // detection also covers the existing public Theme fields when a
-        // host mutates one directly; that keeps the derived snapshot correct
-        // while those fields remain part of the public resource API.
-        if cache.revision != theme_revision || theme_changed {
-            cache.visuals = theme.to_visuals();
+        // detection also covers the existing public Theme fields when a host
+        // mutates one directly; that keeps the derived snapshot correct while
+        // those fields remain part of the public resource API. Keep the
+        // immutable snapshot in an Arc so a stable frame does not deep-clone
+        // the complete Theme merely to pass it through the exclusive egui
+        // renderer.
+        let theme_changed = cache.revision != theme_revision || theme_changed;
+        if theme_changed {
+            let source = updated_theme
+                .as_ref()
+                .expect("theme changed without a refreshed Theme snapshot");
+            cache.theme = Arc::new(source.clone());
+            cache.visuals = cache.theme.to_visuals();
             cache.revision = theme_revision;
         }
-        cache.visuals.clone()
+        if theme_changed || cache.applied_context_revision != theme_revision {
+            // Context visuals are global egui state. Reapplying the same copy
+            // on every frame needlessly clones and invalidates style state
+            // while the workbench is otherwise only reading the cached
+            // presentation.
+            ctx.set_visuals(cache.visuals.clone());
+            cache.applied_context_revision = theme_revision;
+        }
+        Arc::clone(&cache.theme)
     };
 
-    // Apply theme to the egui ctx itself (not just per-ui) — the
-    // menu bar, status bar, and any other `TopBottomPanel`/`SidePanel`
-    // paint their frame from `ctx.style().visuals.panel_fill`
-    // *before* running the user closure, so a per-ui
-    // `style_mut().visuals = …` assignment lands too late and leaves
-    // chrome panels unstyled (dark in Light mode, etc.). Setting
-    // visuals on the ctx fixes every chrome panel in one shot.
-    ctx.set_visuals(visuals.clone());
-
-    render_layout(&ctx, &mut layout, world, &theme, &visuals);
+    render_layout(&ctx, &mut layout, world, &theme);
 
     world.insert_resource(layout);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
@@ -3628,7 +3652,6 @@ fn render_layout(
     layout: &mut WorkbenchLayout,
     world: &mut World,
     theme: &lunco_theme::Theme,
-    visuals: &egui::Visuals,
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -3801,7 +3824,6 @@ fn render_layout(
         // doesn't read as a thin sliver above thicker rows below.
         .exact_size(titlebar_height)
         .show(&mut viewport_ui, |ui| {
-        ui.style_mut().visuals.clone_from(visuals);
         // egui::MenuBar normally creates an 18px compact row of its own.
         // Make that row use the whole title-bar height before constructing
         // any menu or control, so every response is centred against the same
@@ -4624,7 +4646,6 @@ fn render_layout(
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
     egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
-        ui.style_mut().visuals.clone_from(visuals);
         render_status_bar_inner(ui, world, theme);
     });
 
@@ -4634,7 +4655,6 @@ fn render_layout(
             .resizable(false)
             .exact_size(40.0)
             .show(&mut viewport_ui, |ui| {
-                ui.style_mut().visuals.clone_from(visuals);
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     for label in ["Files", "Parts", "Assets", "Find", "Settings"] {
@@ -4863,7 +4883,6 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -4880,7 +4899,6 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -4896,7 +4914,6 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {

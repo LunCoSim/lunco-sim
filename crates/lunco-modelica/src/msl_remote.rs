@@ -213,58 +213,18 @@ pub fn deserialize_parsed_bundle(
     .map_err(|e| format!("bincode deserialize: {e}"))
 }
 
-/// Untar + parse the compressed **source** bundle (`sources-*.tar.zst`) into the
-/// parsed AST bundle. Each doc is keyed by its root-relative tar path
-/// (`Modelica/…`) — identical to the build-time bundle keys
-/// (`build_msl_assets::rel_key`) — so runtime class resolution matches. This is
-/// the worker's tag-mismatch source recovery (see
-/// `worker_transport::WireMessage::ParseSourceMslCompressed`): a rumoca-version
-/// skew makes the shipped pre-parsed bundle undeserializable, but the `.mo`
-/// sources are still valid and reparse into a fresh, matching bundle.
+/// Extract the generated editor index from a web source bundle without
+/// materialising Modelica ASTs. The worker uses this on the pre-parsed fast
+/// path, where the source archive is otherwise retained only for lazy drill-in.
 #[cfg(target_arch = "wasm32")]
-pub fn parse_source_bundle_to_docs(
+pub fn load_msl_index_from_source_bundle(
     compressed: &[u8],
-) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
-    let files = lunco_assets::web_fetch::unpack_tar_zst(compressed, 2700)?;
-    let mut out = Vec::with_capacity(files.len());
-    let mut failed = 0usize;
-    for (path, content) in files {
-        let uri = lunco_assets::asset_path::slashed(&path);
-        if !uri.ends_with(".mo") {
-            continue;
-        }
-        let Ok(src) = std::str::from_utf8(&content) else {
-            failed += 1;
-            continue;
-        };
-        match rumoca_phase_parse::parse_to_ast(src, &uri) {
-            Ok(def) => out.push((uri, def)),
-            Err(_) => failed += 1,
-        }
-    }
-    if out.is_empty() {
-        return Err(format!(
-            "source bundle produced 0 parsed docs ({failed} failed)"
-        ));
-    }
-    if failed > 0 {
-        bevy::log::warn!(
-            "[MSL] source reparse: {failed} file(s) failed to parse (kept {})",
-            out.len()
-        );
-    }
-    Ok(out)
-}
-
-/// bincode-encode a parsed bundle in the same wire format
-/// [`deserialize_parsed_bundle`] reads — used by the worker to transfer a
-/// freshly-reparsed bundle back to the main thread.
-#[cfg(target_arch = "wasm32")]
-pub fn encode_parsed_bundle(
-    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
-) -> Result<Vec<u8>, String> {
-    bincode::serde::encode_to_vec(docs, bincode::config::standard())
-        .map_err(|e| format!("bincode serialize: {e}"))
+) -> Result<crate::visual_diagram::MslIndex, String> {
+    let files = lunco_assets::web_fetch::unpack_tar_zst(compressed, 1)?;
+    let bytes = files
+        .get(std::path::Path::new("msl_index.json"))
+        .ok_or_else(|| "source bundle has no generated msl_index.json".to_string())?;
+    crate::visual_diagram::decode_msl_index(bytes)
 }
 
 // ─── Chunked main-thread MSL deserialize ──────────────────────────
@@ -496,6 +456,81 @@ pub fn install_global_parsed_msl_pub(
     install_global_parsed_msl(parsed);
 }
 
+#[cfg(target_arch = "wasm32")]
+struct WebMslIndexAssembly {
+    components: Vec<crate::index::ClassEntry>,
+    bundled: Vec<crate::package_tree::types::PackageNode>,
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static WEB_MSL_INDEX: std::cell::RefCell<Option<WebMslIndexAssembly>> =
+        const { std::cell::RefCell::new(None) };
+    static WEB_MSL_INDEX_READY: std::cell::RefCell<Option<crate::visual_diagram::MslIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Receive one bounded editor-index chunk from the Modelica worker. Keeping
+/// chunks on the main side avoids decoding the entire generated index inside
+/// one browser event-loop turn.
+#[cfg(target_arch = "wasm32")]
+pub fn ingest_worker_msl_index_chunk(
+    components: Vec<crate::index::ClassEntry>,
+    bundled: Vec<crate::package_tree::types::PackageNode>,
+    done: bool,
+) {
+    WEB_MSL_INDEX.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let assembly = slot.get_or_insert_with(|| WebMslIndexAssembly {
+            components: Vec::new(),
+            bundled: Vec::new(),
+        });
+        assembly.components.extend(components);
+        assembly.bundled.extend(bundled);
+        if done {
+            let assembly = slot
+                .take()
+                .expect("MSL index assembly disappeared while completing");
+            WEB_MSL_INDEX_READY.with(|ready| {
+                *ready.borrow_mut() = Some(crate::visual_diagram::MslIndex {
+                    components: assembly.components,
+                    bundled: assembly.bundled,
+                });
+            });
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn fail_worker_msl_index(error: String) {
+    WEB_MSL_INDEX.with(|slot| *slot.borrow_mut() = None);
+    bevy::log::error!("[MSL] editor index load failed: {error}");
+}
+
+/// Publish a terminal worker failure to the Bevy-owned MSL state. The worker
+/// callback has no `World` access, so it crosses the same shared slot used by
+/// the fetch task and lets `drain_msl_load_slot` update the resource.
+#[cfg(target_arch = "wasm32")]
+pub fn fail_worker_msl(error: String) {
+    if let Some(slot) = WEB_MSL_SLOT.get() {
+        if let Ok(mut slot) = slot.lock() {
+            slot.pending_parsed_compressed = None;
+            slot.pending_source_compressed = None;
+            slot.pending_state = Some(MslLoadState::Failed(error));
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn drive_web_msl_index(mut commands: Commands) {
+    let index = WEB_MSL_INDEX_READY.with(|ready| ready.borrow_mut().take());
+    let Some(index) = index else { return };
+    if crate::visual_diagram::install_msl_index(index) {
+        bevy::log::info!("[MSL] editor index loaded in bounded worker chunks");
+        commands.trigger(crate::visual_diagram::MslEditorIndexBecameReady);
+    }
+}
+
 /// Web: a Settings action requests one explicit async MSL fetch.
 #[cfg(target_arch = "wasm32")]
 fn kick_web_msl_fetcher(
@@ -549,7 +584,12 @@ impl Plugin for MslRemotePlugin {
             app.add_observer(on_native_msl_index_action);
             app.add_systems(
                 Update,
-                (drain_native_msl_install, drive_native_msl_dataset).chain(),
+                (
+                    drain_native_msl_install,
+                    drive_native_msl_dataset,
+                    drive_native_msl_index,
+                )
+                    .chain(),
             );
         }
 
@@ -587,6 +627,7 @@ impl Plugin for MslRemotePlugin {
 
             if let Some(root) = resolved_root {
                 let count = count_mo_files(&root);
+                let index_present = root.join("msl_index.json").is_file();
                 info!(
                     "[MSL] using on-disk root {} ({count} .mo files)",
                     root.display()
@@ -594,7 +635,8 @@ impl Plugin for MslRemotePlugin {
                 lunco_assets::msl::install_global_msl_sources(sources_with_extras(
                     MslAssetSource::Filesystem(root.clone()),
                 ));
-                if crate::visual_diagram::msl_index_available() {
+                app.insert_resource(NativeMslIndexLoad::new());
+                if index_present {
                     app.insert_resource(MslLoadState::Ready {
                         file_count: count,
                         compressed_bytes: 0,
@@ -627,6 +669,7 @@ impl Plugin for MslRemotePlugin {
         #[cfg(target_arch = "wasm32")]
         {
             let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
+            let _ = WEB_MSL_SLOT.set(slot.clone());
             app.insert_resource(MslLoadState::NotStarted);
             app.insert_resource(MslLoadSlot(slot));
             app.init_resource::<WebMslInstallRequest>();
@@ -636,6 +679,7 @@ impl Plugin for MslRemotePlugin {
                     kick_web_msl_fetcher,
                     drain_msl_load_slot,
                     drive_msl_main_decode,
+                    drive_web_msl_index,
                 )
                     .chain(),
             );
@@ -664,6 +708,23 @@ struct NativeInstallSlotInner {
 struct NativeMslInstallSlot {
     state: NativeInstallSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource)]
+struct NativeMslIndexLoad {
+    task: Option<bevy::tasks::Task<Result<crate::visual_diagram::MslIndex, String>>>,
+    failed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeMslIndexLoad {
+    fn new() -> Self {
+        Self {
+            task: None,
+            failed: false,
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -701,7 +762,7 @@ fn spawn_native_index(
                 return;
             }
 
-            if !completed || !crate::visual_diagram::msl_index_available() {
+            if !completed || !root.join("msl_index.json").is_file() {
                 set_install_state(
                     &slot,
                     MslLoadState::Failed(format!(
@@ -726,11 +787,12 @@ fn spawn_native_index(
 
 #[cfg(target_arch = "wasm32")]
 fn on_msl_install_action(trigger: On<MslInstallAction>, mut request: ResMut<WebMslInstallRequest>) {
-    if matches!(
-        *trigger.event(),
-        MslInstallAction::Install | MslInstallAction::Reinstall
-    ) {
-        request.0 = true;
+    match *trigger.event() {
+        MslInstallAction::Install => request.0 = true,
+        MslInstallAction::Reinstall => {
+            crate::worker_transport::reset_worker_pipeline();
+            request.0 = true;
+        }
     }
 }
 
@@ -797,6 +859,7 @@ fn on_native_msl_index_action(
         bytes_done: 0,
         bytes_total: 0,
     });
+    commands.insert_resource(NativeMslIndexLoad::new());
     commands.insert_resource(native_index_resources(root));
 }
 
@@ -804,6 +867,7 @@ fn on_native_msl_index_action(
 fn drive_native_msl_dataset(
     registry: Option<Res<DatasetRegistry>>,
     slot: Option<Res<NativeMslInstallSlot>>,
+    index_load: Option<Res<NativeMslIndexLoad>>,
     mut state: ResMut<MslLoadState>,
     mut commands: Commands,
 ) {
@@ -850,13 +914,19 @@ fn drive_native_msl_dataset(
             if slot.is_some() {
                 return;
             }
+            // The source can remain usable while the generated editor index
+            // has failed. Preserve that explicit failure until the user asks
+            // for a rebuild; do not relaunch the decoder every frame.
+            if index_load.as_ref().is_some_and(|load| load.failed) {
+                return;
+            }
             let Some(root) = lunco_assets::msl_source_root_path() else {
                 *state = MslLoadState::Failed(
                     "dataset is installed but no Modelica/ tree exists in the cache".into(),
                 );
                 return;
             };
-            if crate::visual_diagram::msl_index_available() {
+            if root.join("msl_index.json").is_file() {
                 lunco_assets::msl::install_global_msl_sources(sources_with_extras(
                     MslAssetSource::Filesystem(root.clone()),
                 ));
@@ -865,6 +935,9 @@ fn drive_native_msl_dataset(
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 };
+                if index_load.is_none() {
+                    commands.insert_resource(NativeMslIndexLoad::new());
+                }
                 return;
             }
             *state = MslLoadState::Loading {
@@ -875,6 +948,60 @@ fn drive_native_msl_dataset(
             commands.insert_resource(native_index_resources(root));
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn drive_native_msl_index(
+    index_load: Option<ResMut<NativeMslIndexLoad>>,
+    state: Option<Res<MslLoadState>>,
+    mut commands: Commands,
+) {
+    use bevy::tasks::futures_lite::future;
+
+    let Some(mut index_load) = index_load else {
+        return;
+    };
+
+    if index_load.failed || crate::visual_diagram::msl_index_available() {
+        return;
+    }
+
+    if index_load.task.is_some() {
+        let result = {
+            let task = index_load
+                .task
+                .as_mut()
+                .expect("MSL index task disappeared while being polled");
+            future::block_on(future::poll_once(task))
+        };
+        let Some(result) = result else {
+            return;
+        };
+        index_load.task = None;
+        match result {
+            Ok(index) => {
+                if crate::visual_diagram::install_msl_index(index) {
+                    bevy::log::info!("[MSL] editor index loaded off-thread");
+                    commands.trigger(crate::visual_diagram::MslEditorIndexBecameReady);
+                }
+            }
+            Err(error) => {
+                index_load.failed = true;
+                bevy::log::error!("[MSL] editor index load failed: {error}");
+            }
+        }
+        return;
+    }
+
+    if !state.is_some_and(|state| state.is_ready()) {
+        return;
+    }
+
+    bevy::log::info!("[MSL] loading editor index off-thread");
+    index_load.task = Some(
+        bevy::tasks::AsyncComputeTaskPool::get()
+            .spawn(async { crate::visual_diagram::load_msl_index_from_assets() }),
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -901,6 +1028,9 @@ fn count_mo_files(root: &std::path::Path) -> usize {
 type SharedSlot = Arc<Mutex<SlotInner>>;
 
 #[cfg(target_arch = "wasm32")]
+static WEB_MSL_SLOT: OnceLock<SharedSlot> = OnceLock::new();
+
+#[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct SlotInner {
     /// Latest state the fetcher has reported. The drain system replaces
@@ -913,10 +1043,6 @@ struct SlotInner {
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
     pending_source_compressed: Option<(Vec<u8>, lunco_assets::msl::MslBundleEntry)>,
-    /// Raw **compressed** `sources-*.tar.zst` bytes to untar + reparse **in the
-    /// worker** when the pre-parsed bundle tag does not match. Drained by
-    /// [`drain_msl_load_slot`].
-    pending_source_parse_compressed: Option<Vec<u8>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -952,36 +1078,15 @@ fn drain_msl_load_slot(slot: Res<MslLoadSlot>, mut state: ResMut<MslLoadState>) 
         // autocomplete) — see `ingest_worker_decoded_msl`.
         let shipped = crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
         if shipped == 0 {
-            inner.pending_state = Some(MslLoadState::Failed(
-                "Modelica Web Worker is unavailable; rebuild the browser worker bundle and retry"
-                    .into(),
-            ));
-        }
-        if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
-            stash_compressed_source(sbytes, smeta);
-        }
-        return;
-    }
-    // Tag-mismatch source recovery: a compressed SOURCE bundle is waiting to
-    // be reparsed. The worker untars and parses it, then the main thread
-    // ingests only the transferred serialized AST bytes.
-    if inner.pending_source_parse_compressed.is_some() {
-        let shipped = crate::worker_transport::parse_msl_source_in_worker(
-            inner.pending_source_parse_compressed.as_ref().unwrap(),
-        );
-        if shipped > 0 {
-            inner.pending_source_parse_compressed = None;
-            // Keep the compressed source for lazy drill-in / msl_index unpack.
-            if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
-                stash_compressed_source(sbytes, smeta);
-            }
+            let error =
+                "Modelica Web Worker is unavailable; rebuild the browser worker bundle".to_string();
+            crate::worker_transport::fail_worker_pipeline(error.clone());
+            inner.pending_state = Some(MslLoadState::Failed(error));
+            inner.pending_source_compressed = None;
             return;
         }
-        inner.pending_source_parse_compressed = None;
-        inner.pending_state = Some(MslLoadState::Failed(
-            "Modelica Web Worker is unavailable for the MSL source bundle; retry after rebuilding the browser worker bundle".into(),
-        ));
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+            crate::worker_transport::load_msl_index_in_worker(&sbytes);
             stash_compressed_source(sbytes, smeta);
         }
         return;
@@ -1042,6 +1147,7 @@ mod web {
         match try_fetch(&slot, &settings).await {
             Ok(()) => {}
             Err(e) => {
+                crate::worker_transport::fail_worker_pipeline(e.clone());
                 if let Ok(mut s) = slot.lock() {
                     s.pending_state = Some(MslLoadState::Failed(e));
                 }
@@ -1079,14 +1185,13 @@ mod web {
             ));
         }
 
-        // ── Sources blob (small, always shipped). Used by the editor
-        // ── for opening MSL files and for worker-owned source recovery when
-        // ── the parsed bundle is unavailable.
+        // ── Sources blob (small, always shipped). Used by the editor for
+        // ── opening MSL files after the runtime artifact is installed.
         let bundle_path = format!("msl/{}", manifest.sources.filename);
         let phase1 = bundle_fetch_phase(&bundle_path).await;
         // Per-blob progress: this download sweeps 0..its own size, so the bar
-        // can't stall at a summed fraction (the old bug: phase 1 only reached
-        // the sources/total slice, then relied on phase 2 ticking to move).
+        // Each blob reports progress over its own byte range, so the bar
+        // advances continuously through both downloads.
         // `total` comes from the fetcher — Content-Length, else the expected
         // size passed below (a Cache-Storage hit often omits Content-Length).
         let sources_total = manifest.sources.compressed_bytes;
@@ -1119,61 +1224,48 @@ mod web {
             ));
         }
 
-        // ── Pre-parsed bundle (when the manifest advertises one AND it was
-        // ── produced by a rumoca whose `StoredDefinition` layout matches
-        // ── ours). This is the fast path: bincode-decode → install directly
-        // ── into rumoca, no per-file parse. A tag mismatch means the bundle
-        // ── would deserialize into garbage/error, so we skip it and let the
-        // ── source recovery (below) parse from `.mo` instead.
-        let tag_ok = manifest.rumoca_artifact_tag.as_deref()
-            == Some(lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG);
-        if manifest.parsed.is_some() && !tag_ok {
-            bevy::log::warn!(
-                "[MSL] parsed bundle tag {:?} != expected `{}`; ignoring fast path, \
-                 parsing source instead (rebuild the bundle with the current rumoca)",
+        if manifest.rumoca_artifact_tag != lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG {
+            return Err(format!(
+                "MSL parsed artifact tag `{}` does not match runtime `{}`; rebuild the MSL bundle",
                 manifest.rumoca_artifact_tag,
                 lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG,
-            );
+            ));
         }
-        let parsed_bytes = if let Some(parsed_meta) = manifest.parsed.as_ref().filter(|_| tag_ok) {
-            let parsed_path = format!("msl/{}", parsed_meta.filename);
-            let phase2 = bundle_fetch_phase(&parsed_path).await;
-            // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.
-            let parsed_total = parsed_meta.compressed_bytes;
-            let progress_slot2 = slot.clone();
-            let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
-                if let Ok(mut s) = progress_slot2.lock() {
-                    s.pending_state = Some(MslLoadState::Loading {
-                        phase: phase2,
-                        bytes_done: done as u64,
-                        bytes_total: total as u64,
-                    });
-                }
-            });
-
-            let bytes = web_fetch::fetch_cached_with_progress(
-                CACHE_NAME,
-                &parsed_path,
-                parsed_total,
-                progress_cb2.as_ref().unchecked_ref(),
-                settings,
-            )
-            .await
-            .map_err(|e| format!("parsed bundle fetch: {e}"))?;
-            if bytes.len() as u64 != parsed_meta.compressed_bytes {
-                return Err(format!(
-                    "parsed bundle size {} != manifest {}",
-                    bytes.len(),
-                    parsed_meta.compressed_bytes
-                ));
+        let parsed_meta = &manifest.parsed;
+        let parsed_path = format!("msl/{}", parsed_meta.filename);
+        let phase2 = bundle_fetch_phase(&parsed_path).await;
+        // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.
+        let parsed_total = parsed_meta.compressed_bytes;
+        let progress_slot2 = slot.clone();
+        let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
+            if let Ok(mut s) = progress_slot2.lock() {
+                s.pending_state = Some(MslLoadState::Loading {
+                    phase: phase2,
+                    bytes_done: done as u64,
+                    bytes_total: total as u64,
+                });
             }
-            Some(bytes)
-        } else {
-            None
-        };
+        });
 
-        // The current blobs are now (re)cached. Evict any superseded
-        // content-hashed bundles a previous MSL release left behind so the
+        let parsed_bytes = web_fetch::fetch_cached_with_progress(
+            CACHE_NAME,
+            &parsed_path,
+            parsed_total,
+            progress_cb2.as_ref().unchecked_ref(),
+            settings,
+        )
+        .await
+        .map_err(|e| format!("parsed bundle fetch: {e}"))?;
+        if parsed_bytes.len() as u64 != parsed_meta.compressed_bytes {
+            return Err(format!(
+                "parsed bundle size {} != manifest {}",
+                parsed_bytes.len(),
+                parsed_meta.compressed_bytes
+            ));
+        }
+
+        // The current blobs are now cached. Evict superseded content-hashed
+        // bundles so the
         // browser cache doesn't grow without bound. Best-effort — never fails
         // the load.
         {
@@ -1182,58 +1274,24 @@ mod web {
             let mut keep = HashSet::new();
             keep.insert("manifest.json".to_string());
             keep.insert(manifest.sources.filename.clone());
-            if let Some(p) = manifest.parsed.as_ref() {
-                keep.insert(p.filename.clone());
-            }
+            keep.insert(manifest.parsed.filename.clone());
             web_fetch::prune_cache(CACHE_NAME, &keep).await;
         }
 
         // Hand the COMPRESSED blobs off WITHOUT decoding them here — this runs
         // on the main-thread event loop, so decompress/untar/decode would
-        // freeze the page (the original bug). Two paths:
-        //   • fast path (manifest advertises a pre-parsed bundle): stash both
-        //     compressed blobs. The drain ships the parsed one to the worker
-        //     (off-thread decode) and starts the chunked main-thread deserialize;
-        //     the source bundle is untarred lazily on first drill-in.
-        //   • source-bundle path (no pre-parsed bundle): no worker decode
-        //     possible, so untar the source here and let the per-frame
-        //     chunked parser build the AST.
-        if parsed_bytes.is_some() {
-            set_state(
-                slot,
-                MslLoadState::Loading {
-                    phase: MslLoadPhase::Parsing,
-                    bytes_done: 0,
-                    bytes_total: manifest
-                        .parsed
-                        .as_ref()
-                        .map(|p| p.file_count as u64)
-                        .unwrap_or(0),
-                },
-            );
-            if let Ok(mut s) = slot.lock() {
-                s.pending_parsed_compressed = parsed_bytes;
-                s.pending_source_compressed = Some((sources_bytes, manifest.sources.clone()));
-            }
-            return Ok(());
-        }
-
-        // ── Source recovery (tag mismatch / no pre-parsed bundle): do NOT untar on this
-        // ── async task — a synchronous untar on the single wasm thread blocks the
-        // ── event loop (the "stall then finish" freeze). Stash the compressed
-        // ── source; `drain_msl_load_slot` ships it to the worker for off-thread
-        // ── untar + reparse (keys match the build-time bundle). Also stash it for lazy
-        // ── drill-in unpack.
+        // freeze the page. The parsed artifact is decoded by the worker and
+        // the source bundle remains compressed until the editor opens a file.
         set_state(
             slot,
             MslLoadState::Loading {
-                phase: MslLoadPhase::Decompressing,
+                phase: MslLoadPhase::Parsing,
                 bytes_done: 0,
-                bytes_total: manifest.sources.uncompressed_bytes,
+                bytes_total: manifest.parsed.file_count as u64,
             },
         );
         if let Ok(mut s) = slot.lock() {
-            s.pending_source_parse_compressed = Some(sources_bytes.clone());
+            s.pending_parsed_compressed = Some(parsed_bytes);
             s.pending_source_compressed = Some((sources_bytes, manifest.sources.clone()));
         }
 

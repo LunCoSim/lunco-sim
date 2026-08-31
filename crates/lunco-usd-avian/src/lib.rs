@@ -57,7 +57,7 @@ use lunco_core::coords::GridPos;
 pub use lunco_usd_bevy::{effective_purpose, Purpose};
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, ShapeDims, StageView, TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot,
+    usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot,
     UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
@@ -70,7 +70,6 @@ use openusd::schemas::physics::tokens as ptok;
 // `physics:type` is a schema token with a schema enum — take openusd's rather than
 // re-spelling `"force"`/`"acceleration"` here.
 pub use openusd::schemas::physics::DriveType;
-use openusd::usd::Stage;
 
 pub mod big_space_bridge;
 pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
@@ -602,7 +601,7 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 ///
 /// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
 fn collect_child_colliders_from_usd(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     parent_path: &SdfPath,
 ) -> Result<Vec<(Position, Rotation, Collider)>, TransformReadError> {
     let mut shapes = Vec::new();
@@ -743,7 +742,7 @@ fn collect_child_colliders_from_usd(
 ///   collider piece of the chassis compound — matches the same skip in
 ///   `process_usd_avian_prims`.
 fn gather_compound_candidates(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     acc: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
@@ -800,7 +799,7 @@ fn gather_compound_candidates(
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 fn build_collider_from_usd(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Option<Collider>, TransformReadError> {
     let scale =
@@ -813,7 +812,7 @@ fn build_collider_from_usd(
 /// transform; compound children obtain it from [`gather_compound_candidates`],
 /// because intermediate USD Xforms have no corresponding Avian collider entity.
 fn build_collider_from_usd_at_scale(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
     scale: Vec3,
 ) -> Option<Collider> {
@@ -835,7 +834,7 @@ fn build_collider_from_usd_at_scale(
         // `meshSimplification`) = exact triangle mesh — correct for STATIC terrain.
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
-        // the standard token so it works off either the live stage or the flatten;
+        // the standard token so it works through either composed reader;
         // an authored approximation that this adapter cannot realize is rejected.
         // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
         // it only means anything when that schema is applied.
@@ -912,7 +911,7 @@ fn apply_collider_scale(mut collider: Collider, scale: Vec3) -> Collider {
 fn add_collider_from_usd(
     commands: &mut Commands,
     entity: Entity,
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), TransformReadError> {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path)? {
@@ -934,9 +933,13 @@ fn log_malformed_collider_transform(sdf_path: &SdfPath, error: &TransformReadErr
 /// One spelling of "this is a body": an applied `PhysicsRigidBodyAPI`. Nothing else
 /// makes a prim a body.
 ///
-/// Walks the composed prim hierarchy, so it answers the same way off the live stage
-/// or the flatten, and independently of where the prim happens to sit in the ECS.
-fn has_rigid_body_ancestor(reader: &StageView<'_>, sdf_path: &SdfPath) -> bool {
+/// Walks the composed prim hierarchy through the shared reader boundary, so it
+/// answers the same way for the prepared initial plan and the live edited stage,
+/// independently of where the prim happens to sit in the ECS.
+fn has_rigid_body_ancestor(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    sdf_path: &SdfPath,
+) -> bool {
     let mut cur = sdf_path.parent();
     while let Some(p) = cur {
         if p.is_abs_root() {
@@ -958,7 +961,7 @@ fn has_rigid_body_ancestor(reader: &StageView<'_>, sdf_path: &SdfPath) -> bool {
 ///
 /// A collider that DOES have a rigid-body ancestor is not a body — it is folded
 /// into that ancestor's compound shape — so it is deliberately not one here.
-fn is_avian_body(reader: &StageView<'_>, path: &SdfPath) -> bool {
+fn is_avian_body(reader: &dyn lunco_usd_bevy::read::UsdReadObject, path: &SdfPath) -> bool {
     reader.has_api_schema(path, ptok::API_RIGID_BODY)
         || reader.has_api_schema(path, "LunCoTerrainAPI")
         || (reader.has_api_schema(path, ptok::API_COLLISION)
@@ -982,11 +985,14 @@ fn is_avian_body(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// the path names nothing that is or sits under a
 /// body, which stays an unresolved joint and still warns.
 ///
-/// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec_typed`
+/// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec`
 /// derives an unauthored anchor from the two body paths ([`derive_joint_anchor`]),
 /// and that derivation must run against the frame of the body the joint is really
 /// built on. Resolving later would leave the anchor expressed in the wrong frame.
-fn nearest_body_path(reader: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
+fn nearest_body_path(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+) -> Option<SdfPath> {
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
         if p.is_abs_root() {
@@ -1005,7 +1011,10 @@ fn nearest_body_path(reader: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> 
 /// component; the joint contract attaches to that child's nearest body ancestor.
 /// Keep this resolution in the Avian USD reader so topology consumers cannot
 /// accidentally compare an unresolved authored path with a resolved ECS path.
-pub fn resolve_joint_body_path(reader: &StageView<'_>, target: &str) -> Option<String> {
+pub fn resolve_joint_body_path(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    target: &str,
+) -> Option<String> {
     let path = SdfPath::new(target).ok()?;
     nearest_body_path(reader, &path).map(|resolved| resolved.to_string())
 }
@@ -1154,10 +1163,10 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 ///
 /// Observer: fires once per entity, the moment the USD structural projection
 /// translates the prim (signalled by inserting `UsdVisualSynced`). CPU visual
-/// meshes may still be streaming; physics reads the canonical USD definition
-/// directly and does not depend on `Mesh3d`.
-/// By that point the stage is loaded and `Transform` is present — safe to read
-/// schemas and attach physics components in one step.
+/// meshes may still be streaming; physics reads the worker-produced composed
+/// projection plan and does not depend on `Mesh3d` or a live `Stage`.
+/// By that point the plan is committed and the same reader contract used by
+/// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdVisualSynced>,
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
@@ -1166,7 +1175,7 @@ fn process_usd_avian_prims(
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut group_tables: ResMut<CollisionGroupTables>,
     mut commands: Commands,
 ) {
@@ -1199,33 +1208,21 @@ fn process_usd_avian_prims(
         return;
     };
 
-    // Ph0′ CUTOVER: read the LIVE canonical stage — the source of truth — built
-    // on demand from the asset's recipe so it is available regardless of system
-    // ordering. The body comes off the composed `Stage` directly.
     let id = prim_path.stage_handle.id();
-    if canonical.get(id).is_none() {
-        if let Some(recipe) = stages
-            .get(&prim_path.stage_handle)
-            .and_then(|a| a.recipe.clone())
-        {
-            canonical.get_or_build(id, &recipe);
-        }
-    }
-    let Some(cs) = canonical.get(id) else {
-        // no live stage (asset carries no recipe / build failed) — skip
+    let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
+    let (reader, _generation) = canonical.reader_for(id, stage_asset);
     bevy::log::debug!(
-        "[canonical] avian extract off LIVE stage: {}",
+        "[canonical] avian extract from composed reader: {}",
         prim_path.path
     );
 
     // Collision groups are a STAGE-wide statement read one prim at a time, so the
     // table is resolved once per stage and cached; recomputing it per prim would
     // be quadratic in prim count on a scene that authors any group at all.
-    let view = cs.view();
-    let groups = group_tables.get_or_read(id, &view).clone();
-    extract_avian_prim(&view, entity, &sdf_path, &groups, &mut commands);
+    let groups = group_tables.get_or_read(id, &reader).clone();
+    extract_avian_prim(&reader, entity, &sdf_path, &groups, &mut commands);
 }
 
 /// Set the world's gravity from a composed `UsdPhysicsScene` prim.
@@ -1241,15 +1238,15 @@ fn process_usd_avian_prims(
 /// scene author only the half it cares about — a lunar scene names 1.62 and says
 /// nothing about direction.
 fn read_physics_scene_gravity(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(f64, DVec3), &'static str> {
     let convention = lunco_usd_bevy::stage_convention(reader)
         .map_err(|_| "stage convention metadata is invalid")?;
-    let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
+    let magnitude = match reader.real(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
         Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
         Some(value) if value.is_finite() => {
-            let converted = convention.length(value as f64);
+            let converted = convention.length(value);
             if !converted.is_finite() {
                 return Err("gravity magnitude is not finite after stage-unit conversion");
             }
@@ -1261,8 +1258,8 @@ fn read_physics_scene_gravity(
         }
         None => return Err("gravity magnitude has an unsupported authored value type"),
     };
-    let raw_direction = match reader.value::<[f32; 3]>(sdf_path, ptok::A_GRAVITY_DIRECTION) {
-        Some(value) => DVec3::new(value[0] as f64, value[1] as f64, value[2] as f64),
+    let raw_direction = match reader.vec3_f64(sdf_path, ptok::A_GRAVITY_DIRECTION) {
+        Some(value) => DVec3::from_array(value),
         None if !reader.has_authored_attribute(sdf_path, ptok::A_GRAVITY_DIRECTION) => DVec3::ZERO,
         None => return Err("gravity direction has an unsupported authored value type"),
     };
@@ -1281,7 +1278,7 @@ fn read_physics_scene_gravity(
 }
 
 fn apply_physics_scene_gravity(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
@@ -1330,11 +1327,11 @@ fn apply_physics_scene_gravity(
     });
 }
 
-/// Map a single composed USD prim to its avian physics components, read off the
-/// live canonical [`StageView`](lunco_usd_bevy::StageView). Split out of the
-/// observer so the read body can be driven directly by tests.
+/// Map a single composed USD prim to its Avian physics components through the
+/// shared reader boundary. Split out of the observer so the read body can be
+/// driven directly by tests.
 fn extract_avian_prim(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     groups: &CollisionGroupTable,
@@ -1595,7 +1592,7 @@ fn apply_collision_groups(
 /// renderer places it. An omitted xform stack composes as USD identity; malformed
 /// authored data is returned as an error.
 pub fn world_transform(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
     let mut chain = Vec::new();
@@ -1609,7 +1606,7 @@ pub fn world_transform(
     }
     let mut acc = Transform::IDENTITY;
     for p in chain.iter().rev() {
-        if let Some(local) = local_transform_at(reader, p, 0.0)? {
+        if let Some(local) = reader.local_transform_at(p, 0.0)? {
             acc = acc.mul_transform(local);
         }
     }
@@ -1621,7 +1618,7 @@ pub fn world_transform(
 /// Avian's runtime velocity components are world-frame. Keep that rotation in
 /// one helper so linear and angular initial state share the same convention.
 fn local_vector_to_world(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     local: DVec3,
 ) -> Result<DVec3, TransformReadError> {
@@ -1635,7 +1632,7 @@ fn local_vector_to_world(
 /// composed USD hierarchy so nested component references and intermediate Xforms
 /// remain valid without repeating the mount position in another description.
 pub fn transform_in_body_frame(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     body_path: &SdfPath,
     prim_path: &SdfPath,
 ) -> Option<Transform> {
@@ -1659,7 +1656,7 @@ pub fn transform_in_body_frame(
 ///
 /// This lets an asset author each part's placement ONCE — as the prim's
 /// `xformOp:translate` — instead of typing it again as the joint's `physics:localPos0`.
-/// `read_joint_spec_typed` calls it only when the anchor is UNAUTHORED, so authored
+/// `read_joint_spec` calls it only when the anchor is UNAUTHORED, so authored
 /// joints are untouched (no regression) and hand-tuned anchors always win.
 ///
 /// Uses WORLD poses, not an ancestor walk, so it is correct for **sibling** joints
@@ -1669,7 +1666,11 @@ pub fn transform_in_body_frame(
 /// body0's rotation frame (avian applies a body's rotation — not its scale — to a
 /// local anchor). Relative, hence invariant under the reference/path-translation that
 /// drops a shared component onto each rover root.
-fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Option<(DVec3, DVec3)> {
+fn derive_joint_anchor(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    body0: &str,
+    body1: &str,
+) -> Option<(DVec3, DVec3)> {
     let p0 = SdfPath::new(body0).ok()?;
     let p1 = SdfPath::new(body1).ok()?;
     let w0 = world_transform(reader, &p0).ok()?;
@@ -1687,7 +1688,10 @@ fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Opti
 /// `lunco-usd-sim`; the generic USD joint projector must not claim them. This
 /// is resolved from the authored body relationship and applied wheel schema,
 /// never from a prim name or a joint-name convention.
-fn joint_targets_simulated_wheel(reader: &StageView<'_>, path: &SdfPath) -> bool {
+fn joint_targets_simulated_wheel(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+) -> bool {
     let targets = reader.rel_targets(path, "physics:body1");
     if targets.len() != 1 {
         return false;
@@ -1696,22 +1700,22 @@ fn joint_targets_simulated_wheel(reader: &StageView<'_>, path: &SdfPath) -> bool
         .is_some_and(|body| reader.has_api_schema(&body, "PhysxVehicleWheelAPI"))
 }
 
-/// Read the STANDARD UsdPhysics joint at `path` off the LIVE composed stage via
-/// openusd's typed schema (`openusd::schemas::physics`) into the deferred
-/// [`PendingUsdJoint`]. The typed schema wraps a live `Prim`, so it reads the
-/// composed opinion directly — canonical stage only, no flattened `sdf::Data`.
+/// Read the STANDARD UsdPhysics joint at `path` through the shared composed
+/// reader into the deferred [`PendingUsdJoint`]. The reader is either the
+/// worker-produced initial projection plan or the live reader for an authored
+/// generation; the joint contract is identical in both cases.
 ///
-/// This replaces the ad-hoc raw-attribute joint reader with the USD standard:
-/// concrete joint subtypes ([`RevoluteJoint`](openusd::schemas::physics::RevoluteJoint)
-/// …), shared `JointBase` body/anchor relationships, `UsdPhysicsDriveAPI`, and
-/// per-DOF `UsdPhysicsLimitAPI` for the generic-D6 reduction. Returns `None` when
+/// This reads the USD standard concrete joint type, shared body/frame
+/// relationships, `UsdPhysicsDriveAPI`, and per-DOF `UsdPhysicsLimitAPI` for
+/// the generic-D6 reduction. Returns `None` when
 /// `path` is not a UsdPhysics joint, is missing a body ref, or targets a wheel
 /// (owned by `lunco-usd-sim`). Revolute limits are converted degrees→radians
 /// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
-fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoint> {
-    use openusd::schemas::physics::{self, JointAxis, JointBase};
-
-    let view = StageView::new(stage);
+fn read_joint_spec(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+) -> Option<PendingUsdJoint> {
+    let view = reader;
     // `physics:jointEnabled` (schema default true) is the spec's own way to say a
     // joint is not simulated. It matters now that COMPONENTS own their mount
     // joints: a host that wants the mechanism inert — `ground_station.usda` parks
@@ -1732,7 +1736,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // Read raw it would hinge about the wrong axis while the meshes and colliders
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
-    let conv = lunco_usd_bevy::stage_convention(&view).ok()?;
+    let conv = lunco_usd_bevy::stage_convention(view).ok()?;
     let read_real_or_default = |name: &str, default: f64| -> Option<f64> {
         match view.real(path, name) {
             Some(value) => Some(value),
@@ -1766,43 +1770,25 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // constrains its body to the OTHER body's orientation. Carrying the rake in
     // the axis alone would aim the slider correctly and still wrench the strut
     // square to the hull.
-    let axis_of = |ax: JointAxis| {
-        conv.dir_d(match ax {
-            JointAxis::X => DVec3::X,
-            JointAxis::Y => DVec3::Y,
-            JointAxis::Z => DVec3::Z,
-        })
+    let axis_of = |axis: &str| -> Option<DVec3> {
+        Some(conv.dir_d(match axis {
+            ptok::AXIS_X => DVec3::X,
+            ptok::AXIS_Y => DVec3::Y,
+            ptok::AXIS_Z => DVec3::Z,
+            _ => return None,
+        }))
     };
-    let read_axis = |attr: openusd::usd::Attribute| -> Option<JointAxis> {
-        match attr.get::<JointAxis>() {
-            Ok(Some(axis)) => Some(axis),
-            Ok(None) if !view.has_authored_attribute(path, ptok::A_AXIS) => Some(JointAxis::X),
-            _ => None,
-        }
+    let read_axis = || -> Option<DVec3> {
+        let axis = match view.text(path, ptok::A_AXIS) {
+            Some(axis) if matches!(axis.as_str(), ptok::AXIS_X | ptok::AXIS_Y | ptok::AXIS_Z) => {
+                axis
+            }
+            Some(_) => return None,
+            None if !view.has_authored_attribute(path, ptok::A_AXIS) => ptok::AXIS_X.to_string(),
+            None => return None,
+        };
+        axis_of(&axis)
     };
-    /// A joint frame's basis in its body's local space, identity when unauthored.
-    /// USD spells a `quatf` `(w, x, y, z)`.
-    ///
-    /// A body-local rotation converts by CONJUGATION (`Q·q·Q⁻¹`), matching how
-    /// the same prim's `xformOp:orient` is converted — the basis and the body it
-    /// hangs off must land in one frame or the joint is built against a pose the
-    /// renderer never shows.
-    fn local_rot_of(
-        attr: openusd::usd::Attribute,
-        authored: bool,
-        conv: &lunco_usd_bevy::ConventionTransform,
-    ) -> Option<DQuat> {
-        if !authored {
-            return Some(DQuat::IDENTITY);
-        }
-        let q = attr.get::<openusd::gf::Quatf>().ok().flatten()?;
-        let q = DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64);
-        if !q.is_finite() || q.length_squared() <= f64::EPSILON {
-            return None;
-        }
-        let converted = conv.rotation_d(q.normalize());
-        converted.is_finite().then_some(converted)
-    }
     // Shared JointBase reads (both bodies + local anchors). A rel left EMPTY is
     // the spec's way to anchor that side to the WORLD frame — carried through as
     // an empty body path, which the build arm realises as a static anchor body.
@@ -1816,43 +1802,34 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // here. A DERIVED one must not: `derive_joint_anchor` builds it from
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
-    fn base<J: JointBase>(j: &J, reader: &StageView<'_>, path: &SdfPath) -> Option<JointBaseRead> {
+    let base = || -> Option<JointBaseRead> {
         let conv = lunco_usd_bevy::stage_convention(reader).ok()?;
-        let read_local_pos = |attr: openusd::usd::Attribute, name: &str| -> Option<Option<DVec3>> {
-            if !reader.has_authored_attribute(path, name) {
-                return Some(None);
-            }
-            let value = attr.get::<[f32; 3]>().ok().flatten()?;
-            let authored = DVec3::new(value[0] as f64, value[1] as f64, value[2] as f64);
-            if !authored.is_finite() {
-                return None;
-            }
-            let converted = conv.point_d(authored);
-            converted.is_finite().then_some(Some(converted))
-        };
         // An endpoint that names a prim which is not itself a body resolves to
         // the body that prim is rigidly part of — see [`nearest_body_path`].
         // This is what lets a mounted mechanism name its own root instead of its
         // host's chassis. An exact hit is the normal case and costs one lookup.
-        let resolve = |target: &openusd::sdf::Path| -> Option<String> {
-            let p = SdfPath::new(&target.to_string()).ok()?;
-            Some(nearest_body_path(reader, &p)?.to_string())
+        let resolve = |target: &SdfPath| -> Option<String> {
+            Some(nearest_body_path(reader, target)?.to_string())
         };
-        let targets0 = j.body0_rel().targets().ok()?;
-        let targets1 = j.body1_rel().targets().ok()?;
+        let targets0 = reader.rel_targets(path, ptok::A_BODY0);
+        let targets1 = reader.rel_targets(path, ptok::A_BODY1);
         if targets0.len() > 1 || targets1.len() > 1 {
             return None;
         }
-        let target0 = targets0.into_iter().next();
-        let target1 = targets1.into_iter().next();
+        let target0 = targets0.first();
+        let target1 = targets1.first();
         let (b0, b1) = match (target0, target1) {
             (Some(t0), Some(t1)) => (resolve(&t0)?, resolve(&t1)?),
             (Some(t0), None) => (resolve(&t0)?, String::new()),
             (None, Some(t1)) => (String::new(), resolve(&t1)?),
             (None, None) => return None,
         };
-        let lp0_auth = read_local_pos(j.local_pos0_attr(), ptok::A_LOCAL_POS_0)?;
-        let lp1_auth = read_local_pos(j.local_pos1_attr(), ptok::A_LOCAL_POS_1)?;
+        let lp0_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_0)
+            .ok()?
+            .map(|value| conv.point_d(value));
+        let lp1_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_1)
+            .ok()?
+            .map(|value| conv.point_d(value));
         let (lp0, lp1) = if let (Some(lp0), Some(lp1)) = (lp0_auth, lp1_auth) {
             (lp0, lp1)
         } else {
@@ -1860,35 +1837,31 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             // the world origin.
             let derived = (!b0.is_empty() && !b1.is_empty())
                 .then(|| derive_joint_anchor(reader, &b0, &b1))
-                .flatten()
-                .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+                .flatten()?;
             (lp0_auth.unwrap_or(derived.0), lp1_auth.unwrap_or(derived.1))
         };
+        let local_rot0 = read_authored_quat(reader, path, ptok::A_LOCAL_ROT_0)
+            .ok()?
+            .map(|value| conv.rotation_d(value))
+            .unwrap_or(DQuat::IDENTITY);
+        let local_rot1 = read_authored_quat(reader, path, ptok::A_LOCAL_ROT_1)
+            .ok()?
+            .map(|value| conv.rotation_d(value))
+            .unwrap_or(DQuat::IDENTITY);
         Some(JointBaseRead {
             body0: b0,
             body1: b1,
             local_pos0: lp0,
             local_pos1: lp1,
-            local_rot0: local_rot_of(
-                j.local_rot0_attr(),
-                reader.has_authored_attribute(path, ptok::A_LOCAL_ROT_0),
-                &conv,
-            )?,
-            local_rot1: local_rot_of(
-                j.local_rot1_attr(),
-                reader.has_authored_attribute(path, ptok::A_LOCAL_ROT_1),
-                &conv,
-            )?,
+            local_rot0,
+            local_rot1,
         })
-    }
+    };
     let read_drive = |ns: &str, body1: &str| -> Result<Option<JointDrive>, ()> {
         let api_name = format!("PhysicsDriveAPI:{ns}");
         if !view.has_api_schema(path, &api_name) {
             return Ok(None);
         }
-        let d = physics::DriveAPI::get(stage, path.clone(), ns)
-            .map_err(|_| ())?
-            .ok_or(())?;
         // Drive quantities convert by their SPEC units, per instance. An angular
         // drive authors DEGREES (`targetPosition` deg, `targetVelocity` deg/s,
         // stiffness/damping per degree) and its torques carry distance² — so
@@ -1918,29 +1891,24 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
                 conv.length(v)
             }
         };
-        let read_value = |attr: openusd::usd::Attribute, name: &str| -> Result<Option<f64>, ()> {
-            match attr.get::<f32>() {
-                Ok(Some(value)) if !value.is_nan() => Ok(Some(value as f64)),
-                Ok(None) if !view.has_authored_attribute(path, name) => Ok(None),
-                _ => Err(()),
-            }
-        };
+        let read_value =
+            |name: &str| -> Result<Option<f64>, ()> { read_authored_real(view, path, name) };
         let property = |sub: &str| format!("drive:{ns}:physics:{sub}");
         let target_position_name = property(ptok::DRIVE_SUB_TARGET_POSITION);
         let target_velocity_name = property(ptok::DRIVE_SUB_TARGET_VELOCITY);
         let max_force_name = property(ptok::DRIVE_SUB_MAX_FORCE);
         let stiffness_name = property(ptok::DRIVE_SUB_STIFFNESS);
         let damping_name = property(ptok::DRIVE_SUB_DAMPING);
-        let tp = read_value(d.target_position_attr(), &target_position_name)?.map(target);
-        let tv = read_value(d.target_velocity_attr(), &target_velocity_name)?.map(target);
-        let mf = read_value(d.max_force_attr(), &max_force_name)?.map(force);
-        let k = read_value(d.stiffness_attr(), &stiffness_name)?.map(gain);
-        let c = read_value(d.damping_attr(), &damping_name)?.map(gain);
+        let tp = read_value(&target_position_name)?.map(target);
+        let tv = read_value(&target_velocity_name)?.map(target);
+        let mf = read_value(&max_force_name)?.map(force);
+        let k = read_value(&stiffness_name)?.map(gain);
+        let c = read_value(&damping_name)?.map(gain);
         let type_name = property(ptok::DRIVE_SUB_TYPE);
-        let ty = match d.type_attr().get::<DriveType>() {
-            Ok(Some(value)) => Some(value),
-            Ok(None) if !view.has_authored_attribute(path, &type_name) => None,
-            _ => return Err(()),
+        let ty = match view.attr_value(path, &type_name) {
+            Some(value) => Some(value.get::<DriveType>().ok_or(())?),
+            None if !view.has_authored_attribute(path, &type_name) => None,
+            None => return Err(()),
         };
         // The driven body's authored mass, for the force-spring → SpringDamper
         // conversion. Read from USD (not avian's computed `Mass`, which does not
@@ -1953,19 +1921,12 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         // Feeding mass in there would be dimensionally wrong, so an angular drive
         // keeps `ForceBased`: unchanged behaviour for the rocker/differential
         // couplings that author angular stiffness.
-        let driven_mass = (ns == "linear")
-            .then(|| {
-                SdfPath::new(body1).ok().and_then(|b1| {
-                    stage
-                        .prim(b1)
-                        .attribute("physics:mass")
-                        .get::<f32>()
-                        .ok()
-                        .flatten()
-                        .map(|m| m as f64)
-                })
-            })
-            .flatten();
+        let driven_mass = if ns == ptok::DOF_LINEAR {
+            let b1 = SdfPath::new(body1).map_err(|_| ())?;
+            read_authored_real(view, &b1, ptok::A_MASS)?
+        } else {
+            None
+        };
         Ok(
             (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
                 JointDrive {
@@ -1981,10 +1942,10 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         )
     };
 
-    let read_limit = |attr: openusd::usd::Attribute, name: &str, default: f64| -> Option<f64> {
-        match attr.get::<f32>() {
-            Ok(Some(value)) if !value.is_nan() => Some(value as f64),
-            Ok(None) if !view.has_authored_attribute(path, name) => Some(default),
+    let read_limit = |name: &str, default: f64| -> Option<f64> {
+        match view.real(path, name) {
+            Some(value) if !value.is_nan() => Some(value),
+            None if !view.has_authored_attribute(path, name) => Some(default),
             _ => None,
         }
     };
@@ -2013,157 +1974,141 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         damping,
     };
 
-    let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone())
-        .ok()
-        .flatten()
-    {
-        let b = base(&j, &view, path)?;
-        let axis = axis_of(read_axis(j.axis_attr())?);
-        let lo =
-            read_limit(j.lower_limit_attr(), ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
-        let hi = read_limit(j.upper_limit_attr(), ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
-        let drive = read_drive("angular", &b.body1).ok()?;
-        pending_from(b, axis, lo, hi, "PhysicsRevoluteJoint", None, drive)
-    } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone())
-        .ok()
-        .flatten()
-    {
-        let b = base(&j, &view, path)?;
-        let axis = axis_of(read_axis(j.axis_attr())?);
-        // Linear limits are authored in scene units, like the anchors.
-        let lo = conv.length(read_limit(
-            j.lower_limit_attr(),
-            ptok::A_LOWER_LIMIT,
-            f64::NEG_INFINITY,
-        )?);
-        let hi = conv.length(read_limit(
-            j.upper_limit_attr(),
-            ptok::A_UPPER_LIMIT,
-            f64::INFINITY,
-        )?);
-        let drive = read_drive("linear", &b.body1).ok()?;
-        pending_from(b, axis, lo, hi, "PhysicsPrismaticJoint", None, drive)
-    } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone())
-        .ok()
-        .flatten()
-    {
-        let b = base(&j, &view, path)?;
-        let axis = axis_of(read_axis(j.axis_attr())?);
-        // `physics:coneAngle{0,1}Limit` is in DEGREES, like every other angular
-        // quantity UsdPhysics authors (and like the revolute limits above);
-        // avian's `AngleLimit` is in radians.
-        let cone0 = read_limit(j.cone_angle0_limit_attr(), ptok::A_CONE_ANGLE_0_LIMIT, -1.0)?;
-        let cone1 = read_limit(j.cone_angle1_limit_attr(), ptok::A_CONE_ANGLE_1_LIMIT, -1.0)?;
-        let swing = (cone0 >= 0.0 || cone1 >= 0.0)
-            .then_some((cone0.max(0.0).to_radians(), cone1.max(0.0).to_radians()));
-        pending_from(
-            b,
-            axis,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            "PhysicsSphericalJoint",
-            swing,
-            None,
-        )
-    } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
-        let b = base(&j, &view, path)?;
-        pending_from(
-            b,
-            DVec3::Y,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            "PhysicsFixedJoint",
-            None,
-            None,
-        )
-    } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone())
-        .ok()
-        .flatten()
-    {
-        let b = base(&j, &view, path)?;
-        // Distances are scene units; a NEGATIVE authored value is the schema's
-        // "limit disabled" sentinel and survives the (positive) unit scale for
-        // the build arm to honour.
-        let lo = conv.length(read_limit(
-            j.min_distance_attr(),
-            ptok::A_MIN_DISTANCE,
-            -1.0,
-        )?);
-        let hi = conv.length(read_limit(
-            j.max_distance_attr(),
-            ptok::A_MAX_DISTANCE,
-            -1.0,
-        )?);
-        pending_from(b, DVec3::Y, lo, hi, "PhysicsDistanceJoint", None, None)
-    } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
-        // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
-        let b = base(&j, &view, path)?;
-        let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint_typed(stage, path, &view)?;
-        // Same two conversions every typed arm applies: the cardinal axis is named
-        // in the STAGE's frame, and an angular limit is authored in degrees while a
-        // linear one is in scene units. `to_radians`/`length` leave an infinite
-        // (unauthored) bound infinite.
-        let axis = conv.dir_d(cardinal);
-        let (lo, hi) = if is_rot {
-            (lo.to_radians(), hi.to_radians())
-        } else {
-            (conv.length(lo), conv.length(hi))
-        };
-        pending_from(b, axis, lo, hi, reduced, None, None)
-    } else {
-        return None;
+    let type_name = view.type_name(path)?;
+    let spec = match type_name.as_str() {
+        ptok::T_PHYSICS_REVOLUTE_JOINT => {
+            let b = base()?;
+            let axis = read_axis()?;
+            let lo = read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
+            let hi = read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
+            let drive = read_drive(ptok::DOF_ANGULAR, &b.body1).ok()?;
+            pending_from(b, axis, lo, hi, ptok::T_PHYSICS_REVOLUTE_JOINT, None, drive)
+        }
+        ptok::T_PHYSICS_PRISMATIC_JOINT => {
+            let b = base()?;
+            let axis = read_axis()?;
+            // Linear limits are authored in scene units, like the anchors.
+            let lo = conv.length(read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?);
+            let hi = conv.length(read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?);
+            let drive = read_drive(ptok::DOF_LINEAR, &b.body1).ok()?;
+            pending_from(
+                b,
+                axis,
+                lo,
+                hi,
+                ptok::T_PHYSICS_PRISMATIC_JOINT,
+                None,
+                drive,
+            )
+        }
+        ptok::T_PHYSICS_SPHERICAL_JOINT => {
+            let b = base()?;
+            let axis = read_axis()?;
+            // `physics:coneAngle{0,1}Limit` is in degrees, while Avian's
+            // `AngleLimit` is in radians.
+            let cone0 = read_limit(ptok::A_CONE_ANGLE_0_LIMIT, -1.0)?;
+            let cone1 = read_limit(ptok::A_CONE_ANGLE_1_LIMIT, -1.0)?;
+            let swing = (cone0 >= 0.0 || cone1 >= 0.0)
+                .then_some((cone0.max(0.0).to_radians(), cone1.max(0.0).to_radians()));
+            pending_from(
+                b,
+                axis,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                ptok::T_PHYSICS_SPHERICAL_JOINT,
+                swing,
+                None,
+            )
+        }
+        ptok::T_PHYSICS_FIXED_JOINT => {
+            let b = base()?;
+            pending_from(
+                b,
+                DVec3::Y,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                ptok::T_PHYSICS_FIXED_JOINT,
+                None,
+                None,
+            )
+        }
+        ptok::T_PHYSICS_DISTANCE_JOINT => {
+            let b = base()?;
+            // Distances are scene units; a negative authored value is the
+            // schema's "limit disabled" sentinel.
+            let lo = conv.length(read_limit(ptok::A_MIN_DISTANCE, -1.0)?);
+            let hi = conv.length(read_limit(ptok::A_MAX_DISTANCE, -1.0)?);
+            pending_from(
+                b,
+                DVec3::Y,
+                lo,
+                hi,
+                ptok::T_PHYSICS_DISTANCE_JOINT,
+                None,
+                None,
+            )
+        }
+        ptok::T_PHYSICS_JOINT => {
+            // Generic/D6 reduces through per-DOF UsdPhysicsLimitAPI.
+            let b = base()?;
+            let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint(reader, path)?;
+            // Same two conversions every typed arm applies: the cardinal axis is named
+            // in the STAGE's frame, and an angular limit is authored in degrees while a
+            // linear one is in scene units. `to_radians`/`length` leave an infinite
+            // (unauthored) bound infinite.
+            let axis = conv.dir_d(cardinal);
+            let (lo, hi) = if is_rot {
+                (lo.to_radians(), hi.to_radians())
+            } else {
+                (conv.length(lo), conv.length(hi))
+            };
+            pending_from(b, axis, lo, hi, reduced, None, None)
+        }
+        _ => return None,
     };
 
     // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
     // wheel body); skip them here to avoid double-up/race.
-    if joint_targets_simulated_wheel(&view, path) {
+    if joint_targets_simulated_wheel(view, path) {
         return None;
     }
     Some(spec)
 }
 
-/// Typed-schema sibling of [`reduce_generic_joint`]: reduces a generic
-/// `UsdPhysicsJoint` (D6) to the avian primitive matching its free DOFs by
-/// reading each per-DOF `UsdPhysicsLimitAPI` (`limit:{transX..rotZ}`) off the
-/// live stage. A DOF is *locked* when `low > high`, *free* when unauthored.
-fn reduce_generic_joint_typed(
-    stage: &Stage,
+/// Reduce a generic `UsdPhysicsJoint` (D6) to the Avian primitive matching its
+/// free degrees of freedom by reading each per-DOF `UsdPhysicsLimitAPI`
+/// (`limit:{transX..rotZ}`). A DOF is locked when `low > high` and free when
+/// the limit schema is absent or its bounds are unauthored.
+fn reduce_generic_joint(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
-    view: &StageView<'_>,
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
-    use openusd::schemas::physics;
     const DOFS: [(&str, DVec3, bool); 6] = [
-        ("transX", DVec3::X, false),
-        ("transY", DVec3::Y, false),
-        ("transZ", DVec3::Z, false),
-        ("rotX", DVec3::X, true),
-        ("rotY", DVec3::Y, true),
-        ("rotZ", DVec3::Z, true),
+        (ptok::DOF_TRANS_X, DVec3::X, false),
+        (ptok::DOF_TRANS_Y, DVec3::Y, false),
+        (ptok::DOF_TRANS_Z, DVec3::Z, false),
+        (ptok::DOF_ROT_X, DVec3::X, true),
+        (ptok::DOF_ROT_Y, DVec3::Y, true),
+        (ptok::DOF_ROT_Z, DVec3::Z, true),
     ];
     let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
     let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
     for (inst, axis, is_rot) in DOFS {
-        let api_name = format!("PhysicsLimitAPI:{inst}");
-        let api = match physics::LimitAPI::get(stage, path.clone(), inst) {
-            Ok(Some(api)) => Some(api),
-            Ok(None) if !view.has_api_schema(path, &api_name) => None,
-            _ => return None,
-        };
+        let api_name = format!("{}:{inst}", ptok::API_LIMIT);
         let property = |bound: &str| format!("limit:{inst}:physics:{bound}");
-        let read_bound =
-            |attr: openusd::usd::Attribute, name: &str, default: f64| match attr.get::<f32>() {
-                Ok(Some(value)) if !value.is_nan() => Some(value as f64),
-                Ok(None) if !view.has_authored_attribute(path, name) => Some(default),
-                _ => None,
-            };
+        let read_bound = |name: &str, default: f64| match reader.real(path, name) {
+            Some(value) if !value.is_nan() => Some(value),
+            None if !reader.has_authored_attribute(path, name) => Some(default),
+            _ => None,
+        };
         let low_name = property(ptok::LIMIT_SUB_LOW);
         let high_name = property(ptok::LIMIT_SUB_HIGH);
-        let (low, high) = match api {
-            Some(api) => (
-                read_bound(api.low_attr(), &low_name, f64::NEG_INFINITY)?,
-                read_bound(api.high_attr(), &high_name, f64::INFINITY)?,
+        let (low, high) = match reader.has_api_schema(path, &api_name) {
+            true => (
+                read_bound(&low_name, f64::NEG_INFINITY)?,
+                read_bound(&high_name, f64::INFINITY)?,
             ),
-            None => (f64::NEG_INFINITY, f64::INFINITY),
+            false => (f64::NEG_INFINITY, f64::INFINITY),
         };
         match (low, high) {
             (l, h) if l > h => {} // locked
@@ -2218,14 +2163,13 @@ fn reduce_generic_joint_typed(
 /// Observer that fires when a USD prim entity is added.
 ///
 /// Detects physics joints (PhysicsRevoluteJoint, PhysicsPrismaticJoint, …) and
-/// stamps the deferred [`PendingUsdJoint`] carrier by reading the STANDARD
-/// UsdPhysics joint schema off the LIVE canonical stage
-/// ([`read_joint_spec_typed`]).
+/// stamps the deferred [`PendingUsdJoint`] carrier from the standard composed
+/// UsdPhysics joint attributes through the shared reader boundary.
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
     query: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -2238,44 +2182,35 @@ fn on_add_usd_prim(
         return;
     };
 
-    // Ph0′: the STANDARD typed UsdPhysics read off the live canonical stage
-    // (built on demand). The typed schema needs the composed `Stage`.
     let id = prim_path.stage_handle.id();
-    if canonical.get(id).is_none() {
-        if let Some(recipe) = stages
-            .get(&prim_path.stage_handle)
-            .and_then(|a| a.recipe.clone())
-        {
-            canonical.get_or_build(id, &recipe);
-        }
-    }
-    let Some(cs) = canonical.get(id) else {
-        // no live stage (asset carries no recipe / build failed) — skip
+    let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
-    let view = StageView::new(cs.stage());
-    let is_physics_joint = view
-        .prim_type_name(&sdf_path)
-        .is_some_and(|type_name| type_name.starts_with("Physics") && type_name.ends_with("Joint"));
-    // A wheel prim on the LIVE stage → owned by the sim plugin, skip.
-    if cs
-        .stage()
-        .prim(sdf_path.clone())
-        .attribute("physxVehicleWheel:radius")
-        .get::<f32>()
-        .ok()
-        .flatten()
+    let (reader, _generation) = canonical.reader_for(id, stage_asset);
+    let is_physics_joint = reader.type_name(&sdf_path).is_some_and(|type_name| {
+        matches!(
+            type_name.as_str(),
+            ptok::T_PHYSICS_JOINT
+                | ptok::T_PHYSICS_FIXED_JOINT
+                | ptok::T_PHYSICS_REVOLUTE_JOINT
+                | ptok::T_PHYSICS_PRISMATIC_JOINT
+                | ptok::T_PHYSICS_SPHERICAL_JOINT
+                | ptok::T_PHYSICS_DISTANCE_JOINT
+        )
+    });
+    if reader
+        .real_f32(&sdf_path, "physxVehicleWheel:radius")
         .is_some()
     {
         return;
     }
-    let wheel_owned = joint_targets_simulated_wheel(&view, &sdf_path);
+    let wheel_owned = joint_targets_simulated_wheel(&reader, &sdf_path);
     if wheel_owned {
         return;
     }
-    if let Some(joint) = read_joint_spec_typed(cs.stage(), &sdf_path) {
+    if let Some(joint) = read_joint_spec(&reader, &sdf_path) {
         commands.entity(entity).try_insert(joint);
-    } else if is_physics_joint && view.boolean(&sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
+    } else if is_physics_joint && reader.boolean(&sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
         // A recognized standard joint that cannot be projected is an authored
         // scene error. Silently omitting it leaves the mechanism unconstrained,
         // which is a physically different assembly and can make a vehicle look
@@ -3263,7 +3198,11 @@ pub fn wheel_revolute_joint(
 /// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
-fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<DVec3> {
+fn read_vec3_attribute(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }
 
@@ -3271,7 +3210,7 @@ fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Op
 /// for an omitted attribute, so a wrong USD type cannot become a schema default
 /// at a physics boundary.
 fn read_authored_real(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<f64>, ()> {
@@ -3285,7 +3224,7 @@ fn read_authored_real(
 /// Read an authored vector without treating a malformed value as an omitted
 /// override. Physics vectors must also remain finite after the read.
 fn read_authored_vec3(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<DVec3>, ()> {
@@ -3299,14 +3238,17 @@ fn read_authored_vec3(
 /// Read an authored quaternion, rejecting wrong types, non-finite values and
 /// the zero quaternion rather than silently using identity.
 fn read_authored_quat(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<DQuat>, ()> {
     if !reader.has_authored_attribute(path, attr) {
         return Ok(None);
     }
-    let q = reader.scalar::<openusd::gf::Quatf>(path, attr).ok_or(())?;
+    let q = reader
+        .attr_value(path, attr)
+        .and_then(|value| value.get::<openusd::gf::Quatf>())
+        .ok_or(())?;
     let q = DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64);
     if !q.is_finite() || q.length_squared() <= f64::EPSILON {
         return Err(());
@@ -3317,7 +3259,7 @@ fn read_authored_quat(
 /// Read a boolean while preserving the distinction between an omitted standard
 /// default and an authored value of the wrong type.
 fn read_authored_bool_or_default(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
     default: bool,
@@ -3344,7 +3286,7 @@ fn read_authored_bool_or_default(
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
@@ -3534,7 +3476,7 @@ fn apply_rigid_body_mass_props(
 fn apply_physics_material(
     commands: &mut Commands,
     entity: Entity,
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
@@ -3699,19 +3641,17 @@ impl std::fmt::Display for PhysicsMaterialReadError {
 impl std::error::Error for PhysicsMaterialReadError {}
 
 pub fn read_physics_material(
-    reader: &StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
     use openusd::schemas::physics::tokens as ptok;
 
-    let mat = lunco_usd_bevy::resolve_bound_material(
-        reader,
-        prim,
-        lunco_usd_bevy::MaterialPurpose::Physics,
-    );
-    let Some(mat) = mat else {
+    let Some(mat_path) = reader.bound_material(prim, lunco_usd_bevy::MaterialPurpose::Physics)
+    else {
         return Ok(None);
     };
+    let mat = SdfPath::new(&mat_path)
+        .map_err(|_| PhysicsMaterialReadError::new(ptok::REL_MATERIAL_BINDING_PHYSICS))?;
     if !reader.has_api_schema(&mat, "PhysicsMaterialAPI") {
         return Ok(None);
     }
@@ -3805,7 +3745,7 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
@@ -3911,11 +3851,11 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
-    use super::{CollisionGroupTable, extract_avian_prim, read_physics_material};
+    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -4158,16 +4098,16 @@ def Xform "World"
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
-mod joint_typed_tests {
-    //! Ph0′ physics rework: the joint projector reads the STANDARD UsdPhysics
-    //! joint schema (`openusd::schemas::physics`) off the live stage into the
+mod joint_reader_tests {
+    //! The joint projector reads the STANDARD UsdPhysics joint schema through
+    //! the composed reader into the
     //! deferred `PendingUsdJoint` — bodies, axis, standard `physics:lowerLimit`/
     //! `upperLimit` (degrees → radians), local anchors, and `UsdPhysicsDriveAPI`.
     //! This is the headless-verifiable half of the rework (the read); joint
     //! *dynamics* need a rover boot.
-    use super::read_joint_spec_typed;
+    use super::read_joint_spec;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{StageView, compose_file_to_stage};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -4202,8 +4142,8 @@ def PhysicsRevoluteJoint "Hinge" (
         std::fs::write(&f, FIXTURE).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
 
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap())
-            .expect("standard revolute joint reads off the live stage");
+        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+            .expect("standard revolute joint reads through the composed reader");
 
         assert_eq!(j.joint_type, "PhysicsRevoluteJoint");
         assert_eq!(j.body0_path, "/Chassis");
@@ -4281,8 +4221,8 @@ def PhysicsPrismaticJoint "Spring" (
         std::fs::write(&f, RAKED).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
 
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Spring").unwrap())
-            .expect("raked prismatic joint reads off the live stage");
+        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Spring").unwrap())
+            .expect("raked prismatic joint reads through the composed reader");
 
         // The axis token itself is cardinal — the rake is not in here.
         assert_eq!(j.axis, DVec3::Y);
@@ -4335,7 +4275,9 @@ def PhysicsPrismaticJoint "Spring" (
         let f = dir.join("nojoint.usda");
         std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
-        assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
+        assert!(
+            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Plain").unwrap()).is_none()
+        );
     }
 
     #[test]
@@ -4388,7 +4330,8 @@ def PhysicsPrismaticJoint "Spring" (
         for (name, source) in cases {
             let stage = write_and_compose(&format!("{name}.usda"), &source);
             assert!(
-                read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap()).is_none(),
+                read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+                    .is_none(),
                 "authored malformed field in {name} must reject the joint"
             );
         }
@@ -4411,7 +4354,7 @@ def PhysicsRevoluteJoint "Hinge"
 "#;
         let stage = write_and_compose("multiple_body_targets.usda", MULTIPLE_TARGETS);
         assert!(
-            read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap()).is_none(),
+            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap()).is_none(),
             "a joint endpoint must name exactly one body target"
         );
     }
@@ -4432,7 +4375,7 @@ def PhysicsSphericalJoint "Ball"
 }
 "#;
         let stage = write_and_compose("unlimited_spherical.usda", SPHERICAL);
-        let joint = read_joint_spec_typed(&stage, &SdfPath::new("/Ball").unwrap())
+        let joint = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Ball").unwrap())
             .expect("spherical joint reads");
         assert_eq!(
             joint.swing_limit, None,
@@ -4457,7 +4400,7 @@ def PhysicsJoint "Generic"
 "#;
         let stage = write_and_compose("unconfigured_generic.usda", GENERIC);
         assert!(
-            read_joint_spec_typed(&stage, &SdfPath::new("/Generic").unwrap()).is_none(),
+            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Generic").unwrap()).is_none(),
             "an unconstrained generic joint has multiple free DOFs and cannot reduce to fixed"
         );
     }
@@ -4496,7 +4439,7 @@ def PhysicsRevoluteJoint "Hinge"
         std::fs::write(&f, ZUP_CM_FIXTURE).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
 
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap())
+        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
             .expect("revolute joint reads off a Z-up stage");
 
         // Tolerance is 1e-6, not machine epsilon: `ConventionTransform` stores its
@@ -4560,8 +4503,11 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         // origin in the root frame (its translate), lp1 = origin. This is what lets
         // `physical_drivetrain.usda` state each wheel's position once, not twice.
         let stage = write_and_compose("derive.usda", &DERIVE_FIXTURE.replace("AUTHORED", ""));
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
-            .expect("revolute joint reads");
+        let j = read_joint_spec(
+            &StageView::new(&stage),
+            &SdfPath::new("/Rover/Hinge").unwrap(),
+        )
+        .expect("revolute joint reads");
         assert!(
             close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)),
             "lp0 derived from wheel translate: {:?}",
@@ -4572,7 +4518,7 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 
     #[test]
     fn authored_anchor_is_not_overridden_by_derivation() {
-        // An explicit `physics:localPos0` must win — the derivation is a fallback for
+        // An explicit `physics:localPos0` must win — derivation fills only an
         // UNAUTHORED anchors only, so hand-tuned joints never change.
         let stage = write_and_compose(
             "authored.usda",
@@ -4581,8 +4527,11 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
                 "        point3f physics:localPos0 = (1, 2, 3)\n",
             ),
         );
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
-            .expect("revolute joint reads");
+        let j = read_joint_spec(
+            &StageView::new(&stage),
+            &SdfPath::new("/Rover/Hinge").unwrap(),
+        )
+        .expect("revolute joint reads");
         assert_eq!(
             j.local_pos0,
             DVec3::new(1.0, 2.0, 3.0),
@@ -4618,8 +4567,11 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     #[test]
     fn joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body() {
         let stage = write_and_compose("mount.usda", MOUNT_FIXTURE);
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap())
-            .expect("revolute joint reads");
+        let j = read_joint_spec(
+            &StageView::new(&stage),
+            &SdfPath::new("/Host/Mount/YawJoint").unwrap(),
+        )
+        .expect("revolute joint reads");
         assert_eq!(
             j.body0_path, "/Host",
             "body0 named a non-body Xform, so it resolves to the host body it hangs under"
@@ -4644,8 +4596,11 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
                  bool physics:rigidBodyEnabled = false\n",
             ),
         );
-        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap())
-            .expect("a joint mounted on a static body still reads");
+        let j = read_joint_spec(
+            &StageView::new(&stage),
+            &SdfPath::new("/Host/Mount/YawJoint").unwrap(),
+        )
+        .expect("a joint mounted on a static body still reads");
         assert_eq!(j.body0_path, "/Host");
     }
 
@@ -4665,7 +4620,11 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             ),
         );
         assert!(
-            read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap()).is_none(),
+            read_joint_spec(
+                &StageView::new(&stage),
+                &SdfPath::new("/Host/Mount/YawJoint").unwrap()
+            )
+            .is_none(),
             "physics:jointEnabled = false must suppress the joint"
         );
     }
@@ -4685,7 +4644,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             "the standard body1 relationship and wheel schema must assign this joint to the wheel projector"
         );
         assert!(
-            read_joint_spec_typed(&stage, &path).is_none(),
+            read_joint_spec(&StageView::new(&stage), &path).is_none(),
             "generic Avian projection must not duplicate a wheel joint owned by lunco-usd-sim"
         );
     }
@@ -4693,7 +4652,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     #[test]
     fn rocker_bogie_hinge_joints_derive_end_to_end() {
         // The HARD retrofit, through the real load path. `rocker_bogie.usda` now omits
-        // every anchor. Its FOUR structural hinges flow through `read_joint_spec_typed`
+        // every anchor. Its FOUR structural hinges flow through `read_joint_spec`
         // and must be DERIVED — including the two SIBLING bogie hinges (`BogieHinge*`:
         // body0 does NOT contain body1) and a scaled hierarchy — reproducing the values
         // the file used to hand-author (byte-identical → unchanged physics).
@@ -4711,8 +4670,8 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             ("BogieHingeL", [0.0, -0.2, 0.6]), // rocker ↔ bogie (SIBLING)
             ("BogieHingeR", [0.0, -0.2, 0.6]),
         ] {
-            let j = read_joint_spec_typed(
-                &stage,
+            let j = read_joint_spec(
+                &StageView::new(&stage),
                 &SdfPath::new(&format!("/RockerBogie/{name}")).unwrap(),
             )
             .unwrap_or_else(|| panic!("{name} reads + derives"));
@@ -4770,9 +4729,11 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 
         for (w, lp0) in mounts {
             let name = format!("{w}_Hinge");
-            let j =
-                read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Rover/{name}")).unwrap())
-                    .unwrap_or_else(|| panic!("{name} reads"));
+            let j = read_joint_spec(
+                &StageView::new(&stage),
+                &SdfPath::new(&format!("/Rover/{name}")).unwrap(),
+            )
+            .unwrap_or_else(|| panic!("{name} reads"));
             assert!(
                 close(j.local_pos0, lp0),
                 "{name}: anchor derived from the wheel translate: {:?}",

@@ -648,15 +648,12 @@ pub(crate) fn scene_topology_changed(
     mut rm_usd_path: RemovedComponents<lunco_usd_bevy::UsdPrimPath>,
     mut rm_camera: RemovedComponents<SceneCamera>,
 ) -> bool {
-    let live_grids: HashSet<Entity> = grids.iter().collect();
-    let (scope_state, scope_error) = grid_scope_state(
-        workspace.as_deref(),
-        active_frame
-            .as_ref()
-            .map(|frame| frame.0)
-            .filter(|grid| live_grids.contains(grid)),
-        active_frame.is_some(),
-    );
+    let current_grid = active_frame
+        .as_ref()
+        .map(|frame| frame.0)
+        .filter(|grid| grids.get(*grid).is_ok());
+    let (scope_state, scope_error) =
+        grid_scope_state(workspace.as_deref(), current_grid, active_frame.is_some());
     let scope_changed = view.grid_scope != scope_state.scope
         || view.active_twin != scope_state.active_twin
         || view.current_grid != scope_state.current_grid

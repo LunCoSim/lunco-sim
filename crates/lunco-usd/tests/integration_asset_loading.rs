@@ -82,25 +82,11 @@ fn compose_stage_from_file(file_path: &Path) -> openusd::usd::Stage {
         .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()))
 }
 
-/// Compose a `.usda` (with its external references) into a live canonical stage
-/// and publish it into `CanonicalStages` keyed by a fresh `UsdStageAsset` handle
-/// — the recipe path for file-with-refs scenes. `StageRecipe::from_source` only
-/// resolves a single in-memory layer, so these ref-carrying scene/rover files
-/// compose the full closure via `compose_file_to_stage` and insert the wrapped
-/// stage directly (the door the live-doc projection uses).
+/// Install a prepared layer-closure asset and its explicit live edit stage for
+/// the synchronous harness. The shared helper uses the same recipe boundary as
+/// the production async loader.
 fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAsset> {
-    let handle = {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { recipe: None })
-    };
-    let stage = compose_file_to_stage(file_path)
-        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
-    let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
-    app.world_mut()
-        .get_non_send_mut::<CanonicalStages>()
-        .expect("CanonicalStages resource (UsdBevyPlugin)")
-        .insert(handle.id(), cstage);
-    handle
+    support::add_prepared_canonical_from_file(app, file_path)
 }
 
 // ============================================================

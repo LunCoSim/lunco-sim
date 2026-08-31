@@ -109,6 +109,15 @@ the physics solver empties. Never block that queue:
 - **No per-frame allocations in the common path.** `String` clones
   and `Vec` rebuilds that happen on a no-op path are the most
   common offenders — pre-allocate, reuse, or skip entirely.
+- The Workbench keeps its immutable theme snapshot and derived egui visuals
+  behind the theme revision. A stable frame reuses that snapshot and does not
+  reapply context-wide visuals. The runtime-UI render acknowledgement follows
+  the same contract: it traverses extracted UI nodes only when an authored,
+  visible surface is required by an active recording contract.
+- The Modelica editor index is an asset task, not a boot-time render dependency.
+  Native MSL source readiness installs the source root immediately; the large
+  generated palette index is decoded off-thread and publishes one readiness
+  event for the browser to enrich its already-available bundled-model view.
 - **Frame-rate-independent animation.** Anything using time must
   take `dt` from `ui.ctx().input(|i| i.unstable_dt)` (egui) or
   `Time::delta` (bevy). Never assume 60 Hz.
@@ -138,6 +147,11 @@ The same ownership rule applies to the measured presentation paths:
   `DeclaredOutputPorts`. Steady frames do not rebuild maps or clone authored
   path keys, and compile-time wrapper publication cannot be mistaken for a
   missing telemetry port.
+- **Generated Modelica source metadata** is invalidated by the generated USD
+  source component and by explicit document-link/removal dirtiness. The
+  publisher does not treat `ModelicaModel` output/time updates as source
+  metadata changes; solver state remains in the Modelica owner while the
+  generated source registry stays stable between projection events.
 - **Graphs** retain the history-to-plot point buffer in the visualization
   owner, keyed by the history fingerprint. A plot host may clone points at the
   `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry

@@ -34,9 +34,7 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
     let handle = app
         .world_mut()
         .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset {
-            recipe: Some(recipe.clone()),
-        });
+        .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
     let id = handle.id();
 
     app.world_mut()
@@ -69,6 +67,9 @@ fn rewire_derives_at_load_and_clears() {
         .unwrap()
         .set_connections([SdfPath::new("/World/Src.outputs:netForce").unwrap()])
         .unwrap();
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
 
     // Spawn the two prims' entities — a structural change (`Added<UsdPrimPath>`)
     // that triggers the rewire, just like the load-time reconcile spawning them.
@@ -130,6 +131,9 @@ fn rewire_derives_at_load_and_clears() {
         .attribute("inputs:force_y")
         .set_connections(Vec::<SdfPath>::new())
         .unwrap();
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
     app.world_mut().resource_mut::<WiringDirty>().0 = true;
     app.update();
 
@@ -161,9 +165,7 @@ fn build_from_source(src: &str) -> (App, AssetId<UsdStageAsset>) {
     let handle = app
         .world_mut()
         .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset {
-            recipe: Some(recipe.clone()),
-        });
+        .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
     let id = handle.id();
     app.world_mut()
         .non_send_mut::<CanonicalStages>()
@@ -336,7 +338,10 @@ fn lander_asset_wiring_migrated() {
         ),
     ] {
         assert_eq!(
-            view.connections(&SdfPath::new("/LanderTest/Lander").unwrap(), controller_port),
+            view.connections(
+                &SdfPath::new("/LanderTest/Lander").unwrap(),
+                controller_port
+            ),
             [source_port],
             "controller inertia must consume the same live Modelica source as the Avian inertia port"
         );
@@ -802,6 +807,9 @@ fn rewire_applies_factor_and_offset() {
             .set(openusd::sdf::Value::Double(0.5))
             .unwrap();
     }
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
 
     app.world_mut().spawn((
         UsdPrimPath {
@@ -858,6 +866,9 @@ fn rewire_reads_float_authored_transform() {
             .set(openusd::sdf::Value::Float(0.5))
             .unwrap();
     }
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
 
     app.world_mut().spawn((
         UsdPrimPath {

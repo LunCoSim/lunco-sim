@@ -57,13 +57,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)
             .add_observer(intent::resolve_editor_intent)
             .add_observer(intent::resolve_new_document_intent)
-            .add_systems(
-                Startup,
-                (
-                    register_modelica_uri_handler,
-                    lifecycle::prewarm_msl_library,
-                ),
-            )
+            .add_systems(Startup, register_modelica_uri_handler)
             .add_systems(
                 Update,
                 (

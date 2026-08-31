@@ -89,11 +89,10 @@ def Xform "World"
     app.world_mut()
         .trigger(SetActiveUsdViewport { doc: doc_id });
 
-    // Run updates to process the viewport installation and initial visual synchronization
-    for _ in 0..5 {
-        app.update();
-    }
-
+    // Advance the production projection contract until the async twin asset is
+    // loaded and its bounded visual queue has committed. A fixed frame count
+    // tests scheduler timing rather than the loading contract.
+    support::settle_visual_projection(&mut app);
     // Verify the child MeshWithMaterial entity was spawned and got its material
     let mut mesh_entity = None;
     let mut q = app.world_mut().query::<(Entity, &Name, &UsdPrimPath)>();

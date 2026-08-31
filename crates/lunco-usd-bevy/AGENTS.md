@@ -3,7 +3,7 @@
 This crate is the **first** plugin in the USD pipeline (Layer 2 / domain). It
 turns USD prims into Bevy entities with meshes, materials, and transforms.
 Everything physics- or sim-related lives in `lunco-usd-avian` and
-`lunco-usd-sim` and runs after the bounded visual projection pass.
+`lunco-usd-sim` and runs after the visual projection binding pass.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
 `src/read.rs` (the `UsdRead` read seam), `src/view.rs` / `src/canonical.rs` (the
@@ -12,9 +12,11 @@ system-level overview).
 
 ## Reading USD attributes
 
-All composed runtime reads go through the `UsdRead` trait (`src/read.rs`) and its
-live canonical `StageView` implementation. Authoring-layer reads use
-`UsdDataExt` separately; extractors must not switch between those authorities.
+All composed runtime reads go through the `UsdRead` trait (`src/read.rs`). The
+live canonical `StageView` implementation owns authoring and incremental edits;
+the loader-produced `UsdStageProjectionPlan` implementation owns the initial
+asset snapshot. Authoring-layer reads use `UsdDataExt` separately; extractors
+must not switch between those authorities.
 
 **Real-valued reads use the `real` family, never `scalar::<f64>`/`scalar::<f32>`
 directly.** A bare typed scalar matches only one authored precision, so a value
@@ -26,7 +28,7 @@ silently dropped — a wrong-magnitude bug. Use:
 
 ## Adding a new prim type
 
-`sync_usd_visuals` matches on `typeName` (`"Cube"`, `"Sphere"`, `"Cylinder"`).
+`instantiate_usd_prim_from_reader` matches on `typeName` (`"Cube"`, `"Sphere"`, `"Cylinder"`).
 Adding a new primitive shape:
 
 1. Add a match arm that reads explicit dimensions via `reader.real(&sdf_path, "<attr>")`
@@ -47,7 +49,8 @@ SdfFileFormat plugin — `prepend payload = @./body.glb@` *just works*. Our
    the arc through an empty stub because the Rust USD fork has no file-format
    plugin API. The render projection reads the authored arc live from the
    composed prim stack and canonicalizes it relative to its authoring layer.
-2. **`sync_usd_visuals`** reads that live binary payload/reference and dispatches:
+2. **`sync_usd_visuals`** reads that binary payload/reference through the shared
+   composed reader and dispatches:
    - `lunco:assetMode = "mesh"` → `asset_server.load::<Mesh>("<uri>#Mesh0/Primitive0")`,
      attached as `Mesh3d`. Compatible with `lunco-usd-avian` collider construction.
    - `lunco:assetMode = "scene"` (default) → `asset_server.load::<Scene>("<uri>#Scene0")`,

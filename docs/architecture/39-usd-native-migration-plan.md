@@ -78,9 +78,11 @@ same reconcile → same `SimConnection` → same `CompiledWiring`. The current d
 spawns `SimConnection` directly from parsed attrs at load) **bypasses the journal — that is exactly the
 legacy to delete**, not merely the string encodings.
 
-Read-source migration is already in place: both producers are `UsdRead`-generic over the live `StageView`,
-and `read.rs` folds relationship targets and `.connect` connections into `rel_target()`. So P1 is *only* the
-encoding switch + moving derivation onto the reconcile.
+Read-source migration is already in place: runtime producers use the shared composed-reader contract, with
+the worker-produced `UsdStageProjectionPlan` for initial materialisation and the live `StageView` only after
+an authored generation exists. `read.rs` folds relationship targets and `.connect` connections into
+`rel_target()`. The reconcile therefore reads one authoritative surface in both phases without opening a
+live stage on the UI thread.
 
 - **P1.0 [in place] — `UsdOp::SetConnection`, the sole authoring op.** Variant
   `SetConnection { edit_target, path, name, type_name, sources: Vec<String> }` in `lunco-usd/document.rs`;
@@ -88,8 +90,9 @@ encoding switch + moving derivation onto the reconcile.
   → `set_connections(...)` (explicit `connectionPaths` list-op; **empty `sources` = clear**).
   `ApplyUsdOp{op:UsdOp}` is generic → auto-dispatches via API/MCP/rhai, records as `EntryKind::Op{domain:Usd}`
   → journaled and distributed. Satisfies requirement (3) at the authoring end.
-- **P1.1 [in place] — Connections survive composition + read off the live stage.** `StageView::rel_target`
-  folds relationship targets and `.connect` uniformly; both `UsdRead` impls surface connections.
+- **P1.1 [in place] — Connections survive composition + read through the shared composed reader.**
+  `StageView::rel_target` folds relationship targets and `.connect` uniformly; both the live `StageView`
+  and worker-produced `UsdStageProjectionPlan` surface the same composed connections.
 - **P1.1b [in place] — `UsdRead::connections(prim, name) -> Vec<String>` (all sources).** `rel_target()`
   returns only the first target; the derivation needs **every** source on a fan-in `inputs:` attr, so
   `connections()` returns the full list on both impls (`StageView`: `prim.attribute(name).connections()`;
@@ -109,7 +112,9 @@ encoding switch + moving derivation onto the reconcile.
   no current asset needs it, all migrated wires are identity).
 - **P1.3 [in place] — connection derivation *on the reconcile*, not a load-time scan.** `rewire_usd_connections`
   rebuilds the derived `SimConnection` set from `connectionPaths` when prim entities spawn/despawn (structural)
-  or a connection edit is drained (`WiringDirty`) — never a marker-scan that can't see edits. For each changed
+  or a connection edit is drained (`WiringDirty`) — never a marker-scan that cannot see edits. Initial
+  structural reads use the prepared plan; after a connection edit is drained, `CanonicalStages::reader_for`
+  selects the live generation. For each changed
   sink prim it despawns that prim's `SimConnection`s, then enumerates its `inputs:*` attrs and for each source
   from `reader.connections(prim, "inputs:<port>")` spawns one `SimConnection { start_element: by_path[src_prim],
   start_connector: <src leaf minus `outputs:`>, end_element: by_path[this], end_connector: <sink leaf minus
@@ -281,7 +286,7 @@ P0 (warm-ups, parallel) ──────────────────�
 
 - **Critical path:** the remaining P1 work is **P1.2 (ports as `inputs:`/`outputs:` attrs)** → **P1.4 (asset
   migration + legacy deletes)**; the reader, `SetConnection` op, and derivation-on-reconcile (P1.0/P1.1/P1.3)
-  are already in place and read off the live stage.
+  are already in place and use the prepared/live reader selected by the canonical generation.
 - **Parallelizable now:** P0 and P3 run independently of the P1 tail.
 - **Guardrail:** the co-sim `propagate.rs` hot loop must not appear in any Phase-1 diff (doc 38 §13.2) —
   if it does, the PR is wrong.

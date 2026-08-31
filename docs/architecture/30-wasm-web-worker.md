@@ -25,13 +25,13 @@ a transport layer that bridges the channels to the worker over
 │ Main page (lunica bundle)           │         │ Worker (lunica_worker)      │
 │ ─────────────────────────────────────── │         │ ─────────────────────────── │
 │ Bevy app, egui UI, MSL fetcher          │         │ no Bevy app                 │
-│ ModelicaChannels (crossbeam)            │         │ WorkerState                  │
-│   tx_cmd ──┐                            │         │ ModelicaCompiler (lazy)     │
+│ ModelicaChannels (crossbeam)            │         │ ModelicaWorkerState          │
+│   tx_cmd ──┐                            │         │ ModelicaCompiler (lazy)      │
 │   rx_res ◄─┤                            │         │                             │
 │            │                            │         │                             │
 │  pump_commands_to_worker  ──postMessage─►  ──────►  onmessage:                  │
 │       (Update system)        bincode    │         │   WireMessage::Command   →  │
-│                                         │         │     process_command          │
+│                                         │         │     process_worker_command   │
 │                              postMessage             ◄── Vec<ModelicaResult>    │
 │  worker.onmessage ◄──────────  bincode  │         │   WireMessage::Ping      → │
 │      → tx_res.send(result)              │         │     pong via WireResult::Log│
@@ -48,7 +48,7 @@ a transport layer that bridges the channels to the worker over
    `web_sys::Worker` of `type=module`, attaches an
    `onmessage` closure that decodes `WireResult` and pushes `Result` into
    `tx_res` and `Log` lines into `bevy::log::info!("[worker] …")`, and
-   stashes the worker handle in a `OnceLock<WorkerHandle>`. The worker JS
+   stashes the worker pool in the transport owner. The worker JS
    bundle is loaded via the **bootstrap adapter** (see "Bootstrap" below).
 3. **Worker init.** Inside the Worker, `bin/lunica_worker.rs::run()` runs
    under `wasm_bindgen(start)`. It installs `self.onmessage`, posts back
@@ -58,11 +58,10 @@ a transport layer that bridges the channels to the worker over
    `msl_remote::drain_msl_load_slot`. The transport posts the compressed parsed
    bundle to the worker as `InstallParsedMslCompressed`; the worker owns
    decompression, bincode deserialization, and installation into its own
-   `GLOBAL_PARSED_MSL`. For source recovery it uses
-   `ParseSourceMslCompressed`, which also keeps untar and parsing off the page
-   thread. The primary worker transfers raw decoded bincode bytes back only so
-   the page can build its separate resolution/autocomplete index with chunked
-   deserialization; the page never decompresses, untars, or parses MSL.
+   `GLOBAL_PARSED_MSL`. The primary worker transfers raw decoded bincode bytes
+   back only so the page can build its separate resolution/autocomplete index
+   with chunked deserialization; the page never parses the MSL source archive
+   as a runtime substitute.
 5. **Compile / Step / etc.** Bevy systems send `ModelicaCommand` via
    `channels.tx` exactly as on native. Each `Update` tick,
    `worker_transport::pump_commands_to_worker` drains `channels.rx_cmd`,
@@ -71,14 +70,14 @@ a transport layer that bridges the channels to the worker over
    receives an explicit lifecycle failure; simulation is never run on the page
    thread and commands never remain queued indefinitely.
 6. **Worker dispatch.** Worker `onmessage` decodes the envelope:
-   - `Command(cmd)` → `worker::process_command(state, cmd, |r| post_result(r))`.
+   - `Command(cmd)` → `worker::process_worker_command(state, cmd, |r| post_result(r))`.
      This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
    - `InstallParsedMslCompressed(bytes)` → worker-owned decompress, deserialize,
      and `msl_remote::install_global_parsed_msl_pub(parsed)`.
-   - `ParseSourceMslCompressed(bytes)` → worker-owned untar, parse, install,
-     and (for the primary) decoded-bundle transfer back to the page.
+   - `InstallMslIndexFromSource(bytes)` → worker-owned editor-index decode,
+     sent back in bounded metadata chunks.
    - `Ping(tag)` → `WireResult::Log("pong: {tag} (msl={})")`.
 7. **Result fan-in.** Worker posts each `WireResult` back. Main's
    `onmessage` decodes:
@@ -95,11 +94,20 @@ a transport layer that bridges the channels to the worker over
 pub enum WireMessage {
     Command(ModelicaCommand),
     InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
-    ParseSourceMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    InstallMslIndexFromSource { bytes: Vec<u8> },
+    ParseDocument { /* document identity, generation, URI, source */ },
+    RunFast { /* run identity and simulation inputs */ },
+    CancelRun { /* run identity */ },
     Ping(String),
 }
 pub enum WireResult {
     Result(ModelicaResult),
+    MslReady { docs: usize },
+    MslFailed { error: String },
+    MslIndexChunk { /* bounded metadata */ },
+    MslIndexFailed { error: String },
+    ParseDocumentDone { /* document identity and AST */ },
+    RunUpdate { /* run identity and update */ },
     Log(String),
 }
 ```
@@ -115,8 +123,8 @@ shared-snapshot fast-path.
 Native unchanged. The serde derives are no-ops at runtime.
 `worker_transport.rs` and `bin/lunica_worker.rs` are
 `#![cfg(target_arch = "wasm32")]` end-to-end. The wasm worker owns the
-`WorkerState` and dispatches through `worker::process_command`; there is no
-main-thread simulation fallback. The native `worker::modelica_worker` loop
+`ModelicaWorkerState` and dispatches through `worker::process_worker_command`;
+there is no main-thread Modelica fallback. The native `worker::modelica_worker` loop
 keeps its native dispatch and ownership of `SimulationSession` values.
 
 ## Build (`scripts/build_web.sh build lunica`)

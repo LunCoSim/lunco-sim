@@ -704,6 +704,7 @@ impl Plugin for ModelicaUiPlugin {
             // MSL loaded": restored/auto-opened tabs projected empty pre-MSL
             // and never recovered).
             .add_observer(panels::package_browser::on_msl_became_ready)
+            .add_observer(panels::package_browser::on_msl_editor_index_became_ready)
             .add_observer(panels::package_browser::on_modelica_library_became_ready)
             .add_systems(Update, cleanup_removed_simulators)
             .add_systems(Update, link_added_simulators)

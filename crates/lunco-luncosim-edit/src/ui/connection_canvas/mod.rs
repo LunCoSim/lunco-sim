@@ -465,7 +465,7 @@ impl Panel for UsdCanvasPanel {
                                     .strip_prefix("generated://")
                                     .unwrap_or(entry.uri.as_str());
                                 let label = label.strip_suffix(".mo").unwrap_or(label);
-                                if let Some(error) = entry.error {
+                                if let Some(error) = entry.projection_error {
                                     ui.colored_label(
                                         ui.visuals().error_fg_color,
                                         format!("{label}: {error}"),

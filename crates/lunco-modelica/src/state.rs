@@ -33,9 +33,10 @@ use crate::document::{ModelicaDocument, ModelicaOp};
 pub struct GeneratedModelicaSources {
     /// Current generated network documents.
     pub entries: Vec<GeneratedModelicaSourceEntry>,
-    /// Change-driven publication gate. Producers set this when a generated
-    /// entity is removed; normal source/model changes are detected by the
-    /// publisher's ECS query.
+    /// Change-driven publication gate. Producers set this when generated
+    /// document links or entities change; generated-source changes are detected
+    /// by the publisher's ECS query. Runtime solver output is not this registry's
+    /// invalidation input.
     pub dirty: bool,
 }
 
@@ -153,8 +154,9 @@ pub struct GeneratedModelicaSourceEntry {
     pub boundary_outputs: Vec<String>,
     /// Promoted member telemetry as `(member path, member output, alias)`.
     pub member_output_aliases: Vec<(String, String, String)>,
-    /// Last compiler/projection error, if any.
-    pub error: Option<String>,
+    /// Error produced while projecting the USD network, if any. Compiler and
+    /// solver errors remain on the linked `ModelicaModel`/document state.
+    pub projection_error: Option<String>,
 }
 
 /// Which library a model belongs to.

@@ -4,16 +4,20 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_modelica::{
     ast_extract::{parse_model_interface, ModelicaVariableMetadata},
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
 use lunco_usd_bevy::program::ProgramGraph;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
+use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use rumoca_compile::parsing::Causality;
 
@@ -112,6 +116,10 @@ pub struct GeneratedModelicaSource {
     pub boundary_outputs: Vec<String>,
     /// Unit and member positions selected by the synthesizer policy.
     pub layout: SynthesisLayout,
+    /// Error produced while this USD network was being projected. Runtime
+    /// solver errors belong to `ModelicaModel` and are not source-projection
+    /// metadata.
+    pub projection_error: Option<String>,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -268,7 +276,7 @@ pub trait DomainSynthesizer: Send + Sync + 'static {
     /// Turn one composed network root into a compilation unit.
     fn synthesize(
         &self,
-        view: &lunco_usd_bevy::StageView<'_>,
+        view: &dyn ComposedReader,
         root: &SdfPath,
         model_name: &str,
         ctx: &SynthContext<'_>,
@@ -305,7 +313,7 @@ pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER
 /// this selection in one function makes the runtime projector and the linter
 /// agree on both the explicit-selector default and the role-derived owner.
 pub(crate) fn select_synthesizer_name(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn ComposedReader,
     root: &SdfPath,
 ) -> Result<String, String> {
     if view.has_api_schema(root, "LunCoDomainSynthesisAPI") {
@@ -325,7 +333,7 @@ pub(crate) fn select_synthesizer_name(
 /// filename heuristic. A mixed collection is rejected because choosing either
 /// owner would hide an authoring error.
 pub fn derive_synthesizer_name(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn ComposedReader,
     root: &SdfPath,
 ) -> Result<String, String> {
     let members = view
@@ -427,7 +435,7 @@ impl DomainSynthesizer for HookSynthesizer {
     }
     fn synthesize(
         &self,
-        view: &lunco_usd_bevy::StageView<'_>,
+        view: &dyn ComposedReader,
         root: &SdfPath,
         model_name: &str,
         ctx: &SynthContext<'_>,
@@ -1704,7 +1712,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
 
     fn synthesize(
         &self,
-        view: &lunco_usd_bevy::StageView<'_>,
+        view: &dyn ComposedReader,
         root: &SdfPath,
         model_name: &str,
         _ctx: &SynthContext<'_>,
@@ -2198,6 +2206,308 @@ fn generated_member_outputs(
     Ok(member_outputs)
 }
 
+/// A domain synthesis request that owns no OpenUSD handles.
+///
+/// The initial asset projection plan is prepared by the asset loader and is
+/// shared by every network task. The task owns the policy call and source
+/// validation; the main thread only commits the resulting ECS/Modelica state.
+struct PendingDomainProjection {
+    entity: Entity,
+    stage_id: AssetId<UsdStageAsset>,
+    stage_generation: u64,
+    root_path: String,
+    model_name: String,
+    requested: String,
+    plan: Arc<lunco_usd_bevy::UsdStageProjectionPlan>,
+    task: Task<Result<SynthOutcome, Vec<DomainProjectionError>>>,
+}
+
+/// In-flight domain synthesis owned by the scene projection lifecycle.
+///
+/// One network has one synthesis owner, and completion is fenced by the USD
+/// entity and canonical-stage generation before it can publish a result.
+#[derive(Resource, Default)]
+pub struct PendingDomainProjections {
+    tasks: Vec<PendingDomainProjection>,
+}
+
+fn queue_domain_projection(
+    pending: &mut PendingDomainProjections,
+    entity: Entity,
+    stage_id: AssetId<UsdStageAsset>,
+    stage_generation: u64,
+    root_path: &SdfPath,
+    model_name: String,
+    requested: String,
+    synthesizer: Arc<dyn DomainSynthesizer>,
+    plan: Arc<lunco_usd_bevy::UsdStageProjectionPlan>,
+    classes: MemberClasses,
+) {
+    let root_path_string = root_path.to_string();
+    let task_root = root_path.clone();
+    let task_model_name = model_name.clone();
+    let task_plan = plan.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let view: &dyn ComposedReader = task_plan.as_ref();
+        let context = SynthContext { classes: &classes };
+        synthesizer.synthesize(view, &task_root, &task_model_name, &context)
+    });
+    pending.tasks.push(PendingDomainProjection {
+        entity,
+        stage_id,
+        stage_generation,
+        root_path: root_path_string,
+        model_name,
+        requested,
+        plan,
+        task,
+    });
+}
+
+fn resolve_domain_synthesizer(
+    view: &dyn ComposedReader,
+    root_path: &SdfPath,
+    prim_path: &str,
+    registry: &SynthesizerRegistry,
+) -> Option<(String, Arc<dyn DomainSynthesizer>)> {
+    let requested = match select_synthesizer_name(view, root_path) {
+        Ok(name) => name,
+        Err(message) => {
+            error!("[domain-projection] `{prim_path}` rejected: {message}");
+            return None;
+        }
+    };
+    let Some(synthesizer) = registry.get(&requested).cloned() else {
+        let known = registry.names().join(", ");
+        error!(
+            "[domain-projection] `{prim_path}` names synthesizer `{requested}`, which is not \
+             registered (known: {known}) — the scope is not projected."
+        );
+        return None;
+    };
+    Some((requested, synthesizer))
+}
+
+/// Commit one completed synthesis result on the main thread.
+///
+/// Rhai execution, graph extraction, and generated-source validation happen in
+/// the task above. This function is the single publication path for both the
+/// prepared startup plan and the canonical live-edit reader, so the Modelica
+/// lifecycle, signal layout, and generated-source diagnostics cannot diverge.
+fn commit_domain_projection(
+    commands: &mut Commands,
+    entity: Entity,
+    prim: &UsdPrimPath,
+    previous: Option<&DomainProjectionState>,
+    installed_model: Option<&ModelicaModel>,
+    root_path: &SdfPath,
+    view: &dyn ComposedReader,
+    classes: &MemberClasses,
+    channels: &ModelicaChannels,
+    requested: &str,
+    model_name: &str,
+    synthesized: Result<SynthOutcome, Vec<DomainProjectionError>>,
+    notices: &mut MessageWriter<ModelicaNotice>,
+) -> bool {
+    let synthesized = match synthesized {
+        Ok(synthesized) => synthesized,
+        Err(errors) => {
+            let message = errors
+                .iter()
+                .map(|error| format!("{}: {}", error.path, error.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let fingerprint = source_fingerprint(&format!("projection-error:{message}"));
+            if previous.is_some_and(|state| state.fingerprint == fingerprint) {
+                return false;
+            }
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
+                text: format!("[{model_name}] Projection error: {message}"),
+            });
+            error!("[domain-projection] `{}` rejected: {message}", prim.path);
+            retire_sim_interface(commands, entity);
+            if let Some(model) = installed_model {
+                queue_retire_generated_document(commands, model.document);
+            }
+            commands
+                .entity(entity)
+                .remove::<(UsdModelicaPortContract, ModelicaSignalLayout)>();
+            commands.entity(entity).try_insert((
+                ModelicaModel {
+                    model_name: model_name.to_string(),
+                    source_uri: format!("generated://{model_name}.mo"),
+                    session_id: installed_model.map_or(1, |model| model.session_id + 1),
+                    is_stepping: false,
+                    is_compiling: false,
+                    last_error: Some(message.clone()),
+                    ..default()
+                },
+                UsdSourcedCosim,
+                DomainProjectionState { fingerprint },
+                GeneratedModelicaSource {
+                    network_root: prim.path.clone(),
+                    doc_uri: format!("generated://{model_name}.mo"),
+                    source: String::new(),
+                    component_paths: Vec::new(),
+                    members: Vec::new(),
+                    source_roots: Vec::new(),
+                    member_output_aliases: Vec::new(),
+                    units: Vec::new(),
+                    boundary_inputs: Vec::new(),
+                    boundary_outputs: Vec::new(),
+                    layout: SynthesisLayout::default(),
+                    projection_error: Some(message),
+                },
+            ));
+            return false;
+        }
+    };
+
+    if matches!(synthesized, SynthOutcome::Pending) {
+        return false;
+    }
+    let SynthOutcome::Ready(synthesized) = synthesized else {
+        if previous.is_some() {
+            retire_sim_interface(commands, entity);
+            if let Some(model) = installed_model {
+                queue_retire_generated_document(commands, model.document);
+            }
+            commands.entity(entity).remove::<(
+                ModelicaModel,
+                ModelicaSignalLayout,
+                UsdSourcedCosim,
+                UsdModelicaPortContract,
+                DomainProjectionState,
+                GeneratedModelicaSource,
+            )>();
+        }
+        return false;
+    };
+
+    let component_count = synthesized.component_paths.len();
+    let source = synthesized.source;
+    let source_for_diagnostics = source.clone();
+    let fingerprint = source_fingerprint(&source);
+    if previous.is_some_and(|state| state.fingerprint == fingerprint) {
+        return false;
+    }
+
+    // ONE parse-and-extract, shared with `cosim::dispatch_loaded_modelica_sources`.
+    let interface = parse_model_interface(&source, "usd-network-projection.mo");
+    let compiled_name = interface
+        .model_name
+        .unwrap_or_else(|| model_name.to_string());
+    let declared_output_ports = interface.outputs.clone();
+    let session_id = installed_model.map_or(1, |model| model.session_id + 1);
+    let doc_uri = format!("generated://{model_name}.mo");
+    let mut model = ModelicaModel {
+        model_name: compiled_name.clone(),
+        source_uri: doc_uri.clone(),
+        parameters: interface.parameters,
+        inputs: interface.inputs,
+        communication_period_secs: synthesized.communication_period_secs,
+        session_id,
+        is_stepping: true,
+        is_compiling: true,
+        resume_after_compile: true,
+        ..default()
+    };
+    let member_output_aliases = synthesized
+        .member_output_aliases
+        .iter()
+        .filter(|(_, _, alias)| interface.outputs.contains(alias))
+        .cloned()
+        .collect::<Vec<_>>();
+    let signal_layout = match generated_signal_layout(
+        view,
+        root_path,
+        &prim.path,
+        &synthesized.outputs,
+        &synthesized.members,
+        &member_output_aliases,
+        &synthesized.units,
+        classes,
+    ) {
+        Ok(layout) => layout,
+        Err(message) => {
+            let message = format!("generated signal layout failed: {message}");
+            model.is_stepping = false;
+            model.is_compiling = false;
+            model.last_error = Some(message.clone());
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
+                text: format!("[{}] Projection error: {message}", model.model_name),
+            });
+            error!("[domain-projection] {} rejected: {message}", prim.path);
+            retire_sim_interface(commands, entity);
+            commands.entity(entity).try_insert(model);
+            return false;
+        }
+    };
+    let projection_error = match channels.tx.send(ModelicaCommand::Compile {
+        entity,
+        session_id,
+        model_name: compiled_name,
+        source,
+        doc_uri: doc_uri.clone(),
+        extra_sources: Vec::new(),
+        parameter_overrides: Vec::new(),
+        stream: None,
+        // The worker, not this projector, owns backend selection and DAE
+        // lowering for generated domain networks.
+        realtime_safe: false,
+    }) {
+        Ok(()) => {
+            info!(
+                "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
+                 generated://{}.mo",
+                prim.path, component_count, model_name
+            );
+            None
+        }
+        Err(error) => {
+            let message = format!("could not dispatch generated model compile: {error}");
+            model.is_stepping = false;
+            model.is_compiling = false;
+            model.last_error = Some(message.clone());
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
+                text: format!("[{}] Compile error: {message}", model.model_name),
+            });
+            Some(message)
+        }
+    };
+    let generated_source = GeneratedModelicaSource {
+        network_root: prim.path.clone(),
+        doc_uri: doc_uri.clone(),
+        source: source_for_diagnostics,
+        component_paths: synthesized.component_paths,
+        members: synthesized.members,
+        source_roots: synthesized.source_roots.into_iter().collect(),
+        member_output_aliases,
+        units: synthesized.units,
+        boundary_inputs: synthesized.inputs.iter().cloned().collect(),
+        boundary_outputs: synthesized.outputs.iter().cloned().collect(),
+        layout: synthesized.layout,
+        projection_error,
+    };
+    retire_sim_interface(commands, entity);
+    commands.entity(entity).try_insert((
+        model,
+        signal_layout,
+        UsdSourcedCosim,
+        lunco_core::PortSurfacePending,
+        UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),
+        crate::cosim::UsdModelicaSchedule {
+            communication_period_secs: synthesized.communication_period_secs,
+        },
+        DomainProjectionState { fingerprint },
+        generated_source,
+    ));
+    true
+}
+
 /// Reactively compile every prim containing a standard component collection of
 /// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
@@ -2223,16 +2533,19 @@ pub fn project_domain_islands(
     // explicit "identity still pending" signal; it is removed on upgrade.
     q_instance_member: Query<(), With<lunco_usd_bevy::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
+    canonical: NonSend<CanonicalStages>,
     dirty: Res<WiringDirty>,
     // A member class landing is the projector's third trigger: the networks that
     // returned `Pending` have to be re-asked, and no prim spawned or changed.
-    mut projection_dirty: ResMut<ProjectionDirty>,
+    mut projection: ParamSet<(ResMut<ProjectionDirty>, ResMut<PendingDomainProjections>)>,
     classes: Res<MemberClasses>,
     registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
+    let started = web_time::Instant::now();
+    let mut projected = 0usize;
+    let mut projection_dirty = projection.p0();
     if !projection_is_due_from_flags(
         !added.is_empty(),
         !identity_added.is_empty(),
@@ -2248,6 +2561,16 @@ pub fn project_domain_islands(
     // and policy reads below are reserved for the changed entities.
     let full_reprojection = dirty.0 || projection_dirty.0;
     projection_dirty.0 = false;
+    drop(projection_dirty);
+    let mut pending = projection.p1();
+    if full_reprojection {
+        // A pending task captured the previous class/source and wiring view.
+        // Drop it before queuing the new transaction; otherwise a late
+        // `Pending` result can consume the invalidation and leave the network
+        // without another trigger. The task owns no mutable world state, so
+        // cancellation is the complete invalidation operation.
+        pending.tasks.clear();
+    }
     let Some(channels) = channels else { return };
     for (entity, prim, previous, installed_model) in &prims {
         if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
@@ -2269,26 +2592,50 @@ pub fn project_domain_islands(
         // Use the same stable instance-root identity as the USD wiring resolver;
         // scene-owned prims need no suffix because their composed paths are unique.
         let id = prim.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim.stage_handle)
-                .and_then(|stage| stage.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        let Some(stage) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let view = stage.view();
+        let (reader, stage_generation) = canonical.reader_for(id, stage_asset);
         let Ok(root_path) = SdfPath::new(&prim.path) else {
             continue;
         };
+        if stage_generation == 0 {
+            if pending.tasks.iter().any(|task| task.entity == entity) {
+                continue;
+            }
+            let plan = stages
+                .get(&prim.stage_handle)
+                .map(|asset| asset.projection_plan.clone())
+                .expect("loaded USD asset always carries a prepared projection plan");
+            let plan_view: &dyn ComposedReader = &reader;
+            if !is_domain_network_root(plan_view, &root_path) {
+                continue;
+            }
+            let Some((requested, synthesizer)) =
+                resolve_domain_synthesizer(plan_view, &root_path, &prim.path, &registry)
+            else {
+                continue;
+            };
+            let model_name = network_model_name(&prim.path, instance_id);
+            queue_domain_projection(
+                &mut pending,
+                entity,
+                id,
+                stage_generation,
+                &root_path,
+                model_name,
+                requested,
+                synthesizer,
+                plan,
+                classes.clone(),
+            );
+            continue;
+        }
         // Domain projection owns only prims with the standard component
         // collection.  Keep this structural gate ahead of synthesizer
         // selection: deriving ownership for an ordinary prim would walk its
         // collection metadata even though it cannot be a network root.
-        if !is_domain_network_root(&view, &root_path) {
+        if !is_domain_network_root(&reader, &root_path) {
             continue;
         }
         // Domain ownership is derived from the typed member role schemas. A
@@ -2296,244 +2643,101 @@ pub fn project_domain_islands(
         // policy for a generic Modelica collection; physical actuator
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
-        let requested = match select_synthesizer_name(&view, &root_path) {
-            Ok(name) => name,
-            Err(message) => {
-                error!("[domain-projection] `{}` rejected: {message}", prim.path);
-                continue;
-            }
-        };
-        let Some(synthesizer) = registry.get(&requested).cloned() else {
-            let known = registry.names().join(", ");
-            error!(
-                "[domain-projection] `{}` names synthesizer `{requested}`, which is not \
-                 registered (known: {known}) — the scope is not projected.",
-                prim.path
-            );
+        let Some((requested, synthesizer)) =
+            resolve_domain_synthesizer(&reader, &root_path, &prim.path, &registry)
+        else {
             continue;
         };
         let model_name = network_model_name(&prim.path, instance_id);
-        let ctx = SynthContext { classes: &classes };
-        let synthesized = match synthesizer.synthesize(&view, &root_path, &model_name, &ctx) {
-            Ok(network) => network,
-            Err(errors) => {
-                let message = errors
-                    .iter()
-                    .map(|error| format!("{}: {}", error.path, error.message))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                let fingerprint = source_fingerprint(&format!("projection-error:{message}"));
-                if previous.is_some_and(|state| state.fingerprint == fingerprint) {
-                    continue;
-                }
-                notices.write(ModelicaNotice {
-                    level: NoticeLevel::Error,
-                    text: format!("[{model_name}] Projection error: {message}"),
-                });
-                error!("[domain-projection] `{}` rejected: {message}", prim.path);
-                retire_sim_interface(&mut commands, entity);
-                if let Some(model) = installed_model {
-                    queue_retire_generated_document(&mut commands, model.document);
-                }
-                // A rejected projection has no interface to hold anyone to; the
-                // rejection itself is the error the user must act on.
-                commands
-                    .entity(entity)
-                    .remove::<(UsdModelicaPortContract, ModelicaSignalLayout)>();
-                commands.entity(entity).try_insert((
-                    ModelicaModel {
-                        model_name: model_name.clone(),
-                        source_uri: format!("generated://{model_name}.mo"),
-                        session_id: installed_model.map_or(1, |model| model.session_id + 1),
-                        is_stepping: false,
-                        is_compiling: false,
-                        last_error: Some(message),
-                        ..default()
-                    },
-                    UsdSourcedCosim,
-                    DomainProjectionState { fingerprint },
-                    GeneratedModelicaSource {
-                        network_root: prim.path.clone(),
-                        doc_uri: format!("generated://{model_name}.mo"),
-                        source: String::new(),
-                        component_paths: Vec::new(),
-                        members: Vec::new(),
-                        source_roots: Vec::new(),
-                        member_output_aliases: Vec::new(),
-                        units: Vec::new(),
-                        boundary_inputs: Vec::new(),
-                        boundary_outputs: Vec::new(),
-                        layout: SynthesisLayout::default(),
-                    },
-                ));
-                continue;
-            }
-        };
-        // Waiting on a member's declared class: no verdict, no state written, so
-        // the next trigger asks again.
-        if matches!(synthesized, SynthOutcome::Pending) {
-            continue;
-        }
-        let SynthOutcome::Ready(synthesized) = synthesized else {
-            if previous.is_some() {
-                // The authored collection ceased to describe a compilable
-                // network. Retire its runtime projection in the same update;
-                // keeping the old solver would simulate stale authoring.
-                retire_sim_interface(&mut commands, entity);
-                if let Some(model) = installed_model {
-                    queue_retire_generated_document(&mut commands, model.document);
-                }
-                commands.entity(entity).remove::<(
-                    ModelicaModel,
-                    ModelicaSignalLayout,
-                    UsdSourcedCosim,
-                    UsdModelicaPortContract,
-                    DomainProjectionState,
-                    GeneratedModelicaSource,
-                )>();
-            }
-            continue;
-        };
-        let component_count = synthesized.component_paths.len();
-        let source = synthesized.source;
-        let source_for_diagnostics = source.clone();
-        let fingerprint = source_fingerprint(&source);
-        if previous.is_some_and(|state| state.fingerprint == fingerprint) {
-            continue;
-        }
-
-        // ONE parse-and-extract, shared with `cosim::dispatch_loaded_modelica_sources`:
-        // the interface of a model is read the same way whether the source came
-        // off disk or out of this emitter.
-        let interface = parse_model_interface(&source, "usd-network-projection.mo");
-        let compiled_name = interface.model_name.unwrap_or_else(|| model_name.clone());
-        // A generated wrapper exposes both authored network boundaries and the
-        // topology-derived member output aliases used by authored telemetry.
-        // Publish the complete generated interface before the first solver
-        // snapshot; otherwise a valid USD declaration is indistinguishable
-        // from a missing port during the compile-to-run interval.
-        let declared_output_ports = interface.outputs.clone();
-        let session_id = installed_model.map_or(1, |model| model.session_id + 1);
-        let doc_uri = format!("generated://{model_name}.mo");
-        let mut model = ModelicaModel {
-            model_name: compiled_name.clone(),
-            source_uri: doc_uri.clone(),
-            parameters: interface.parameters,
-            inputs: interface.inputs,
-            communication_period_secs: synthesized.communication_period_secs,
-            session_id,
-            is_stepping: true,
-            is_compiling: true,
-            resume_after_compile: true,
-            ..default()
-        };
-        // The policy result carries the member-output facts collected by the
-        // one composed-USD reader. Filter them against the actual generated
-        // root interface so a policy that deliberately omits an optional
-        // output cannot create a telemetry/layout entry with no solver value.
-        let member_output_aliases = synthesized
-            .member_output_aliases
-            .iter()
-            .filter(|(_, _, alias)| interface.outputs.contains(alias))
-            .cloned()
-            .collect::<Vec<_>>();
-        let signal_layout = match generated_signal_layout(
-            &view,
+        let synthesized = synthesizer.synthesize(
+            &reader,
             &root_path,
-            &prim.path,
-            &synthesized.outputs,
-            &synthesized.members,
-            &member_output_aliases,
-            &synthesized.units,
-            &classes,
-        ) {
-            Ok(layout) => layout,
-            Err(message) => {
-                let message = format!("generated signal layout failed: {message}");
-                model.is_stepping = false;
-                model.is_compiling = false;
-                model.last_error = Some(message.clone());
-                notices.write(ModelicaNotice {
-                    level: NoticeLevel::Error,
-                    text: format!("[{}] Projection error: {message}", model.model_name),
-                });
-                error!("[domain-projection] {} rejected: {message}", prim.path);
-                retire_sim_interface(&mut commands, entity);
-                commands.entity(entity).try_insert(model);
-                continue;
-            }
-        };
-        let dispatch = channels.tx.send(ModelicaCommand::Compile {
-            entity,
-            session_id,
-            model_name: compiled_name,
-            source,
-            doc_uri: doc_uri.clone(),
-            extra_sources: Vec::new(),
-            parameter_overrides: Vec::new(),
-            stream: None,
-            // A projected domain island is a NETWORK of components, not a
-            // program driving a client-predicted body. It therefore carries no
-            // prediction promise and resolves through the authoritative-live
-            // capability profile. The worker, not this projector, owns backend
-            // selection and DAE lowering.
-            realtime_safe: false,
-        });
-        info!(
-            "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
-             generated://{}.mo",
-            prim.path, component_count, model_name
+            &model_name,
+            &SynthContext { classes: &classes },
         );
-        if let Err(error) = dispatch {
-            let message = format!("could not dispatch generated model compile: {error}");
-            model.is_stepping = false;
-            model.is_compiling = false;
-            model.last_error = Some(message.clone());
-            notices.write(ModelicaNotice {
-                level: NoticeLevel::Error,
-                text: format!("[{}] Compile error: {message}", model.model_name),
-            });
+        if commit_domain_projection(
+            &mut commands,
+            entity,
+            prim,
+            previous,
+            installed_model,
+            &root_path,
+            &reader,
+            &classes,
+            &channels,
+            &requested,
+            &model_name,
+            synthesized,
+            &mut notices,
+        ) {
+            projected += 1;
         }
-        let generated_source = GeneratedModelicaSource {
-            network_root: prim.path.clone(),
-            doc_uri: doc_uri.clone(),
-            source: source_for_diagnostics,
-            component_paths: synthesized.component_paths,
-            members: synthesized.members,
-            source_roots: synthesized.source_roots.into_iter().collect(),
-            member_output_aliases,
-            units: synthesized.units,
-            boundary_inputs: synthesized.inputs.iter().cloned().collect(),
-            boundary_outputs: synthesized.outputs.iter().cloned().collect(),
-            layout: synthesized.layout,
+        continue;
+    }
+    if projected > 0 {
+        bevy::log::debug!(
+            "[domain-projection] prepared {projected} network(s) in {:.2} ms",
+            started.elapsed().as_secs_f64() * 1_000.0
+        );
+    }
+}
+
+/// Publish completed startup synthesis tasks without making the UI schedule
+/// wait for Rhai, network extraction, or generated-source validation.
+pub fn poll_domain_projection_tasks(
+    mut commands: Commands,
+    mut pending: ResMut<PendingDomainProjections>,
+    prims: Query<(
+        &UsdPrimPath,
+        Option<&DomainProjectionState>,
+        Option<&ModelicaModel>,
+    )>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
+    classes: Res<MemberClasses>,
+    channels: Option<Res<ModelicaChannels>>,
+    mut notices: MessageWriter<ModelicaNotice>,
+) {
+    let Some(channels) = channels else { return };
+    let mut index = 0;
+    while index < pending.tasks.len() {
+        let ready = block_on(future::poll_once(&mut pending.tasks[index].task));
+        let Some(synthesized) = ready else {
+            index += 1;
+            continue;
         };
-        // A changed wrapper may expose a different port interface. Rebuild the
-        // derived co-sim projection instead of retaining values and port names
-        // from the previous compiled topology.
-        retire_sim_interface(&mut commands, entity);
-        commands.entity(entity).try_insert((
-            model,
-            signal_layout,
-            UsdSourcedCosim,
-            // The generated ModelicaModel is installed before the ordinary
-            // wrapper pass can publish SimComponent. This is an explicit
-            // lifecycle fact, not a timing guess: consumers must wait for the
-            // wrapper's port surface instead of classifying the interval as a
-            // missing authored port.
-            lunco_core::PortSurfacePending,
-            // The generated interface is the compiler-confirmed contract for
-            // this wrapper. It includes authored network boundaries and the
-            // topology-derived member aliases that USD telemetry may target;
-            // validation turns any DAE discrepancy into one durable,
-            // actionable error instead of an island that steps and publishes
-            // an incomplete surface.
-            UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),
-            crate::cosim::UsdModelicaSchedule {
-                communication_period_secs: synthesized.communication_period_secs,
-            },
-            DomainProjectionState { fingerprint },
-            generated_source,
-        ));
+        let task = pending.tasks.swap_remove(index);
+        let Ok((prim, previous, installed_model)) = prims.get(task.entity) else {
+            continue;
+        };
+        if prim.stage_handle.id() != task.stage_id {
+            continue;
+        }
+        let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
+            continue;
+        };
+        if canonical.generation_for(task.stage_id) != task.stage_generation {
+            continue;
+        }
+        let Ok(root_path) = SdfPath::new(&task.root_path) else {
+            continue;
+        };
+        let view: &dyn ComposedReader = task.plan.as_ref();
+        commit_domain_projection(
+            &mut commands,
+            task.entity,
+            prim,
+            previous,
+            installed_model,
+            &root_path,
+            view,
+            &classes,
+            &channels,
+            &task.requested,
+            &task.model_name,
+            synthesized,
+            &mut notices,
+        );
     }
 }
 
@@ -2550,6 +2754,7 @@ pub fn sync_generated_network_documents(
         )>,
     >,
     mut documents: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
+    mut generated_metadata: ResMut<lunco_modelica::state::GeneratedModelicaSources>,
 ) {
     for (entity, source, mut model) in &mut generated {
         // Projection errors are represented by an empty diagnostic source and
@@ -2588,6 +2793,7 @@ pub fn sync_generated_network_documents(
         documents.checkpoint_source(document, source.source.clone());
         documents.link(entity, document);
         model.document = document;
+        generated_metadata.dirty = true;
     }
 }
 
@@ -2682,7 +2888,7 @@ pub fn publish_generated_sources(
                 boundary_inputs: source.boundary_inputs.clone(),
                 boundary_outputs: source.boundary_outputs.clone(),
                 member_output_aliases: source.member_output_aliases.clone(),
-                error: model.and_then(|m| m.last_error.clone()),
+                projection_error: source.projection_error.clone(),
             },
         )
         .collect();
@@ -2690,9 +2896,11 @@ pub fn publish_generated_sources(
 }
 
 /// Change gate for the generated metadata publisher. The resource flag covers
-/// removals, while ECS change detection covers source/model error transitions.
+/// document-link and removal changes, while ECS change detection covers the
+/// generated source projection itself. Runtime solver output is deliberately
+/// outside this metadata contract.
 pub fn generated_sources_need_publish(
-    changed: Query<(), Or<(Changed<GeneratedModelicaSource>, Changed<ModelicaModel>)>>,
+    changed: Query<(), Changed<GeneratedModelicaSource>>,
     generated: Res<lunco_modelica::state::GeneratedModelicaSources>,
 ) -> bool {
     generated.dirty || !changed.is_empty()
@@ -2738,7 +2946,7 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                     "network_root": generated.network_root,
                     "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
                     "doc_uri": generated.doc_uri,
-                    "error": model.and_then(|model| model.last_error.clone()),
+                    "projection_error": generated.projection_error,
                     "boundary_inputs": generated.boundary_inputs,
                     "boundary_outputs": generated.boundary_outputs,
                     "member_output_aliases": generated.member_output_aliases,
@@ -2854,7 +3062,7 @@ where
 }
 
 fn network_communication_period(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn ComposedReader,
     components: &[DomainComponent],
 ) -> Result<f64, Vec<DomainProjectionError>> {
     aggregate_communication_periods(components.iter().map(|component| {
@@ -2888,7 +3096,7 @@ fn network_communication_period(
 /// every unit test below builds a `DomainNetwork` by hand, and the composition
 /// arcs are exactly where this has broken in the field.
 pub fn read_network(
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &dyn ComposedReader,
     root: &SdfPath,
     classes: &MemberClasses,
 ) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
@@ -3494,7 +3702,11 @@ fn instance_identifier(root: &str, path: &str) -> Result<String, String> {
 /// telemetry declaration.  Such a declaration owns the public channel name;
 /// the generated wrapper alias remains available as implementation state but
 /// must not be classified as a second public channel for the same value.
-fn has_authored_telemetry_for_output(view: &impl UsdRead, member: &str, output: &str) -> bool {
+fn has_authored_telemetry_for_output(
+    view: &dyn ComposedReader,
+    member: &str,
+    output: &str,
+) -> bool {
     let Ok(path) = SdfPath::new(member) else {
         return false;
     };
@@ -3533,7 +3745,7 @@ fn has_authored_telemetry_for_output(view: &impl UsdRead, member: &str, output: 
 /// consumer sees the same USD structure without parsing generated names in a
 /// UI or retaining a second solver.
 fn generated_signal_layout(
-    view: &impl UsdRead,
+    view: &dyn ComposedReader,
     root_path: &SdfPath,
     root: &str,
     outputs: &BTreeSet<String>,
@@ -3713,9 +3925,11 @@ fn generated_signal_layout(
     // unit only if the authored topology is invalid. The projection validator
     // owns that error; this map remains a direct data projection and never
     // invents another owner.
-    debug_assert!(members.iter().all(|(member, _, _)| units
-        .iter()
-        .any(|unit| unit.component_paths.contains(member))));
+    debug_assert!(members.iter().all(|(member, _, _)| {
+        units
+            .iter()
+            .any(|unit| unit.component_paths.contains(member))
+    }));
     Ok(layout)
 }
 
@@ -3728,14 +3942,6 @@ pub enum MemberClass {
     /// authoring error; the projector does not substitute another class.
     Invalid(String),
 }
-
-/// How long a member source may stay unresolved before the projector reports a
-/// source-resolution error.
-///
-/// A source-resolution transaction has its own explicit terminal state. It is
-/// intentionally independent of the scene-load transaction: a missing member
-/// source must not make the whole scene browser unavailable.
-const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 
 /// The class each member source declares — the ONE authority on what a generated
 /// model may instantiate.
@@ -3752,12 +3958,15 @@ const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 /// resolved yet simply does not project until they are. Keyed by asset path, so
 /// one file is fetched and parsed once per session however many networks
 /// instantiate it.
-#[derive(Resource, Default)]
+#[derive(Resource, Clone, Default)]
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
     outputs: HashMap<String, BTreeSet<String>>,
     metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
-    pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
+    /// Resident handles let source modification events invalidate the exact
+    /// declaration they changed without rescanning every pending source.
+    handles: HashMap<String, Handle<lunco_modelica::source_asset::ModelicaSource>>,
+    pending: HashMap<String, Handle<lunco_modelica::source_asset::ModelicaSource>>,
 }
 
 impl MemberClasses {
@@ -3816,8 +4025,8 @@ impl MemberClasses {
 }
 
 /// Set when a member class resolves, so the projection that was waiting on it
-/// re-runs. Prim spawn and live edits are the projector's other triggers; an
-/// asset finishing its load is neither.
+/// re-runs. Prim spawn and live edits are the projector's other triggers; the
+/// asset event is the resolution trigger for a pending source.
 #[derive(Resource, Default)]
 pub struct ProjectionDirty(pub bool);
 
@@ -3858,10 +4067,10 @@ pub(crate) fn domain_projection_due(
 /// produce a generated model with an unknown member class and an unattributed
 /// compiler failure.
 ///
-/// A source that fails to load, cannot be parsed, or simply never resolves
-/// within [`CLASS_RESOLVE_MAX_SECS`] settles as [`MemberClass::Invalid`]. The
-/// projection reports that terminal source error and does not compile an
-/// incomplete model.
+/// A source that fails to load or does not expose a class settles as
+/// [`MemberClass::Invalid`]. The projection reports that terminal source error
+/// and does not compile an incomplete model. Completion and failure are driven
+/// by the Modelica asset events; there is no time-based give-up path.
 pub fn resolve_member_classes(
     prims: Query<&UsdPrimPath>,
     added: Query<(), Added<UsdPrimPath>>,
@@ -3869,36 +4078,64 @@ pub fn resolve_member_classes(
     mut projection_dirty: ResMut<ProjectionDirty>,
     dirty: Res<WiringDirty>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
+    canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
     sources: Res<Assets<lunco_modelica::source_asset::ModelicaSource>>,
-    // REAL time, like every other give-up deadline in this crate: a paused or
-    // time-warped simulation must not change when a load is declared lost.
-    time: Res<Time<bevy::time::Real>>,
+    mut source_events: MessageReader<AssetEvent<lunco_modelica::source_asset::ModelicaSource>>,
+    mut source_failures: MessageReader<
+        bevy::asset::AssetLoadFailedEvent<lunco_modelica::source_asset::ModelicaSource>,
+    >,
 ) {
-    let now = time.elapsed_secs_f64();
+    let mut loaded = HashSet::new();
+    let mut modified = HashSet::new();
+    for event in source_events.read() {
+        match event {
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => {
+                loaded.insert(*id);
+            }
+            AssetEvent::Modified { id } => {
+                modified.insert(*id);
+            }
+            _ => {}
+        }
+    }
+    let failed: HashMap<AssetId<lunco_modelica::source_asset::ModelicaSource>, String> =
+        source_failures
+            .read()
+            .map(|event| (event.id, event.error.to_string()))
+            .collect();
+    let discover = !added.is_empty() || dirty.0;
+    if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
+        return;
+    }
 
     // Discovery runs on the same triggers as the projector — plus never at all
     // once every member is known, which is the steady state.
-    if !added.is_empty() || dirty.0 {
+    let mut discovered = HashSet::new();
+    let modified_assets: Vec<_> = classes
+        .handles
+        .iter()
+        .filter(|(_, handle)| modified.contains(&handle.id()))
+        .map(|(asset, handle)| (asset.clone(), handle.clone()))
+        .collect();
+    for (asset, handle) in modified_assets {
+        classes.known.remove(&asset);
+        classes.outputs.remove(&asset);
+        classes.metadata.remove(&asset);
+        classes.pending.insert(asset, handle);
+    }
+    if discover {
         for prim in &prims {
             let id = prim.stage_handle.id();
-            if canonical.get(id).is_none() {
-                if let Some(recipe) = stages
-                    .get(&prim.stage_handle)
-                    .and_then(|stage| stage.recipe.clone())
-                {
-                    canonical.get_or_build(id, &recipe);
-                }
-            }
-            let Some(stage) = canonical.get(id) else {
+            let Some(stage_asset) = stages.get(&prim.stage_handle) else {
                 continue;
             };
-            let view = stage.view();
+            let (reader, _generation) = canonical.reader_for(id, stage_asset);
+            let view: &dyn ComposedReader = &reader;
             let Ok(root) = SdfPath::new(&prim.path) else {
                 continue;
             };
-            if !is_domain_network_root(&view, &root) {
+            if !is_domain_network_root(view, &root) {
                 continue;
             }
             let Ok(members) = view.collection_members(&root, "components") else {
@@ -3908,7 +4145,7 @@ pub fn resolve_member_classes(
                 if !view.has_api_schema(&member, "LunCoProgramAPI") {
                     continue;
                 }
-                let source_ref = match modelica_source_ref(&view, &member) {
+                let source_ref = match modelica_source_ref(view, &member) {
                     Ok(source_ref) => source_ref,
                     Err(issue) => {
                         warn!(
@@ -3924,9 +4161,9 @@ pub fn resolve_member_classes(
                 }
                 let handle: Handle<lunco_modelica::source_asset::ModelicaSource> =
                     asset_server.load(asset.clone());
-                classes
-                    .pending
-                    .insert(asset, (handle, now + CLASS_RESOLVE_MAX_SECS));
+                discovered.insert(handle.id());
+                classes.handles.insert(asset.clone(), handle.clone());
+                classes.pending.insert(asset, handle);
             }
         }
     }
@@ -3936,52 +4173,58 @@ pub fn resolve_member_classes(
     }
     let settled: Vec<(
         String,
-        Option<String>,
-        Option<(BTreeSet<String>, HashMap<String, ModelicaVariableMetadata>)>,
+        Result<
+            (
+                String,
+                BTreeSet<String>,
+                HashMap<String, ModelicaVariableMetadata>,
+            ),
+            String,
+        >,
     )> = classes
         .pending
         .iter()
-        .filter_map(|(asset, (handle, expires))| {
+        .filter_map(|(asset, handle)| {
+            let id = handle.id();
+            if !discovered.contains(&id) && !loaded.contains(&id) && !failed.contains_key(&id) {
+                return None;
+            }
             if let Some(source) = sources.get(handle) {
                 let interface = parse_model_interface(&source.text, "member-class.mo");
-                let class = interface.model_name.map(|declared| match interface.within {
+                let Some(declared) = interface.model_name else {
+                    return Some((
+                        asset.clone(),
+                        Err("the Modelica source did not expose a declared class".into()),
+                    ));
+                };
+                let class = match interface.within {
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
-                });
+                };
                 return Some((
                     asset.clone(),
-                    class,
-                    Some((interface.outputs, interface.variable_metadata)),
+                    Ok((class, interface.outputs, interface.variable_metadata)),
                 ));
             }
-            if asset_server.load_state(handle).is_failed() || now >= *expires {
-                return Some((asset.clone(), None, None));
-            }
-            None
+            failed.get(&id).map(|error| {
+                (
+                    asset.clone(),
+                    Err(format!("failed to load Modelica source asset: {error}")),
+                )
+            })
         })
         .collect();
-    for (asset, class, interface) in settled {
+    for (asset, result) in settled {
         classes.pending.remove(&asset);
-        match class {
-            Some(class) => {
-                if let Some((outputs, metadata)) = interface {
-                    classes.outputs.insert(asset.clone(), outputs);
-                    classes.metadata.insert(asset.clone(), metadata);
-                }
+        match result {
+            Ok((class, outputs, metadata)) => {
+                classes.outputs.insert(asset.clone(), outputs);
+                classes.metadata.insert(asset.clone(), metadata);
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
-            None => {
-                warn!(
-                    "[domain-projection] could not read a declared Modelica class from `{asset}` (load \
-                     failed, unparseable, or not resolved within {CLASS_RESOLVE_MAX_SECS:.0}s) — \
-                     the network projection will report this source error."
-                );
-                classes.known.insert(
-                    asset,
-                    MemberClass::Invalid(
-                        "the Modelica source did not expose a declared class".into(),
-                    ),
-                );
+            Err(error) => {
+                warn!("[domain-projection] {asset}: {error}");
+                classes.known.insert(asset, MemberClass::Invalid(error));
             }
         }
         // The projection that was waiting on this member has no other reason to
@@ -4184,10 +4427,10 @@ mod tests {
         );
         let mut classes = MemberClasses::default();
         for member in view.collection_members(&root, "components").unwrap() {
-            if !view.has_api_schema(&member, "LunCoProgramAPI") {
+            if !lunco_usd_bevy::UsdRead::has_api_schema(&view, &member, "LunCoProgramAPI") {
                 continue;
             }
-            let asset = view.asset(&member, "info:sourceAsset").unwrap();
+            let asset = lunco_usd_bevy::UsdRead::asset(&view, &member, "info:sourceAsset").unwrap();
             let source = std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../assets")
@@ -4586,6 +4829,7 @@ def Scope "Rig"
                     boundary_inputs: Vec::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
+                    projection_error: None,
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
@@ -4638,6 +4882,7 @@ def Scope "Rig"
                     boundary_inputs: Vec::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
+                    projection_error: None,
                 },
             ))
             .id();
@@ -4660,7 +4905,7 @@ def Scope "Rig"
                 boundary_inputs: Vec::new(),
                 boundary_outputs: Vec::new(),
                 member_output_aliases: Vec::new(),
-                error: None,
+                projection_error: None,
             });
 
         app.world_mut()
@@ -4678,6 +4923,72 @@ def Scope "Rig"
             .resource::<lunco_modelica::state::GeneratedModelicaSources>()
             .entries
             .is_empty());
+    }
+
+    #[test]
+    fn generated_source_publication_ignores_runtime_model_output_changes() {
+        #[derive(Resource, Default)]
+        struct PublicationCount(usize);
+
+        fn count_publications(mut count: ResMut<PublicationCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+            .init_resource::<PublicationCount>()
+            .add_systems(
+                Update,
+                count_publications.run_if(generated_sources_need_publish),
+            );
+        let entity = app
+            .world_mut()
+            .spawn((
+                GeneratedModelicaSource {
+                    network_root: "/Rig".into(),
+                    doc_uri: "generated://Rig.mo".into(),
+                    source: "model Rig end Rig;".into(),
+                    component_paths: Vec::new(),
+                    members: Vec::new(),
+                    source_roots: Vec::new(),
+                    member_output_aliases: Vec::new(),
+                    units: Vec::new(),
+                    boundary_inputs: Vec::new(),
+                    boundary_outputs: Vec::new(),
+                    layout: SynthesisLayout::default(),
+                    projection_error: None,
+                },
+                ModelicaModel::default(),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(app.world().resource::<PublicationCount>().0, 1);
+
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<PublicationCount>().0,
+            1,
+            "solver output changes are not generated-source metadata changes"
+        );
+
+        app.world_mut()
+            .get_mut::<GeneratedModelicaSource>(entity)
+            .unwrap()
+            .source
+            .push(' ');
+        app.update();
+        assert_eq!(app.world().resource::<PublicationCount>().0, 2);
+
+        app.world_mut()
+            .resource_mut::<lunco_modelica::state::GeneratedModelicaSources>()
+            .dirty = true;
+        app.update();
+        assert_eq!(app.world().resource::<PublicationCount>().0, 3);
     }
 
     #[test]

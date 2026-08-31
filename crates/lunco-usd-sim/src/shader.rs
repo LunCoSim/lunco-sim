@@ -37,10 +37,10 @@ use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset,
-    UsdVisualSynced,
+    read_primvar_vec3_strict, CanonicalStages, UsdPrimPath, UsdStageAsset, UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
@@ -66,9 +66,9 @@ pub fn apply_usd_shader_materials(
         (With<UsdVisualSynced>, Without<UsdShaderResolved>),
     >,
     stages: Res<Assets<UsdStageAsset>>,
-    // Read the LIVE canonical stage (source of truth), built on demand from
-    // the asset's recipe.
-    mut canonical: NonSendMut<CanonicalStages>,
+    // Initial projection reads the immutable plan prepared by the asset
+    // loader. Later authored generations read the canonical live stage.
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
     // For `asset`-typed shader inputs (texture layers): root-relative paths
@@ -80,25 +80,16 @@ pub fn apply_usd_shader_materials(
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     for (entity, prim_path, visual_target) in q.iter() {
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        // No live stage (asset carries no recipe / build failed) yet → retry next
-        // frame (do NOT mark resolved).
-        let Some(cs) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).try_insert(UsdShaderResolved);
             continue;
         };
         apply_usd_shader_material_read(
-            &cs.view(),
+            &reader,
             entity,
             prim_path,
             &sdf_path,
@@ -110,12 +101,13 @@ pub fn apply_usd_shader_materials(
     }
 }
 
-/// Per-prim shader authoring over the composed read surface ([`UsdRead`]) — drives
-/// off the live canonical `StageView`. Marks the prim [`UsdShaderResolved`] the moment its stage is
-/// readable (whether or not it ends up wanting a shader).
+/// Per-prim shader authoring over the shared composed read surface. Initial
+/// generation uses the immutable prepared plan; authored generations use the
+/// canonical live stage. Marks the prim [`UsdShaderResolved`] once that reader
+/// is available, whether or not it ends up wanting a shader.
 #[allow(clippy::too_many_arguments)]
 fn apply_usd_shader_material_read(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
@@ -310,7 +302,7 @@ fn apply_usd_shader_material_read(
     // `opacityThreshold` model how much light a surface TRANSMITS, which covers
     // opaque, cutout and sorted blending but can never express `dst + src`. So
     // this is a vendor attribute covering only the genuinely new part (AGENTS.md
-    // rule 1); opacity keeps its standard meaning in the fallback below.
+    // rule 1); opacity keeps its standard meaning in the following branch.
     //
     // What it buys: an emissive surface that must not OCCLUDE. An additive
     // surface is binned into the transparent phase, which depth-TESTS but does
@@ -375,13 +367,11 @@ fn apply_usd_shader_material_read(
     // is not proof that the prim owns a named port surface.
     let material_entity = visual_target.unwrap_or(entity);
     let mut entity_commands = commands.entity(material_entity);
-    entity_commands
-        .remove::<PbrLook>()
-        .try_insert((
-            look,
-            lunco_core::PortSurfaceReady,
-            lunco_usd_bevy::UsdVisualShaderBound,
-        ));
+    entity_commands.remove::<PbrLook>().try_insert((
+        look,
+        lunco_core::PortSurfaceReady,
+        lunco_usd_bevy::UsdVisualShaderBound,
+    ));
     if procedural_skybox {
         entity_commands.try_insert(ProceduralSkybox);
     }
@@ -445,7 +435,7 @@ fn shader_has_fragment_entry(_shader_path: &str) -> bool {
 /// Names the shader does not declare pack to nothing, so filling
 /// `display_color` for a prim whose shader ignores it is harmless.
 fn fill_prim_engine_params(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     sdf_path: &SdfPath,
     values: &mut BTreeMap<String, ParamValue>,
 ) -> Result<(), String> {
@@ -487,7 +477,7 @@ fn fill_prim_engine_params(
 /// Modelica strut model on the same prim that binds a material; those are simulation
 /// wires and touch no uniform.
 fn driven_shader_inputs(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     shader_prim: &SdfPath,
 ) -> std::collections::BTreeSet<String> {
@@ -519,7 +509,7 @@ fn driven_shader_inputs(
 /// read anyway. A per-instance drive is a different thing entirely and is authored on
 /// the bound GEOMETRY — see [`has_connected_inputs`].
 fn read_shader_inputs(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     shader_prim: &SdfPath,
 ) -> BTreeMap<String, ParamValue> {
     let mut values = BTreeMap::new();
@@ -562,7 +552,7 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
 /// [`read_shader_inputs`] — a connected port is fed by a producer node
 /// (doc 18 Tier B), not by an authored file.
 fn read_shader_texture_inputs(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     shader_prim: &SdfPath,
 ) -> Vec<(TextureLayer, String)> {
     let mut out = Vec::new();

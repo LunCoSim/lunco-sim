@@ -64,7 +64,9 @@ impl PackageTreeCache {
             .map(|lib| super::library_tree::library_root_node(lib))
             .collect();
 
-        // Bundled models — pre-baked tree from `msl_indexer`. Always last.
+        // Bundled models are available from the embedded asset inventory before
+        // the optional editor index has been decoded. Always keep this root
+        // last; the generated index enriches it through its readiness event.
         roots.push(PackageNode::Category {
             id: "bundled_root".into(),
             name: "LunCo Examples".into(),
@@ -151,15 +153,10 @@ impl Default for PackageTreeCache {
     }
 }
 
-/// Pre-baked bundled-models tree from `msl_index.json`. Indexer
-/// emits `Vec<PackageNode>` directly, so this is a trivial clone.
-/// Falls back to flat per-file leaves when the index predates the
-/// bundled-node format.
+/// Initial bundled-models tree from the asset-owned embedded inventory.
+/// `MslEditorIndexBecameReady` replaces these leaves with the generated tree
+/// after its decode completes off-thread.
 fn build_bundled_tree() -> Vec<PackageNode> {
-    let pre_baked = crate::visual_diagram::msl_bundled_nodes();
-    if !pre_baked.is_empty() {
-        return pre_baked.to_vec();
-    }
     crate::models::bundled_models()
         .iter()
         .map(|m| PackageNode::Model {

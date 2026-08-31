@@ -5,7 +5,7 @@ The core **OpenUSD Hierarchy and Visuals** bridge for Bevy.
 ## Rationale
 This crate provides the foundational integration between OpenUSD and Bevy. It handles the mapping of USD Prims to Bevy Entities and automatically synchronizes visual properties (shapes and transforms) from USDA files. 
 
-By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`) or simulation metadata (`lunco-usd`) to be added as modular layers.
+By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`) or simulation metadata (`lunco-usd`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
 
 ## Key Functions & Features
 
@@ -30,9 +30,10 @@ Automatically maps the standard USD `primvars:displayColor` attribute to Bevy `S
 
 ### 5. Types
 *   **`UsdPrimPath`**: Component linking a Bevy entity to its source prim in the USD Stage.
-*   **`UsdStageAsset`**: Bevy `Asset` carrying the recipe for the live composed `openusd` stage used by runtime lookups.
+*   **`UsdStageAsset`**: Bevy `Asset` carrying the layer recipe and the worker-produced `UsdStageProjectionPlan` used for initial projection.
 
 ## Usage
 Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn
 entities tagged with `UsdPrimPath`; the load observer queues them and the
-bounded projection pass populates meshes, transforms, and materials.
+bounded projection pass binds meshes, transforms, and materials from the
+prepared plan. Later authored edits use the live canonical stage explicitly.

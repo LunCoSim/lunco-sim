@@ -48,8 +48,6 @@
 //! strictly better version of the same thing, and summing both would
 //! double-count the sky.
 
-use crate::UsdRead;
-
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
@@ -100,7 +98,7 @@ pub struct UsdDomeEnvironment {
 }
 
 fn read_dome_format(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &openusd::sdf::Path,
 ) -> Result<(), crate::LightReadError> {
     match reader.text(path, "inputs:texture:format").as_deref() {
@@ -240,7 +238,7 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 /// (`lunco_usd::live_consume`). Two copies would drift, and the symptom would
 /// be a dome that loads one way from disk and another way after an edit.
 pub fn read_dome_environment(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,

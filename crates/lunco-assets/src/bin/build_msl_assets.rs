@@ -175,10 +175,11 @@ fn main() {
         entries.push((msl_root, index_path));
     } else {
         eprintln!(
-            "warning: {} not present — palette will be empty on web. \
+            "error: {} is required for the web editor bundle. \
              Run `cargo run -p lunco-modelica --bin msl_indexer` first.",
             index_path.display()
         );
+        std::process::exit(1);
     }
     // Deterministic tar order → reproducible hash. Sort by the root-relative
     // key (NOT absolute path): extra roots live at machine-specific absolute

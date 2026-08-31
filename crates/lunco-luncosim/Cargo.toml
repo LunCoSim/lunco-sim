@@ -131,8 +131,8 @@ lunco-tutorial = { path = "../lunco-tutorial", default-features = false }
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
-# the USD-reading systems below consume the composed stage; recipe-less in-memory
-# test assets are intentionally skipped by the canonical dispatcher.
+# the USD-reading systems below consume the composed stage, while initial reads
+# use every asset's prepared projection plan.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 # `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
 # prims are still spawning" onto the workbench `StatusBus` — where the offline

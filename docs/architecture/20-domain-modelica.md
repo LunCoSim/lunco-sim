@@ -88,7 +88,9 @@ projection error, never a compiled-schema fallback.
 
 `GeneratedModelicaSource` exposes the same source, member mapping, topology
 units, and layout to diagnostics and the workbench, so the visible diagram and
-the compiled simulation have one inspectable source of truth.
+the compiled simulation have one inspectable source of truth. Its
+`projection_error` field is reserved for USD-to-Modelica projection failures;
+compiler and solver failures remain on the linked Modelica runtime state.
 
 The generated-domain projector is lifecycle-driven. Its scheduler condition
 opens only for a newly projected prim or identity, a USD wiring edit, or a
@@ -287,6 +289,14 @@ mutation signal, so a stale completion cannot leave a changed document asleep.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
+Generated USD Modelica source metadata has a separate invalidation boundary:
+the generated source projection and its document link/removal lifecycle. Live
+`ModelicaModel` output and clock updates do not rebuild that source registry;
+they remain solver state and are consumed through the Modelica runtime paths.
+Member class discovery follows the Modelica source asset lifecycle: an asset
+load or failure event settles the declaration, and a source modification
+invalidates only that declaration before re-projection. There is no
+time-based source-resolution deadline or steady-state pending scan.
 
 ### 4.1 Run-state machine + command semantics
 

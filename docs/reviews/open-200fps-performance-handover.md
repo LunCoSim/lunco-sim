@@ -653,6 +653,42 @@ The approximately 39 ms `prepare_clusters` outlier requires a separate Tracy
 inspection. It may be an upload/allocation stall rather than average work, and
 the stable-frame target requires p95/p99 evidence, not only means.
 
+#### 2026-08-31 USD projection and Modelica lifecycle verification
+
+The generated-source publisher no longer treats live `ModelicaModel` output or
+clock updates as source-metadata changes. It reacts to the generated source
+component and explicit generated-document link/removal dirtiness, so the
+steady-state publisher does not rebuild its derived registry. Initial domain
+synthesis runs on Bevy compute tasks against the prepared composed USD reader;
+the main thread only commits the resulting ECS and Modelica state. A full
+wiring/source reprojection cancels captured pending tasks as one transaction,
+which prevents a stale `Pending` result from consuming a later invalidation.
+
+Modelica member class discovery now follows `ModelicaSource` asset load,
+failure, and modification events. The old time-based give-up path and stable
+pending scan are gone; a failed source becomes an explicit projection error,
+and a modified source invalidates only its own class metadata. The public
+generated metadata field is `projection_error`; compiler and solver errors
+remain on the Modelica runtime owner.
+
+Verification in the USD checkout used the normal `target/debug/luncosim`:
+
+- The focused owner suites passed: `lunco-usd-sim` 129/129,
+  `lunco-modelica` 289 passed/1 ignored, and `lunco-luncosim-edit` 59/59.
+- USD integration suites passed: `lunco-usd` 175 unit tests plus all
+  integration targets; `lunco-usd-sim` 129 unit tests plus 6 reader, 6
+  drivetrain, 15 Rhai hook, and 20 connection tests; `lunco-usd-bevy` 250
+  unit tests plus all integration targets.
+- A normal sandbox launch reached the API readiness contract in 887 ms with
+  no pending work or fault. Modelica participants completed asynchronously in
+  about 2.85 s. Typed `Exit` released the process and port.
+- The four-process authored gate completed 55/58 headless and 5/8 graphics.
+  The remaining failures are the existing `drivetrain_parity`,
+  `landing_legs`, `tutorial_lander_mission`, `hdri`,
+  `rocker_bogie_antenna_visual`, and `shader_fallback` fixtures; the Modelica
+  scenes passed. No performance target or full-Apollo acceptance claim is
+  made from this sandbox result.
+
 ### 3. Physics remains a separate, lower-priority budget
 
 Physics must stay independent from visual quality and visual transforms:

@@ -13,11 +13,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-// `StageView` rather than `impl UsdRead`: the composed reads this needs
-// (`value_str`, `collection_members`) are the view's own, and every caller —
-// the runtime projector, the per-prim binder, the lint facts — already holds one.
-use crate::read::UsdRead;
-use crate::view::StageView;
+// The runtime projector and the per-prim binder share this same composed read
+// contract. A prepared asset plan implements it without retaining OpenUSD
+// handles, while live edits continue to use StageView.
+use crate::read::UsdReadObject;
 use openusd::sdf::Path as SdfPath;
 
 /// Why a prim that claims to be a Modelica program facet cannot be used as one.
@@ -121,17 +120,17 @@ fn source_issue(prim: &SdfPath, property: &str, message: impl Into<String>) -> P
 /// authoring conflict rather than an alternative to try. No host or collection
 /// traversal happens here; execution ownership is resolved separately.
 pub fn resolve_program(
-    view: &StageView<'_>,
+    view: &dyn UsdReadObject,
     prim: &SdfPath,
 ) -> Result<ResolvedProgram, ProgramSourceIssue> {
     let selector = view
-        .value_str(prim, "info:implementationSource")
+        .text(prim, "info:implementationSource")
         .unwrap_or_default();
     let id = view
         .text(prim, "info:id")
         .filter(|id| !id.trim().is_empty());
     let code = view
-        .scalar::<String>(prim, "info:sourceCode")
+        .text(prim, "info:sourceCode")
         .filter(|code| !code.trim().is_empty());
     let asset = view
         .asset(prim, "info:sourceAsset")
@@ -227,7 +226,7 @@ pub fn resolve_program(
 /// classification in one place; consumers only translate the result into
 /// their own runtime marker.
 pub fn resolve_behavior_tree_source(
-    view: &StageView<'_>,
+    view: &dyn UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<BehaviorTreeSource>, ProgramSourceIssue> {
     match resolve_program(view, prim)? {
@@ -257,7 +256,7 @@ pub fn is_generic_program_backend(backend: ProgramBackend) -> bool {
 /// reads on the web too, where the file may still be unfetched. The loaded
 /// source resolver is the only authority for the class name.
 pub fn modelica_source_ref(
-    view: &StageView<'_>,
+    view: &dyn UsdReadObject,
     prim: &SdfPath,
 ) -> Result<ModelicaSourceRef, ProgramSourceIssue> {
     let resolved = resolve_program(view, prim)?;
@@ -276,7 +275,7 @@ pub fn modelica_source_ref(
         ));
     };
     let sub_identifier = view
-        .value_str(prim, "info:sourceAsset:subIdentifier")
+        .text(prim, "info:sourceAsset:subIdentifier")
         .filter(|value| !value.is_empty());
     if let Some(class) = sub_identifier.as_deref() {
         if class.is_empty() || !class.split('.').all(is_modelica_identifier) {
@@ -298,7 +297,7 @@ pub fn modelica_source_ref(
 /// Codeless multiple-apply schemas are not consistently surfaced by every
 /// OpenUSD binding through `HasAPI`; their standard authored properties are
 /// authoritative and round-trip in all runtimes.
-pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
+pub fn is_domain_network_root(view: &dyn UsdReadObject, prim: &SdfPath) -> bool {
     view.any_attr_with_prefix(prim, "collection:components:")
 }
 
@@ -315,7 +314,7 @@ pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
 /// boundary. Keeping this distinction in the shared USD contract prevents the
 /// linter and projector from treating an actuator command surface as an
 /// unsourced or duplicate Modelica boundary.
-pub fn is_network_boundary_output(view: &StageView<'_>, root: &SdfPath, attr: &str) -> bool {
+pub fn is_network_boundary_output(view: &dyn UsdReadObject, root: &SdfPath, attr: &str) -> bool {
     let Some(name) = attr
         .strip_prefix("outputs:")
         .map(|name| name.strip_suffix(".connect").unwrap_or(name))
@@ -355,7 +354,7 @@ pub fn is_network_boundary_output(view: &StageView<'_>, root: &SdfPath, attr: &s
 /// ordinary external boundary, including the common case where its source is
 /// a runtime actuator port rather than a generated member.
 pub fn internal_network_input_source(
-    view: &StageView<'_>,
+    view: &dyn UsdReadObject,
     root: &SdfPath,
     input: &str,
 ) -> Option<String> {
@@ -382,7 +381,7 @@ pub fn internal_network_input_source(
 /// to `root.outputs:name`: the reader still needs the authored member address so
 /// it can turn that edge into a direct Modelica causal equation.
 pub fn network_member_output_source(
-    view: &StageView<'_>,
+    view: &dyn UsdReadObject,
     root: &SdfPath,
     output: &str,
 ) -> Option<String> {
@@ -414,7 +413,7 @@ pub const ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER: &str = "actuator-wrench";
 /// collection of LunCoForceActuatorAPI members is a geometry-derived wrench
 /// allocator. Mixed or unclassified collections are invalid and must be
 /// reported by the caller; no owner is guessed.
-pub fn derive_synthesizer_name(view: &StageView<'_>, root: &SdfPath) -> Result<String, String> {
+pub fn derive_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Result<String, String> {
     let members = view
         .collection_members(root, "components")
         .map_err(|error| format!("could not read component collection: {error}"))?;
@@ -460,7 +459,7 @@ pub fn derive_synthesizer_name(view: &StageView<'_>, root: &SdfPath) -> Result<S
 /// scalar input wires materialised by the cosim projection. `LunCoProgramAPI`
 /// is the authoritative boundary between a Modelica member and such a
 /// physical participant; collection membership alone is not.
-pub fn modelica_network_member_paths(view: &StageView<'_>) -> HashSet<String> {
+pub fn modelica_network_member_paths(view: &dyn UsdReadObject) -> HashSet<String> {
     let mut members = HashSet::new();
     for prim in view.prim_paths() {
         if !is_domain_network_root(view, &prim) {

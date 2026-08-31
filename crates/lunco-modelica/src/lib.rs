@@ -1832,13 +1832,10 @@ impl Plugin for ModelicaWorkbenchPlugin {
         // native too (copies a public link).
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
-        // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca *compile* (seconds for non-trivial models) freezes the
-        // render loop. The worker pool handles that heavy compile/run work —
-        // but it is NOT spawned here. Spawning it eagerly at boot is a cold
-        // compile of each worker bundle and can take tens of seconds on a
-        // weak machine. We only register the worker URL now; parsing-for-
-        // diagram runs on the main thread until a worker is warm.
+        // Off-thread Modelica worker. wasm32 has no real threads, so all
+        // parsing, compilation, and simulation use the Web Worker pool. The
+        // URL is registered here; the transport starts the pool when the first
+        // Modelica operation needs it.
         #[cfg(target_arch = "wasm32")]
         worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
@@ -2038,20 +2035,17 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        app.insert_resource(worker::InlineWorker::default());
-        // Command dispatch on wasm always goes through the Web Worker. If the
-        // bundle cannot start, the inline worker remains a functional fallback.
-        app.add_systems(
-            Update,
-            worker_transport::pump_commands_to_worker.before(worker::inline_worker_process),
-        );
+        // Modelica work on wasm always goes through the Web Worker. A missing
+        // or stale worker is a terminal runtime error reported through the
+        // existing command/result lifecycle; it is never executed on the UI
+        // thread.
+        app.add_systems(Update, worker_transport::pump_commands_to_worker);
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
         app.add_systems(Update, |_world: &mut World| {
             worker_transport::pump_worker_respawns();
         });
-        app.add_systems(Update, worker::inline_worker_process);
         app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on

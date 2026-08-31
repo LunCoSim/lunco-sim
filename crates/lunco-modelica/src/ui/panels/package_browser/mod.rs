@@ -104,27 +104,43 @@ pub fn on_msl_became_ready(
     // `msl_bundled_nodes`) isn't resident when `PackageTreeCache::new()` runs,
     // so the 📦 LunCo Examples root is empty at boot. Now that the engine
     // bootstrap has made the index resident, fill it in.
-    if !cache.bundled_tree_indexed {
-        let fresh = crate::visual_diagram::msl_bundled_nodes();
-        if !fresh.is_empty() {
-            for root in &mut cache.roots {
-                if let PackageNode::Category { id, children, .. } = root {
-                    if id == "bundled_root" {
-                        *children = Some(fresh.to_vec());
-                        break;
-                    }
-                }
-            }
-            cache.bundled_tree_indexed = true;
-            bevy::log::info!(
-                "[PackageBrowser] MslBecameReady: rebuilt bundled examples tree ({} nodes)",
-                fresh.len()
-            );
-        }
-    }
+    refresh_bundled_tree(&mut cache, "MslBecameReady");
 
     // ── 3. Reconcile library roots ────────────────────────────────────
     cache.reconcile_library_roots();
+}
+
+/// Refresh the bundled examples tree once the generated editor index arrives.
+/// The embedded model inventory is already available at boot, so this update
+/// only replaces its flat presentation with the richer authored tree.
+pub fn on_msl_editor_index_became_ready(
+    _trigger: On<crate::visual_diagram::MslEditorIndexBecameReady>,
+    mut cache: ResMut<PackageTreeCache>,
+) {
+    refresh_bundled_tree(&mut cache, "MslEditorIndexBecameReady");
+}
+
+fn refresh_bundled_tree(cache: &mut PackageTreeCache, source: &str) {
+    if cache.bundled_tree_indexed {
+        return;
+    }
+    let fresh = crate::visual_diagram::msl_bundled_nodes();
+    if fresh.is_empty() {
+        return;
+    }
+    for root in &mut cache.roots {
+        if let PackageNode::Category { id, children, .. } = root {
+            if id == "bundled_root" {
+                *children = Some(fresh.to_vec());
+                break;
+            }
+        }
+    }
+    cache.bundled_tree_indexed = true;
+    bevy::log::info!(
+        "[PackageBrowser] {source}: rebuilt bundled examples tree ({} nodes)",
+        fresh.len()
+    );
 }
 
 /// Re-project open diagrams after any bundled source root lands in the shared

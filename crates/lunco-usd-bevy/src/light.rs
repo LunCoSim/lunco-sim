@@ -60,7 +60,6 @@ use lunco_render::{
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
-use crate::read::UsdRead;
 
 /// An authored light attribute could not be interpreted without inventing a
 /// replacement value. The importer logs the precise prim/property and refuses
@@ -111,13 +110,10 @@ pub const DOME_TEXTURE_ATTR: &str = "inputs:texture:file";
 /// one dome it owns instead of blindly authoring the total and double-counting
 /// whatever the scene already authored.
 ///
-/// # Limitation
-///
-/// Reads flattened layer data (`UsdDocument::composed_arc()` is an sdf
-/// layer-stack merge, not PCP composition), so a dome that only exists inside a
-/// `references`d asset is **not** counted, while the ECS sum does see it. Scenes
-/// author their ambient fill directly, so this is the rare case; it would show up
-/// as the ambient slider reading back higher than it was set.
+/// This is an authoring/document query over the document's own layer data. It is
+/// intentionally distinct from the runtime composed-reader path above: a command
+/// editing a document asks which dome opinions that document owns, while runtime
+/// rendering reads the fully composed stage through `UsdRead`.
 pub fn untextured_dome_intensity_sum(
     data: &openusd::sdf::Data,
     exclude: Option<&SdfPath>,
@@ -298,7 +294,7 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
 /// but the photometric conversion is identical, so it lives here once. `Err`
 /// means an authored intensity/exposure could not be interpreted safely.
 pub fn read_intensity_with_exposure(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<f32, LightReadError> {
@@ -306,7 +302,7 @@ pub fn read_intensity_with_exposure(
 }
 
 fn resolve_intensity_with_exposure(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<(f32, bool, f32), LightReadError> {
@@ -341,7 +337,7 @@ pub struct DomeIntensity {
 /// only when USD omits `inputs:intensity` and preserving authored intensity and
 /// exposure exactly.
 pub fn read_dome_intensity(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     quality: RenderQualityProfile,
 ) -> Result<DomeIntensity, LightReadError> {
@@ -359,7 +355,7 @@ pub fn read_dome_intensity(
 /// non-finite authored values are rejected instead of being converted into a
 /// plausible-looking light.
 fn read_authored_real(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     name: &str,
 ) -> Result<Option<f32>, LightReadError> {
@@ -395,7 +391,7 @@ fn read_authored_real(
 /// `inputs:enableColorTemperature` is authored `true` — the `UsdLuxLightAPI`
 /// rule, shared by every light arm here and the dome tint in `dome.rs`.
 pub(crate) fn read_light_color(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
 ) -> Result<Vec3, LightReadError> {
     let color = if reader.has_authored_attribute(path, "inputs:color")
@@ -438,7 +434,7 @@ pub(crate) fn read_light_color(
 /// Read an authored USD boolean, preserving the distinction between an omitted
 /// attribute and a malformed value.
 pub(crate) fn read_authored_bool(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     name: &str,
 ) -> Result<Option<bool>, LightReadError> {
@@ -518,7 +514,7 @@ fn positive_length(
 }
 
 fn read_positive_length(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     name: &str,
     default: f32,
@@ -552,7 +548,7 @@ fn area_scale(normalize: bool, area_ratio: f32) -> Option<f32> {
 /// default here, not "zero metres"; negative authored values are invalid.
 ///
 fn read_light_range(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     default: f32,
     convention: crate::units::ConventionTransform,
@@ -589,7 +585,7 @@ fn read_light_range(
 /// API without overriding the attribute therefore lands on the engine default,
 /// while other invalid negative/zero values are rejected.
 fn read_shadow_distance(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     default: f32,
     convention: crate::units::ConventionTransform,
@@ -639,7 +635,7 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// `inputs:shadow:enable = false` — which shipped local lights now do — so the
 /// scene states its own render budget and the engine reads it.
 fn read_shadow_enable(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
 ) -> Result<bool, LightReadError> {
     Ok(read_authored_bool(reader, path, "inputs:shadow:enable")?.unwrap_or(USDLUX_SHADOW_ENABLE))
@@ -650,7 +646,7 @@ fn read_shadow_enable(
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
 /// the shared path there.
 pub(crate) fn instantiate_light_prim(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
@@ -1443,6 +1439,7 @@ def DomeLight "Scalar"
 mod photometry_tests {
     use super::*;
     use crate::canonical::{CanonicalStage, StageRecipe};
+    use crate::read::UsdRead;
 
     #[test]
     fn rect_power_scales_with_area_unless_normalized() {

@@ -34,8 +34,9 @@ use lunco_celestial::frames::LPoint;
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
-use lunco_usd_bevy::UsdRead;
 use openusd::sdf::{Path as SdfPath, Value};
+
+type ComposedReader<'a> = dyn lunco_usd_bevy::read::UsdReadObject + 'a;
 
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
@@ -44,7 +45,7 @@ const DEFAULT_ANCHOR_BODY: i32 = 301;
 /// property (which may use the schema default) and a malformed opinion.  A
 /// failed numeric conversion must never become a zero-valued placement input.
 fn read_real_strict(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<f64>, ()> {
@@ -59,13 +60,15 @@ fn read_real_strict(
 /// Read a schema-declared NAIF/body integer without turning a wrong USD type
 /// into the Moon default.
 fn read_i32_strict(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<i32>, ()> {
-    match reader.scalar::<i32>(path, attribute) {
-        Some(value) => Ok(Some(value)),
+    match reader.attr_value(path, attribute) {
+        Some(Value::Int(value)) => Ok(Some(value)),
+        Some(Value::Int64(value)) if i32::try_from(value).is_ok() => Ok(Some(value as i32)),
         None if reader.has_authored_attribute(path, attribute) => Err(()),
+        Some(_) => Err(()),
         None => Ok(None),
     }
 }
@@ -74,7 +77,7 @@ fn read_i32_strict(
 /// values are useful for ordinary fields, but they must not make a keyed
 /// declaration look present (`trackedId = 0` is the classic example).
 fn read_authored_i32(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<i32>, ()> {
@@ -87,7 +90,7 @@ fn read_authored_i32(
 }
 
 fn read_authored_real(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<f64>, ()> {
@@ -100,7 +103,7 @@ fn read_authored_real(
 }
 
 fn read_authored_bool(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<bool>, ()> {
@@ -118,7 +121,7 @@ fn read_authored_bool(
 }
 
 fn read_authored_string(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<String>, ()> {
@@ -132,7 +135,7 @@ fn read_authored_string(
 }
 
 fn read_authored_token(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<String>, ()> {
@@ -160,7 +163,7 @@ fn rgba_from_value(value: Value) -> Option<[f32; 4]> {
 }
 
 fn read_authored_rgba(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<[f32; 4]>, ()> {
@@ -175,7 +178,7 @@ fn read_authored_rgba(
 }
 
 fn read_positive_optional_real(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
     attribute: &str,
 ) -> Result<Option<f64>, ()> {
@@ -190,7 +193,7 @@ fn read_positive_optional_real(
 /// or longitude remains the documented zero default, but an authored invalid
 /// value rejects the anchor instead of placing it at Greenwich/equator.
 fn read_geodetic_anchor(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
 ) -> Result<Option<GeodeticAnchor>, ()> {
     let has_lat = reader.has_authored_attribute(path, "lunco:anchor:lat");
@@ -216,7 +219,7 @@ fn read_geodetic_anchor(
 /// gets its USD schema default only when it is genuinely omitted, and the
 /// elliptic-only solver contract is validated before insertion.
 fn read_kepler_orbit(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     path: &SdfPath,
 ) -> Result<Option<KeplerOrbit>, ()> {
     if !reader.has_authored_attribute(path, "lunco:orbit:semiMajorAxisM") {
@@ -268,7 +271,7 @@ fn read_kepler_orbit(
 }
 
 pub fn insert_celestial_comms_components(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     entity: Entity,
     prim_path_str: &str,
     sdf_path: &SdfPath,
@@ -314,7 +317,7 @@ pub fn insert_celestial_comms_components(
     //
     // The fill used to be spawned from Rust at startup, which is why it had no
     // USD identity to filter on in the first place.
-    if reader.prim_type_name(sdf_path).as_deref() == Some("DistantLight") {
+    if reader.type_name(sdf_path).as_deref() == Some("DistantLight") {
         let parent_is_body = match sdf_path.parent() {
             Some(parent) => match read_i32_strict(reader, &parent, "lunco:body") {
                 Ok(Some(naif)) => naif != 0,
@@ -402,9 +405,9 @@ pub fn insert_celestial_comms_components(
                     }
                     Ok(_) => {}
                     Err(()) => warn!(
-                    "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
-                    prim_path_str
-                ),
+                        "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
+                        prim_path_str
+                    ),
                 }
             }
         }
@@ -872,7 +875,7 @@ pub fn insert_celestial_comms_components(
 /// is the authoritative source for the local box. Both are pre-scale, in the
 /// prim's local space; the kernel applies the `Transform` scale.
 fn read_occluder_box(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &ComposedReader<'_>,
     sdf_path: &SdfPath,
 ) -> Result<lunco_celestial::link::LinkOccluder, ()> {
     use bevy::math::DVec3;
@@ -882,7 +885,7 @@ fn read_occluder_box(
         // custom `size` (the shipped wall is size 1, while Cube's fallback extent
         // describes size 2). Derive only the standard cube case; every other
         // occluder must author the standard extent explicitly.
-        if reader.prim_type_name(sdf_path).as_deref() != Some("Cube") {
+        if reader.type_name(sdf_path).as_deref() != Some("Cube") {
             return Err(());
         }
         let Some(size) = reader.real(sdf_path, "size") else {

@@ -345,19 +345,18 @@ impl MslLoadPhase {
 }
 
 /// The rumoca-artifact tag the *current* build understands. `build_msl_assets`
-/// stamps it into `manifest.rumoca_artifact_tag`; the web runtime compares
-/// against it and declines a mismatched `parsed` bundle (falling back to a
-/// source parse) because the bincode'd `StoredDefinition` layout is
-/// rumoca-version-sensitive — a stale bundle would deserialize into garbage or
-/// error mid-load.
+/// stamps it into `manifest.rumoca_artifact_tag`; the web runtime requires an
+/// exact match because the bincode `StoredDefinition` layout is
+/// rumoca-version-sensitive. A mismatched artifact is a packaging error and
+/// must be fixed by rebuilding the bundle.
 ///
 /// BUMP THIS whenever the pinned rumoca changes its AST / `StoredDefinition`
 /// shape, **or** the bundle's bincode encoding changes. Producer
 /// (`build_msl_assets`) and consumer (`msl_remote`) share this one source of
 /// truth, so they can never drift apart. The `+bincode2` suffix marks the
 /// bincode 1.3 (fixint) → bincode 2 `standard()` (varint) codec switch, which
-/// makes any older bundle undecodable — this bump rejects them cleanly so the
-/// runtime falls back to a source parse instead of decoding garbage.
+/// makes any older bundle undecodable — this bump rejects it before runtime
+/// installation instead of decoding an incompatible artifact.
 pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-07-14+bincode2";
 
 /// Schema of `manifest.json` written by `build_msl_assets`. Kept here
@@ -367,20 +366,13 @@ pub struct MslManifest {
     pub schema_version: u32,
     pub sources: MslBundleEntry,
     /// Pre-parsed bundle (`Vec<(String, StoredDefinition)>` bincode'd).
-    /// Optional: when present the wasm runtime fetches and deserialises
-    /// it instead of parsing source files (which is unworkably slow
-    /// on wasm — ~600 ms/file × 2670 files ≈ 27 minutes). The encoding
-    /// is bincode 2 `standard()` and must match the rumoca version this
-    /// artifact was produced against; the manifest carries `rumoca_artifact_tag`
-    /// for the runtime to validate.
-    #[serde(default)]
-    pub parsed: Option<MslBundleEntry>,
-    /// Free-form tag identifying the rumoca version that produced the
-    /// `parsed` bundle. The runtime compares against its own compiled-in
-    /// tag and refuses to load a mismatched bundle (the encoded
-    /// `StoredDefinition` shape is rumoca-version-sensitive).
-    #[serde(default)]
-    pub rumoca_artifact_tag: Option<String>,
+    /// Required runtime artifact. The wasm runtime installs this pre-parsed
+    /// bundle in a worker; it never parses the full source tree as a runtime
+    /// substitute.
+    pub parsed: MslBundleEntry,
+    /// Tag identifying the rumoca artifact that produced `parsed`. The runtime
+    /// requires an exact match before downloading or installing the bundle.
+    pub rumoca_artifact_tag: String,
     /// Hint to the runtime that the unpacked tree should contain this
     /// file under its root. Used as a sanity check after extraction.
     pub msl_root_marker: String,

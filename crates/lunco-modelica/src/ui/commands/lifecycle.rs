@@ -1373,16 +1373,3 @@ pub fn on_get_file(trigger: On<GetFile>) {
         }
     }
 }
-
-pub fn prewarm_msl_library() {
-    bevy::tasks::AsyncComputeTaskPool::get()
-        .spawn(async {
-            let t0 = web_time::Instant::now();
-            let n = crate::visual_diagram::msl_class_library().len();
-            bevy::log::info!(
-                "[MSL] prewarmed component library: {n} entries in {:?}",
-                t0.elapsed()
-            );
-        })
-        .detach();
-}

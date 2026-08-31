@@ -185,7 +185,7 @@ pub struct ParamDef {
 }
 
 /// On-disk shape of `msl_index.json` — the one form the indexer writes and
-/// [`parse_msl_index`] reads. Carries the component payload alongside the
+/// [`decode_msl_index`] reads. Carries the component payload alongside the
 /// pre-baked bundled `PackageNode` tree so the indexer ships both in a single
 /// artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,8 +196,6 @@ pub struct MslIndex {
     /// Pre-baked `PackageNode` tree for the bundled-models root in
     /// the Package Browser. Indexer emits these directly so the
     /// runtime is a trivial deserialise — no shape conversion.
-    /// Empty when the indexer was run before this format landed.
-    #[serde(default)]
     pub bundled: Vec<crate::package_tree::types::PackageNode>,
 }
 
@@ -420,88 +418,66 @@ use std::sync::OnceLock;
 
 static MSL_LIBRARY: OnceLock<MslIndex> = OnceLock::new();
 
-/// Returns the MSL component definitions available in the palette.
-/// Loaded from `msl_index.json` — either via the in-memory MSL bundle
-/// (web) or directly off disk (native).
+/// Notify the UI that the editor index has been decoded and is available.
 ///
-/// The cache uses `OnceLock::set` only after a *successful* load so
-/// early calls (e.g. the `prewarm_msl_library` startup task on wasm
-/// before the MSL bundle has finished fetching) return an empty slice
-/// without permanently poisoning the cache. Subsequent calls retry the
-/// load until it succeeds, then memoize. Per-frame cost while empty is
-/// one `OnceLock::get` + one hashmap lookup — negligible.
+/// MSL source installation and editor metadata are separate readiness edges:
+/// source resolution must not wait for a multi-megabyte palette index, and the
+/// index must not be decoded on the render thread.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct MslEditorIndexBecameReady;
+
+/// Install the decoded editor index exactly once.
+pub fn install_msl_index(index: MslIndex) -> bool {
+    MSL_LIBRARY.set(index).is_ok()
+}
+
+/// Load and decode the editor index through the asset-owned MSL source.
+///
+/// This function performs blocking I/O and JSON decoding by design; callers
+/// must run it on the native asset/index task, never from a render system.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_msl_index_from_assets() -> Result<MslIndex, String> {
+    let bytes = lunco_assets::msl::msl_read(std::path::Path::new("msl_index.json"))
+        .ok_or_else(|| "MSL editor index is not present".to_string())?;
+    decode_msl_index(&bytes)
+}
+
+/// Decode the one generated editor-index format shared by native and web.
+/// Callers own the scheduling boundary: native uses the asset task and web
+/// uses the Modelica worker, so this pure decoder never runs in a render path.
+pub fn decode_msl_index(bytes: &[u8]) -> Result<MslIndex, String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| format!("MSL editor index is not UTF-8: {error}"))?;
+    serde_json::from_str(text)
+        .map_err(|error| format!("MSL editor index has an invalid format: {error}"))
+}
+
+/// Returns the MSL component definitions available in the palette.
+/// Loaded from the asset-owned `msl_index.json` by the background MSL index
+/// task. The render path only reads the resident immutable snapshot.
+///
+/// The cache uses `OnceLock::set` only after the background index task has
+/// decoded a valid artifact. Per-frame cost while the task is in flight is one
+/// `OnceLock::get` plus the empty-slice projection — negligible.
 pub fn msl_class_library() -> &'static [crate::index::ClassEntry] {
     msl_index().map(|i| i.components.as_slice()).unwrap_or(&[])
 }
 
 /// Pre-baked `PackageNode` tree for the bundled-models root in the
-/// Package Browser. Empty when the running `msl_index.json` predates
-/// this format — callers should fall back to flat-leaf rendering.
+/// Package Browser. Empty until the background editor-index task completes.
 pub fn msl_bundled_nodes() -> &'static [crate::package_tree::types::PackageNode] {
     msl_index().map(|i| i.bundled.as_slice()).unwrap_or(&[])
 }
 
 /// Whether the generated palette/example index is present and in the current
-/// runtime format. Native startup uses this as part of MSL readiness; a source
-/// tree without its index is usable for parsing but cannot populate the editor.
+/// runtime format. This is a non-blocking resident-state query; loading and
+/// validation happen in the MSL index task.
 pub fn msl_index_available() -> bool {
     msl_index().is_some()
 }
 
 fn msl_index() -> Option<&'static MslIndex> {
-    if let Some(idx) = MSL_LIBRARY.get() {
-        return Some(idx);
-    }
-    if let Some(idx) = try_load_msl_index() {
-        let _ = MSL_LIBRARY.set(idx);
-    }
     MSL_LIBRARY.get()
-}
-
-fn try_load_msl_index() -> Option<MslIndex> {
-    // 1. In-memory bundle (set by `MslRemotePlugin` on wasm; also
-    //    populated on native if we ever decide to load via the same
-    //    pipeline). This wins so a host that has both still uses the
-    //    deliberately-shipped index over whatever happens to be on disk.
-    if let Some(bytes) = lunco_assets::msl::msl_read(std::path::Path::new("msl_index.json")) {
-        if let Ok(text) = std::str::from_utf8(&bytes) {
-            if let Some(idx) = parse_msl_index(text) {
-                return Some(idx);
-            }
-        }
-    }
-    // 2. Native filesystem fallback.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = lunco_assets::msl_dir().join("msl_index.json");
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Some(idx) = parse_msl_index(&content) {
-                return Some(idx);
-            }
-        }
-    }
-    None
-}
-
-/// Deserialise `msl_index.json`. There is ONE accepted form — the [`MslIndex`]
-/// object `msl_indexer` emits.
-///
-/// A cache in any other shape is stale, and `msl_index.json` is a generated
-/// artifact, so the fix is to rerun the indexer, not to teach this reader a
-/// second vocabulary. Reporting that is the whole point: a reader that quietly
-/// salvaged what it could turned "your cache is from an older indexer" into
-/// "the palette is mysteriously half-empty".
-fn parse_msl_index(text: &str) -> Option<MslIndex> {
-    match serde_json::from_str::<MslIndex>(text) {
-        Ok(idx) => Some(idx),
-        Err(e) => {
-            warn!(
-                "[msl] msl_index.json is not in the current index format ({e}); \
-                 the component palette stays empty until `msl_indexer` is rerun",
-            );
-            None
-        }
-    }
 }
 
 /// Get unique categories from the MSL library.
@@ -569,7 +545,7 @@ mod tests {
             bundled: Vec::new(),
         };
         let encoded = serde_json::to_string(&expected).expect("test index serializes");
-        let decoded = parse_msl_index(&encoded).expect("indexer format parses");
+        let decoded = decode_msl_index(encoded.as_bytes()).expect("indexer format parses");
 
         assert_eq!(decoded.components.len(), 2);
         assert!(decoded

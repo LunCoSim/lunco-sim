@@ -23,13 +23,13 @@
 //! ```text
 //! UsdDocument source text
 //!         │
-//!         ▼  (on DocumentOpened / DocumentChanged for an active doc)
+//!         ▼  (on DocumentOpened for an active doc)
 //! authored layer → canonical composition → UsdStageAsset
 //!         │
 //!         ▼  (Assets<UsdStageAsset>::get_mut, in-place swap)
 //! Handle<UsdStageAsset>
 //!         │
-//!         ▼  (UsdPrimPath { stage_handle, path: "/" } on scene_root)
+//!         ▼  (UsdPrimPath { stage_handle, path: "" } on scene_root)
 //! sync_usd_visuals  →  child entities with meshes / transforms
 //!         │
 //!         ▼  (Camera3d targets a render-to-texture Image)
@@ -45,11 +45,10 @@
 //!   → bootstrap render scaffolding on first open, set this doc as
 //!   the active viewport target, parse + install asset, mount on
 //!   `scene_root`.
-//! - [`lunco_doc_bevy::DocumentChanged`] for the
-//!   active doc → re-parse, **mutate the asset in-place** so the
-//!   `Handle<UsdStageAsset>` stays valid, despawn synced children,
-//!   clear the `UsdVisualSynced` marker on `scene_root` so
-//!   `sync_usd_visuals` re-runs.
+//! - [`lunco_doc_bevy::DocumentChanged`] wakes the shared
+//!   `twin_projection` owner. It authors the typed edit to the live
+//!   canonical stage and the normal USD projection refreshes the preview;
+//!   this panel does not re-parse or mutate an asset in-place.
 //! - [`DocumentClosed`] → if it was
 //!   the active doc, drop the asset and clear `scene_root`'s
 //!   `UsdPrimPath`. Render scaffolding (image, camera, BigSpace) is
@@ -75,7 +74,7 @@ use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
-use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
+use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
 use lunco_render::{GraphicsCameraDefaults, SceneCamera};
 use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
@@ -131,7 +130,6 @@ impl Plugin for UsdViewportPlugin {
         app.register_panel(UsdViewportPanel);
         app.add_observer(on_doc_opened_for_viewport);
         app.add_observer(on_twin_closed_for_viewport);
-        app.add_observer(on_doc_changed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
         app.add_observer(on_viewport_measured);
         app.add_observer(on_viewport_orbit_input);
@@ -644,12 +642,6 @@ fn on_twin_closed_for_viewport(_trigger: On<TwinClosed>, mut commands: Commands)
     });
 }
 
-fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
-    // Doc-backed viewport rebuilds are owned by `sync_twin_overlays`: when the
-    // document generation moves it refreshes the twin overlay and reloads the
-    // asset, re-projecting the preview. Nothing to do here per edit.
-}
-
 fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
@@ -751,6 +743,9 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     world
         .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
         .track(doc, projection_root, name, rel);
+    world
+        .resource_mut::<crate::twin_projection::TwinProjectionWake>()
+        .wake();
     let projection_name = world
         .resource::<crate::twin_projection::DocBackedTwinScenes>()
         .coords_of(doc)
@@ -760,7 +755,10 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         entity.despawn_related::<Children>();
         entity.insert(UsdPrimPath {
             stage_handle: handle.clone(),
-            path: "/".to_string(),
+            // The empty path is the shared scene-root sentinel. The visual
+            // projector resolves it through the composed defaultPrim before
+            // walking the prepared hierarchy.
+            path: String::new(),
         });
     }
     let mut state = world.resource_mut::<UsdViewportState>();

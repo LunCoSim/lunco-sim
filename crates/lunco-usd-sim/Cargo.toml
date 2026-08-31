@@ -65,6 +65,7 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 serde_json = { workspace = true }
+web-time = { workspace = true }
 
 [features]
 python = ["lunco-scripting/python"]

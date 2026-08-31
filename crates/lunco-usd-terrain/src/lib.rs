@@ -575,7 +575,8 @@ fn refresh_layered_terrain_layers(
             }
         }
         let Some(cs) = canonical.get(id) else {
-            // No live stage (asset carries no recipe / build failed) — skip.
+            // No live stage is available and this external asset has no recipe
+            // from which the canonical owner can build one — skip this update.
             continue;
         };
         let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
@@ -1570,8 +1571,9 @@ fn bridge_usd_dem_terrain(
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
-        // Read the LIVE canonical stage (built on demand from the asset's recipe)
-        // — the source of truth. Wait until it is available before reading attrs.
+        // Read the LIVE canonical stage (built on demand from a layer recipe
+        // when the asset carries one) — the source of truth. Wait until it is
+        // available before reading attrs.
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -1582,7 +1584,8 @@ fn bridge_usd_dem_terrain(
             }
         }
         if canonical.get(id).is_none() {
-            // No live stage (asset carries no recipe / build failed) — retry next frame.
+            // No live stage is available for this external asset — retry when
+            // its owning canonical stage is supplied.
             continue;
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {

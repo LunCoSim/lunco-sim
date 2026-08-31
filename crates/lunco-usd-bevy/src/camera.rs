@@ -36,7 +36,6 @@
 use bevy::prelude::*;
 use openusd::sdf::{Path as SdfPath, Value};
 
-use crate::read::UsdRead;
 use crate::units::StageMetrics;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
@@ -84,7 +83,7 @@ pub enum CameraExposureError {
 }
 
 pub fn read_camera_exposure_ev100(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Option<f32>, CameraExposureError> {
     let authored = [
@@ -117,7 +116,7 @@ pub fn read_camera_exposure_ev100(
 }
 
 fn read_camera_exposure_real(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -148,7 +147,7 @@ fn read_camera_exposure_real(
 /// complete render graph. Called from `instantiate_usd_prim`; the prim's
 /// transform and visibility are applied by the shared path there.
 pub(crate) fn instantiate_camera_prim(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
@@ -324,17 +323,18 @@ pub(crate) fn instantiate_camera_prim(
 /// genuinely unauthored; an invalid authored opinion is never converted into a
 /// guessed projection.
 fn read_projection(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit as f32;
-    let resolved_clipping = reader
-        .scalar::<[f32; 2]>(path, "clippingRange")
+    let clipping_value = reader.attr_value(path, "clippingRange");
+    let resolved_clipping = clipping_value
+        .clone()
+        .and_then(|value| value.get::<[f32; 2]>())
         .or_else(|| {
-            reader
-                .scalar::<[f64; 2]>(path, "clippingRange")
-                .map(|[n, f]| [n as f32, f as f32])
+            clipping_value
+                .and_then(|value| value.get::<[f64; 2]>().map(|[n, f]| [n as f32, f as f32]))
         });
     let clipping = match resolved_clipping {
         Some(range) => Some(range),
@@ -429,7 +429,7 @@ fn read_projection(
 /// Read a positive USD camera scalar without mistaking an invalid authored
 /// opinion for an omitted schema default.
 fn read_positive_camera_real(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -461,7 +461,7 @@ fn read_positive_camera_real(
 /// data. Custom camera-role tokens are control-plane data, so falling through to
 /// another role would create a second pose/viewport owner by accident.
 fn read_camera_token(
-    reader: &crate::StageView<'_>,
+    reader: &dyn crate::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: &str,
@@ -506,7 +506,7 @@ fn read_camera_token(
 /// `false`. The schema fallback remains available only when the attribute is
 /// genuinely omitted.
 fn read_camera_bool(
-    reader: &crate::StageView<'_>,
+    reader: &impl crate::UsdRead,
     path: &SdfPath,
     name: &str,
     schema_default: bool,

@@ -210,12 +210,13 @@ pub fn update_solar_poses(
             With<LibrationAnchor>,
             With<SolarTracked>,
             With<LinkNode>,
+            With<crate::wifi::WifiNode>,
         )>,
     >,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
-    // A link node is usually a deep child of the thing that IS anchored (a dish's
-    // feed aperture, six prims under the ground station), so its own entity carries
-    // no anchor. Looked up by ancestry below.
+    // A tracked endpoint is usually a deep child of the thing that IS anchored
+    // (a dish feed aperture or a chassis radio), so its own entity carries no
+    // anchor. Looked up by ancestry below.
     q_anchor: Query<&GeodeticAnchor>,
     q_orbit: Query<&KeplerOrbit>,
     q_libration: Query<&LibrationAnchor>,

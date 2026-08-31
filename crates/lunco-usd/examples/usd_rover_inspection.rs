@@ -25,12 +25,12 @@ fn main() {
     // wheel / panel attributes the physics mapping reads are resolved, then
     // publish the composed stage as the live canonical stage.
     let path = "assets/vessels/rovers/rucheyok/rucheyok.usda";
-    let stage_handle = {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { recipe: None })
-    };
     let stage =
         compose_file_to_stage(std::path::Path::new(path)).expect("Failed to compose rucheyok.usda");
+    let stage_handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset::from_composed_stage(&stage).expect("prepare composed asset"))
+    };
     let cstage = CanonicalStage::from_stage(stage, path.to_string());
     app.world_mut()
         .get_non_send_mut::<CanonicalStages>()

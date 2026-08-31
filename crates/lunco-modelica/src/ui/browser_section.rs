@@ -270,7 +270,7 @@ fn render_generated_network_row(
                 )
                 .on_hover_text(if can_open {
                     open_hint
-                } else if entry.error.is_some() {
+                } else if entry.projection_error.is_some() {
                     "Generated source is unavailable because synthesis failed.".to_string()
                 } else {
                     "Generated source is still being projected.".to_string()
@@ -327,7 +327,7 @@ fn render_generated_network_row(
             }
         });
 
-        if let Some(error) = &entry.error {
+        if let Some(error) = &entry.projection_error {
             ui.colored_label(theme.tokens.error, format!("Projection error: {error}"));
         } else if entry.source.is_empty() {
             ui.colored_label(theme.tokens.warning, "Projection unavailable");
@@ -1323,7 +1323,7 @@ function F end F;
             boundary_inputs: Vec::new(),
             boundary_outputs: Vec::new(),
             member_output_aliases: Vec::new(),
-            error: None,
+            projection_error: None,
         };
         assert_eq!(generated_network_open_class(&entry), "Unit_Rover_Battery");
     }
@@ -1378,7 +1378,7 @@ function F end F;
             boundary_inputs: Vec::new(),
             boundary_outputs: Vec::new(),
             member_output_aliases: Vec::new(),
-            error: None,
+            projection_error: None,
         };
         assert_eq!(generated_network_open_class(&entry), "Rover_System");
     }

@@ -2,8 +2,8 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Listens for
 //! bincode-serialized `ModelicaCommand` messages from the main page, drives
-//! them through the same `worker::process_inline_command` dispatch the inline
-//! path uses, and `postMessage`s each `ModelicaResult` back.
+//! them through the same `worker::process_worker_command` dispatch the native
+//! worker uses, and `postMessage`s each `ModelicaResult` back.
 //!
 //! Why a separate bin
 //! ------------------
@@ -16,7 +16,7 @@
 //!
 //! State
 //! -----
-//! One `InlineWorkerInner` per worker bundle; lives for the lifetime of the
+//! One `ModelicaWorkerState` per worker bundle; lives for the lifetime of the
 //! page. State (steppers, DAE cache, lazy `ModelicaCompiler`) survives across
 //! postMessage round-trips so back-to-back Step commands hit the warm
 //! stepper without any re-compile cost.
@@ -29,13 +29,11 @@
 //! That handoff is WIRED: `worker_transport::WireMessage` wraps every
 //! `ModelicaCommand` and carries two extra variants —
 //! `InstallParsedMslCompressed { bytes, provide_to_main }` (the boot path: the
-//! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread)
-//! and `InstallParsedMsl(Vec<(uri, StoredDefinition)>)` (the already-decoded
-//! form). The worker installs it and answers `WireResult::MslReady`; with
+//! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread).
+//! The worker installs it and answers `WireResult::MslReady`; with
 //! `provide_to_main` it also hands the decoded bytes back to the page
-//! (`msl_remote::ingest_worker_decoded_msl`), so the main thread never pays the
-//! decode. (The old `TODO(arch-msl-handoff)` here described this as unbuilt —
-//! it has been built; the note is kept only to say where to look.)
+//! (`msl_remote::ingest_worker_decoded_msl`) for bounded main-thread
+//! deserialization.
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
 // host target passing without producing a meaningful executable.
@@ -84,14 +82,15 @@ mod wasm {
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
     use lunco_modelica::worker::{
-        panic_result_for_command, process_inline_command, InlineWorkerInner,
+        panic_result_for_command, process_worker_command, ModelicaWorkerState,
     };
 
     thread_local! {
         /// Per-worker dispatch state. Outlives any single message because rumoca
         /// session caches and the lazy `ModelicaCompiler` are expensive to
         /// rebuild.
-        static STATE: RefCell<InlineWorkerInner> = RefCell::new(InlineWorkerInner::default());
+        static STATE: RefCell<ModelicaWorkerState> =
+            RefCell::new(ModelicaWorkerState::default());
 
         /// Holds the `onmessage` closure for the lifetime of the worker; dropping
         /// it would un-register the JS-side handler.
@@ -137,6 +136,44 @@ mod wasm {
         if let Err(e) = scope.post_message_with_transfer(&buffer, &transfer) {
             web_sys::console::error_1(
                 &format!("[lunica_worker] post decoded MSL transfer failed: {e:?}").into(),
+            );
+        }
+    }
+
+    /// Send editor metadata in bounded messages. The source bundle is decoded
+    /// in this worker; chunking the structured result keeps each main-thread
+    /// wire decode small enough that the browser remains responsive.
+    fn post_msl_index_chunks(
+        scope: &DedicatedWorkerGlobalScope,
+        index: lunco_modelica::visual_diagram::MslIndex,
+    ) {
+        const COMPONENTS_PER_MESSAGE: usize = 64;
+        let mut bundled = Some(index.bundled);
+        let components = index.components;
+        if components.is_empty() {
+            post_wire(
+                scope,
+                &WireResult::MslIndexChunk {
+                    components: Vec::new(),
+                    bundled: bundled.take().unwrap_or_default(),
+                    done: true,
+                },
+            );
+            return;
+        }
+        let message_count = components.len().div_ceil(COMPONENTS_PER_MESSAGE);
+        for (message_index, chunk) in components.chunks(COMPONENTS_PER_MESSAGE).enumerate() {
+            post_wire(
+                scope,
+                &WireResult::MslIndexChunk {
+                    components: chunk.to_vec(),
+                    bundled: if message_index == 0 {
+                        bundled.take().unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                    done: message_index + 1 == message_count,
+                },
             );
         }
     }
@@ -431,7 +468,7 @@ mod wasm {
                             // a previous panic doesn't crash this one too.
                             match s.try_borrow_mut() {
                                 Ok(mut state) => {
-                                    process_inline_command(&mut state, cmd, |result| {
+                                    process_worker_command(&mut state, cmd, |result| {
                                         post_result(&scope, result);
                                     });
                                 }
@@ -444,7 +481,7 @@ mod wasm {
                                     // next command starts fresh. Loses
                                     // cached compilers but avoids a
                                     // wedge.
-                                    s.replace(InlineWorkerInner::default());
+                                    s.replace(ModelicaWorkerState::default());
                                 }
                             }
                         });
@@ -485,24 +522,11 @@ mod wasm {
                             // in an inconsistent state. Better to lose
                             // caches than wedge every subsequent compile.
                             STATE.with(|s| {
-                                s.replace(InlineWorkerInner::default());
+                                s.replace(ModelicaWorkerState::default());
                             });
                             post_log(&scope, "STATE reset after panic — caches cleared");
                         }
                     }
-                }
-                WireMessage::InstallParsedMsl(parsed) => {
-                    let count = parsed.len();
-                    let started = web_time::Instant::now();
-                    lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
-                    post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
-                    post_log(
-                        &scope_for_cb,
-                        format!(
-                            "installed MSL: {count} docs in {:.2}s",
-                            started.elapsed().as_secs_f64()
-                        ),
-                    );
                 }
                 WireMessage::InstallParsedMslCompressed {
                     bytes,
@@ -547,64 +571,30 @@ mod wasm {
                                     );
                                 }
                                 Err(e) => {
-                                    post_log(&scope_for_cb, format!("MSL deserialize failed: {e}"));
+                                    post_wire(
+                                        &scope_for_cb,
+                                        &WireResult::MslFailed {
+                                            error: format!("MSL deserialize failed: {e}"),
+                                        },
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            post_log(&scope_for_cb, format!("MSL decompress failed: {e}"));
+                            post_wire(
+                                &scope_for_cb,
+                                &WireResult::MslFailed {
+                                    error: format!("MSL decompress failed: {e}"),
+                                },
+                            );
                         }
                     }
                 }
-                WireMessage::ParseSourceMslCompressed {
-                    bytes,
-                    provide_to_main,
-                } => {
-                    // Tag-mismatch fallback: untar + reparse the `.mo` sources here
-                    // in the worker (off the main thread) into a fresh parsed bundle
-                    // whose keys match the build-time bundle. If we're the primary
-                    // (`provide_to_main`), bincode-encode it and transfer it back so
-                    // the main thread's resolution heap fills by deserialize-only.
-                    let started = web_time::Instant::now();
-                    match lunco_modelica::msl_remote::parse_source_bundle_to_docs(&bytes) {
-                        Ok(parsed) => {
-                            let count = parsed.len();
-                            // Encode for the transfer BEFORE moving `parsed` into
-                            // the worker's own global install.
-                            let encoded = if provide_to_main {
-                                match lunco_modelica::msl_remote::encode_parsed_bundle(&parsed) {
-                                    Ok(b) => Some(b),
-                                    Err(e) => {
-                                        post_log(
-                                            &scope_for_cb,
-                                            format!("MSL source-parse encode failed: {e}"),
-                                        );
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-                            lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
-                            if let Some(enc) = encoded {
-                                post_decoded_msl_transfer(&scope_for_cb, enc);
-                            }
-                            post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
-                            post_log(
-                                &scope_for_cb,
-                                format!(
-                                    "reparsed MSL source: {count} docs in {:.2}s{}",
-                                    started.elapsed().as_secs_f64(),
-                                    if provide_to_main {
-                                        " (provided to main)"
-                                    } else {
-                                        ""
-                                    }
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            post_log(&scope_for_cb, format!("MSL source reparse failed: {e}"));
+                WireMessage::InstallMslIndexFromSource { bytes } => {
+                    match lunco_modelica::msl_remote::load_msl_index_from_source_bundle(&bytes) {
+                        Ok(index) => post_msl_index_chunks(&scope_for_cb, index),
+                        Err(error) => {
+                            post_wire(&scope_for_cb, &WireResult::MslIndexFailed { error })
                         }
                     }
                 }
@@ -675,7 +665,7 @@ mod wasm {
                         let ast = recovery.best_effort().clone();
                         (ast, errors)
                     }));
-                    let (ast, errors) = match outcome {
+                    let parsed = match outcome {
                         Ok(pair) => pair,
                         Err(e) => {
                             let msg = e
@@ -687,14 +677,18 @@ mod wasm {
                                 &scope_for_cb,
                                 format!("PANIC during ParseDocument doc={doc_id:?}: {msg}"),
                             );
-                            (
-                                rumoca_compile::parsing::ast::StoredDefinition::default(),
-                                vec![lunco_doc::Diagnostic::message_only(format!(
-                                    "worker panic: {msg}"
-                                ))],
-                            )
+                            post_wire(
+                                &scope_for_cb,
+                                &WireResult::ParseDocumentFailed {
+                                    doc_id,
+                                    gen,
+                                    error: format!("Modelica parser panicked: {msg}"),
+                                },
+                            );
+                            return;
                         }
                     };
+                    let (ast, errors) = parsed;
                     let ms = started.elapsed().as_secs_f64() * 1000.0;
                     post_log(
                         &scope_for_cb,

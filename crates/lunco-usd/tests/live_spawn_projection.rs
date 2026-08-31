@@ -3,7 +3,7 @@
 //! `CanonicalStage`, whose openusd change sink fires and `project_stage_changes`
 //! spawns the matching ECS entity — with **no whole-scene asset reload**. This
 //! is the end-to-end regression for the incremental projection path: the twin
-//! projection systems (`sync_twin_overlays` → `author_structural_edit` →
+//! projection systems (`sync_twin_overlays` → typed live authoring →
 //! `project_stage_changes`) now drive incremental structural edits.
 
 use bevy::prelude::*;
@@ -90,7 +90,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     );
 
     // Author a plain (reference-less) child prim into the runtime layer. This
-    // rides `sync_twin_overlays` → `author_structural_edit` (Plain) → the live
+    // rides `sync_twin_overlays` → typed live authoring (Plain) → the live
     // stage's sink → `project_stage_changes`, spawning the entity in place.
     app.world_mut().trigger(ApplyUsdOp {
         doc,

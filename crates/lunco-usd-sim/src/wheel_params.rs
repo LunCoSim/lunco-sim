@@ -50,7 +50,8 @@ use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
 use lunco_hardware::SteeringActuator;
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::read::UsdReadObject;
+use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 
@@ -122,9 +123,7 @@ impl WheelAttachmentTopology {
 /// A relationship is singular in the vehicle schema. Multi-target authoring,
 /// duplicate attachments, malformed endpoint types, and missing required
 /// endpoints are rejected; the first or last list target is never selected.
-pub fn collect_wheel_attachment_topology(
-    reader: &lunco_usd_bevy::StageView<'_>,
-) -> WheelAttachmentTopology {
+pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAttachmentTopology {
     let mut topology = WheelAttachmentTopology::default();
     for attachment in reader.prim_paths() {
         if !reader.has_api_schema(&attachment, "PhysxVehicleWheelAttachmentAPI") {
@@ -192,7 +191,9 @@ pub fn collect_wheel_attachment_topology(
             }
         };
 
-        let Some(index) = reader.scalar::<i32>(&attachment, "physxVehicleWheelAttachment:index")
+        let Some(index) = reader
+            .attr_value(&attachment, "physxVehicleWheelAttachment:index")
+            .and_then(|value| value.get::<i32>())
         else {
             error!(
                 "USD wheel attachment {} has no valid physxVehicleWheelAttachment:index",
@@ -229,7 +230,7 @@ pub fn collect_wheel_attachment_topology(
 /// first element of a multi-target list would make topology depend on list-op
 /// ordering rather than authored intent.
 fn one_attachment_target(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     name: &str,
 ) -> Result<Option<String>, usize> {
@@ -246,7 +247,7 @@ fn one_attachment_target(
 /// attachment prim itself when the relationship is omitted. In both cases the
 /// resolved prim must carry the API that defines the endpoint.
 fn attachment_endpoint(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     attachment: &SdfPath,
     relationship: &str,
     api_schema: &str,
@@ -331,7 +332,7 @@ impl WheelParams {
     /// under-authored and is rejected.
     ///
     pub fn read(
-        reader: &lunco_usd_bevy::StageView<'_>,
+        reader: &dyn UsdReadObject,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
         attachment_tire: Option<&SdfPath>,
@@ -367,18 +368,20 @@ impl WheelParams {
             "physxVehicleTire:longitudinalStiffness",
             &mut missing,
         );
-        let mut lateral_stiffness_graph =
-            match reader.scalar::<[f32; 2]>(tire, "physxVehicleTire:lateralStiffnessGraph") {
-                Some([minimum_normalized_load, max_stiffness]) => TireLateralStiffnessGraph {
-                    minimum_normalized_load: minimum_normalized_load as f64,
-                    max_stiffness: max_stiffness as f64,
-                    rest_load: 0.0,
-                },
-                None => {
-                    missing.push("physxVehicleTire:lateralStiffnessGraph".to_owned());
-                    TireLateralStiffnessGraph::default()
-                }
-            };
+        let mut lateral_stiffness_graph = match reader
+            .attr_value(tire, "physxVehicleTire:lateralStiffnessGraph")
+            .and_then(|value| value.get::<[f32; 2]>())
+        {
+            Some([minimum_normalized_load, max_stiffness]) => TireLateralStiffnessGraph {
+                minimum_normalized_load: minimum_normalized_load as f64,
+                max_stiffness: max_stiffness as f64,
+                rest_load: 0.0,
+            },
+            None => {
+                missing.push("physxVehicleTire:lateralStiffnessGraph".to_owned());
+                TireLateralStiffnessGraph::default()
+            }
+        };
         let rest_load = read_required_real(reader, tire, "physxVehicleTire:restLoad", &mut missing);
         lateral_stiffness_graph.rest_load = rest_load;
         let min_validated_speed =
@@ -595,7 +598,7 @@ pub(crate) fn attachment_tire_path(
 /// Read the three suspension attrs off one prim. `None` unless all three are
 /// authored — partial authoring is treated as missing (no per-field defaults).
 fn read_suspension_attrs(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
 ) -> Result<SuspensionParams, Vec<String>> {
     let mut missing = Vec::new();
@@ -640,7 +643,7 @@ fn read_suspension_attrs(
 }
 
 fn read_optional_real(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     name: &str,
     missing: &mut Vec<String>,
@@ -656,7 +659,7 @@ fn read_optional_real(
 }
 
 fn read_required_real(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     name: &str,
     missing: &mut Vec<String>,
@@ -728,7 +731,7 @@ fn validate_wheel_values(
 }
 
 fn validate_wheel_schema_hints(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     errors: &mut Vec<String>,
     values: impl IntoIterator<Item = (&'static str, f64)>,
@@ -739,7 +742,7 @@ fn validate_wheel_schema_hints(
 }
 
 fn validate_suspension_schema_hints(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     errors: &mut Vec<String>,
     values: [(&str, f64); 3],
@@ -750,7 +753,7 @@ fn validate_suspension_schema_hints(
 }
 
 fn validate_schema_hint(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn UsdReadObject,
     prim: &SdfPath,
     name: &str,
     value: f64,
@@ -809,7 +812,11 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
 /// refresh path. Prim-scoped where a name is not wheel-specific:
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
-pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> bool {
+pub fn claims_edit(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    prim: &SdfPath,
+    attr: &str,
+) -> bool {
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }

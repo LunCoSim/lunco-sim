@@ -1,16 +1,7 @@
-//! Ph0′ integration test: a `UsdStageAsset` that carries a [`StageRecipe`] is
-//! instantiated **off the live canonical stage**, end-to-end, in a headless
-//! Bevy `App` — the visual extractor's runtime cutover.
-//!
-//! This is the test that would have caught the "runtime no-op" the boot
-//! surfaced: the earlier design built the `CanonicalStage` in an `Update` system
-//! that ran AFTER the synchronous `on_usd_prim_added` observer cascade, so the
-//! extractors always missed the live stage and silently fell back to the
-//! flatten. Here we assert (a) the `CanonicalStages` resource actually holds the
-//! stage after instantiation — i.e. the on-demand build fired, so the LIVE
-//! branch was taken — and (b) the resulting Bevy components (mesh, bound-shader
-//! appearance intent, light) are correct, proving the live extraction produced
-//! them.
+//! Integration test for the prepared USD projection plan and its live-stage
+//! handoff. A real `UsdStageAsset` is projected end-to-end in a headless Bevy
+//! app, and the resulting ECS components are checked across primitive, material,
+//! lighting, and curve/surface paths.
 //!
 //! The appearance assertion is on the render-free `PbrLook` **intent** — this
 //! crate no longer names `StandardMaterial` (see
@@ -22,7 +13,7 @@
 
 use bevy::prelude::*;
 use lunco_render::PbrLook;
-use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset};
 
 const SCENE: &str = r#"#usda 1.0
 ( defaultPrim = "World", metersPerUnit = 1 )
@@ -122,24 +113,21 @@ fn entity_at(app: &mut App, path: &str) -> Option<Entity> {
 }
 
 #[test]
-fn recipe_asset_instantiates_off_live_canonical_stage() {
+fn recipe_asset_instantiates_from_prepared_projection_plan() {
     let mut app = app();
 
-    // A recipe-carrying asset is the Ph0′ construction: the canonical stage is
-    // buildable from it, so the dispatcher must take the LIVE branch.
+    // The asset carries the worker-produced prepared plan and the recipe used
+    // by the live canonical stage for later authoring.
     let recipe = StageRecipe::from_source("inmemory://scene.usda", SCENE);
     let handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset {
-            recipe: Some(recipe),
-        })
+        stages.add(UsdStageAsset::from_recipe(recipe).expect("prepare stage asset"))
     };
     let stage_id = handle.id();
 
-    // Spawn the scene root exactly as the loader does: a `UsdPrimPath` entity.
-    // The `on_usd_prim_added` observer instantiates it (and recursively its
-    // children) in a synchronous cascade — the exact path that used to miss the
-    // canonical stage.
+    // Spawn the scene root exactly as the loader does. The observer only admits
+    // it to the bounded projection queue; projection creates children from the
+    // prepared hierarchy.
     app.world_mut().spawn((
         Name::new("World"),
         UsdPrimPath {
@@ -173,10 +161,9 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
         std::thread::yield_now();
     }
 
-    // (a) THE cutover assertion: the canonical stage was built and cached, which
-    // only happens on the LIVE branch (`get_or_build`). If instantiation had
-    // used a non-composed read, this map would be empty — exactly the runtime
-    // no-op the boot caught.
+    // (a) Initial materialisation does not open the non-Send live stage. The
+    // prepared plan is the complete composed reader for generation zero; the
+    // live stage is opened only when an authored edit needs it.
     let has_canonical = app
         .world()
         .get_non_send::<CanonicalStages>()
@@ -184,15 +171,20 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
         .get(stage_id)
         .is_some();
     assert!(
-        has_canonical,
-        "instantiation must build + use the live canonical stage (LIVE branch), \
-         not use a non-composed reader"
+        !has_canonical,
+        "initial materialisation must not open a live stage"
+    );
+    assert!(
+        app.world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(stage_id)
+            .map(|asset| asset.projection_plan.as_ref())
+            .is_some(),
+        "initial materialisation must retain its prepared composed projection"
     );
 
-    // (b) The bound-shader appearance resolved off the live stage: base color is the
-    // shader's diffuseColor (0.1, 0.2, 0.8), which only resolves if the
-    // material:binding → outputs:surface(.connect) → shader walk works on the
-    // live `StageView` (the attribute-connection fix).
+    // (b) The bound-shader appearance came from the prepared composed plan:
+    // material:binding → outputs:surface → shader inputs.
     let box_e = entity_at(&mut app, "/World/Box").expect("Box prim entity");
     let look = app
         .world()
@@ -206,29 +198,29 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     let lin = look.base_color;
     assert!(
         (lin.red - 0.1).abs() < 1e-4,
-        "diffuse R off live shader: {}",
+        "diffuse R off prepared shader: {}",
         lin.red
     );
     assert!(
         (lin.green - 0.2).abs() < 1e-4,
-        "diffuse G off live shader: {}",
+        "diffuse G off prepared shader: {}",
         lin.green
     );
     assert!(
         (lin.blue - 0.8).abs() < 1e-4,
-        "diffuse B off live shader: {}",
+        "diffuse B off prepared shader: {}",
         lin.blue
     );
     assert!(
         (look.perceptual_roughness - 0.4).abs() < 1e-4,
-        "roughness off live shader"
+        "roughness off prepared shader"
     );
 
-    // (c) The UsdLux light extracted off the live stage → a Bevy DirectionalLight.
+    // (c) UsdLux light projection.
     let sun_e = entity_at(&mut app, "/World/Sun").expect("Sun prim entity");
     assert!(
         app.world().get::<DirectionalLight>(sun_e).is_some(),
-        "DistantLight must project to a DirectionalLight off the live stage"
+        "DistantLight must project to a DirectionalLight"
     );
 
     // (d) `UsdLuxRectLight` → Bevy `RectLight`. Both put the rectangle in the
@@ -239,7 +231,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     let panel = app
         .world()
         .get::<RectLight>(panel_e)
-        .expect("RectLight must project to a Bevy RectLight off the live stage");
+        .expect("RectLight must project to a Bevy RectLight");
     assert!((panel.width - 1.2).abs() < 1e-4, "width {}", panel.width);
     assert!((panel.height - 0.6).abs() < 1e-4, "height {}", panel.height);
     // `RectLight::intensity` is luminous POWER in lumens (unlike Point/Spot,
@@ -307,39 +299,19 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
 }
 
 #[test]
-fn recipeless_asset_builds_no_canonical_and_is_skipped() {
-    // Runtime invariant: the canonical stage is the single source. An asset with
-    // no recipe builds no canonical stage, so the visual dispatcher SKIPS it
-    // (no stage → no instantiation). Every runtime scene now loads through
-    // the recipe-building async loader, so recipe-less assets don't occur in
-    // production; this pins the skip-not-crash behavior.
-    let mut app = app();
-    let handle = {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { recipe: None })
-    };
-    app.world_mut().spawn((
-        Name::new("World"),
-        UsdPrimPath {
-            stage_handle: handle.clone(),
-            path: "/World".to_string(),
-        },
-    ));
-    app.update();
-    app.update();
+fn externally_composed_asset_has_prepared_projection_plan() {
+    let recipe = StageRecipe::from_source("inmemory://scene.usda", SCENE);
+    let canonical = CanonicalStage::from_recipe(&recipe).expect("compose external stage");
+    let asset = UsdStageAsset::from_composed_stage(canonical.stage())
+        .expect("snapshot externally composed stage");
 
-    // No recipe ⇒ no canonical stage ⇒ the dispatcher skips (no children spawned).
     assert!(
-        app.world()
-            .get_non_send::<CanonicalStages>()
-            .unwrap()
-            .get(handle.id())
-            .is_none(),
-        "a recipe-less asset builds no canonical stage"
-    );
-    assert!(
-        entity_at(&mut app, "/World/Box").is_none(),
-        "a recipe-less asset is skipped — no children instantiated"
+        asset
+            .projection_plan
+            .prims
+            .iter()
+            .any(|prim| prim.path == "/World/Box"),
+        "every asset construction path must provide the prepared composed plan"
     );
 }
 
@@ -358,12 +330,10 @@ def Xform "World"
 "#;
 
     let mut app = app();
-    let handle = app
-        .world_mut()
-        .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset {
-            recipe: Some(StageRecipe::from_source("scene.usda", SCENE)),
-        });
+    let handle = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+        UsdStageAsset::from_recipe(StageRecipe::from_source("scene.usda", SCENE))
+            .expect("prepare stage asset"),
+    );
 
     // Two mounted owners may legitimately project the same composed stage path.
     // Path identity is scoped by the USD parent/instance, not by a global scan.

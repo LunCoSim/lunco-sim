@@ -27,22 +27,11 @@ use std::path::Path;
 
 mod support;
 
-/// Compose a USD file and hand it to the Bevy pipeline as a canonical stage —
-/// the same shape the other pipeline tests use (each integration test is its own
-/// crate, so this helper is per-file by necessity).
+/// Install a prepared layer-closure asset and its explicit live edit stage for
+/// the synchronous harness. The shared helper uses the same recipe boundary as
+/// the production async loader.
 fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAsset> {
-    let handle = {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { recipe: None })
-    };
-    let stage = compose_file_to_stage(file_path)
-        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
-    let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
-    app.world_mut()
-        .get_non_send_mut::<CanonicalStages>()
-        .expect("CanonicalStages resource (UsdBevyPlugin)")
-        .insert(handle.id(), cstage);
-    handle
+    support::add_prepared_canonical_from_file(app, file_path)
 }
 
 /// Compose a scene/asset through the same pipeline the app uses, and settle it.

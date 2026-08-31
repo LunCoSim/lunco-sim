@@ -1,6 +1,9 @@
-//! Compose a USD stage with openusd from an in-memory layer closure, for the
-//! runtime's live [`CanonicalStage`](crate::canonical::CanonicalStage) — read
-//! through [`StageView`](crate::view::StageView), never flattened.
+//! Compose USD from an in-memory layer closure with OpenUSD's composition
+//! engine. The asset loader uses this path on its async boundary to prepare the
+//! initial [`UsdStageProjectionPlan`](crate::UsdStageProjectionPlan); the live
+//! [`CanonicalStage`](crate::canonical::CanonicalStage) is built separately on
+//! the main thread for authoring and incremental edits. Neither representation
+//! is flattened.
 //!
 //! Pipeline:
 //!  1. **Pre-fetch BFS** ([`fetch_layer_closure`]) — discover every
@@ -8,11 +11,13 @@
 //!     `LoadContext::read_asset_bytes` (native + wasm, routed through Bevy's
 //!     `AssetServer` + our registered sources). openusd's resolver is
 //!     synchronous, so all async fetching happens here, up front.
-//!  2. **Compose** ([`build_stage_with_resolver`]) —
-//!     `Stage::builder().resolver(LuncoUsdResolver).open(root)` runs the real PCP
-//!     engine: references, payloads, variant selection, relationship-target
-//!     translation — all filesystem-free. The composed `Stage` is the runtime
-//!     source of truth; downstream reads it via `StageView`.
+//!  2. **Prepare** ([`UsdStageProjectionPlan::from_recipe`]) — compose the
+//!     fetched closure with the same PCP engine and snapshot the composed
+//!     hierarchy, default-time values, transforms, material bindings, and
+//!     animation topology into owned `Send` data for initial projection.
+//!  3. **Live composition** ([`build_stage_with_resolver`]) — when the runtime
+//!     needs an editable `!Send` stage, the same recipe is opened on the main
+//!     thread. `StageView` then serves authored edits and incremental reads.
 //!
 //! Binary assets (`.glb`/`.gltf`/…) are not USD layers: the resolver routes them
 //! to an empty composition stub, while the render projection reads the
@@ -35,10 +40,10 @@ use crate::canonical::StageRecipe;
 use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
-/// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
-/// Split out so the (main-thread, `!Send`) `Stage` build can be deferred: an
-/// asset loader fetches the recipe off-thread, then a main-thread system builds
-/// the canonical `Stage` from it (Ph0′ [`CanonicalStage::from_recipe`]).
+/// in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and builds
+/// the initial `UsdStageProjectionPlan` before publishing the asset. The live
+/// `!Send` stage is opened later by the canonical-stage owner when authoring or
+/// incremental projection needs it.
 ///
 /// [`CanonicalStage::from_recipe`]: crate::canonical::CanonicalStage::from_recipe
 pub(crate) async fn fetch_layer_closure(

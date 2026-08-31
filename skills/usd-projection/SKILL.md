@@ -38,29 +38,55 @@ UsdOp  ──►  UsdDocumentRegistry::apply   (journals + inverts)
               └── info_only  → attribute-only: translate, rotate, domes …
               │
               ▼
-          UsdVisualProjectionQueued  (bounded main-thread queue)
+          UsdVisualProjectionQueued  (bounded ECS binding queue)
               │
               ▼
-          instantiate_usd_prim_from_stage  (lunco-usd-bevy/src/lib.rs)
+          instantiate_usd_prim_from_reader (lunco-usd-bevy/src/lib.rs)
               └── match reader.type_name(path) → components
 ```
 
-The `Add, UsdPrimPath` observer and `sync_usd_visuals` both feed the same
+The asset loader composes the fetched layer closure and snapshots the complete
+default-time `UsdRead` surface into `UsdStageProjectionPlan` on its worker. The
+`Add, UsdPrimPath` observer and `sync_usd_visuals` both feed the same
 `UsdVisualProjectionQueued` marker. `process_queued_usd_visuals` drains that
-queue with its configured per-frame budget, then calls the same extractor. A
-scene loaded from disk and a prim authored at runtime therefore produce
+queue with its configured per-frame budget, but the extractor reads only the
+owned plan during initial materialisation; it does not parse USD, walk a live
+stage, or resolve composed bindings on the UI thread. CPU geometry uses the
+existing async compute path and only Bevy asset insertion remains on the main
+thread. After the initial asset generation, explicit live edits use the
+canonical `StageView` and the same extractor contract.
+
+Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
+through the registered source scheme; `AssetEvent` and
+`AssetLoadFailedEvent` advance or fail the pending document transaction. The
+composed document overlay is published before `LoadScene` is submitted.
+Referenced stage closures follow the same event boundary before a reference is
+authored onto the live stage. Do not add frame-count timeouts, per-frame load
+polls, or direct filesystem reads to this path. After admission,
+`DocumentChanged` and stage-asset lifecycle events wake the single
+`sync_twin_overlays` owner; do not add a per-frame generation scan or a
+viewport-specific edit/reload path.
+
+A scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
-window. The queue marker is the projection ownership fence: one traversal
-creates one child under its USD parent, so the projector does not scan the
-world for duplicate stage paths. The same composed path is valid in separate
-scene mounts and runtime instances; hierarchy and instance identity scope those
-projections.
+window. The queue marker is the projection ownership fence: one prepared
+hierarchy creates one child under its USD parent, so the projector does not
+scan the world for duplicate stage paths. The same composed path is valid in
+separate scene mounts and runtime instances; hierarchy and instance identity
+scope those projections.
 
 Generated Modelica domain projection follows the same ownership and change
 set rule: apply the shared `is_domain_network_root` predicate before selecting
 a synthesizer, then use Bevy identity change detection to revisit only changed
 prim entities. Reserve the full root pass for a USD wiring or member-source
 invalidation. Do not add a second stage scan or a name-based candidate list.
+The generated-source browser/API projection has its own source/document
+invalidation boundary. Do not gate it on live `ModelicaModel` output or clock
+changes; those are solver state and must stay in the Modelica runtime owner.
+Member class discovery is driven by `ModelicaSource` asset load, failure, and
+modification events. Do not add a time-based give-up deadline or poll pending
+sources on stable frames; an unavailable source remains explicitly pending
+until the asset owner publishes a terminal outcome.
 
 ### Scene precision boundary
 
@@ -149,8 +175,9 @@ the right behaviour is for it to visibly do nothing.
 ## Adding support for a new prim type or attribute
 
 1. **Read it.** Extractors use the `UsdRead` trait
-   (`lunco-usd-bevy/src/read.rs`), implemented by `StageView` (the live
-   composed stage). Authoring-layer reads use `UsdDataExt` separately; runtime
+   (`lunco-usd-bevy/src/read.rs`), implemented by both `StageView` (the live
+   composed stage) and `UsdStageProjectionPlan` (the worker-produced initial
+   snapshot). Authoring-layer reads use `UsdDataExt` separately; runtime
    extractors never switch to that source.
    - Floats: use `real` / `real_f32`, **never** `scalar::<f64>` — a `float`-
      authored value silently reads `None` through the f64 path.
@@ -158,7 +185,7 @@ the right behaviour is for it to visibly do nothing.
      `resolve_texture_path` to make it relative to the stage layer. Downloaded
      assets are `lunco://textures/…` (declared in a crate's `Assets.toml`).
 2. **Dispatch it.** Prim types are a `match` on `reader.type_name(&path)` inside
-   `instantiate_usd_prim_from_stage`. There is no registry to add to.
+   `instantiate_usd_prim_from_reader`. There is no registry to add to.
 3. **Project it.** Insert components. Keep render-bound types out of
    `lunco-usd-bevy` — it is render-free by contract (`cargo tree -p lunco-usd-bevy
    -i wgpu` must be empty). `bevy_light` / `bevy_image` / `bevy_camera` are fine;
@@ -172,8 +199,10 @@ the right behaviour is for it to visibly do nothing.
 5. **Author it.** Add a command that lowers to `UsdOp`s (Law 1) and register it
    with `register_commands!` — a command is only reachable from the HTTP API /
    MCP / rhai if its *type* is in the reflect registry.
-6. **Test it.** Because extractors are generic, unit-test off a flattened
-   `sdf::Data` parsed from a `&str` of USDA — no App, no renderer.
+6. **Test it.** Because extractors use the shared composed-reader contract,
+   unit-test the prepared `UsdStageProjectionPlan` for initial-load behavior
+   and use a live `StageView` only for explicit authored-edit behavior — no App,
+   no renderer.
 
 ## Worked example
 

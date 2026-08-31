@@ -56,7 +56,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
-use lunco_usd_bevy::{instance_key, resolve_stage_prim_path, CanonicalStages, UsdRead};
+use lunco_usd_bevy::{instance_key, resolve_stage_prim_path, CanonicalStages};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -127,7 +127,7 @@ const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
 /// structural: the actuator is a prim under the body, just like a collider or
 /// a joint endpoint. No vessel name or subsystem slot is embedded in Rust.
 fn actuator_body_path(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     actuator_path: &SdfPath,
 ) -> Option<SdfPath> {
     let mut current = actuator_path.parent();
@@ -149,7 +149,7 @@ fn actuator_body_path(
 /// prim's local frame (the USD schema contract) and is converted once into the
 /// owning body's frame before it enters the generic Avian actuator component.
 pub(crate) fn force_actuator_from_usd(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     actuator_path: &SdfPath,
 ) -> Option<ForceActuator> {
     if !reader.has_api_schema(actuator_path, FORCE_ACTUATOR_API) {
@@ -172,11 +172,13 @@ pub(crate) fn force_actuator_from_usd(
         return None;
     };
     let direction = reader
-        .scalar::<[f32; 3]>(actuator_path, FORCE_DIRECTION_ATTR)
-        .or_else(|| {
-            reader
-                .scalar::<[f64; 3]>(actuator_path, FORCE_DIRECTION_ATTR)
-                .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        .attr_value(actuator_path, FORCE_DIRECTION_ATTR)
+        .and_then(|value| {
+            value.clone().get::<[f32; 3]>().or_else(|| {
+                value
+                    .get::<[f64; 3]>()
+                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+            })
         })
         .map(Vec3::from_array)
         .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
@@ -215,7 +217,7 @@ pub(crate) fn force_actuator_from_usd(
 /// Read a torque actuator's generic description. Reaction wheels and control
 /// moment gyros use the same scalar torque command and axis contract.
 pub(crate) fn torque_actuator_from_usd(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     actuator_path: &SdfPath,
 ) -> Option<TorqueActuator> {
     if !reader.has_api_schema(actuator_path, TORQUE_ACTUATOR_API) {
@@ -229,11 +231,13 @@ pub(crate) fn torque_actuator_from_usd(
         return None;
     }
     let axis = reader
-        .scalar::<[f32; 3]>(actuator_path, TORQUE_AXIS_ATTR)
-        .or_else(|| {
-            reader
-                .scalar::<[f64; 3]>(actuator_path, TORQUE_AXIS_ATTR)
-                .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        .attr_value(actuator_path, TORQUE_AXIS_ATTR)
+        .and_then(|value| {
+            value.clone().get::<[f32; 3]>().or_else(|| {
+                value
+                    .get::<[f64; 3]>()
+                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+            })
         })
         .map(Vec3::from_array)
         .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
@@ -326,7 +330,7 @@ impl JointTopologyIndex {
         stage: bevy::asset::AssetId<UsdStageAsset>,
         generation: u64,
         projection_revision: u64,
-        reader: &lunco_usd_bevy::StageView<'_>,
+        reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     ) {
         let topology = self.by_stage.entry(stage).or_default();
         if topology.canonical_generation == Some(generation)
@@ -888,9 +892,9 @@ fn process_usd_sim_prims(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Read the LIVE canonical stage (source of truth), built on demand from
-    // the asset recipe.
-    mut canonical: NonSendMut<CanonicalStages>,
+    // Initial reads use the worker-produced plan; later authored generations
+    // use the live canonical stage selected by the shared reader boundary.
+    canonical: NonSend<CanonicalStages>,
     mut topology_index: ResMut<JointTopologyIndex>,
     stage_revision: Res<lunco_usd_bevy::UsdStageRevision>,
     // The active-scene sun: the avatar camera's exposure is read from the SAME
@@ -901,6 +905,8 @@ fn process_usd_sim_prims(
     input_bindings: Res<InputBindingsSettings>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
+    let started = web_time::Instant::now();
+    let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
     let Ok(input_map) = input_bindings.input_map() else {
         error!("[usd-sim] refusing to create avatar controllers from invalid input bindings");
@@ -916,21 +922,9 @@ fn process_usd_sim_prims(
         if !seen_stages.insert(id) {
             continue;
         }
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|asset| asset.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        if let Some(stage) = canonical.get(id) {
-            topology_index.refresh_if_stale(
-                id,
-                stage.generation(),
-                stage_revision.0,
-                &stage.view(),
-            );
+        if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
+            let (reader, generation) = canonical.reader_for(id, stage_asset);
+            topology_index.refresh_if_stale(id, generation, stage_revision.0, &reader);
         }
     }
 
@@ -962,26 +956,16 @@ fn process_usd_sim_prims(
             continue;
         }
 
-        // Read the live canonical stage, built on demand from the recipe.
-        // Acquired per entity — `get_or_build` is cached, so the whole prim
-        // cascade shares one composed stage.
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        let Some(cs) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Some(topology) = topology_index.get(id) else {
             continue;
         };
         process_usd_sim_prim_read(
-            &cs.view(),
+            &reader,
             entity,
             prim_path,
             sdf_path.clone(),
@@ -1001,8 +985,15 @@ fn process_usd_sim_prims(
             &mut commands,
             &mut authored_diagnostics,
         );
+        processed += 1;
     }
     runtime_diagnostics.replace_producer("usd-sim", authored_diagnostics);
+    if processed > 0 {
+        bevy::log::debug!(
+            "[usd-sim] processed {processed} prim(s) in {:.2} ms",
+            started.elapsed().as_secs_f64() * 1_000.0
+        );
+    }
 }
 
 /// Per-stage joint scan (Pass 1), generic over the read source ([`UsdRead`]):
@@ -1015,7 +1006,7 @@ fn process_usd_sim_prims(
 /// relationship is a list-op, so taking `rel_target` here would silently turn
 /// malformed fan-out authoring into a first-target choice.
 fn collect_joint_scan_read(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     topology: &mut StageJointTopology,
 ) {
     for path in reader.prim_paths() {
@@ -1113,7 +1104,7 @@ fn collect_joint_scan_read(
 /// the namespace's spelling and depth are authoring choices, not runtime rules.
 /// The source arm and backend come from the shared USD program resolver.
 fn collect_behavior_sources(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     parent: &SdfPath,
     out: &mut Vec<(String, Option<String>, Option<String>)>,
 ) {
@@ -1150,7 +1141,7 @@ fn collect_behavior_sources(
 }
 
 fn read_gear_drive_real(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
     name: &str,
     default: f64,
@@ -1164,13 +1155,16 @@ fn read_gear_drive_real(
     }
 }
 
-pub(crate) fn is_gear_drive(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath) -> bool {
-    reader.prim_type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
+pub(crate) fn is_gear_drive(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    prim: &SdfPath,
+) -> bool {
+    reader.type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
         && reader.has_api_schema(prim, "PhysicsDriveAPI:angular")
 }
 
 pub(crate) fn read_gear_ratio(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Option<f64> {
     reader
@@ -1179,7 +1173,7 @@ pub(crate) fn read_gear_ratio(
 }
 
 fn read_gear_drive_values(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<(f64, f64, f64, f64, f64), ()> {
     let rest_offset = read_gear_drive_real(
@@ -1213,7 +1207,7 @@ fn read_gear_drive_values(
 }
 
 fn read_gear_drive_type(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Option<DifferentialDriveType> {
     match reader.text(prim, "drive:angular:physics:type") {
@@ -1274,7 +1268,7 @@ def PhysxPhysicsGearJoint "Differential" (
 }
 
 fn read_authored_camera_look_at(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Option<[f64; 3]>, ()> {
     if !reader.has_authored_attribute(path, "lunco:cameraLookAt") {
@@ -1287,7 +1281,7 @@ fn read_authored_camera_look_at(
 }
 
 fn read_raycast_observation(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<RaycastObservation, ()> {
     let axis = match reader.text(path, "lunco:raycast:axis").as_deref() {
@@ -1390,7 +1384,7 @@ def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
     }
 }
 fn process_usd_sim_prim_read(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: SdfPath,
@@ -1518,7 +1512,7 @@ fn process_usd_sim_prim_read(
             let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
                 Some(Value::String(value)) => value,
                 Some(_) if reader.has_authored_attribute(&sdf_path, "lunco:billboard:text") => {
-                    return Err(())
+                    return Err(());
                 }
                 _ => default.template.clone(),
             };
@@ -2647,7 +2641,7 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
 /// command, so it is skipped loudly. Terms are sorted by port so the derived
 /// component is independent of USD child order (which is hash-ordered).
 fn read_drive_mix_scope(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     scope: &SdfPath,
 ) -> Option<Vec<lunco_mobility::kernels::MixEntry>> {
     let terms = reader.children(scope);
@@ -2756,7 +2750,7 @@ fn drive_output_ownership(expected: &[String], connected: &[String]) -> DriveOut
 /// derived for that vehicle. Shared by the spawn path and the live wheel-param
 /// resync so an edited allocation re-derives identically.
 fn derive_drive_mix(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf_path: &SdfPath,
     prim_path_str: &str,
 ) -> Option<DriveMix> {
@@ -2961,7 +2955,7 @@ mod drive_output_ownership_tests {
 /// its vehicle. A rocker-bogie wheel hangs off a rocker link (`/Rover/RockerL/Wheel_FL`),
 /// so a parent-only check silently reports "does not steer" for a rover that does.
 fn steering_vehicle_of(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     wheel_path: &str,
 ) -> Option<SdfPath> {
     let mut path = wheel_path;
@@ -2985,7 +2979,7 @@ fn steering_vehicle_of(
 /// steering (`0.0`), so an omitted strength is the semantic USD default; an
 /// explicit non-finite or out-of-range value is an asset error, never a clamp.
 pub(crate) fn steering_vehicle_params(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     vehicle: &SdfPath,
 ) -> Result<(f64, f64), String> {
     let max_steer_angle = reader
@@ -3026,7 +3020,7 @@ fn usd_entity_for_path(
 /// raycast realization starts at its parent and walks the composed topology to
 /// the enclosing body.
 fn raycast_body_path(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     wheel_path: &SdfPath,
 ) -> Option<SdfPath> {
     let mut path = wheel_path.parent()?;
@@ -3042,7 +3036,7 @@ fn raycast_body_path(
 /// topology. A wheel may be nested under a non-body carrier, and a physical
 /// wheel's owner is the body named by its authored revolute `body0` relation.
 fn wheel_body_mount(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     wheel_path: &SdfPath,
     physical_body_path: Option<&str>,
     stage: bevy::asset::AssetId<UsdStageAsset>,
@@ -3061,7 +3055,7 @@ fn wheel_body_mount(
 /// wheel's carrier owns the prismatic DOF, while Ackermann geometry is measured
 /// in the vehicle context frame.
 fn vehicle_mount_transform(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     wheel_path: &SdfPath,
 ) -> Option<Transform> {
     let mut path = wheel_path.clone();
@@ -3085,7 +3079,7 @@ fn vehicle_mount_transform(
 /// drivetrain string identifies a contribution. A full physical variant keeps
 /// the same prim as its own `PhysicsRigidBodyAPI` and therefore does not fold it.
 fn raycast_mass_contribution_from_usd(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
@@ -3357,7 +3351,7 @@ fn setup_raycast_wheel(
 /// converted from wheel-local to carrier-local while preserving the authored
 /// composed stage hierarchy.
 fn physical_suspension_visuals(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     wheel_path: &UsdPrimPath,
     wheel_entity: Entity,
     wheel_tf: Transform,
@@ -4069,7 +4063,7 @@ fn project_celestial_comms_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<CelestialProjected>>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<CanonicalStages>,
+    canonical: NonSend<CanonicalStages>,
 ) {
     for (entity, prim_path) in query.iter() {
         // A scene mounted without an explicit root uses the empty path as the
@@ -4082,21 +4076,12 @@ fn project_celestial_comms_prims(
         if prim_path.path.is_empty() {
             continue;
         }
-        // Read the live canonical stage, built on demand from the recipe — the same
-        // source `process_usd_sim_prims` reads.
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        let Some(cs) = canonical.get(id) else {
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let Some(resolved_path) = resolve_stage_prim_path(&cs.view(), &prim_path.path) else {
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let Some(resolved_path) = resolve_stage_prim_path(&reader, &prim_path.path) else {
             warn!(
                 stage = ?id,
                 "USD stage root has no defaultPrim; celestial projection skipped"
@@ -4107,7 +4092,7 @@ fn project_celestial_comms_prims(
             continue;
         };
         celestial::insert_celestial_comms_components(
-            &cs.view(),
+            &reader,
             entity,
             &resolved_path,
             &sdf_path,
@@ -4363,8 +4348,7 @@ fn try_wire_wheel(
 /// compiler owns the separate active-frame pose bake. Unresolved paths produce
 /// an explicitly empty binding set: the compiler then refuses the tree with a
 /// dangling target rather than driving to a guessed origin. A pending route is
-/// re-evaluated by the next authoritative prim/identity publication, never by
-/// a per-frame recovery scan.
+/// re-evaluated when the authoritative prim or identity publication changes.
 fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,

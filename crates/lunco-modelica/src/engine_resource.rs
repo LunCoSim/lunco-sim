@@ -207,6 +207,15 @@ impl ModelicaEngineHandle {
         engine.finish_parse(doc_id, gen);
     }
 
+    /// Record a terminal worker parse failure and clear the in-flight slot.
+    /// The next engine-sync pass installs the diagnostic into the document's
+    /// syntax cache, so the same source generation is not retried forever.
+    pub fn finish_worker_parse_failed(&self, doc_id: DocumentId, gen: u64, error: String) {
+        let mut engine = self.lock();
+        engine.set_parse_diags(doc_id, vec![lunco_doc::Diagnostic::message_only(error)]);
+        engine.finish_parse(doc_id, gen);
+    }
+
     /// Clear all pending parses. Used when a worker crashes to unwedge the
     /// parse queue.
     pub fn clear_all_pending(&self) {
@@ -725,17 +734,13 @@ pub fn drive_engine_sync(
                     );
                     continue;
                 }
-                if crate::worker_transport::dispatch_parse_to_worker(
+                crate::worker_transport::dispatch_parse_to_worker(
                     doc_id,
                     gen,
                     uri,
                     source.to_string(),
-                ) {
-                    true
-                } else {
-                    handle.finish_pending_failed(doc_id, gen);
-                    false
-                }
+                );
+                true
             }
             None => {
                 // Already in flight — let the next tick retry once
@@ -808,6 +813,15 @@ pub fn drain_worker_parse_results(
     {
         use crate::document::SyntaxCache;
         use std::sync::Arc;
+        while let Some(env) = crate::worker_transport::try_recv_parse_failed() {
+            handle.finish_worker_parse_failed(env.doc_id, env.gen, env.error.clone());
+            bevy::log::error!(
+                "[EngineSync] worker parse failed doc={} gen={}: {}",
+                env.doc_id.raw(),
+                env.gen,
+                env.error,
+            );
+        }
         while let Some(env) = crate::worker_transport::try_recv_parse_done() {
             // Lenient parser always returns an AST. `errors` carries
             // any recovery diagnostics; `is_empty()` ⇒ source was

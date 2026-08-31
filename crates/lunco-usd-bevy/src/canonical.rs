@@ -1,19 +1,21 @@
 //! `CanonicalStage` — the live composed openusd `Stage` as the single source of
 //! truth for a scene (Ph0′ substrate).
 //!
-//! openusd's `Stage` is `Rc`-backed (`!Send`), so it lives as a **`NonSend`**
-//! resource on the main thread; every USD read/author/project system runs on the
-//! main thread and reads it through [`StageView`](crate::view::StageView). The
-//! rest of the engine (render / physics / async) consumes the `Send` ECS
-//! components the projection emits — never the stage. The stage is the membrane.
+//! openusd's `Stage` is `Rc`-backed (`!Send`), so the live authoring/runtime
+//! stage lives as a **`NonSend`** resource on the main thread and remains the
+//! source for edits and incremental re-projection. Initial asset materialisation
+//! crosses that membrane as the loader's `Send` [`UsdStageProjectionPlan`], so
+//! hierarchy and default-time visual reads do not run on the UI thread. The rest
+//! of the engine (render / physics / async) consumes the `Send` ECS components
+//! the projection emits — never the stage.
 //!
 //! A [`StageSink`] pushes each committed change into a `Send` inbox
 //! (`Arc<Mutex<..>>`) that a projection system drains per tick; this is how live
 //! edits (and reference-dependent cascade) reach the projector.
 //!
-//! S1 scope: build + hold the stage, expose a [`StageView`], and capture change
-//! notices. The runtime/session edit-target sublayer, EditTarget authoring, and
-//! the chunked physics-aware projector land in later slices (S2/S3).
+//! The canonical owner builds and holds the live stage, exposes a [`StageView`],
+//! and captures change notices. Initial asset projection uses the immutable
+//! prepared plan; this stage owns authoring and incremental re-projection.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -21,14 +23,15 @@ use std::sync::{Arc, Mutex};
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
+use crate::read::UsdReadSource;
 use crate::view::StageView;
-use crate::UsdRead;
+use crate::{UsdRead, UsdStageAsset};
 
-/// A `Send` in-memory recipe for building a canonical [`Stage`]: the resolved
-/// root layer identifier + the full transitive `.usda` layer-closure bytes
-/// (from [`fetch_layer_closure`](crate::compose)). This crosses the async→main
-/// boundary the `!Send` `Stage` cannot: an asset loader fetches the recipe
-/// off-thread, a main-thread system builds the `CanonicalStage` from it.
+/// A `Send` in-memory recipe for composing a USD asset: the resolved root layer
+/// identifier plus the full transitive `.usda` layer-closure bytes (from
+/// [`fetch_layer_closure`](crate::compose)). The loader uses it to prepare the
+/// initial projection plan; the canonical owner uses the same recipe to open
+/// the live `!Send` stage for authoring and incremental re-projection.
 #[derive(Clone)]
 pub struct StageRecipe {
     pub root_id: String,
@@ -115,10 +118,12 @@ impl CanonicalStage {
         }
     }
 
-    /// Build a `CanonicalStage` from a fetched [`StageRecipe`] — the main-thread
-    /// build path for the runtime scene load (async fetch → this). Captures the
-    /// resolver's shared byte-map handle so runtime referenced spawns can inject
-    /// their layer closure (see [`add_layer_bytes`](Self::add_layer_bytes)).
+    /// Build the live authoring [`CanonicalStage`] from a fetched [`StageRecipe`].
+    /// Initial scene materialisation uses the worker-produced projection plan;
+    /// this constructor is the explicit live-stage path for authored edits and
+    /// runtime reference insertion. It captures the resolver's shared byte-map
+    /// handle so referenced spawns can inject their layer closure (see
+    /// [`add_layer_bytes`](Self::add_layer_bytes)).
     pub fn from_recipe(recipe: &StageRecipe) -> anyhow::Result<Self> {
         let (stage, shared) = crate::compose::build_stage_with_resolver(recipe)?;
         let mut cs = Self::from_stage(stage, recipe.root_id.clone());
@@ -739,6 +744,37 @@ impl CanonicalStages {
         self.by_asset.get_mut(&asset)
     }
 
+    /// Select the one composed read surface for an asset generation.
+    ///
+    /// A stage at generation zero is still the unedited load transaction, so the
+    /// worker-produced plan remains authoritative even when a live stage happens
+    /// to have been opened for another reason. A later generation is authored
+    /// state and must be read from the live canonical stage. The method never
+    /// opens a stage; callers that need one for authoring use [`Self::get_or_build`]
+    /// explicitly.
+    pub fn reader_for<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+    ) -> (UsdReadSource<'a>, u64) {
+        if let Some(stage) = self.get(asset) {
+            if stage.generation() > 0 {
+                return (UsdReadSource::Live(stage.view()), stage.generation());
+            }
+        }
+        (
+            UsdReadSource::Prepared(stage_asset.projection_plan.as_ref()),
+            0,
+        )
+    }
+
+    /// Return the current projection generation without opening a live stage.
+    /// A prepared asset is generation zero until the first authored change is
+    /// committed to its canonical stage.
+    pub fn generation_for(&self, asset: bevy::asset::AssetId<UsdStageAsset>) -> u64 {
+        self.get(asset).map_or(0, CanonicalStage::generation)
+    }
+
     pub fn len(&self) -> usize {
         self.by_asset.len()
     }
@@ -813,17 +849,11 @@ impl CanonicalStages {
         }
     }
 
-    /// Build the canonical stage for `asset` from its `recipe` **on demand** if
-    /// not already present, and return a reference to it.
-    ///
-    /// Ph0′ timing fix: `sync_canonical_stages` reacts to `AssetEvent`s in
-    /// `Update`, but the visual/physics extractors instantiate synchronously in
-    /// the `on_usd_prim_added` observer cascade — which runs BEFORE that system
-    /// in the load frame. Building here, at the first read, makes the canonical
-    /// stage available regardless of system ordering. Cached,
-    /// so the whole prim cascade shares one composed stage. `None` only if the
-    /// asset carries no recipe (for example, an in-memory test asset) or the
-    /// build fails.
+    /// Ensure the live canonical stage for `asset` exists and return it. This is
+    /// the explicit stage-owner entry point for runtime entities created before
+    /// the asset event is published; all callers share the resulting stage.
+    /// Initial visual and domain projection still read the asset's prepared
+    /// plan, so this method never supplies a second initial-read path.
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
@@ -833,13 +863,13 @@ impl CanonicalStages {
             match CanonicalStage::from_recipe(recipe) {
                 Ok(cs) => {
                     bevy::log::debug!(
-                        "[canonical] on-demand built CanonicalStage for {asset:?} ({} prims)",
+                        "[canonical] opened live CanonicalStage for {asset:?} ({} prims)",
                         cs.view().prim_paths().len()
                     );
                     entry.insert(cs);
                 }
                 Err(e) => {
-                    bevy::log::warn!("[canonical] on-demand from_recipe failed for {asset:?}: {e}");
+                    bevy::log::warn!("[canonical] failed to open live stage for {asset:?}: {e}");
                     return None;
                 }
             }
@@ -848,12 +878,10 @@ impl CanonicalStages {
     }
 }
 
-/// Main-thread system: when a `UsdStageAsset` finishes loading with a
-/// [`StageRecipe`], build its live [`CanonicalStage`] and stash it in
-/// [`CanonicalStages`]. This is the only source the domain extractors read
-/// from — a stage that fails to build here reads as absent, it does not fall
-/// back. `NonSend` because the built `Stage` is `!Send`, so this system is
-/// pinned to the main thread.
+/// Main-thread system: replace the live [`CanonicalStage`] after an authored
+/// asset modification. Initial loading is already represented by the worker
+/// [`UsdStageProjectionPlan`], so an `Added` event does not open OpenUSD on the
+/// UI thread. `NonSend` is required because the live `Stage` is `!Send`.
 pub fn sync_canonical_stages(
     mut events: bevy::prelude::MessageReader<bevy::asset::AssetEvent<crate::UsdStageAsset>>,
     assets: bevy::prelude::Res<bevy::asset::Assets<crate::UsdStageAsset>>,
@@ -862,7 +890,7 @@ pub fn sync_canonical_stages(
     use bevy::asset::AssetEvent;
     for event in events.read() {
         match event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+            AssetEvent::Modified { id } => {
                 let Some(asset) = assets.get(*id) else {
                     continue;
                 };
@@ -872,17 +900,18 @@ pub fn sync_canonical_stages(
                 match CanonicalStage::from_recipe(recipe) {
                     Ok(cs) => {
                         bevy::log::info!(
-                            "[canonical] built CanonicalStage for {:?} ({} prims)",
+                            "[canonical] reopened live CanonicalStage for {:?} ({} prims)",
                             id,
                             cs.view().prim_paths().len()
                         );
                         stages.by_asset.insert(*id, cs);
                     }
                     Err(e) => {
-                        bevy::log::warn!("[canonical] from_recipe failed for {id:?}: {e}");
+                        bevy::log::warn!("[canonical] failed to reopen live stage for {id:?}: {e}");
                     }
                 }
             }
+            AssetEvent::Added { .. } => {}
             AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
                 stages.by_asset.remove(id);
             }
@@ -897,9 +926,8 @@ pub fn sync_canonical_stages(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)]
 mod recipe_tests {
-    //! Ph0′ S2d: the runtime build primitive — a `StageRecipe` (what the loader
-    //! fetches off-thread) builds, on the main thread, a `CanonicalStage` whose
-    //! composed reads match the known-good file-composed stage.
+    //! A `StageRecipe` opens the live canonical stage with the same composed
+    //! semantics as the file-backed authoring path.
 
     use super::*;
     use crate::compose::compose_file_to_stage;
@@ -949,10 +977,9 @@ mod recipe_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `recipe_tests`
 mod sync_system_tests {
-    //! Ph0′ S2d-wiring: the `sync_canonical_stages` SYSTEM, in a minimal Bevy
-    //! App, must turn a loaded `UsdStageAsset` (carrying a `StageRecipe`) into a
-    //! live `CanonicalStage` in the `CanonicalStages` resource — the exact runtime
-    //! path the headless server exercises on scene load.
+    //! The initial `UsdStageAsset` carries a prepared composed projection plan.
+    //! `sync_canonical_stages` only opens the non-`Send` live stage for an
+    //! authored modification, never for the initial `Added` event.
 
     use super::*;
     use bevy::asset::{AssetApp, AssetPlugin};
@@ -961,7 +988,7 @@ mod sync_system_tests {
     const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
 
     #[test]
-    fn sync_canonical_stages_builds_stage_from_loaded_asset() {
+    fn added_asset_keeps_live_stage_closed() {
         let dir = std::env::temp_dir().join("lunco_sync_system_test");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("scene.usda");
@@ -978,13 +1005,22 @@ mod sync_system_tests {
             .init_non_send::<CanonicalStages>()
             .add_systems(Update, sync_canonical_stages);
 
-        // `Assets::add` emits `AssetEvent::Added`, which the system reads.
+        // `Assets::add` emits `AssetEvent::Added`, which deliberately does not
+        // open the non-Send live stage. The worker-produced plan is the initial
+        // composed reader for projection systems.
         let handle = app
             .world_mut()
             .resource_mut::<Assets<crate::UsdStageAsset>>()
-            .add(crate::UsdStageAsset {
-                recipe: Some(recipe),
-            });
+            .add(crate::UsdStageAsset::from_recipe(recipe).expect("prepare stage asset"));
+
+        assert!(
+            app.world()
+                .resource::<Assets<crate::UsdStageAsset>>()
+                .get(handle.id())
+                .map(|asset| asset.projection_plan.as_ref())
+                .is_some(),
+            "initial asset must carry its prepared composed projection plan"
+        );
 
         // One frame flushes the asset event; the next lets the system act on it.
         app.update();
@@ -996,18 +1032,60 @@ mod sync_system_tests {
             .expect("CanonicalStages resource present");
         assert_eq!(
             stages.len(),
-            1,
-            "exactly one canonical stage built from the loaded asset"
+            0,
+            "initial projection must not open a live stage"
         );
-        let cs = stages
-            .get(handle.id())
-            .expect("canonical stage keyed by the asset id");
-        assert!(
-            cs.view()
-                .prim_paths()
-                .iter()
-                .any(|p| p.to_string() == "/Root/Box"),
-            "the runtime canonical stage exposes the composed scene"
+    }
+
+    #[test]
+    fn added_event_does_not_replace_an_explicit_live_stage() {
+        let dir = std::env::temp_dir().join("lunco_sync_existing_stage_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<crate::UsdStageAsset>()
+            .init_non_send::<CanonicalStages>()
+            .add_systems(Update, sync_canonical_stages);
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<crate::UsdStageAsset>>()
+            .add(crate::UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
+
+        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let rover = SdfPath::new("/Root/Box").unwrap();
+        canonical
+            .author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("author existing stage");
+        canonical.drain_changes();
+        assert_eq!(canonical.generation(), 1);
+        app.world_mut()
+            .get_non_send_mut::<CanonicalStages>()
+            .expect("CanonicalStages resource present")
+            .insert(handle.id(), canonical);
+
+        app.update();
+        app.update();
+
+        let stages = app
+            .world()
+            .get_non_send::<CanonicalStages>()
+            .expect("CanonicalStages resource present");
+        assert_eq!(
+            stages
+                .get(handle.id())
+                .expect("existing canonical stage retained")
+                .generation(),
+            1,
+            "an Added event must not replace a stage explicitly opened by its owner"
         );
     }
 }

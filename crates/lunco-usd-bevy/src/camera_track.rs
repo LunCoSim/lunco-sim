@@ -51,7 +51,7 @@ pub const ACTIVE_CAMERA_ATTR: &str = "lunco:activeCamera";
 
 /// True iff `path` authors `lunco:activeCamera` `timeSamples` — i.e. it is a
 /// camera track and its entity should get the [`CameraTrack`] marker at spawn.
-pub fn prim_is_camera_track(reader: &crate::StageView<'_>, path: &SdfPath) -> bool {
+pub fn prim_is_camera_track(reader: &impl crate::UsdRead, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, ACTIVE_CAMERA_ATTR)
 }
 
@@ -105,17 +105,18 @@ fn held_camera(keys: &[(f64, String)], t: f64) -> Option<&str> {
 /// asset is loaded. Gated on `Without<CameraTrackPlan>`, so it retries per frame
 /// only for tracks not yet planned and is empty in steady state.
 pub fn plan_camera_tracks(
+    stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     mut status: ResMut<CameraSelectionStatus>,
     q: Query<(Entity, &UsdPrimPath), (With<CameraTrack>, Without<CameraTrackPlan>)>,
 ) {
     for (entity, prim) in &q {
-        let Some(cs) = canonical.get(prim.stage_handle.id()) else {
+        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let view = cs.view();
-        let reader = &view;
+        let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
+        let reader = &reader;
         let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else {
             continue;
         };
@@ -149,6 +150,7 @@ pub fn plan_camera_tracks(
 /// leaves an explicit binding intact; absent time spine → stays on the world clock.
 pub fn bind_camera_tracks_to_preview(
     preview: Option<Res<AnimationPreview>>,
+    stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (Added<CameraTrack>, Without<TimeBinding>)>,
@@ -163,11 +165,12 @@ pub fn bind_camera_tracks_to_preview(
             domain: preview.domain,
         });
         // Union the track's key span (seconds) into the range to grow the domain.
-        if let Some(cs) = canonical.get(prim.stage_handle.id()) {
-            let view = cs.view();
+        if let Some(stage_asset) = stages.get(&prim.stage_handle) {
+            let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
+            let reader = &reader;
             if let Ok(sp) = SdfPath::new(prim.path.as_str()) {
-                let tcps = stage_time_codes_per_second(&view);
-                let keys = read_token_timesamples(&view, &sp, ACTIVE_CAMERA_ATTR);
+                let tcps = stage_time_codes_per_second(reader);
+                let keys = read_token_timesamples(reader, &sp, ACTIVE_CAMERA_ATTR);
                 if let (Some(first), Some(last)) = (keys.first(), keys.last()) {
                     let (a, b) = (first.0 / tcps, last.0 / tcps);
                     span = Some(match span {

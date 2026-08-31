@@ -108,20 +108,42 @@ camera leaves the loaded scene in an explicit no-camera state and does not turn
 successful USD projection into a false asset-load failure.
 
 USD visual projection is the deliberate exception to all-at-once scene
-materialisation. `sync_usd_visuals` only moves loaded prims into its queue;
-`UsdVisualProjectionSettings::frame_budget` bounds when the main-thread USD
-read and recursive child scheduling may start in `process_queued_usd_visuals`.
-The budget is time-based because prim costs are not uniform. One prim remains
-atomic because the live OpenUSD stage is `!Send`; detached CPU geometry is
-published through the async compute phase, and Bevy asset mutation is committed
-on the main thread. The queue marker is the ownership fence: a USD traversal
-creates one child under its parent, without a world-wide duplicate-path scan.
-The same composed path can legitimately occur in separate mounts or runtime
-instances, where the parent hierarchy and instance identity scope it.
+materialisation. The asset loader composes the fetched layer closure on its
+worker and publishes a `UsdStageProjectionPlan`, an immutable `Send` snapshot
+of the composed hierarchy, default-time attributes, transforms, bindings, and
+animation topology. `sync_usd_visuals` and `process_queued_usd_visuals` perform
+only bounded ECS/resource binding from that snapshot; they do not parse USD,
+walk a live stage, or resolve composed values on the UI thread. CPU geometry
+that is safe to detach remains on the async compute path, and Bevy asset
+mutation is committed on the main thread. The live OpenUSD stage is still
+`!Send` and is retained only by `CanonicalStages` for authoring and explicit
+incremental edits after the initial snapshot.
+
+`UsdVisualProjectionSettings::frame_budget` bounds the ECS binding phase because
+entity allocation and Bevy asset mutation are main-thread responsibilities. The
+queue marker is the ownership fence: a prepared hierarchy creates one child
+under its parent, without a world-wide duplicate-path scan. The same composed
+path can legitimately occur in separate mounts or runtime instances, where the
+parent hierarchy and instance identity scope it.
 `UsdAwaitingStage` remains on queued prims, so the authoritative stage outcome
 is retained until the queue is empty. The workbench reports the indeterminate
 loading/projecting phase, and a clear transaction reports unloading, rather than
 presenting a partially projected scene as ready.
+
+Doc-backed Twin admission is event-driven at the asset boundary. The Twin source
+is loaded as `UsdSourceText`; `AssetEvent` marks successful availability and
+`AssetLoadFailedEvent` closes the pending document transaction with its error.
+Only after that terminal event does the owner publish the composed document
+overlay and submit `LoadScene`. Referenced stage assets use the same event
+boundary before their reference is authored onto a live stage. This keeps source
+bytes in the asset pipeline and removes frame-count timeouts, per-frame load-state
+polls, and main-thread filesystem reads from scene admission.
+
+After admission, document edits wake the single `twin_projection` owner through
+`DocumentChanged`; stage lifecycle events wake it when an edit is waiting for a
+prepared asset. The owner consumes that wake while authoring the typed delta and
+the live projection sink refreshes ECS. It does not scan document generations on
+the render loop, and the viewport does not maintain a second edit path.
 
 The native `--scene` entry point follows the same boundary: `setup_sandbox` only
 resolves the owning root and queues the shared asynchronous Twin scan. The

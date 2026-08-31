@@ -1,5 +1,6 @@
-//! `UsdRead` — the composed-read surface over the canonical stage, implemented
-//! by [`StageView`](crate::view::StageView).
+//! `UsdRead` — the composed-read surface shared by the worker-produced
+//! [`UsdStageProjectionPlan`](crate::UsdStageProjectionPlan) and the live
+//! [`StageView`](crate::view::StageView).
 //!
 //! This is the **composed-read plane**: every read resolves through PCP, so an
 //! extractor sees the values usdview would. Its counterpart is the *authoring*
@@ -13,6 +14,7 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
+use bevy::prelude::Transform;
 use openusd::ar::ResolvedPath;
 use openusd::sdf::{FieldKey, Path as SdfPath, Value};
 use openusd::usd::Stage;
@@ -120,8 +122,9 @@ fn numeric_value_as_f64(value: &Value) -> Option<f64> {
     }
 }
 
-/// Composed, default-time reads served by the live canonical `StageView`.
-/// Extractors depend on this seam rather than reaching into OpenUSD directly.
+/// Composed, default-time reads served by either the worker-produced initial
+/// plan or the live canonical `StageView`. Extractors depend on this seam rather
+/// than reaching into OpenUSD directly.
 pub trait UsdRead {
     /// Composed `typeName` of the prim at `prim` (e.g. `"Cube"`, `"Mesh"`).
     /// Named `type_name` to distinguish it from authoring-layer helpers.
@@ -158,6 +161,31 @@ pub trait UsdRead {
         T: TryFrom<Value>,
     {
         self.attr_value(prim, name).and_then(|v| v.get::<T>())
+    }
+
+    /// The canonical precision-tolerant scalar vec3 read. USD authors the
+    /// same semantic vector as fixed-size float/double values or as a vector
+    /// array, so callers must not select one Rust representation as a type
+    /// contract. The conversion is kept here with the other composed readers
+    /// so live and prepared readers cannot drift.
+    fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
+        if let Some(v) = self.scalar::<[f32; 3]>(prim, name) {
+            return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
+        }
+        if let Some(v) = self.scalar::<[f64; 3]>(prim, name) {
+            return Some([v[0], v[1], v[2]]);
+        }
+        if let Some(v) = self.scalar::<Vec<f32>>(prim, name) {
+            if v.len() >= 3 {
+                return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
+            }
+        }
+        if let Some(v) = self.scalar::<Vec<f64>>(prim, name) {
+            if v.len() >= 3 {
+                return Some([v[0], v[1], v[2]]);
+            }
+        }
+        None
     }
 
     /// The text of a `string`- **or** `token`-typed attribute.
@@ -335,6 +363,11 @@ pub trait UsdRead {
     /// (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `LunCoTerrainAPI`).
     fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool;
 
+    /// All composed applied API schemas on `prim`, in OpenUSD's resolved order.
+    /// Snapshot readers need the complete set so a worker-produced plan cannot
+    /// silently omit a schema that a later extractor asks for.
+    fn api_schemas(&self, prim: &SdfPath) -> Vec<String>;
+
     /// First composed target of **relationship** `name` on `prim`, as a path
     /// string (e.g. a joint's `physics:body0`). Composed = PCP-translated.
     ///
@@ -347,6 +380,19 @@ pub trait UsdRead {
     /// WRONG one and never find out. Use
     /// [`connection_source`](Self::connection_source) for connections.
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
+
+    /// All composed targets of relationship `name`, preserving USD list-op
+    /// order. Relationship cardinality is part of the authored contract; a
+    /// reader must not silently select the first target when a singular link
+    /// has been authored more than once.
+    fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath>;
+
+    /// Names of composed relationship properties on `prim`.
+    ///
+    /// This keeps snapshot readers and live readers on the same relationship
+    /// discovery path. Consumers that need a relationship should ask for the
+    /// composed property here, rather than maintaining a list of schema names.
+    fn relationship_names(&self, prim: &SdfPath) -> Vec<String>;
 
     /// **All** composed connection sources of attribute `name` on `prim` — the
     /// full `connectionPaths` list (fan-in), as path strings, in list order. The
@@ -363,14 +409,17 @@ pub trait UsdRead {
         self.connections(prim, name).into_iter().next()
     }
 
-    /// The live composed [`Stage`] behind this view — the escape hatch to
-    /// openusd's typed schemas (`UsdShadeMaterialBindingAPI`, `UsdGeomXformable`),
-    /// so we resolve bindings and compose transforms with openusd's spec
-    /// implementation instead of re-deriving USD's rules here.
-    fn usd_stage(&self) -> &Stage;
-
     /// Immediate composed prim children of `prim`.
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
+
+    /// Expand the standard USD collection membership query for `prim`.
+    /// Implementations retain USD's collection semantics; callers do not
+    /// reconstruct includes/excludes or subtree expansion themselves.
+    fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String>;
 
     /// Every live composed prim path (active, defined, non-abstract), in
     /// traversal order — the set a per-stage scan iterates. On the live stage
@@ -404,6 +453,26 @@ pub trait UsdRead {
     /// interpolated. The transform decoders read at `time = 0.0` for static
     /// geometry.
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value>;
+
+    /// The canonical local transform at `time`, already converted from the
+    /// stage's authored units/axis. Live readers delegate to OpenUSD's
+    /// Xformable implementation; prepared readers return the worker-produced
+    /// value used for initial projection.
+    fn local_transform_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<Transform>, crate::TransformReadError>;
+
+    /// USD's inherited Imageable visibility/purpose result used by the visual
+    /// projector. The value is prepared with the same composed semantics as
+    /// the live stage.
+    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool;
+
+    /// Resolve the standard UsdShade material binding for a purpose. The
+    /// returned path is owned so a worker-produced reader can cross the asset
+    /// boundary without OpenUSD handles.
+    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
 
     /// Typed timeSamples-or-default read — the `_at` sibling of [`scalar`](Self::scalar).
     fn scalar_at<T>(&self, prim: &SdfPath, name: &str, time: f64) -> Option<T>
@@ -479,6 +548,227 @@ pub trait UsdRead {
     fn time_sample_span(&self, prim: &SdfPath, name: &str) -> Option<(f64, f64)> {
         let ts = self.time_sample_times(prim, name);
         Some((*ts.first()?, *ts.last()?))
+    }
+}
+
+/// Object-safe composed reads used by work that may execute outside Bevy's
+/// main thread.
+///
+/// [`UsdRead`] remains the typed reader used by ordinary Rust code. Its
+/// generic `scalar` helpers intentionally cannot be put behind a trait object,
+/// so this is the concrete-value subset shared by the live canonical reader
+/// and the send-safe asset projection plan. It is an adapter over the same
+/// [`UsdRead`] implementation, not a second source of USD facts.
+pub trait UsdReadObject {
+    fn type_name(&self, prim: &SdfPath) -> Option<String>;
+    fn kind(&self, prim: &SdfPath) -> Option<String>;
+    fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
+    fn points3(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 3]>;
+    fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]>;
+    fn text(&self, prim: &SdfPath, name: &str) -> Option<String>;
+    fn asset(&self, prim: &SdfPath, name: &str) -> Option<String>;
+    fn real(&self, prim: &SdfPath, name: &str) -> Option<f64>;
+    fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32>;
+    fn integer(&self, prim: &SdfPath, name: &str) -> Option<i32>;
+    fn boolean(&self, prim: &SdfPath, name: &str) -> Option<bool>;
+    fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool;
+    fn documentation(&self, prim: &SdfPath) -> Option<String>;
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool;
+    fn api_schemas(&self, prim: &SdfPath) -> Vec<String>;
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
+    fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath>;
+    fn relationship_names(&self, prim: &SdfPath) -> Vec<String>;
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String>;
+    fn connection_source(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.connections(prim, name).into_iter().next()
+    }
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
+    fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String>;
+    fn prim_paths(&self) -> Vec<SdfPath>;
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String>;
+    fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool;
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value>;
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool;
+    fn time_codes_per_second(&self) -> f64;
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
+    fn stage_metadata_value(&self, name: &str) -> Option<Value>;
+    fn local_transform_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<Transform>, crate::TransformReadError>;
+    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool;
+    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
+    fn is_active(&self, prim: &SdfPath) -> bool;
+    fn has_prim(&self, prim: &SdfPath) -> bool;
+    fn default_prim(&self) -> Option<String>;
+    fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint>;
+}
+
+impl<T: UsdRead + ?Sized> UsdReadObject for T {
+    fn type_name(&self, prim: &SdfPath) -> Option<String> {
+        UsdRead::type_name(self, prim)
+    }
+
+    fn kind(&self, prim: &SdfPath) -> Option<String> {
+        UsdRead::kind(self, prim)
+    }
+
+    fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
+        UsdRead::attr_value(self, prim, name)
+    }
+
+    fn points3(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 3]> {
+        UsdRead::points3(self, prim, name)
+    }
+
+    fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
+        UsdRead::vec3_f64(self, prim, name)
+    }
+
+    fn text(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        UsdRead::text(self, prim, name)
+    }
+
+    fn asset(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        UsdRead::asset(self, prim, name)
+    }
+
+    fn real(&self, prim: &SdfPath, name: &str) -> Option<f64> {
+        UsdRead::real(self, prim, name)
+    }
+
+    fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
+        UsdRead::real_f32(self, prim, name)
+    }
+
+    fn integer(&self, prim: &SdfPath, name: &str) -> Option<i32> {
+        UsdRead::scalar(self, prim, name)
+    }
+
+    fn boolean(&self, prim: &SdfPath, name: &str) -> Option<bool> {
+        UsdRead::boolean(self, prim, name)
+    }
+
+    fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
+        UsdRead::has_authored_attribute(self, prim, name)
+    }
+
+    fn documentation(&self, prim: &SdfPath) -> Option<String> {
+        UsdRead::documentation(self, prim)
+    }
+
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
+        UsdRead::has_api_schema(self, prim, schema)
+    }
+
+    fn api_schemas(&self, prim: &SdfPath) -> Vec<String> {
+        UsdRead::api_schemas(self, prim)
+    }
+
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        UsdRead::rel_target(self, prim, name)
+    }
+
+    fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
+        UsdRead::rel_targets(self, prim, name)
+    }
+
+    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+        UsdRead::relationship_names(self, prim)
+    }
+
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
+        UsdRead::connections(self, prim, name)
+    }
+
+    fn connection_source(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        UsdRead::connection_source(self, prim, name)
+    }
+
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
+        UsdRead::children(self, prim)
+    }
+
+    fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        UsdRead::collection_members(self, prim, instance_name)
+    }
+
+    fn prim_paths(&self) -> Vec<SdfPath> {
+        UsdRead::prim_paths(self)
+    }
+
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
+        UsdRead::attr_names(self, prim)
+    }
+
+    fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool {
+        UsdRead::any_attr_with_prefix(self, prim, prefix)
+    }
+
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
+        UsdRead::attr_value_at(self, prim, name, time)
+    }
+
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
+        UsdRead::has_time_samples(self, prim, name)
+    }
+
+    fn time_codes_per_second(&self) -> f64 {
+        UsdRead::time_codes_per_second(self)
+    }
+
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        UsdRead::time_sample_times(self, prim, name)
+    }
+
+    fn stage_metadata_value(&self, name: &str) -> Option<Value> {
+        UsdRead::stage_metadata_value(self, name)
+    }
+
+    fn local_transform_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<Transform>, crate::TransformReadError> {
+        UsdRead::local_transform_at(self, prim, time)
+    }
+
+    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
+        UsdRead::is_invisible_or_guide(self, prim)
+    }
+
+    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
+        UsdRead::bound_material(self, prim, purpose)
+    }
+
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
+        UsdRead::binary_asset_uri(self, prim)
+    }
+
+    fn is_active(&self, prim: &SdfPath) -> bool {
+        UsdRead::is_active(self, prim)
+    }
+
+    fn has_prim(&self, prim: &SdfPath) -> bool {
+        UsdRead::has_prim(self, prim)
+    }
+
+    fn default_prim(&self) -> Option<String> {
+        UsdRead::default_prim(self)
+    }
+
+    fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint> {
+        UsdRead::attr_ui_hint(self, prim, name)
     }
 }
 
@@ -558,8 +848,36 @@ impl UsdRead for StageView<'_> {
             .unwrap_or(false)
     }
 
-    fn usd_stage(&self) -> &Stage {
-        StageView::stage(self)
+    fn api_schemas(&self, prim: &SdfPath) -> Vec<String> {
+        self.stage()
+            .prim(prim.clone())
+            .api_schemas()
+            .map(|schemas| schemas.iter().map(ToString::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        StageView::collection_members(self, prim, instance_name)
+    }
+
+    fn local_transform_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<Transform>, crate::TransformReadError> {
+        crate::compose_live_xform_order_at(self, prim, time)
+    }
+
+    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
+        crate::stage_prim_is_invisible_or_guide(self, prim)
+    }
+
+    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
+        crate::resolve_bound_material(self, prim, purpose).map(|path| path.to_string())
     }
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
@@ -574,6 +892,34 @@ impl UsdRead for StageView<'_> {
             .into_iter()
             .next()
             .map(|t| t.to_string())
+    }
+
+    fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
+        self.stage()
+            .prim(prim.clone())
+            .relationship(name)
+            .targets()
+            .unwrap_or_default()
+    }
+
+    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+        self.stage()
+            .prim(prim.clone())
+            .property_names()
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|name| {
+                        self.stage()
+                            .prim(prim.clone())
+                            .relationship(name.as_str())
+                            .targets()
+                            .ok()
+                            .map(|_| name.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
@@ -747,6 +1093,232 @@ impl UsdRead for StageView<'_> {
 
     fn stage_metadata_value(&self, name: &str) -> Option<Value> {
         self.stage().stage_metadata(name).ok().flatten()
+    }
+}
+
+/// The composed reader selected for one projection generation.
+///
+/// The initial generation is served by the immutable plan prepared by the asset
+/// loader. Once an authored edit exists, the live canonical stage is selected so
+/// the editor and incremental projection observe the same OpenUSD document. This
+/// enum is the single boundary adapter; consumers do not duplicate that choice.
+pub enum UsdReadSource<'a> {
+    /// Worker-produced, `Send`-safe initial projection data.
+    Prepared(&'a crate::UsdStageProjectionPlan),
+    /// Main-thread live stage used for authored edits and later generations.
+    Live(StageView<'a>),
+}
+
+impl UsdRead for UsdReadSource<'_> {
+    fn type_name(&self, prim: &SdfPath) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::type_name(*reader, prim),
+            Self::Live(reader) => UsdRead::type_name(reader, prim),
+        }
+    }
+
+    fn kind(&self, prim: &SdfPath) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::kind(*reader, prim),
+            Self::Live(reader) => UsdRead::kind(reader, prim),
+        }
+    }
+
+    fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
+        match self {
+            Self::Prepared(reader) => UsdRead::attr_value(*reader, prim, name),
+            Self::Live(reader) => UsdRead::attr_value(reader, prim, name),
+        }
+    }
+
+    fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::has_authored_attribute(*reader, prim, name),
+            Self::Live(reader) => UsdRead::has_authored_attribute(reader, prim, name),
+        }
+    }
+
+    fn documentation(&self, prim: &SdfPath) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::documentation(*reader, prim),
+            Self::Live(reader) => UsdRead::documentation(reader, prim),
+        }
+    }
+
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::has_api_schema(*reader, prim, schema),
+            Self::Live(reader) => UsdRead::has_api_schema(reader, prim, schema),
+        }
+    }
+
+    fn api_schemas(&self, prim: &SdfPath) -> Vec<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::api_schemas(*reader, prim),
+            Self::Live(reader) => UsdRead::api_schemas(reader, prim),
+        }
+    }
+
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::rel_target(*reader, prim, name),
+            Self::Live(reader) => UsdRead::rel_target(reader, prim, name),
+        }
+    }
+
+    fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
+        match self {
+            Self::Prepared(reader) => UsdRead::rel_targets(*reader, prim, name),
+            Self::Live(reader) => UsdRead::rel_targets(reader, prim, name),
+        }
+    }
+
+    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::relationship_names(*reader, prim),
+            Self::Live(reader) => UsdRead::relationship_names(reader, prim),
+        }
+    }
+
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::connections(*reader, prim, name),
+            Self::Live(reader) => UsdRead::connections(reader, prim, name),
+        }
+    }
+
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
+        match self {
+            Self::Prepared(reader) => UsdRead::children(*reader, prim),
+            Self::Live(reader) => UsdRead::children(reader, prim),
+        }
+    }
+
+    fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::collection_members(*reader, prim, instance_name),
+            Self::Live(reader) => UsdRead::collection_members(reader, prim, instance_name),
+        }
+    }
+
+    fn prim_paths(&self) -> Vec<SdfPath> {
+        match self {
+            Self::Prepared(reader) => UsdRead::prim_paths(*reader),
+            Self::Live(reader) => UsdRead::prim_paths(reader),
+        }
+    }
+
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::attr_names(*reader, prim),
+            Self::Live(reader) => UsdRead::attr_names(reader, prim),
+        }
+    }
+
+    fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::any_attr_with_prefix(*reader, prim, prefix),
+            Self::Live(reader) => UsdRead::any_attr_with_prefix(reader, prim, prefix),
+        }
+    }
+
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
+        match self {
+            Self::Prepared(reader) => UsdRead::attr_value_at(*reader, prim, name, time),
+            Self::Live(reader) => UsdRead::attr_value_at(reader, prim, name, time),
+        }
+    }
+
+    fn local_transform_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<Transform>, crate::TransformReadError> {
+        match self {
+            Self::Prepared(reader) => UsdRead::local_transform_at(*reader, prim, time),
+            Self::Live(reader) => UsdRead::local_transform_at(reader, prim, time),
+        }
+    }
+
+    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::is_invisible_or_guide(*reader, prim),
+            Self::Live(reader) => UsdRead::is_invisible_or_guide(reader, prim),
+        }
+    }
+
+    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::bound_material(*reader, prim, purpose),
+            Self::Live(reader) => UsdRead::bound_material(reader, prim, purpose),
+        }
+    }
+
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::binary_asset_uri(*reader, prim),
+            Self::Live(reader) => UsdRead::binary_asset_uri(reader, prim),
+        }
+    }
+
+    fn is_active(&self, prim: &SdfPath) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::is_active(*reader, prim),
+            Self::Live(reader) => UsdRead::is_active(reader, prim),
+        }
+    }
+
+    fn has_prim(&self, prim: &SdfPath) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::has_prim(*reader, prim),
+            Self::Live(reader) => UsdRead::has_prim(reader, prim),
+        }
+    }
+
+    fn default_prim(&self) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::default_prim(*reader),
+            Self::Live(reader) => UsdRead::default_prim(reader),
+        }
+    }
+
+    fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint> {
+        match self {
+            Self::Prepared(reader) => UsdRead::attr_ui_hint(*reader, prim, name),
+            Self::Live(reader) => UsdRead::attr_ui_hint(reader, prim, name),
+        }
+    }
+
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
+        match self {
+            Self::Prepared(reader) => UsdRead::has_time_samples(*reader, prim, name),
+            Self::Live(reader) => UsdRead::has_time_samples(reader, prim, name),
+        }
+    }
+
+    fn time_codes_per_second(&self) -> f64 {
+        match self {
+            Self::Prepared(reader) => UsdRead::time_codes_per_second(*reader),
+            Self::Live(reader) => UsdRead::time_codes_per_second(reader),
+        }
+    }
+
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        match self {
+            Self::Prepared(reader) => UsdRead::time_sample_times(*reader, prim, name),
+            Self::Live(reader) => UsdRead::time_sample_times(reader, prim, name),
+        }
+    }
+
+    fn stage_metadata_value(&self, name: &str) -> Option<Value> {
+        match self {
+            Self::Prepared(reader) => UsdRead::stage_metadata_value(*reader, name),
+            Self::Live(reader) => UsdRead::stage_metadata_value(reader, name),
+        }
     }
 }
 

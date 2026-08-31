@@ -4,9 +4,8 @@
 //! `UsdDocument` records granular deltas (`document::UsdChange`): a **move** is
 //! `InfoOnly{path, "xformOp:translate"}` (cheap — just an entity transform),
 //! while spawns/removes/renames are `Resync` and a wholesale replace is
-//! `FullReload`. The doc-backed refresh system (`sync_twin_overlays`) used to
-//! full-reload the *whole* scene on any generation bump — so dragging a gizmo
-//! re-instantiated every rover + terrain every frame of the drag.
+//! `FullReload`. The doc-backed projector routes each delta to the smallest
+//! live-stage or ECS update that can express it.
 //!
 //! The document projector replays typed edits onto the live canonical stage.
 //! This read-side bridge drains the stage sink, applies transform and other
@@ -971,9 +970,7 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset {
-                recipe: Some(recipe.clone()),
-            });
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -1049,9 +1046,7 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset {
-                recipe: Some(recipe.clone()),
-            });
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -1123,9 +1118,7 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset {
-                recipe: Some(recipe.clone()),
-            });
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
 
         // Build the live stage on demand, then drain its initial change set so
@@ -1213,9 +1206,7 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset {
-                recipe: Some(recipe.clone()),
-            });
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()

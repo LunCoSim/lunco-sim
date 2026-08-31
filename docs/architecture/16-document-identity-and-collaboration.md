@@ -175,9 +175,10 @@ The rule that falls out:
 > frame belongs in the ECS and is replicated by rollback netcode (§7). It reaches
 > USD only when a human asks — save, checkpoint, promote-scenario.
 
-This is not theoretical for us: `sync_twin_overlays` already debounces its
-whole-stage serialize *because* per-stroke USD writes were unaffordable during
-terrain brushing. That was this rule, discovered locally and paid for once.
+This is not theoretical for us: `sync_twin_overlays` sends a settle message for
+its whole-stage serialization because per-stroke USD writes are unaffordable
+during terrain brushing. The message boundary coalesces the edit burst while
+the live stage still receives each authored operation immediately.
 
 **Three things, not two** — and the middle one is easy to miss:
 

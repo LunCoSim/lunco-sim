@@ -351,6 +351,9 @@ impl Plugin for UsdCommandsPlugin {
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        app.init_resource::<crate::twin_projection::TwinProjectionWake>();
+        app.add_message::<crate::twin_projection::TwinProjectionSettle>();
+        app.add_observer(crate::twin_projection::wake_twin_projection_on_document_changed);
         app.add_observer(claim_user_document_on_opened);
         app.add_observer(forget_backed_document_on_closed);
         app.init_resource::<crate::live_consume::LiveTransformEditHints>();
@@ -390,12 +393,19 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(
             PreUpdate,
             (
-                crate::twin_projection::drain_pending_twin_docs,
+                crate::twin_projection::settle_twin_overlays,
+                crate::twin_projection::mark_pending_twin_docs,
+                crate::twin_projection::drain_pending_twin_docs
+                    .run_if(crate::twin_projection::pending_twin_docs_ready),
+                crate::twin_projection::wake_twin_projection_on_stage_event,
                 // Author doc deltas (translate / spawn / remove) onto the live
                 // stage; queue referenced spawns needing a closure fetch.
-                crate::twin_projection::sync_twin_overlays,
+                crate::twin_projection::sync_twin_overlays
+                    .run_if(crate::twin_projection::twin_projection_ready),
+                crate::twin_projection::mark_pending_ref_spawns,
                 // Complete referenced spawns whose closure has now loaded.
-                crate::twin_projection::drain_ref_spawns,
+                crate::twin_projection::drain_ref_spawns
+                    .run_if(crate::twin_projection::pending_ref_spawns_ready),
                 crate::live_consume::project_stage_changes,
             )
                 .chain()
@@ -481,13 +491,27 @@ fn open_usd_docs_on_twin_asset_mounted(
                     twin.root.display()
                 );
                 let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(scene_uri.clone());
+                let source_ready = usd_sources
+                    .as_ref()
+                    .is_some_and(|sources| sources.get(handle.id()).is_some());
+                let source_failed = asset_server
+                    .get_load_state(handle.id())
+                    .is_some_and(|state| state.is_failed());
+                let source_id = handle.id();
                 pending_twin.push(
                     handle,
+                    source_ready,
                     twin_name.clone(),
                     scene.to_string(),
                     twin.root.join(scene),
                     twin.root.clone(),
                 );
+                if source_failed {
+                    pending_twin.mark_failed(
+                        source_id,
+                        "the source asset had already failed to load".into(),
+                    );
+                }
             }
             #[cfg(test)]
             if asset_server.is_none() || usd_sources.is_none() {
@@ -710,9 +734,8 @@ fn execute_admitted_load_scene(
     //
     // - sentinel (the ordinary load) means "mount the stage's `defaultPrim`". It
     //   cannot be compared as a string: `instantiate_usd_prim` resolves it and
-    //   writes the concrete path BACK onto the scene root, so once the stage has
-    //   parsed no entity carries `""` and a string compare matches nothing —
-    //   which is why a repeat load used to tear down and remount a live scene.
+    //   writes the concrete path back onto the scene root, so the mounted root
+    //   represents the sentinel semantically rather than as an empty string.
     //   What the sentinel denotes is the stage's default mount, and that mount is
     //   exactly the `UsdSceneRoot`, so ask for that instead.
     // - an explicit override names a real prim path, so compare it as one.
@@ -769,6 +792,9 @@ fn execute_admitted_load_scene(
     // Spawn via shared helper, deferred so despawns flush first.
     commands.queue(move |world: &mut World| {
         spawn_scene_root_world(world, &path, &root_prim);
+        world
+            .resource_mut::<crate::twin_projection::TwinProjectionWake>()
+            .wake();
         if stage_already_loaded {
             world.write_message(lunco_usd_sim::cosim::SceneStageAssetOutcome::Loaded {
                 stage_id: new_id,
@@ -971,9 +997,8 @@ fn on_open_file(
 
 /// Open the root that owns `scene` and select that scene.
 ///
-/// This is the same root-relative scan used by the workbench previously, now
-/// owned by the USD scene domain so GUI and headless `OpenFile` requests cannot
-/// mount one file through competing paths.
+/// This root-relative scan is owned by the USD scene domain so GUI and headless
+/// `OpenFile` requests cannot mount one file through competing paths.
 fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: &str) {
     let abs = match lunco_storage::canonicalize_file_path(scene) {
         Ok(abs) => abs,
@@ -1093,11 +1118,8 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
             }
             Some(Ok(source)) => {
-                // Idempotent re-open: one document per file, base refreshed from
-                // the text we just read. This used to be a hand-rolled scan plus
-                // `if existing.is_none() { allocate(source) }` — so re-opening an
-                // already-open file threw `source` away and kept the stale
-                // document, even though the read had just happened.
+                // Idempotent re-open: the registry owns one document per file and
+                // decides whether the freshly read source can replace its base.
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
                     .open_file(load.path.clone(), source);
@@ -1438,9 +1460,8 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 // live HERE — in the crate that owns `DocumentRegistry<UsdDocument>` — not in the editor, so a
 // headless binary with documents but no 3D editor can still undo.
 //
-// There is no separate `UndoEdit`/`RedoEdit`: it was a second, USD-only pair of commands
-// with a byte-for-byte identical body, which would have advertised four undo verbs on the
-// API and silently done nothing on a Modelica document.
+// The generic undo verbs are handled by each document-owning domain. USD's
+// handlers live here so the document registry remains the single owner.
 
 /// Per-domain [`UndoDocument`] handler for **USD** documents: undo the document's last
 /// history group by applying its typed inverses.
@@ -1452,9 +1473,9 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 /// the ECS ([`crate::live_consume`]). It journals (undo/redo record through the same
 /// `OpRecorder` seam) and replicates like any other op.
 ///
-/// An editor-side "remember the old Transform and write it back" stack cannot do this: it
-/// does not know about the document, so an undone spawn stays in the layer and the
-/// journal, and the two disagree. There used to be one; it is gone.
+/// An editor-side transform stack cannot do this: it does not know about the
+/// document, so an undone spawn could remain in the layer and journal. The
+/// document-owned inverse group keeps both representations aligned.
 ///
 /// No-ops for a `doc` this registry doesn't own, per the `UndoDocument` ownership
 /// convention.
@@ -2613,6 +2634,22 @@ mod tests {
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
     }
 
+    fn wait_for_one_usd_document(app: &mut App) {
+        for _ in 0..1_000 {
+            app.update();
+            if app
+                .world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .ids()
+                .count()
+                == 1
+            {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    }
+
     #[test]
     fn open_file_for_usd_path_creates_document() {
         // Write a tiny .usda to a tempfile we can resolve.
@@ -2631,12 +2668,9 @@ mod tests {
         app.world_mut().trigger(OpenFile {
             path: tmp_path.to_string_lossy().to_string(),
         });
-        // Flush the queued world-command (spawns the async read task),
-        // then advance a few ticks until the read completes and the document
-        // is allocated.
-        for _ in 0..5 {
-            app.update();
-        }
+        // Flush the queued world-command (spawns the async read task), then
+        // wait for the actual document-allocation result.
+        wait_for_one_usd_document(&mut app);
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         assert_eq!(
@@ -2661,9 +2695,7 @@ mod tests {
         app.world_mut().trigger(OpenFile {
             path: format!("file://{}", tmp_path.display()),
         });
-        for _ in 0..5 {
-            app.update();
-        }
+        wait_for_one_usd_document(&mut app);
 
         assert_eq!(
             app.world()

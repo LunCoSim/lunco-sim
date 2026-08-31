@@ -46,13 +46,12 @@ use lunco_mobility::LunCoMobilityPlugin;
 #[cfg(feature = "networking")]
 use lunco_usd::LoadScene;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
-// The USD-reading systems read the LIVE canonical stage via `StageView`, which
-// implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
-// AUTHORED layer). Since the
-// terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
-// USD policy extractor and the UI terrain layer-map binding.
+// USD policy and terrain presentation read the composed reader selected by the
+// shared USD projection boundary. Initial scene loads use the worker-produced
+// plan; authored generations use the live canonical stage. `UsdDataExt` remains
+// the separate authored-layer surface for document questions.
 use bevy::asset::AssetLoadFailedEvent;
-use lunco_usd_bevy::UsdRead;
+use lunco_usd_bevy::read::UsdReadObject;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
 /// propagate the process exit code (e.g. the startup-scene fail-loud guard).
@@ -1831,49 +1830,59 @@ struct AuthoredPolicy {
     source_path: Option<String>,
 }
 
-/// Read every composed `LunCoPolicy` prim across all live stages into the authored
-/// policy set — the "policy is a projected USD prim" extractor. Reads the **composed**
-/// stage, so an opinion authored at any layer (global/twin/scene) resolves to one
-/// effective policy per seam. A prim missing `seam`, or carrying NEITHER an inline
-/// `source` nor a `sourcePath`, is skipped (incompletely authored). Pure over the
-/// stages, so it's unit-testable without a running app — the file-ref RESOLUTION (asset
-/// load) happens in [`project_usd_policies`], not here.
-fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<AuthoredPolicy> {
-    let mut out = Vec::new();
-    for (stage_id, cs) in canonical.iter() {
-        let view = cs.view();
-        for prim in view.prim_paths() {
-            if view.prim_type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
-                continue;
-            }
-            let seam = view
-                .value::<String>(&prim, "lunco:policy:seam")
-                .unwrap_or_default();
-            // The schema default for both is empty (`""` / `@@`), so filter empties: an
-            // unauthored opinion reads back as the fallback, which is not a real source.
-            let inline_source = view
-                .value::<String>(&prim, "info:sourceCode")
-                .filter(|s| !s.is_empty());
-            // `asset`-typed ref — read via `UsdRead::asset` (a `Value::AssetPath`, which a
-            // `String` read would miss). UFCS, so no trait import is needed here.
-            let source_path = lunco_usd_bevy::UsdRead::asset(&view, &prim, "info:sourceAsset")
-                .filter(|s| !s.is_empty());
-            if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
-                continue;
-            }
-            out.push(AuthoredPolicy {
-                stage_id,
-                seam,
-                entry: view
-                    .value::<String>(&prim, "lunco:policy:entry")
-                    .unwrap_or_default(),
-                deterministic: view
-                    .value::<bool>(&prim, "lunco:policy:deterministic")
-                    .unwrap_or(true),
-                inline_source,
-                source_path,
-            });
+/// Append every composed `LunCoPolicy` prim from one reader to the authored policy
+/// set. Reads the composed stage, so an opinion authored at any layer
+/// (global/twin/scene) resolves to one effective policy per seam. A prim missing
+/// `seam`, or carrying neither an inline source nor a source path, is skipped as
+/// incompletely authored. File-reference resolution happens in
+/// [`project_usd_policies`], not here.
+fn append_usd_policies(
+    reader: &dyn UsdReadObject,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    out: &mut Vec<AuthoredPolicy>,
+) {
+    for prim in reader.prim_paths() {
+        if reader.type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
+            continue;
         }
+        let seam = reader.text(&prim, "lunco:policy:seam").unwrap_or_default();
+        let inline_source = reader
+            .text(&prim, "info:sourceCode")
+            .filter(|source| !source.is_empty());
+        let source_path = reader
+            .asset(&prim, "info:sourceAsset")
+            .filter(|source| !source.is_empty());
+        if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
+            continue;
+        }
+        out.push(AuthoredPolicy {
+            stage_id,
+            seam,
+            entry: reader.text(&prim, "lunco:policy:entry").unwrap_or_default(),
+            deterministic: reader
+                .boolean(&prim, "lunco:policy:deterministic")
+                .unwrap_or(true),
+            inline_source,
+            source_path,
+        });
+    }
+}
+
+/// Read policies from the active scene's prepared/live composed source. The
+/// active scene root is the ownership boundary; unrelated loaded asset plans
+/// must not register policy hooks in the running simulation.
+fn extract_active_usd_policies(
+    stages: &Assets<UsdStageAsset>,
+    canonical: &lunco_usd_bevy::CanonicalStages,
+    roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
+) -> Vec<AuthoredPolicy> {
+    let mut out = Vec::new();
+    for stage_id in roots {
+        let Some(stage_asset) = stages.get(stage_id) else {
+            continue;
+        };
+        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
+        append_usd_policies(&reader, stage_id, &mut out);
     }
     out
 }
@@ -1948,7 +1957,9 @@ fn resolve_policy_source_file(
 /// any file-backed source is still loading.
 #[allow(clippy::type_complexity)]
 fn project_usd_policies(
+    stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -1958,7 +1969,7 @@ fn project_usd_policies(
         std::collections::HashMap<String, Handle<lunco_scripting::source_asset::RhaiSource>>,
     >,
     mut source_events: MessageReader<AssetEvent<lunco_scripting::source_asset::RhaiSource>>,
-    mut last: Local<Option<(usize, u64)>>,
+    mut last: Local<Option<(usize, usize, u64)>>,
     mut awaiting: Local<bool>,
 ) {
     let source_changed = source_events.read().any(|event| {
@@ -1971,9 +1982,14 @@ fn project_usd_policies(
                 | AssetEvent::LoadedWithDependencies { .. }
         )
     });
+    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
     let signal = (
-        canonical.len(),
-        canonical.iter().map(|(_, cs)| cs.generation()).sum(),
+        root_ids.len(),
+        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
+        root_ids
+            .iter()
+            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
+            .sum::<u64>(),
     );
     // Re-run when the stage moved OR a file-backed source is still loading.
     if *last == Some(signal) && !*awaiting && !source_changed {
@@ -1981,7 +1997,7 @@ fn project_usd_policies(
     }
     *last = Some(signal);
 
-    let authored = extract_usd_policies(&canonical);
+    let authored = extract_active_usd_policies(&stages, &canonical, root_ids);
     // Drop cached handles for paths no longer authored, so a removed file-policy stops
     // pinning its asset.
     let live: std::collections::HashSet<String> = authored
@@ -2106,9 +2122,10 @@ fn apply_authored_env(
 
 #[cfg(feature = "ui")]
 fn project_env_settings(
+    stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
     mut authored: ResMut<AuthoredEnv>,
-    mut q_exposure: Query<&mut bevy::camera::Exposure>,
     bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
@@ -2117,11 +2134,16 @@ fn project_env_settings(
     // light prim, loaded like every other. See the note below.
     // The exposure single-source-of-truth — see the `exposureEv100` branch.
     mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
-    mut last: Local<Option<(usize, u64)>>,
+    mut last: Local<Option<(usize, usize, u64)>>,
 ) {
+    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
     let signal = (
-        canonical.len(),
-        canonical.iter().map(|(_, cs)| cs.generation()).sum(),
+        root_ids.len(),
+        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
+        root_ids
+            .iter()
+            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
+            .sum::<u64>(),
     );
     if *last == Some(signal) {
         return;
@@ -2129,17 +2151,20 @@ fn project_env_settings(
     *last = Some(signal);
 
     let mut scene_bloom = None;
-    for (_, cs) in canonical.iter() {
-        let view = cs.view();
-        for prim in view.prim_paths() {
-            if view.prim_type_name(&prim).as_deref()
+    for stage_id in root_ids {
+        let Some(stage_asset) = stages.get(stage_id) else {
+            continue;
+        };
+        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
+        for prim in reader.prim_paths() {
+            if reader.type_name(&prim).as_deref()
                 != Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE)
             {
                 continue;
             }
-            if view.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
-                if let Some(ev) = view
-                    .value::<f32>(&prim, "lunco:env:exposureEv100")
+            if reader.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
+                if let Some(ev) = reader
+                    .real_f32(&prim, "lunco:env:exposureEv100")
                     .filter(|ev| ev.is_finite())
                 {
                     // RECORD it — `apply_authored_env` owns getting it onto cameras,
@@ -2152,20 +2177,17 @@ fn project_env_settings(
                     if let Some(sun) = lunar_sun.as_mut() {
                         sun.exposure_ev100 = ev;
                     }
-                    for mut e in &mut q_exposure {
-                        e.ev100 = ev;
-                    }
                 } else {
                     warn!("ignoring invalid authored lunco:env:exposureEv100 on {prim}");
                 }
             }
-            if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
-                if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity")
+            if let Some(bi) = reader.real_f32(&prim, "lunco:env:bloomIntensity") {
+                if reader.has_authored_attribute(&prim, "lunco:env:bloomIntensity")
                     && bi.is_finite()
                     && bi >= 0.0
                 {
                     scene_bloom = Some(bi);
-                } else if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
+                } else if reader.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
                     warn!("ignoring invalid authored lunco:env:bloomIntensity on {prim}");
                 }
             }
@@ -2446,8 +2468,17 @@ lunco_core::register_commands!(on_set_rhai_policy, on_save_scenario);
 
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
-    use super::extract_usd_policies;
-    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe, UsdRead};
+    use super::{append_usd_policies, AuthoredPolicy};
+    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+
+    fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {
+        let mut out = Vec::new();
+        for (stage_id, stage) in canonical.iter() {
+            let view = stage.view();
+            append_usd_policies(&view, stage_id, &mut out);
+        }
+        out
+    }
 
     /// A `LunCoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
     /// the "settable in USD" half of proper policies. The projector then hands this
@@ -3431,13 +3462,15 @@ struct LayerRole {
 /// the prim's `shaderPath` is `terrain_layered.wgsl` (which declares the
 /// bindings); with `regolith.wgsl` the slots are simply ignored.
 ///
-/// Reads via [`UsdRead`], i.e. the live `StageView` over the canonical stage.
+/// Reads through the shared composed reader. Initial scene loads use the
+/// worker-produced projection plan; authored generations use the live
+/// canonical stage.
 ///
 /// CONNECTED map inputs are skipped — a connected port is fed by a producer
 /// node (doc 18 Tier B, bake nodes), not by an authored file.
 #[cfg(feature = "ui")]
 fn read_material_network_layer_maps(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf: &openusd::sdf::Path,
     roles: &'static [LayerRole],
 ) -> Vec<(&'static LayerRole, String, f32)> {
@@ -3818,7 +3851,10 @@ fn report_scene_spawn_status(
         let message = if projecting > 0 {
             format!("projecting scene {} ({projecting} prims queued)", g.path)
         } else if pending_meshes > 0 {
-            format!("loading scene {} (streaming {pending_meshes} meshes)", g.path)
+            format!(
+                "loading scene {} (streaming {pending_meshes} meshes)",
+                g.path
+            )
         } else {
             format!("loading scene {}", g.path)
         };
@@ -4001,7 +4037,7 @@ fn bind_terrain_layers(
     // headless start of this binary. Binding maps onto a material is meaningless without
     // a material, so the honest headless behaviour is to skip.
     mats: Option<ResMut<Assets<lunco_render_bevy::ShaderMaterial>>>,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     use lunco_materials::ParamValue;
@@ -4037,27 +4073,21 @@ fn bind_terrain_layers(
             continue;
         };
 
-        // Read the LIVE canonical stage (built on demand from the asset's recipe)
-        // — the source of truth — through the `UsdRead` read body
-        // (`read_material_network_layer_maps`).
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
-            }
-        }
-        let Some(cs) = canonical.get(id) else {
-            // No live stage (asset carries no recipe / build failed) — retry next frame.
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            error!(
+                "[usd-dem] terrain layer binding has no USD asset for `{}`",
+                prim_path.path
+            );
+            commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
         // The bound UsdShade Material network is the ONLY source (doc 18 §3).
         let authored: Vec<(&LayerRole, String, f32)> =
-            read_material_network_layer_maps(&cs.view(), &sdf, ROLES);
+            read_material_network_layer_maps(&reader, &sdf, ROLES);
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.

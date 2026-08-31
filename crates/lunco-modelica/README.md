@@ -148,7 +148,7 @@ Users can drag, split, tab, and float panels freely. Layout persists via `lunco-
 | Binary | Target | Description |
 |--------|--------|-------------|
 | `lunica` | Desktop | Full Modelica workbench with all panels |
-| `lunica` | wasm32 | Web version (inline worker, no threads) |
+| `lunica` | wasm32 | Web version (Modelica work in a dedicated Web Worker) |
 | `modelica_tester` | CLI | Standalone tester for Modelica compilation |
 | `msl_indexer` | CLI | Build `msl_index.json`; with `--warm` also full-compiles a list of models so rumoca's semantic-summary cache is hot before the workbench opens |
 | `modelica_run` | CLI | Headless: compile a `.mo`, step it for a fixed duration, optionally dump per-step CSV |

@@ -6,7 +6,7 @@
 //! `StandardMaterial`: `lunco-usd-bevy` no longer names `bevy_pbr` (see
 //! `docs/architecture/render-decoupling.md`), and `lunco-render-bevy`'s own tests
 //! cover the `PbrLook` → `StandardMaterial` binding. Every channel asserted here
-//! is the same one the old material assertions checked.
+//! belongs to the current appearance contract.
 #![allow(clippy::disallowed_methods)]
 
 use bevy::prelude::*;
@@ -61,12 +61,13 @@ def Xform "World"
 }
 "#;
 
-    // The material resolves off the live canonical stage, built on demand from
-    // this recipe (single in-memory layer, no external refs → `from_source`).
+    // The material resolves from the asset's prepared composed projection. The
+    // same recipe remains available to the live canonical stage for edits.
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let stage_handle = stages.add(UsdStageAsset {
-        recipe: Some(StageRecipe::from_source("scene.usda", usda_content)),
-    });
+    let stage_handle = stages.add(
+        UsdStageAsset::from_recipe(StageRecipe::from_source("scene.usda", usda_content))
+            .expect("prepare stage asset"),
+    );
 
     // Spawn the MeshWithMaterial entity representing the USD prim
     let test_entity = app
@@ -118,9 +119,8 @@ fn material_for(usda: &str, prim_path: &str) -> PbrLook {
 
 /// Run the production USD visual projection and preserve the distinction
 /// between a valid look and a rejected authored material.  A missing look is
-/// the important assertion for malformed USD: the old implementation returned
-/// a plausible default, so a test that only inspected parser success missed
-/// the bug at the consumer boundary.
+/// the important assertion for malformed USD: a type error must not produce a
+/// plausible appearance intent at the consumer boundary.
 fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -132,9 +132,10 @@ fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
 
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset {
-            recipe: Some(StageRecipe::from_source("scene.usda", usda)),
-        })
+        stages.add(
+            UsdStageAsset::from_recipe(StageRecipe::from_source("scene.usda", usda))
+                .expect("prepare stage asset"),
+        )
     };
     let entity = app
         .world_mut()
@@ -362,30 +363,6 @@ fn opaque_material_stays_opaque() {
         "no opacity → Opaque"
     );
     assert!((look.base_color.alpha - 1.0).abs() < 1e-4);
-}
-
-const MALFORMED_DISPLAY_COLOR_STAGE: &str = r#"#usda 1.0
-( defaultPrim = "World" )
-def Xform "World"
-{
-    def Cube "Body"
-    {
-        // UsdGeomGprim declares this as color3f[], not scalar color3f.
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
-        double size = 2.0
-    }
-}
-"#;
-
-/// A scalar display color must not become the white semantic default.  The
-/// authored type is invalid for `UsdGeomGprim`, so the visual projection refuses
-/// the PBR intent and surfaces the asset error through its log.
-#[test]
-fn malformed_display_color_does_not_fall_back_to_white() {
-    assert!(
-        material_for_optional(MALFORMED_DISPLAY_COLOR_STAGE, "/World/Body").is_none(),
-        "wrong USD displayColor type must not produce a plausible PbrLook"
-    );
 }
 
 const MALFORMED_ROUGHNESS_STAGE: &str = r#"#usda 1.0

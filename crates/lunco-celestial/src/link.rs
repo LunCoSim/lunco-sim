@@ -1,17 +1,19 @@
 //! Generic connectivity kernel — the domain-free MECHANISM behind links.
 //!
 //! The heavy work lives here in Rust (and thus serves every scripting language):
-//! a cadence-gated pairwise sweep over [`LinkNode`] entities that computes the
-//! geometry — range, local elevation, analytic body occlusion, and terrain
-//! occlusion (via the generic `TerrainRaycast` query) — then asks a
+//! a cadence-gated pairwise sweep over direct [`LinkNode`] and radio [`WifiNode`]
+//! entities that computes the geometry — range, local elevation, analytic body
+//! occlusion, and terrain occlusion (via the generic `TerrainRaycast` query) —
+//! then asks a
 //! **language-neutral verdict hook** ([`LINK_HOOK`]) whether each pair is a usable
 //! link. Scripts supply only that verdict (a pure boolean over precomputed
 //! geometry — no loops, no queries), so a rhai / Python policy is minimal.
 //!
-//! Nothing here is "comms": nodes, links, and the verdict are generic. A comms
-//! (or sensor, or relay) domain is authored on top — roles, routing, and naming
-//! live in script over the [`LinkState`] this writes and the `link.aos`/`link.los`
-//! events it emits.
+//! Nothing here is "comms": direct nodes, geometry, and the verdict are generic.
+//! A comms (or sensor, or relay) domain is authored on top — roles, routing, and
+//! naming live in script over the [`LinkState`] this writes and the `link.aos`/
+//! `link.los` events it emits. [`LinkGeometryState`] is the policy-free substrate
+//! shared by domains such as Wi-Fi.
 //!
 //! The recompute cadence is a **runtime parameter** ([`LinkConfig::interval_s`]),
 //! tuned live via the [`SetLinkCadence`] command — never a build constant.
@@ -308,13 +310,13 @@ fn link_solve_due_at(current_jd: f64, last_jd: Option<f64>, interval_s: f64) -> 
 }
 
 /// Skip the link kernel between its authored sim-time cadence intervals. The
-/// node-count probe is bounded to two matches so an empty scene does not enter
-/// the large pairwise system at all.
+/// endpoint-count probe is bounded to two matches so an empty scene does not
+/// enter the large pairwise system at all.
 pub(crate) fn link_solve_due(
     config: Option<Res<LinkConfig>>,
     world_time: Option<Res<WorldTime>>,
     state: Res<LinkSolverState>,
-    nodes: Query<(), With<LinkNode>>,
+    nodes: Query<(), Or<(With<LinkNode>, With<crate::wifi::WifiNode>)>>,
 ) -> bool {
     if nodes.iter().take(2).count() < 2 {
         return false;
@@ -332,16 +334,20 @@ pub(crate) fn reset_link_solver_state(mut state: ResMut<LinkSolverState>) {
     *state = LinkSolverState::default();
 }
 
-/// One resolved node, snapshotted so the world borrow is free for the terrain
-/// query provider.
-struct Node {
+/// One resolved geometry endpoint, snapshotted so the world borrow is free for
+/// the terrain query provider. Direct `LinkNode` policy is optional: a Wi-Fi-only
+/// endpoint contributes geometry without entering the direct `LinkState` graph.
+struct GeometryEndpoint {
     entity: Entity,
     /// Stable identity — see [`LinkPeer::peer`].
     gid: u64,
     /// Human label (prim `Name`, else class) for logs and the verdict ctx. NEVER
     /// an identity: it is not unique and not guaranteed stable.
     label: String,
-    node: LinkNode,
+    direct_node: Option<LinkNode>,
+    max_range_m: f64,
+    min_elevation_deg: f64,
+    class: Option<String>,
     pose: SolarFramePose,
 }
 
@@ -378,6 +384,13 @@ pub(crate) fn update_links(
         Option<&Name>,
         Option<&lunco_core::GlobalEntityId>,
     )>,
+    q_wifi: Query<(
+        Entity,
+        &crate::wifi::WifiNode,
+        &SolarFramePose,
+        Option<&Name>,
+        Option<&lunco_core::GlobalEntityId>,
+    )>,
     q_terrain: Query<(Entity, &DemHeightField)>,
     q_occluders: Query<(&LinkOccluder, &SolarFramePose, &Transform)>,
     q_parents: Query<&ChildOf>,
@@ -394,33 +407,53 @@ pub(crate) fn update_links(
     // `1` (or a fat-fingered `0`) means "flip immediately" — the pre-debounce behaviour.
     let debounce = config.drop_debounce.max(1);
     let jd = world_time.epoch_jd;
-    if q_nodes.iter().count() < 2 {
-        return;
-    }
     if !link_solve_due_at(jd, state.last_jd, config.interval_s) {
         return;
     }
 
-    // A node with no GID yet is SKIPPED this sweep, not given a fallback id.
+    // An endpoint with no GID yet is SKIPPED this sweep, not given a fallback id.
     // Identity is minted in `PostUpdate` (and a runtime-spawned instance takes an
     // extra frame to go `Provenance::Local` → `Derived`), so an absent GID means
     // "not yet", and the node joins the graph within a frame or two. Inventing a
     // name/index key instead would MIS-BIND — it diverges across peers and across a
     // reload, which is precisely the class of bug GIDs exist to prevent.
-    let nodes: Vec<Node> = q_nodes
-        .iter()
-        .filter_map(|(e, n, p, name, gid)| {
-            Some(Node {
-                entity: e,
-                gid: gid?.get(),
-                label: node_label(n.class.as_deref(), name, e),
-                node: n.clone(),
-                pose: *p,
-            })
-        })
-        .collect();
-    if nodes.len() < 2 {
-        // Fewer than two IDENTIFIED nodes — nothing to pair. Return WITHOUT
+    let mut endpoints = Vec::new();
+    let mut direct_entities = HashSet::new();
+    for (entity, node, pose, name, gid) in q_nodes.iter() {
+        let Some(gid) = gid else { continue };
+        direct_entities.insert(entity);
+        endpoints.push(GeometryEndpoint {
+            entity,
+            gid: gid.get(),
+            label: node_label(node.class.as_deref(), name, entity),
+            direct_node: Some(node.clone()),
+            max_range_m: node.max_range_m,
+            min_elevation_deg: node.min_elevation_deg,
+            class: node.class.clone(),
+            pose: *pose,
+        });
+    }
+    // Wi-Fi-only endpoints share the geometry substrate but are not direct
+    // policy endpoints. An entity carrying both components is already present
+    // above and must not become two geometry participants.
+    for (entity, wifi, pose, name, gid) in q_wifi.iter() {
+        let Some(gid) = gid else { continue };
+        if direct_entities.contains(&entity) {
+            continue;
+        }
+        endpoints.push(GeometryEndpoint {
+            entity,
+            gid: gid.get(),
+            label: node_label(None, name, entity),
+            direct_node: None,
+            max_range_m: wifi.max_range_m,
+            min_elevation_deg: -90.0,
+            class: None,
+            pose: *pose,
+        });
+    }
+    if endpoints.len() < 2 {
+        // Fewer than two identified endpoints — nothing to pair. Return WITHOUT
         // stamping `last_jd`: this frame did no work, so it must not consume the
         // cadence slot, or the frame in which identities finally mint would be
         // skipped and the graph would wait a further interval for no reason.
@@ -472,9 +505,9 @@ pub(crate) fn update_links(
     let mut per_node: HashMap<Entity, Vec<LinkPeer>> = HashMap::new();
     let mut per_geometry: HashMap<Entity, Vec<LinkGeometryPeer>> = HashMap::new();
     let mut up_now: HashSet<(u64, u64)> = HashSet::new();
-    for i in 0..nodes.len() {
-        for j in (i + 1)..nodes.len() {
-            let (a, b) = (&nodes[i], &nodes[j]);
+    for i in 0..endpoints.len() {
+        for j in (i + 1)..endpoints.len() {
+            let (a, b) = (&endpoints[i], &endpoints[j]);
             // A nested endpoint is a duplicate declaration inside one physical
             // assembly (for example an antenna root plus its feed aperture),
             // never a second radio. Do not let it become a self-link.
@@ -506,9 +539,9 @@ pub(crate) fn update_links(
                 .find(|(_, c, r)| segment_hits_sphere(a.pose.pos, b.pose.pos, *c, *r))
                 .map(|(n, _, _)| n.clone());
 
-            let cheap_ok = range_m <= a.node.max_range_m.min(b.node.max_range_m)
-                && above_mask(elev_a, a.node.min_elevation_deg)
-                && above_mask(elev_b, b.node.min_elevation_deg)
+            let cheap_ok = range_m <= a.max_range_m.min(b.max_range_m)
+                && above_mask(elev_a, a.min_elevation_deg)
+                && above_mask(elev_b, b.min_elevation_deg)
                 && occluded_by.is_none();
             // Terrain relief (a rille rim / hill between the endpoints) shadows the
             // link. March the DEM in the site-local frame — `SolarFramePose::local`
@@ -525,55 +558,9 @@ pub(crate) fn update_links(
                 && occluder_blocks(a.pose.pos, b.pose.pos, &occluders);
             let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
 
-            let ctx = HookValue::map([
-                // Identity first (the ids `find()` speaks), labels alongside for a
-                // policy that wants to read as prose.
-                ("a", HookValue::Int(a.gid as i64)),
-                ("b", HookValue::Int(b.gid as i64)),
-                ("name_a", HookValue::str(a.label.clone())),
-                ("name_b", HookValue::str(b.label.clone())),
-                (
-                    "class_a",
-                    HookValue::str(a.node.class.clone().unwrap_or_default()),
-                ),
-                (
-                    "class_b",
-                    HookValue::str(b.node.class.clone().unwrap_or_default()),
-                ),
-                ("range_m", HookValue::Float(range_m)),
-                ("light_time_s", HookValue::Float(light_time_s(range_m))),
-                // `()` — NOT a number — when the endpoint has no horizon. A policy
-                // that compares it numerically gets rhai's unit, which is a type
-                // error at the comparison rather than a plausible angle that
-                // quietly passes or fails a mask. There is no honest float here.
-                ("elev_a", elev_a.map_or(HookValue::Unit, HookValue::Float)),
-                ("elev_b", elev_b.map_or(HookValue::Unit, HookValue::Float)),
-                ("min_elev_a", HookValue::Float(a.node.min_elevation_deg)),
-                ("min_elev_b", HookValue::Float(b.node.min_elevation_deg)),
-                ("occluded", HookValue::Bool(occluded_by.is_some())),
-                (
-                    "occluded_by",
-                    HookValue::str(occluded_by.clone().unwrap_or_default()),
-                ),
-                ("terrain_blocked", HookValue::Bool(terrain_blocked)),
-                ("occluder_blocked", HookValue::Bool(occluder_blocked)),
-                (
-                    "max_range_m",
-                    HookValue::Float(a.node.max_range_m.min(b.node.max_range_m)),
-                ),
-                // Let an authored verdict retain the kernel's geometry result and
-                // add only its domain/routing rule. This keeps a policy from
-                // accidentally reopening an occluded or out-of-range pair.
-                ("builtin", HookValue::Bool(builtin)),
-            ]);
-            let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
-                Some(Ok(v)) => v.as_bool().unwrap_or(builtin),
-                _ => builtin,
-            };
-
-            // Publish the domain-free geometry observation before applying the
-            // role verdict. A rover↔rover pair may be rejected from the direct
-            // Earth-link graph while still being a valid Wi-Fi candidate.
+            // Publish the policy-free geometry observation before applying the
+            // direct role verdict. A direct-link pair may be rejected by policy
+            // while remaining a valid Wi-Fi candidate.
             per_geometry
                 .entry(a.entity)
                 .or_default()
@@ -583,7 +570,7 @@ pub(crate) fn update_links(
                     range_m,
                     light_time_s: light_time_s(range_m),
                     elevation_deg: elev_a,
-                    class: b.node.class.clone(),
+                    class: b.class.clone(),
                 });
             per_geometry
                 .entry(b.entity)
@@ -594,8 +581,61 @@ pub(crate) fn update_links(
                     range_m,
                     light_time_s: light_time_s(range_m),
                     elevation_deg: elev_b,
-                    class: a.node.class.clone(),
+                    class: a.class.clone(),
                 });
+
+            // Wi-Fi-only endpoints stop at the shared geometry result. They do
+            // not invoke the direct policy hook, participate in direct debounce,
+            // or publish `LinkState`.
+            let (Some(a_node), Some(b_node)) = (&a.direct_node, &b.direct_node) else {
+                continue;
+            };
+
+            let ctx = HookValue::map([
+                // Identity first (the ids `find()` speaks), labels alongside for a
+                // policy that wants to read as prose.
+                ("a", HookValue::Int(a.gid as i64)),
+                ("b", HookValue::Int(b.gid as i64)),
+                ("name_a", HookValue::str(a.label.clone())),
+                ("name_b", HookValue::str(b.label.clone())),
+                (
+                    "class_a",
+                    HookValue::str(a_node.class.clone().unwrap_or_default()),
+                ),
+                (
+                    "class_b",
+                    HookValue::str(b_node.class.clone().unwrap_or_default()),
+                ),
+                ("range_m", HookValue::Float(range_m)),
+                ("light_time_s", HookValue::Float(light_time_s(range_m))),
+                // `()` — NOT a number — when the endpoint has no horizon. A policy
+                // that compares it numerically gets rhai's unit, which is a type
+                // error at the comparison rather than a plausible angle that
+                // quietly passes or fails a mask. There is no honest float here.
+                ("elev_a", elev_a.map_or(HookValue::Unit, HookValue::Float)),
+                ("elev_b", elev_b.map_or(HookValue::Unit, HookValue::Float)),
+                ("min_elev_a", HookValue::Float(a_node.min_elevation_deg)),
+                ("min_elev_b", HookValue::Float(b_node.min_elevation_deg)),
+                ("occluded", HookValue::Bool(occluded_by.is_some())),
+                (
+                    "occluded_by",
+                    HookValue::str(occluded_by.clone().unwrap_or_default()),
+                ),
+                ("terrain_blocked", HookValue::Bool(terrain_blocked)),
+                ("occluder_blocked", HookValue::Bool(occluder_blocked)),
+                (
+                    "max_range_m",
+                    HookValue::Float(a_node.max_range_m.min(b_node.max_range_m)),
+                ),
+                // Let an authored verdict retain the kernel's geometry result and
+                // add only its domain/routing rule. This keeps a policy from
+                // accidentally reopening an occluded or out-of-range pair.
+                ("builtin", HookValue::Bool(builtin)),
+            ]);
+            let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
+                Some(Ok(v)) => v.as_bool().unwrap_or(builtin),
+                _ => builtin,
+            };
 
             // Asymmetric drop debounce (see `LinkConfig::drop_debounce`). Acquire the
             // instant geometry closes; drop only after N consecutive severed reads, so a
@@ -631,7 +671,7 @@ pub(crate) fn update_links(
                 range_m,
                 light_time_s: delay_s,
                 elevation_deg: elev_a,
-                class: b.node.class.clone(),
+                class: b_node.class.clone(),
             });
             per_node.entry(b.entity).or_default().push(LinkPeer {
                 peer: a.gid,
@@ -639,14 +679,14 @@ pub(crate) fn update_links(
                 range_m,
                 light_time_s: delay_s,
                 elevation_deg: elev_b,
-                class: a.node.class.clone(),
+                class: a_node.class.clone(),
             });
         }
     }
 
     debug!(
-        "[link] recompute: {} nodes, {} links up",
-        nodes.len(),
+        "[link] recompute: {} endpoints, {} direct links up",
+        endpoints.len(),
         up_now.len()
     );
 
@@ -664,20 +704,25 @@ pub(crate) fn update_links(
     }
     state.prev_up = up_now;
 
-    // Publish per-node state — update in place, else insert.
-    for node in &nodes {
-        let peers = per_node.remove(&node.entity).unwrap_or_default();
-        if let Ok(mut st) = q_state.get_mut(node.entity) {
-            st.peers = peers;
-        } else {
-            commands.entity(node.entity).try_insert(LinkState { peers });
+    // Publish direct policy state only for direct endpoints, and publish the
+    // shared geometry state for every endpoint including Wi-Fi-only radios.
+    for endpoint in &endpoints {
+        if endpoint.direct_node.is_some() {
+            let peers = per_node.remove(&endpoint.entity).unwrap_or_default();
+            if let Ok(mut st) = q_state.get_mut(endpoint.entity) {
+                st.peers = peers;
+            } else {
+                commands
+                    .entity(endpoint.entity)
+                    .try_insert(LinkState { peers });
+            }
         }
-        let peers = per_geometry.remove(&node.entity).unwrap_or_default();
-        if let Ok(mut st) = q_geometry.get_mut(node.entity) {
+        let peers = per_geometry.remove(&endpoint.entity).unwrap_or_default();
+        if let Ok(mut st) = q_geometry.get_mut(endpoint.entity) {
             st.peers = peers;
         } else {
             commands
-                .entity(node.entity)
+                .entity(endpoint.entity)
                 .try_insert(LinkGeometryState { peers });
         }
     }
@@ -1453,6 +1498,54 @@ mod tests {
             .expect("a sees relay");
         assert!(peer.connected, "a clear 10 m link should be up: {peer:?}");
         assert!((peer.range_m - 10.0).abs() < 1e-6, "range {}", peer.range_m);
+    }
+
+    #[test]
+    fn wifi_only_endpoints_publish_geometry_without_direct_link_state() {
+        let _g = link_lock();
+        let mut world = world_at_epoch(0.0);
+        let a = world
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(GID_A),
+                crate::wifi::WifiNode { max_range_m: 100.0 },
+                SolarFramePose {
+                    pos: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                    local: DVec3::ZERO,
+                    horizon: crate::pose::Horizon::Free { body: 301 },
+                },
+            ))
+            .id();
+        let b = world
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(GID_B),
+                crate::wifi::WifiNode { max_range_m: 100.0 },
+                SolarFramePose {
+                    pos: DVec3::new(10.0, 0.0, 0.0),
+                    rotation: DQuat::IDENTITY,
+                    local: DVec3::new(10.0, 0.0, 0.0),
+                    horizon: crate::pose::Horizon::Free { body: 301 },
+                },
+            ))
+            .id();
+
+        world.run_system_once(update_links).unwrap();
+
+        assert!(
+            world.get::<LinkState>(a).is_none(),
+            "Wi-Fi-only endpoints must not enter the direct link graph"
+        );
+        let geometry = world
+            .get::<LinkGeometryState>(a)
+            .expect("Wi-Fi-only endpoint receives shared geometry");
+        let peer = geometry
+            .peers
+            .iter()
+            .find(|peer| peer.peer == GID_B)
+            .expect("Wi-Fi endpoint sees the other Wi-Fi endpoint");
+        assert!(peer.builtin, "clear Wi-Fi geometry must be available");
+        assert!((peer.range_m - 10.0).abs() < 1e-6);
+        assert!(world.get::<LinkGeometryState>(b).is_some());
     }
 
     /// The green↔red chatter fix: a link that reads severed for a moment must NOT drop
