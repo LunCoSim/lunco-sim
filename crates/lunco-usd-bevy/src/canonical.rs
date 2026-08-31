@@ -768,6 +768,29 @@ impl CanonicalStages {
         )
     }
 
+    /// Select the composed reader for one projected entity.
+    ///
+    /// Referenced runtime instances carry an immutable plan remapped to their
+    /// authored scene path. That plan is the read source for the instance
+    /// subtree; the scene's live stage remains the source for edits and for
+    /// ordinary authored prims.
+    pub fn reader_for_entity<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+        instance: Option<&'a crate::UsdInstanceProjection>,
+    ) -> (UsdReadSource<'a>, u64) {
+        if let Some(instance) = instance {
+            if instance.canonical_generation == self.generation_for(asset) {
+                return (
+                    UsdReadSource::Prepared(instance.plan.as_ref()),
+                    instance.canonical_generation,
+                );
+            }
+        }
+        self.reader_for(asset, stage_asset)
+    }
+
     /// Return the current projection generation without opening a live stage.
     /// A prepared asset is generation zero until the first authored change is
     /// committed to its canonical stage.

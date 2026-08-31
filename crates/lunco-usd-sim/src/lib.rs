@@ -56,7 +56,9 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
-use lunco_usd_bevy::{instance_key, resolve_stage_prim_path, CanonicalStages};
+use lunco_usd_bevy::{
+    instance_key, resolve_stage_prim_path, CanonicalStages, UsdInstanceProjection,
+};
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -878,6 +880,7 @@ fn process_usd_sim_prims(
             Option<&Mesh3d>,
             Option<&PbrLook>,
             Option<&ShaderLook>,
+            Option<&UsdInstanceProjection>,
             Has<lunco_usd_bevy::UsdVisualMeshPending>,
             Has<lunco_usd_bevy::UsdVisualShaderBound>,
         ),
@@ -936,6 +939,7 @@ fn process_usd_sim_prims(
         maybe_mesh,
         maybe_mat,
         maybe_shader_mat,
+        instance_projection,
         mesh_pending,
         shader_bound,
     ) in query.iter()
@@ -960,7 +964,8 @@ fn process_usd_sim_prims(
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let (reader, _generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Some(topology) = topology_index.get(id) else {
             continue;
         };
@@ -4216,15 +4221,28 @@ fn try_wire_wheel(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
-        let wheel_root = instance_key(ent, &q_provenance, &q_gid, &q_instance_root);
+        let wheel_root = instance_key(
+            ent,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        );
         let vehicle_root = q_fsw.iter().find(|(root_ent, path, _, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
-                && instance_key(*root_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
+                && instance_key(
+                    *root_ent,
+                    &q_provenance,
+                    &q_gid,
+                    &q_instance_root,
+                    &q_instance_projection,
+                ) == wheel_root
         });
 
         if let Some((_, _, _, actuators)) = vehicle_root {
@@ -4370,6 +4388,7 @@ fn resolve_behavior_targets(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     mut target_cache: Local<bevy::ecs::entity::EntityHashMap<Vec<String>>>,
     mut commands: Commands,
 ) {
@@ -4394,7 +4413,13 @@ fn resolve_behavior_targets(
         return;
     }
     for (vessel, _xml, vessel_path, current_bindings) in q_trees.iter() {
-        let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
+        let vessel_instance = instance_key(
+            vessel,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        );
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         let mut missing = false;
         let targets = target_cache
@@ -4420,7 +4445,13 @@ fn resolve_behavior_targets(
                 let match_stage = vessel_path
                     .map(|vp| p.stage_handle == vp.stage_handle)
                     .unwrap_or(true);
-                let inst = instance_key(*e, &q_provenance, &q_gid, &q_instance_root);
+                let inst = instance_key(
+                    *e,
+                    &q_provenance,
+                    &q_gid,
+                    &q_instance_root,
+                    &q_instance_projection,
+                );
                 let match_inst = inst.is_none()
                     || vessel_instance.is_none()
                     || inst == vessel_instance;
@@ -4483,17 +4514,30 @@ fn resolve_differential_coupling(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     mut commands: Commands,
 ) {
     for (joint, joint_path, pending) in q_pending.iter() {
-        let joint_root = instance_key(joint, &q_provenance, &q_gid, &q_instance_root);
+        let joint_root = instance_key(
+            joint,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        );
         let find = |target: &str| {
             q_bodies
                 .iter()
                 .find(|(e, p)| {
                     p.path == target
                         && p.stage_handle == joint_path.stage_handle
-                        && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
+                        && instance_key(
+                            *e,
+                            &q_provenance,
+                            &q_gid,
+                            &q_instance_root,
+                            &q_instance_projection,
+                        ) == joint_root
                 })
                 .map(|(e, _)| e)
         };

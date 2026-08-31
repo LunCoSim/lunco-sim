@@ -51,8 +51,8 @@ use lunco_scripting::{
 use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceRoot, UsdPrimPath, UsdSceneRoot, UsdStageAsset, UsdVisualMeshPending,
-    UsdVisualProjectionQueued,
+    UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath, UsdSceneRoot, UsdStageAsset,
+    UsdVisualMeshPending, UsdVisualProjectionQueued,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -568,7 +568,7 @@ fn record_scene_load_terminal_outcome(
 
 pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
+    query: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -583,7 +583,7 @@ pub(crate) fn process_usd_cosim_prims(
     // each prim is decided exactly once.
     let mut members_by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, BTreeSet<String>> =
         HashMap::new();
-    for (entity, prim_path) in query.iter() {
+    for (entity, prim_path, instance_projection) in query.iter() {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
@@ -602,7 +602,8 @@ pub(crate) fn process_usd_cosim_prims(
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let (reader, _generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
         // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
         // prim between this system's iterate and ApplyDeferred — the canonical
         // race is the moonbase autoload vs a first-run tutorial on web. `.insert`
@@ -739,6 +740,7 @@ fn project_usd_telemetry(
             Option<&lunco_core::Provenance>,
             Option<&lunco_core::GlobalEntityId>,
             Has<UsdInstanceRoot>,
+            Option<&UsdInstanceProjection>,
         ),
         Without<UsdTelemetryProjected>,
     >,
@@ -802,12 +804,13 @@ fn project_usd_telemetry(
         index.dirty = false;
     }
 
-    for (entity, prim_path, provenance, gid, is_root) in &pending_query {
+    for (entity, prim_path, provenance, gid, is_root, instance_projection) in &pending_query {
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
         let id = prim_path.stage_handle.id();
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let (reader, _generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             index.diagnostics.insert(
                 (id, prim_path.path.clone()),
@@ -2187,6 +2190,7 @@ pub fn fire_connected_events(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     fixed_time: Res<Time<Fixed>>,
     world_time: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
@@ -2201,8 +2205,15 @@ pub fn fire_connected_events(
         warn!("[usd-cosim] cannot publish a connected event without the authoritative WorldTime");
         return;
     };
-    let instance_of =
-        |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
+    let instance_of = |entity| {
+        lunco_usd_bevy::instance_key(
+            entity,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        )
+    };
     let mut by_path = HashMap::new();
     for (entity, path, component, gid) in &sources {
         by_path.insert(
@@ -2549,6 +2560,7 @@ pub fn rewire_usd_connections(
             Option<&GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
             Option<&lunco_core::PortSurface>,
+            Option<&UsdInstanceProjection>,
         ),
         Or<(
             With<lunco_core::PortSurfaceReady>,
@@ -2606,8 +2618,15 @@ pub fn rewire_usd_connections(
     // A prim's instance identity (its instance-root GID, `None` for scene prims)
     // is what keeps two spawns of one asset — byte-identical stage-relative paths
     // and all — from collapsing onto one entity below. See `instance_key`.
-    let instance_of =
-        |e: Entity| lunco_usd_bevy::instance_key(e, &q_provenance, &q_gid, &q_instance_root);
+    let instance_of = |e: Entity, projection: Option<&UsdInstanceProjection>| {
+        lunco_usd_bevy::instance_key_from_projection(
+            e,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            projection,
+        )
+    };
 
     // Index every prim entity by (stage, instance, path). The stage is part of
     // prim identity: two composed USD projections may carry the same path text
@@ -2637,16 +2656,16 @@ pub fn rewire_usd_connections(
     > = HashMap::new();
     let environment_probe_entities: std::collections::HashSet<Entity> = q_all
         .iter()
-        .filter_map(|(entity, _, _, _, is_probe, _)| is_probe.then_some(entity))
+        .filter_map(|(entity, _, _, _, is_probe, _, _)| is_probe.then_some(entity))
         .collect();
     let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = q_all
         .iter()
-        .filter_map(|(entity, _, _, _, _, surface)| {
+        .filter_map(|(entity, _, _, _, _, surface, _)| {
             surface.cloned().map(|surface| (entity, surface))
         })
         .collect();
-    for (e, p, _, generated, _, _) in q_all.iter() {
-        let instance = instance_of(e);
+    for (e, p, _, generated, _, _, projection) in q_all.iter() {
+        let instance = instance_of(e, projection);
         let key = (p.stage_handle.id(), instance, p.path.clone());
         by_path.insert(key, e);
         if let Some(generated) = generated {
@@ -2691,12 +2710,12 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica, _, _, wheel_endpoints) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _, _, wheel_endpoints, projection) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, projection);
         let view: &dyn UsdReadObject = &reader;
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
             continue;
@@ -2728,7 +2747,7 @@ pub fn rewire_usd_connections(
 
         // Resolve this prim's wires within its OWN instance — a source path names a
         // prim of the same spawn, never a same-named prim of a different one.
-        let sink_instance = instance_of(entity);
+        let sink_instance = instance_of(entity, projection);
 
         for attr in view.attr_names(&sink_sdf) {
             // An `outputs:X.connect` is a FORWARD: this prim publishes an interior
@@ -4519,6 +4538,7 @@ pub fn spawn_usd_child_under_parent(
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.
     let parent_member = world.get::<UsdInstanceMember>(parent_entity).cloned();
+    let parent_projection = world.get::<UsdInstanceProjection>(parent_entity).cloned();
     let parent_is_root = world.get::<UsdInstanceRoot>(parent_entity).is_some();
     let member = parent_member.or_else(|| {
         parent_is_root.then(|| UsdInstanceMember {
@@ -4552,6 +4572,9 @@ pub fn spawn_usd_child_under_parent(
             .id(),
         None => world.spawn((base, ChildOf(parent_entity))).id(),
     };
+    if let Some(projection) = parent_projection {
+        world.entity_mut(entity).insert(projection);
+    }
     info!("[scene] incremental spawn: `{}` (entity {})", path, entity);
     Some(entity)
 }

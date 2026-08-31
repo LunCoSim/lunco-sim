@@ -61,8 +61,12 @@ through the registered source scheme; `AssetEvent` and
 `AssetLoadFailedEvent` advance or fail the pending document transaction. The
 composed document overlay is published before `LoadScene` is submitted.
 Referenced stage closures follow the same event boundary before a reference is
-authored onto the live stage. Do not add frame-count timeouts, per-frame load
-polls, or direct filesystem reads to this path. After admission,
+authored onto the live stage. The instance carries a path-remapped copy of the
+prepared source plan and its root identity; descendants reuse both through the
+same queue. The entity reader invalidates that prepared source when the
+canonical stage generation changes, so authored overrides are always read from
+the live composed stage. Do not add frame-count timeouts, per-frame load polls,
+or direct filesystem reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.

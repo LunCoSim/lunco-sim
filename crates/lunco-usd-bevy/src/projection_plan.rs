@@ -250,6 +250,87 @@ impl UsdStageProjectionPlan {
             .get(path.as_str())
             .and_then(|index| self.prims.get(*index))
     }
+
+    /// Create the prepared read surface for one USD reference instance.
+    ///
+    /// A reference composes the source asset's default prim at the authored
+    /// instance path. The source asset has already paid the async composition
+    /// cost, so runtime projection must reuse that immutable plan instead of
+    /// reading the live scene stage once per prim. The returned plan is still
+    /// derived exclusively from the source asset plan; the live canonical stage
+    /// remains the owner for subsequent edits.
+    pub fn for_instance(&self, instance_root: &str) -> Result<Self> {
+        let instance_root = SdfPath::new(instance_root)
+            .map_err(|error| anyhow!("invalid USD instance root {instance_root}: {error}"))?;
+        if !instance_root.is_abs() {
+            anyhow::bail!("USD instance root must be absolute: {instance_root}");
+        }
+        let source_root = self
+            .default_prim
+            .as_deref()
+            .map(|default_prim| format!("/{}", default_prim.trim_start_matches('/')))
+            .ok_or_else(|| anyhow!("prepared USD asset has no defaultPrim"))?;
+
+        let remap_path = |path: &str| {
+            if path == source_root {
+                return instance_root.to_string();
+            }
+            path.strip_prefix(&format!("{source_root}/"))
+                .map(|suffix| format!("{instance_root}/{suffix}"))
+                .unwrap_or_else(|| path.to_string())
+        };
+        let remap_property_path = |path: &str| {
+            path.find('.')
+                .map(|separator| {
+                    format!("{}{}", remap_path(&path[..separator]), &path[separator..])
+                })
+                .unwrap_or_else(|| remap_path(path))
+        };
+
+        let mut plan = self.clone();
+        plan.default_prim = Some(
+            instance_root
+                .to_string()
+                .trim_start_matches('/')
+                .to_string(),
+        );
+        for prim in &mut plan.prims {
+            prim.path = remap_path(&prim.path);
+            for targets in prim.relationships.values_mut() {
+                for target in targets {
+                    *target = remap_path(target);
+                }
+            }
+            for sources in prim.connections.values_mut() {
+                for source in sources {
+                    *source = remap_property_path(source);
+                }
+            }
+        }
+
+        plan.children = self
+            .children
+            .iter()
+            .map(|(parent, children)| (remap_path(parent), children.clone()))
+            .collect();
+        plan.collections = self
+            .collections
+            .iter()
+            .map(|((prim, name), members)| {
+                (
+                    (remap_path(prim), name.clone()),
+                    members.iter().map(|member| remap_path(member)).collect(),
+                )
+            })
+            .collect();
+        plan.prim_indices = plan
+            .prims
+            .iter()
+            .enumerate()
+            .map(|(index, prim)| (prim.path.clone(), index))
+            .collect();
+        Ok(plan)
+    }
 }
 
 impl UsdRead for UsdStageProjectionPlan {
@@ -500,6 +581,32 @@ def Xform \"World\"\n\
             Some([6.0, 2.0, 3.0])
         );
         assert_eq!(plan.children(&world), vec![child]);
+    }
+
+    #[test]
+    fn instance_plan_remaps_the_composed_namespace_without_rebuilding_usd() {
+        let recipe = StageRecipe::from_source(
+            "rover.usda",
+            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
+def Xform \"Rover\"\n\
+{\n\
+    def Xform \"Body\"\n\
+    {\n\
+    }\n\
+}\n",
+        );
+        let source = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
+        let instance = source
+            .for_instance("/Traverse/rover_1")
+            .expect("instance plan remaps");
+        let root = SdfPath::new("/Traverse/rover_1").unwrap();
+        let body = SdfPath::new("/Traverse/rover_1/Body").unwrap();
+
+        assert_eq!(instance.default_prim.as_deref(), Some("Traverse/rover_1"));
+        assert!(instance.has_prim(&root));
+        assert!(instance.has_prim(&body));
+        assert_eq!(instance.children(&root), vec![body]);
+        assert!(!instance.has_prim(&SdfPath::new("/Rover").unwrap()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
