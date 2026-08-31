@@ -132,8 +132,10 @@ owns authored camera-selection policy through `set_camera(name)` and can read
 the full fact with `get_exposure(...)`; HUI/CSS owns the compact retained
 presentation and binds `active_label` while its authored button emits
 `camera.picker.toggle`.
-The native picker uses the measured HUI rectangle only as its anchor; egui
-measures the popup content and constrains the resulting area to the viewport.
+The native picker uses the measured HUI rectangle only as its anchor; it sizes
+the popup from the widest rendered option, clamps that width to egui's menu and
+viewport limits, and truncates only the display projection when a bound is
+reached. Full USD identities remain the selection and hover data.
 The shared `lunco-usd-bevy::camera_switch::camera_display_labels` policy is
 used by the exposure, picker, Camera menu, USD prim tree, entity tree, and
 Inspector: unique authored leaves stand alone; duplicate leaves gain the

@@ -13,7 +13,7 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy::camera_switch::{
@@ -559,6 +559,64 @@ fn camera_option_list(ui: &mut egui::Ui, state: &CameraSelectionStatus) -> Optio
     selected
 }
 
+const CAMERA_OBSERVE_AVATAR: &str = "Observe avatar";
+const CAMERA_RESUME_DIRECTOR: &str = "Resume authored director";
+const CAMERA_PICKER_MIN_WIDTH: f32 = 180.0;
+const CAMERA_PICKER_MAX_WIDTH: f32 = 360.0;
+const CAMERA_PICKER_VIEWPORT_INSET: f32 = 12.0;
+
+fn camera_picker_content_max_width(content_width: f32, menu_width: f32) -> f32 {
+    (content_width - 2.0 * CAMERA_PICKER_VIEWPORT_INSET)
+        .max(1.0)
+        .min(menu_width)
+        .min(CAMERA_PICKER_MAX_WIDTH)
+}
+
+fn camera_picker_content_width(
+    ui: &egui::Ui,
+    state: &CameraSelectionStatus,
+    max_width: f32,
+) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let mut widest = lunco_usd_bevy::camera_switch::camera_display_labels(&state.cameras)
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(label.clone(), font.clone(), ui.visuals().text_color())
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    if state.avatar_available {
+        widest = widest.max(
+            ui.painter()
+                .layout_no_wrap(
+                    CAMERA_OBSERVE_AVATAR.to_owned(),
+                    font.clone(),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x,
+        );
+    }
+    if state.director_available {
+        widest = widest.max(
+            ui.painter()
+                .layout_no_wrap(
+                    CAMERA_RESUME_DIRECTOR.to_owned(),
+                    font,
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x,
+        );
+    }
+
+    (widest + 2.0 * ui.spacing().button_padding.x + 2.0 * ui.spacing().item_spacing.x)
+        .max(CAMERA_PICKER_MIN_WIDTH)
+        .min(max_width)
+}
+
 /// Draw the camera picker opened by the authored camera-status button.
 ///
 /// HUI 0.7 has no dynamic repeated-list or payload action contract. The
@@ -602,9 +660,10 @@ fn draw_camera_picker(
     let mut selected = None;
     let mut observe_avatar = false;
     let mut resume_director = false;
+    let viewport_width = ctx.content_rect().width();
 
-    // The HUI rectangle anchors the popup only. Let egui measure the content
-    // and constrain the resulting area to the available viewport.
+    // The HUI rectangle anchors the popup only. Size the body from rendered
+    // option metrics, then keep it within egui's menu and viewport bounds.
     egui::Popup::new(
         popup_id,
         ctx.clone(),
@@ -624,12 +683,19 @@ fn draw_camera_picker(
             .inner_margin(egui::Margin::same(8)),
     )
     .show(|ui| {
+        // Keep ordinary camera names content-sized, but bound unusually long
+        // authored identities to the available viewport. This only changes
+        // presentation; selection and hover text retain the full name.
+        let max_width = camera_picker_content_max_width(viewport_width, ui.spacing().menu_width);
+        let content_width = camera_picker_content_width(ui, &status, max_width);
+        ui.set_width(content_width);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         ui.heading(egui::RichText::new("Camera").color(theme.tokens.accent));
         ui.separator();
-        if status.avatar_available && ui.button("Observe avatar").clicked() {
+        if status.avatar_available && ui.button(CAMERA_OBSERVE_AVATAR).clicked() {
             observe_avatar = true;
         }
-        if status.director_available && ui.button("Resume authored director").clicked() {
+        if status.director_available && ui.button(CAMERA_RESUME_DIRECTOR).clicked() {
             resume_director = true;
         }
         if status.avatar_available || status.director_available {
@@ -684,11 +750,11 @@ fn register_camera_menu(world: &mut World) {
                     ui.colored_label(bevy_egui::egui::Color32::from_rgb(255, 110, 110), error);
                 }
             }
-            if state.avatar_available && ui.button("Observe avatar").clicked() {
+            if state.avatar_available && ui.button(CAMERA_OBSERVE_AVATAR).clicked() {
                 ctx.trigger(ObserveAvatar {});
                 ui.close();
             }
-            if state.director_available && ui.button("Resume authored director").clicked() {
+            if state.director_available && ui.button(CAMERA_RESUME_DIRECTOR).clicked() {
                 ctx.trigger(ResumeCameraDirector {});
                 ui.close();
             }
@@ -1538,6 +1604,7 @@ fn clean_scene_name(stem: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::camera_picker_content_max_width;
     use lunco_usd_bevy::camera_switch::camera_display_labels;
 
     #[test]
@@ -1565,5 +1632,12 @@ mod tests {
             camera_display_labels(&names),
             vec!["Overview / Views / Alpha", "Overview / Views / Beta"]
         );
+    }
+
+    #[test]
+    fn camera_picker_width_is_content_bounded_by_menu_and_viewport() {
+        assert_eq!(camera_picker_content_max_width(1200.0, 400.0), 360.0);
+        assert_eq!(camera_picker_content_max_width(500.0, 400.0), 360.0);
+        assert_eq!(camera_picker_content_max_width(200.0, 400.0), 176.0);
     }
 }

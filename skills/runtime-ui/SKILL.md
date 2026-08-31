@@ -208,8 +208,9 @@ The closed action set includes `camera.picker.toggle` for the authored
 camera-status trigger. That action only opens the camera picker; because HUI
 has no dynamic repeated-list or payload-action contract, the existing egui host
 renders the options from `CameraSelectionStatus`, anchors them to the measured
-HUI surface rectangle, sizes the popup from its measured content within the
-viewport, and emits `SetUserCamera`. Reuse that view model and
+HUI surface rectangle, measures the widest rendered option, clamps the popup to
+egui's menu and viewport limits, truncates only its display projection at that
+bound, and emits `SetUserCamera` with the full USD identity. Reuse that view model and
 typed command path instead of adding a second camera registry or a HUI list
 shim.
 

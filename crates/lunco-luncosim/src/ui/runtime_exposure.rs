@@ -5,19 +5,19 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress,
     TemplateProperties, UiId,
 };
-use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
+use lunco_core::exposure::EngineExposures;
 use lunco_render::SceneCamera;
 use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
 use serde::Deserialize;
@@ -68,8 +68,8 @@ pub(crate) fn register_action(
 ) {
     functions.register(
         callback,
-        move |In(_source): In<Entity>, mut commands: Commands| {
-            commands.trigger(RuntimeUiAction { action });
+        move |In(_source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
+            world.trigger(RuntimeUiAction { action });
         },
     );
 }
