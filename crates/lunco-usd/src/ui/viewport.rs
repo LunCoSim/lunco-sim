@@ -10,7 +10,7 @@
 //!
 //! ## Why a singleton viewport (for now)
 //!
-//! Phase 6 ships **one shared viewport** that swaps which document
+//! The editor uses **one shared viewport** that swaps which document
 //! it shows when the user clicks a stage in the browser. That's what
 //! the user-visible flow needs (one 3D scene at a time, just like
 //! Omniverse's stage view) and avoids the per-document camera /
@@ -23,7 +23,7 @@
 //! ```text
 //! UsdDocument source text
 //!         │
-//!         ▼  (on DocumentOpened for an active doc)
+//!         ▼  (on SetActiveUsdViewport for an explicit doc)
 //! authored layer → canonical composition → UsdStageAsset
 //!         │
 //!         ▼  (Assets<UsdStageAsset>::get_mut, in-place swap)
@@ -41,10 +41,9 @@
 //!
 //! ## Lifecycle (observers)
 //!
-//! - [`DocumentOpened`] for our kind
-//!   → bootstrap render scaffolding on first open, set this doc as
-//!   the active viewport target, parse + install asset, mount on
-//!   `scene_root`.
+//! - [`SetActiveUsdViewport`] for an explicit document
+//!   → bootstrap render scaffolding, parse + install that document,
+//!   and mount it on `scene_root`.
 //! - [`lunco_doc_bevy::DocumentChanged`] wakes the shared
 //!   `twin_projection` owner. It authors the typed edit to the live
 //!   canonical stage and the normal USD projection refreshes the preview;
@@ -74,7 +73,7 @@ use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
-use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
+use lunco_doc_bevy::DocumentClosed;
 use lunco_render::{GraphicsCameraDefaults, SceneCamera};
 use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
@@ -128,7 +127,6 @@ impl Plugin for UsdViewportPlugin {
         app.init_resource::<UsdViewportState>();
         app.init_resource::<RenderingQualitySettings>();
         app.register_panel(UsdViewportPanel);
-        app.add_observer(on_doc_opened_for_viewport);
         app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
         app.add_observer(on_viewport_measured);
@@ -170,8 +168,8 @@ pub struct OrbitCamera {
 
 impl Default for OrbitCamera {
     fn default() -> Self {
-        // Defaults derived from the previous fixed camera pose
-        // (4, 3, 5) looking at the origin — same framing, now movable.
+        // The default pose frames the origin while leaving the camera
+        // interactive through the orbit controls.
         Self {
             yaw: 0.6747,
             pitch: 0.4435,
@@ -293,6 +291,18 @@ impl UsdViewportState {
     /// The doc currently surfaced in the viewport, if any.
     pub fn active_doc(&self) -> Option<DocumentId> {
         self.active_doc
+    }
+
+    /// The prepared stage handle currently mounted in the assembly preview.
+    /// Consumers must pair it with [`Self::active_doc`] instead of selecting a
+    /// live stage by entity count or insertion order.
+    pub fn active_stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
+        self.current_handle.as_ref()
+    }
+
+    /// The preview root that scopes the active assembly projection.
+    pub fn preview_scene_root(&self) -> Option<Entity> {
+        self.scene_root
     }
 }
 
@@ -584,26 +594,6 @@ register_commands!(on_set_active_usd_viewport,);
 // ─────────────────────────────────────────────────────────────────────
 // Document lifecycle observers
 // ─────────────────────────────────────────────────────────────────────
-
-fn on_doc_opened_for_viewport(trigger: On<DocumentOpened>, mut commands: Commands) {
-    let doc = trigger.event().doc;
-    commands.queue(move |world: &mut World| {
-        // Gate on USD ownership so Modelica / SysML opens skip.
-        if !world
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(doc)
-        {
-            return;
-        }
-        // Make this the active doc if nothing else is showing. The
-        // user can switch later by clicking a different row in the
-        // browser (which fires `SetActiveUsdViewport`).
-        if world.resource::<UsdViewportState>().active_doc.is_none() {
-            bootstrap(world);
-            install_active_doc(world, doc);
-        }
-    });
-}
 
 /// A user-owned preview may outlive the Twin that originally supplied its
 /// `twin://` authority. Reinstall it after the Twin-close observer retires that
@@ -1019,8 +1009,7 @@ mod tests {
                 .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.open_file("/tmp/x.usda", "#usda 1.0\n".to_string()).0
         };
-        // Drain pending events twice so the DocumentOpened trigger
-        // fires and our observer runs.
+        // Drain pending events twice to settle the document lifecycle.
         app.update();
         app.update();
 
@@ -1031,6 +1020,39 @@ mod tests {
         assert!(state.tex_id.is_none());
         // active_doc gates on bootstrap so we don't half-attach.
         assert!(state.active_doc.is_none());
+    }
+
+    /// Opening a USD document registers it for authoring, but does not choose
+    /// the shared preview target. Preview selection is an explicit document
+    /// action, so opening a second assembly cannot retarget an editor that is
+    /// already showing another file.
+    #[test]
+    fn document_open_requires_explicit_preview_selection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(UsdViewportPlugin);
+
+        let doc = {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            registry
+                .open_file("/tmp/assembly.usda", "#usda 1.0\n".to_string())
+                .0
+        };
+        app.update();
+        app.update();
+
+        let state = app.world().resource::<UsdViewportState>();
+        assert!(!state.bootstrapped);
+        assert_eq!(state.active_doc(), None);
+        assert!(app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(doc));
     }
 
     #[test]

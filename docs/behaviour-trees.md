@@ -109,7 +109,7 @@ autopilot compiles today.
 
 | `kind` | Params | Semantics |
 |---|---|---|
-| `drive_to` | `target`, `speed`, `radius` | Steer toward a world point; `Success` (and brake) within `radius`. |
+| `drive_to` | `target`, `speed`, `radius` | Steer toward a world point; if the goal is behind, pivot with zero throttle until the heading is recovered, then approach forward; `Success` (and brake) within `radius`. |
 | `follow` | `target` (GlobalEntityId), `speed`, `radius` | Track a **moving** entity: steer toward its *live* pose each tick, hold station within `radius`. Never finishes — stays `Running` while the target resolves, `Failure` (braking) if it vanishes so a fallback takes over. |
 | `intercept` | `target` (GlobalEntityId), `speed`, `radius`, `lead` | Lead-pursuit: aim `lead` seconds *ahead* of the target along its velocity (cut it off, don't tail it); `Success` on contact (within `radius` of its actual pose), `Failure` (braking) if it vanishes. A catch-it pursuit that **finishes**, unlike `follow`. |
 | `patrol` | `waypoints`, `speed`, `radius`, `dwell` | Loop waypoint objects forever; optionally dwell (braked) `dwell` s at each (a per-waypoint `dwell` overrides it). Sugar for `forever(sequence([drive_to, wait?, run_tool?…]…))`. Each `PatrolWaypoint` is a `{pos, dwell?, on_arrival?}` map carrying per-waypoint arrival actions (e.g. `take_photo`). The declarative home for "fire a tool at a waypoint" — no rhai tree-composition needed. |

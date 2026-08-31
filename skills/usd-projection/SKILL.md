@@ -71,6 +71,14 @@ or direct filesystem reads to this path. After admission,
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
 
+The Assembly editor is document-scoped. `DocumentId` from the existing
+`DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
+Browser selects it through `SetActiveUsdViewport`, and the isolated preview,
+prim tree, Inspector, and USD commands consume that same document binding.
+Never choose an editor stage by entity count, insertion order, or the current
+simulation viewport, and never use an active-viewport fallback for an entity
+that lacks an explicit document binding.
+
 A scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
 window. The queue marker is the projection ownership fence: one prepared

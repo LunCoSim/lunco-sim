@@ -717,16 +717,21 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 /// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
 /// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
-/// `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
-/// API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
-/// so a cutscene or a "reload-then-pause" one-liner can freeze the world.
+/// `{"rate":4.0}` runs it 4× realtime, and the bounded live ladder ends at
+/// 100×. Rates 32×–100× enter the explicit kinematic-warp regime: the physics
+/// tick freezes while pure epoch consumers advance. Use `SetClock` for a
+/// presentation-only celestial rate above 100×. This is THE pause command:
+/// exposed on the API/MCP and wrapped by the rhai prelude verbs
+/// `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
+/// one-liner can freeze the world.
 #[Command(default)]
 pub struct SetTimeTransport {
     /// Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it.
     #[serde(default)]
     #[reflect(default)]
     pub playing: Option<bool>,
-    /// Speed multiplier vs realtime (1.0 = realtime); `None` leaves it.
+    /// Speed multiplier vs realtime (1.0 = realtime, bounded to 100.0 for the
+    /// live transport); `None` leaves it.
     #[serde(default)]
     #[reflect(default)]
     pub rate: Option<f64>,
@@ -756,7 +761,14 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
         };
     }
     if let Some(rate) = cmd.rate {
-        transport.rate = rate.max(0.0);
+        if rate.is_finite() && (0.0..=crate::MAX_TRANSPORT_RATE).contains(&rate) {
+            transport.rate = rate;
+        } else {
+            bevy::log::warn!(
+                "[time] rejected live transport rate {rate:?}; supported range is 0..={}x",
+                crate::MAX_TRANSPORT_RATE
+            );
+        }
     }
 }
 
@@ -1297,6 +1309,38 @@ mod tests {
         );
         assert_eq!(transport.mode, TransportMode::Playing);
         assert_eq!(transport.rate, 8.0);
+    }
+
+    #[test]
+    fn transport_rate_command_rejects_uncapped_and_nonfinite_rates() {
+        let mut transport = crate::TimeTransport::default();
+
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                rate: Some(crate::MAX_TRANSPORT_RATE),
+                ..default()
+            },
+        );
+        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
+
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                rate: Some(crate::MAX_TRANSPORT_RATE + 1.0),
+                ..default()
+            },
+        );
+        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
+
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                rate: Some(f64::NAN),
+                ..default()
+            },
+        );
+        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
     }
 
     #[test]

@@ -59,9 +59,16 @@ pub const MAX_REALTIME_RATE: f64 = 16.0;
 /// from advertising a rate that the clock would interpret differently.
 pub const REALTIME_RATE_OPTIONS: &[f64] = &[1.0, 2.0, 4.0, 8.0, 16.0];
 
+/// Highest supported rate for the live-world transport. Higher rates are not
+/// exposed or accepted here: use an explicitly re-parented celestial clock
+/// (`SetClock`) when only a pure presentation clock needs to run faster.
+pub const MAX_TRANSPORT_RATE: f64 = 100.0;
+
 /// User-selectable kinematic-warp rates. These advance pure epoch consumers
-/// while the deterministic physics tick remains frozen.
-pub const KINEMATIC_WARP_RATE_OPTIONS: &[f64] = &[100.0, 1_000.0, 10_000.0, 100_000.0, 1_000_000.0];
+/// while the deterministic physics tick remains frozen. The live transport is
+/// deliberately bounded at [`MAX_TRANSPORT_RATE`]; this is not an uncapped
+/// fast-forward mode.
+pub const KINEMATIC_WARP_RATE_OPTIONS: &[f64] = &[32.0, 64.0, 100.0];
 
 /// Maximum number of fixed simulation steps a rendered frame may drain while
 /// running a realtime transport rate. This is a catch-up guard, not a rate cap:
@@ -332,7 +339,7 @@ impl MissionClock {
 /// return struct duplicating clock state.
 ///
 /// * `tick` — current [`SimTick`].
-/// * `rate` — transport rate (clamped ≥0).
+/// * `rate` — transport rate (clamped to the supported live range).
 /// * `paused` — transport pause.
 /// * `real_secs` — `Time::<Real>` elapsed seconds (only consulted in warp).
 ///
@@ -345,7 +352,13 @@ pub fn advance_clock(
     paused: bool,
     real_secs: f64,
 ) -> f64 {
-    let rate = rate.max(0.0);
+    // The command boundary rejects out-of-range values. Keep this pure owner
+    // defensive for callers that construct the transport resource directly.
+    let rate = if rate.is_finite() {
+        rate.clamp(0.0, MAX_TRANSPORT_RATE)
+    } else {
+        0.0
+    };
     let running = !paused && rate > 0.0;
     let desired = if running && rate > MAX_REALTIME_RATE {
         TimeRegime::KinematicWarp
@@ -640,6 +653,13 @@ mod tests {
         assert!(KINEMATIC_WARP_RATE_OPTIONS
             .iter()
             .all(|&rate| rate > MAX_REALTIME_RATE));
+        assert!(KINEMATIC_WARP_RATE_OPTIONS
+            .windows(2)
+            .all(|rates| rates[0] < rates[1]));
+        assert_eq!(
+            KINEMATIC_WARP_RATE_OPTIONS.last().copied(),
+            Some(MAX_TRANSPORT_RATE)
+        );
     }
 
     #[derive(Resource, Default)]
@@ -700,9 +720,11 @@ mod tests {
             "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one capped frame demand \
              {steps_per_hitched_frame:.0} fixed steps — above the central fixed-step budget"
         );
-        // Just above the ceiling must escape to the kinematic (tick-frozen) regime.
+        // The first bounded warp choice must escape to the kinematic
+        // (tick-frozen) regime; the live transport never accepts an unbounded
+        // rate beyond MAX_TRANSPORT_RATE.
         let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, MAX_REALTIME_RATE + 1.0, false, 0.0);
+        let rs = advance_clock(&mut c, 0, KINEMATIC_WARP_RATE_OPTIONS[0], false, 0.0);
         assert_eq!(c.regime, TimeRegime::KinematicWarp);
         assert_eq!(rs, 0.0);
     }
@@ -722,7 +744,7 @@ mod tests {
     #[test]
     fn high_warp_switches_to_kinematic_and_freezes_tick() {
         let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, 500.0, false, 0.0);
+        let rs = advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 0.0);
         assert_eq!(c.regime, TimeRegime::KinematicWarp);
         assert_eq!(rs, 0.0); // tick frozen (not running)
         assert!(c.warp.is_some());
@@ -732,16 +754,16 @@ mod tests {
     fn kinematic_warp_advances_epoch_from_wall_clock() {
         let mut c = MissionClock::anchored(J2000_JD, 0);
         // Enter warp at real_secs = 0.
-        advance_clock(&mut c, 0, 1000.0, false, 0.0);
+        advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 0.0);
         assert_eq!(c.epoch_jd(0, 0.0), J2000_JD);
-        // 2 wall seconds later at 1000× = 2000 sim seconds advanced, tick unchanged.
-        advance_clock(&mut c, 0, 1000.0, false, 2.0);
-        assert!((c.epoch_jd(0, 2.0) - (J2000_JD + 2000.0 / SECS_PER_DAY)).abs() < EPS);
+        // 2 wall seconds later at 100× = 200 sim seconds advanced, tick unchanged.
+        advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 2.0);
+        assert!((c.epoch_jd(0, 2.0) - (J2000_JD + 200.0 / SECS_PER_DAY)).abs() < EPS);
         // MET advances during warp even though sim_secs (tick-locked) does not.
         // Tolerance is loose because MET = (epoch − mission_epoch0)·86400 cancels a
         // ~2.45e6-magnitude single-`f64` JD; sub-ms MET precision needs the
         // two-part JulianDate (T3). ~4e-5 s error here, well inside this bound.
-        assert!((c.met_secs(0, 2.0) - 2000.0).abs() < 1e-3);
+        assert!((c.met_secs(0, 2.0) - 200.0).abs() < 1e-3);
         assert!(c.sim_secs(0).abs() < EPS);
     }
 
@@ -771,9 +793,9 @@ mod tests {
         let mut c = MissionClock::anchored(2_461_283.667_46, 12);
         let origin = c.epoch_jd(12, 0.0);
 
-        advance_clock(&mut c, 12, 100_000.0, false, 0.0);
+        advance_clock(&mut c, 12, MAX_TRANSPORT_RATE, false, 0.0);
         assert_eq!(c.regime, TimeRegime::KinematicWarp);
-        assert!(c.epoch_jd(12, 1.0) > origin + 1.0);
+        assert!(c.epoch_jd(12, 1.0) > origin + 50.0 / SECS_PER_DAY);
 
         c.reset_calendar();
 

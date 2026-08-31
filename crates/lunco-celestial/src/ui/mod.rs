@@ -65,11 +65,24 @@ impl Panel for CelestialTimePanel {
                 });
             }
         });
+        ui.label(egui::RichText::new("Physics realtime").weak().small());
         ui.horizontal_wrapped(|ui| {
-            for &m in REALTIME_RATE_OPTIONS
-                .iter()
-                .chain(KINEMATIC_WARP_RATE_OPTIONS.iter())
-            {
+            for &m in REALTIME_RATE_OPTIONS {
+                if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
+                    ctx.trigger(SetTimeTransport {
+                        playing: Some(true),
+                        rate: Some(m),
+                    });
+                }
+            }
+        });
+        ui.label(
+            egui::RichText::new("Kinematic warp — physics frozen")
+                .weak()
+                .small(),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for &m in KINEMATIC_WARP_RATE_OPTIONS {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
                     ctx.trigger(SetTimeTransport {
                         playing: Some(true),

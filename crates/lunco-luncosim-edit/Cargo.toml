@@ -102,10 +102,6 @@ ui = [
     "dep:transform-gizmo-bevy",
     "dep:lunco-workbench",
     "dep:lunco-canvas",
-    # Forwards to the command layer's lone GUI concession:
-    # `doc_resolve::resolve_doc_for_entity`'s fallback to the viewport's active
-    # document. Drop this and a GUI edit resolves a different document.
-    "lunco-scene-commands/ui",
     "lunco-modelica/ui",
     "lunco-avatar/ui",
     "lunco-usd/ui",

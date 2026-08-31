@@ -260,10 +260,10 @@ impl Panel for CommandDeck {
             }
         });
 
-        // ── Builder waypoint editor ───────────────────────────────────────
-        // Waypoints remain USD prims: this panel exposes their route in Builder,
-        // while placement and transforms stay on the scene surface where their
-        // coordinates are meaningful.
+        // ── Scene waypoint editor ─────────────────────────────────────────
+        // Waypoints remain USD prims: this panel exposes their route in the
+        // scene, while placement and transforms stay on the scene surface
+        // where their coordinates are meaningful.
         if view.is_patrol && !view.patrol.is_empty() {
             ui.separator();
             ui.label("Waypoints");
@@ -289,6 +289,6 @@ impl Panel for CommandDeck {
         }
 
         ui.separator();
-        ui.small("Builder editor: Alt+Left-click ground to add · select a pin to move it · Delete to remove");
+        ui.small("Scene editor: Alt+Left-click ground to add · select a pin to move it · Delete to remove");
     }
 }

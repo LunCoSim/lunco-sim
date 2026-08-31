@@ -85,7 +85,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`43-orbital-view.md`](43-orbital-view.md) | Satellites, ground stations, the site frame; the **IAU/WGCCRE rotation model** |
 | [`44-surface-orbital-spaces.md`](44-surface-orbital-spaces.md) | The current surface/body-fixed and orbital/inertial reference-frame contract |
 | [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md) · [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) | Current `big_space` ownership, f64-to-cell projection, physics bridge, and maintenance checklist |
-| [`48-object-builder.md`](48-object-builder.md) | The object builder |
+| [`48-assembly-editor.md`](48-assembly-editor.md) | The Assembly editor |
 | [`49-control-programs-and-live-rebuild.md`](49-control-programs-and-live-rebuild.md) | Generic control programs, OBC/FSW composition, and live USD rebuild boundaries |
 | [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md) | The generic link kernel (comms is a domain over it, not a kernel) |
 | [`50-usd-driven-visuals.md`](50-usd-driven-visuals.md) | Beams, plumes, ribbons: geometry+look authored in USD, logic in Rust, bound by name (`info:id`). **`radius`/`height` bake at instantiation — live size is `xformOp:scale`**; a `lunco:*` property needs THREE files or it is inert |

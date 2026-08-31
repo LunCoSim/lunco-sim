@@ -1524,7 +1524,7 @@ class "LunCoMissionSpacecraftAPI" (
 
 # --- Mount sockets and plugs -------------------------------------------------
 #
-# The Object Builder's attach flow: a HOST explicitly advertises SOCKET prims
+# The Assembly editor's attach flow: a HOST explicitly advertises SOCKET prims
 # through `LunCoMountHostAPI`, while a PART advertises the PLUG frame it hangs by.
 # Socket and joint paths are relationship targets, not name-derived conventions.
 # Snapping re-derives the part's placement so its plug coincides with the socket —

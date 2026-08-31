@@ -1438,10 +1438,11 @@ impl AutopilotBehaviorSpec {
 
 /// Steering math (Rust): from the vessel's world pose and a goal, return
 /// `(throttle, steer, brake, arrived)` in `[-1, 1]`. Steer toward the goal on the
-/// yaw plane; reverse when the goal is behind so an Ackermann rover can reach a
-/// point inside its forward turning circle; brake + `arrived` within `radius`.
-/// COMPUTATION, so it lives in Rust — rhai is glue-only. Steering is a *relative*
-/// direction, so it's invariant to the floating-origin offset.
+/// yaw plane; when the goal is behind, pivot with zero throttle until it enters
+/// the forward half-plane, then approach it forward. Brake + `arrived` within
+/// `radius`. This is COMPUTATION, so it lives in Rust — rhai is glue-only.
+/// Steering is a *relative* direction, so it is invariant to the floating-origin
+/// offset.
 pub fn nav_setpoint(
     pos: GridPos,
     fwd: Vec3,
@@ -1464,13 +1465,12 @@ pub fn nav_setpoint(
     let cy = fwd.z * to.x - fwd.x * to.z;
     let dot = fwd.dot(to);
     if dot < 0.0 {
-        // A front-steered vehicle cannot turn inside its minimum forward arc. A
-        // hard forward throttle makes it orbit a nearby goal forever. Reverse is
-        // the physically available recovery maneuver; reversing also flips the
-        // steering response, hence `+cy` rather than the forward `-cy`.
-        let reverse_throttle = -speed * (-dot as f64).clamp(0.25, 1.0);
-        let reverse_steer = cy.clamp(-1.0, 1.0) as f64;
-        return (reverse_throttle, reverse_steer, 0.0, false);
+        // A goal behind the rover is a heading error, not a request for reverse
+        // motion. With throttle released, the skid-steer drive kernel pivots on
+        // the spot. Exactly behind is symmetric, so use the same deterministic
+        // left-turn tie-break as the authored `steer_to` helper.
+        let steer = if cy >= 0.0 { -1.0 } else { 1.0 };
+        return (0.0, steer, 0.0, false);
     }
     let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
     let throttle = speed * (0.25 + 0.75 * dot as f64).clamp(0.25, 1.0);

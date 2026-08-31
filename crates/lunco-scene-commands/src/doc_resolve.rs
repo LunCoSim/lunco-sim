@@ -83,16 +83,27 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
 /// caller authoring a *sequence* of ops (the mount snap) resolves the doc once and
 /// dispatches every op to it.
 ///
-/// Falls back to the viewport's active doc, which is a GUI notion — a headless server
-/// has no viewport, so there the registry match is the only answer (and the honest
-/// one: with no open viewport there is no "active" document to mean).
+/// The stage-to-document binding is authoritative in
+/// [`lunco_usd::twin_projection::DocBackedTwinScenes`]. File-origin matching is
+/// retained for ordinary file-backed projections that are not Twin-mounted.
+/// There is no active-viewport fallback: an entity without an explicit document
+/// binding is not editable.
 pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
     let prim = world.get::<UsdPrimPath>(entity)?;
     let asset_server = world.get_resource::<AssetServer>()?;
     let asset_path = asset_server.get_path(prim.stage_handle.id())?;
     let path_str = asset_path.path().to_string_lossy().to_string();
 
-    let doc_id = world
+    if let Some((name, rel)) = lunco_assets::split_twin_rel(&path_str) {
+        if let Some(doc) = world
+            .get_resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .and_then(|backed| backed.doc_for(name, rel))
+        {
+            return Some(doc);
+        }
+    }
+
+    world
         .get_resource::<DocumentRegistry<UsdDocument>>()
         .and_then(|reg| {
             reg.ids().find(|id| {
@@ -103,14 +114,5 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
                     _ => false,
                 })
             })
-        });
-
-    #[cfg(feature = "ui")]
-    let doc_id = doc_id.or_else(|| {
-        world
-            .get_resource::<lunco_usd::ui::viewport::UsdViewportState>()
-            .and_then(|v| v.active_doc())
-    });
-
-    doc_id
+        })
 }

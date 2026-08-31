@@ -1,16 +1,16 @@
 //! USD **prim tree** panel — the scene's authoring hierarchy.
 //!
-//! Where the Entity list (`entity_list.rs`) shows the ECS objects a user can
-//! click, this shows the faithful **USD prim hierarchy** —
-//! `/SandboxScene → Rover → Rocker → Bogie → Wheel_FL` — reconstructed from the
-//! `UsdPrimPath` of every spawned prim (intermediate xforms that carry no entity
-//! of their own are synthesized from the path so the structure is complete).
-//! That is the structure you navigate when *building* an object: drill the
+//! Where the Entity list (`entity_list.rs`) shows the simulation ECS, this shows
+//! the faithful **USD prim hierarchy** of the explicitly active Assembly
+//! document — `/Assembly → Chassis → Wheel_FL`. It is reconstructed from the
+//! document's isolated preview projection; intermediate xforms that carry no
+//! entity of their own are synthesized from the path so the structure is complete.
+//! That is the structure you navigate when editing an assembly: drill the
 //! hierarchy, select a part, tune it in the Inspector.
 //!
-//! Clicking a node that maps to an entity selects it through the same
-//! `apply_selection` path the viewport and Entity list use; intermediate nodes
-//! are pure expanders.
+//! Clicking a node that maps to a preview entity selects it through the same
+//! typed selection path used by the viewport; intermediate nodes are pure
+//! expanders. The live simulation projection is never selected by this tree.
 //!
 //! # Reactive shape (WP-8)
 //!
@@ -24,19 +24,19 @@ use std::collections::{BTreeSet, HashMap};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
+use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{
-    camera_switch::camera_display_labels, instance_key, CanonicalStages, SdfPath,
-    UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdStageAsset,
+    camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
+    UsdStageAsset,
 };
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
-/// Tree-node identity: the prim's owning **instance** (its instance-root GID,
-/// `None` for authored scene prims) plus its stage-relative path. Two runtime
-/// spawns of one asset compose IDENTICAL paths, so the instance is what keeps
-/// them from collapsing into a single node — each spawn is its own root subtree.
-type NodeKey = (Option<u64>, String);
+/// Tree-node identity: the composed USD prim path in the explicitly active
+/// Assembly document. Document scope comes from [`UsdViewportState`], so two
+/// open files can contain the same paths without colliding.
+type NodeKey = String;
 
 /// One node in the prim tree.
 struct PrimTreeNode {
@@ -65,57 +65,79 @@ pub struct UsdPrimTreeView {
     built: bool,
 }
 
+impl UsdPrimTreeView {
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.roots.clear();
+        self.hash = 0;
+        self.built = false;
+    }
+}
+
+/// Wake the Assembly tree only when its explicit document projection or the
+/// composed USD stage changes. There is no meaningful tree when the preview
+/// has no selected document.
+pub fn assembly_prim_tree_changed(
+    viewport: Option<Res<UsdViewportState>>,
+    revision: Res<lunco_usd_bevy::UsdStageRevision>,
+) -> bool {
+    viewport.is_some_and(|state| state.is_changed()) || revision.is_changed()
+}
+
 /// View-model producer: rebuild [`UsdPrimTreeView`] from the composed stage when
 /// the prim-path set changes.
 pub fn produce_usd_prim_tree(
     q: Query<(Entity, &UsdPrimPath, Has<SceneCamera>)>,
-    q_provenance: Query<&lunco_core::Provenance>,
-    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_parents: Query<&ChildOf>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
     q_catalog_id: Query<&lunco_core::CatalogEntryId>,
-    q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    q_instance_projection: Query<&UsdInstanceProjection>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdPrimTreeView>,
+    viewport: Option<Res<UsdViewportState>>,
 ) {
-    // Pick the scene stage = the stage id with the most prim entities.
-    let mut counts: HashMap<AssetId<UsdStageAsset>, (usize, Handle<UsdStageAsset>)> =
-        HashMap::new();
-    for (_, p, _) in q.iter() {
-        counts
-            .entry(p.stage_handle.id())
-            .or_insert_with(|| (0, p.stage_handle.clone()))
-            .0 += 1;
-    }
-    let Some((stage_id, handle)) = counts
-        .into_iter()
-        .max_by_key(|(_, (c, _))| *c)
-        .map(|(id, (_, h))| (id, h))
-    else {
+    let Some(viewport) = viewport else {
+        view.clear();
         return;
     };
+    let Some(preview_root) = viewport.preview_scene_root() else {
+        view.clear();
+        return;
+    };
+    let Some(handle) = viewport.active_stage_handle().cloned() else {
+        view.clear();
+        return;
+    };
+    let stage_id = handle.id();
 
-    // ((instance, path) → entity) for this stage; the set of keys drives the
-    // change gate. Keying on the instance is what gives two spawns of one asset
-    // two subtrees instead of one collapsed node (their paths are identical).
+    // The active document owns the preview stage. Restrict the entity mapping
+    // to that preview subtree: a Twin scene can share the same stage handle,
+    // but its live entities are not Assembly-editor entities.
+    let is_preview_entity = |entity: Entity| {
+        let mut current = entity;
+        while let Ok(parent) = q_parents.get(current) {
+            current = parent.parent();
+            if current == preview_root {
+                return true;
+            }
+        }
+        false
+    };
+
+    // The set of explicit document paths drives the change gate. The preview
+    // root is the document scope; the live simulation is intentionally absent.
     let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
     for (e, p, _) in q.iter() {
-        if p.stage_handle.id() == stage_id {
-            let inst = instance_key(
-                e,
-                &q_provenance,
-                &q_gid,
-                &q_instance_root,
-                &q_instance_projection,
-            );
-            entity_of.insert((inst, p.path.clone()), e);
+        if p.stage_handle.id() == stage_id && is_preview_entity(e) {
+            entity_of.insert(p.path.clone(), e);
         }
     }
 
     let camera_identities: Vec<(Entity, String)> = q
         .iter()
-        .filter(|(_, path, is_camera)| *is_camera && path.stage_handle.id() == stage_id)
+        .filter(|(entity, path, is_camera)| {
+            *is_camera && path.stage_handle.id() == stage_id && is_preview_entity(*entity)
+        })
         .map(|(entity, path, _)| (entity, path.path.clone()))
         .collect();
     let camera_names: Vec<String> = camera_identities
@@ -130,15 +152,15 @@ pub fn produce_usd_prim_tree(
         .map(|((entity, _), label)| (entity, label))
         .collect();
 
-    // Every path + all of its ancestor prefixes (within the SAME instance), so
-    // intermediate xforms appear under the right spawn.
+    // Every path plus all ancestor prefixes, so intermediate xforms appear
+    // under the correct authored hierarchy.
     let mut all_paths: BTreeSet<NodeKey> = BTreeSet::new();
-    for (inst, path) in entity_of.keys() {
+    for path in entity_of.keys() {
         let mut acc = String::new();
         for seg in path.split('/').filter(|s| !s.is_empty()) {
             acc.push('/');
             acc.push_str(seg);
-            all_paths.insert((*inst, acc.clone()));
+            all_paths.insert(acc.clone());
         }
     }
 
@@ -181,7 +203,7 @@ pub fn produce_usd_prim_tree(
     let mut roots: Vec<NodeKey> = Vec::new();
 
     for key in &all_paths {
-        let (_, path) = key;
+        let path = key;
         let name = path.rsplit('/').next().unwrap_or(path);
         let default_display_name = entity_of
             .get(key)
@@ -226,14 +248,12 @@ pub fn produce_usd_prim_tree(
         );
     }
 
-    // Wire parent → children (and collect roots). The parent shares this node's
-    // instance, so the prefix resolves within the same spawn.
+    // Wire parent → children and collect roots from the explicit USD paths.
     for key in &all_paths {
-        let (inst, path) = key;
-        match path.rsplit_once('/') {
+        match key.rsplit_once('/') {
             Some(("", _)) | None => roots.push(key.clone()),
             Some((parent, _)) => {
-                let parent_key = (*inst, parent.to_string());
+                let parent_key = parent.to_string();
                 if let Some(p) = nodes.get_mut(&parent_key) {
                     p.children.push(key.clone());
                 } else {
@@ -249,9 +269,9 @@ pub fn produce_usd_prim_tree(
     // so sorting by the path's last segment avoids a borrow of `nodes`).
     for node in nodes.values_mut() {
         node.children
-            .sort_by_key(|(_, c)| c.rsplit('/').next().unwrap_or(c).to_string());
+            .sort_by_key(|c| c.rsplit('/').next().unwrap_or(c).to_string());
     }
-    roots.sort_by_key(|(_, p)| p.rsplit('/').next().unwrap_or(p).to_string());
+    roots.sort_by_key(|p| p.rsplit('/').next().unwrap_or(p).to_string());
 
     view.nodes = nodes;
     view.roots = roots;
@@ -345,8 +365,8 @@ fn render_prim_node(
     // Top two levels open by default so the scene structure is visible without
     // drilling; deeper subtrees (a rover's per-wheel joints) start collapsed.
     let default_open = depth < 2;
-    // Key includes the instance, so two spawns of one asset get DISTINCT egui
-    // ids (identical paths would otherwise share collapse state).
+    // The document path is stable and already scoped by this panel's active
+    // document, so it is sufficient for collapse-state identity.
     let id = ui.make_persistent_id(("usd_prim_tree", key));
     egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
         .show_header(ui, |ui| {

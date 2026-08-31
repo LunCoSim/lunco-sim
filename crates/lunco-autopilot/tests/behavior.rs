@@ -81,7 +81,7 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
 }
 
 #[test]
-fn nav_setpoint_reverses_when_goal_is_behind_the_vehicle() {
+fn nav_setpoint_turns_toward_a_behind_goal_before_driving_forward() {
     let (throttle, steer, brake, arrived) = nav_setpoint(
         GridPos(DVec3::ZERO),
         Vec3::NEG_Z,
@@ -91,10 +91,29 @@ fn nav_setpoint_reverses_when_goal_is_behind_the_vehicle() {
     );
 
     assert!(
-        throttle < 0.0,
-        "a goal behind an Ackermann rover needs reverse"
+        throttle.abs() < 1e-6,
+        "a behind goal requires a turn phase, got throttle={throttle}"
     );
-    assert!(steer.abs() < 1e-6, "straight-behind goal should not steer");
+    assert!(
+        steer.abs() > 0.99,
+        "a straight-behind goal requires a deterministic hard turn, got steer={steer}"
+    );
+    assert_eq!(brake, 0.0);
+    assert!(!arrived);
+}
+
+#[test]
+fn nav_setpoint_keeps_forward_motion_for_a_goal_once_heading_is_recovered() {
+    let (throttle, steer, brake, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        Vec3::Z,
+        GridPos(DVec3::new(0.0, 0.0, 8.0)),
+        0.6,
+        2.0,
+    );
+
+    assert!(throttle > 0.0, "recovered heading must drive forward");
+    assert!(steer.abs() < 1e-6, "aligned goal should not steer");
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 }

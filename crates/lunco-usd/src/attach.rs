@@ -1,5 +1,5 @@
 //! Attach a component asset to a host body as a jointed child — the op-lowering
-//! behind "build from parts" (`docs/architecture/48-object-builder.md` §3.1).
+//! behind "build from parts" (`docs/architecture/48-assembly-editor.md` §3.1).
 //!
 //! ## The duplication this removes
 //!
@@ -388,7 +388,7 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
 
 /// Re-derive an **already-attached** part's placement + joint anchor from mount
 /// frames, without re-referencing it — the *retrofit* half of the mount story
-/// (`docs/architecture/48-object-builder.md` §3.1). Where [`attach_component_ops`]
+/// (`docs/architecture/48-assembly-editor.md` §3.1). Where [`attach_component_ops`]
 /// adds a new part, this touches only the two things that duplicate today: the
 /// part's `xformOp:translate`/`rotateXYZ`, and its joint's `localPos0`. The part
 /// prim and its joint already exist on the stage (a wheel under a bogie); "move the
