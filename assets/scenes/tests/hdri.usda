@@ -51,11 +51,11 @@ def Xform "HdriTest" (
         asset inputs:texture:file = @lunco://textures/kloppenheim_02_puresky_2k.hdr@
         token inputs:texture:format = "latlong"
 
-        # Sky luminance in cd/m². The cameras run at a physically-calibrated
-        # EV100 ~ 15 (a 128 klx sun), so this has to be in the thousands to be
-        # visible at all — UsdLux's spec default of 1.0 renders pure black here.
-        # A few hundred = dim/overcast; ~10000 clips the sky to white.
-        float inputs:intensity = 1500
+        # Sky luminance in cd/m². The shared LunarSurface camera is calibrated
+        # at EV100 16 for the 128 klx sun; this HDRI's radiance needs a
+        # ten-thousand-nit authored scale to provide a readable sky gradient
+        # while preserving the same intensity for image-based lighting.
+        float inputs:intensity = 10000
         float inputs:exposure = 0.0
         color3f inputs:color = (1, 1, 1)
 

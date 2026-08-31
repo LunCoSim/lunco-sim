@@ -51,10 +51,10 @@ pub const ASSETS_DIR_NAME: &str = "assets";
 /// The shipped-asset root (`…/assets`) an on-disk file lives under, if any —
 /// the directory `lunco://` is anchored at *for that file*.
 ///
-/// Distinct from [`crate::assets_dir_abs`], which anchors on the process CWD:
-/// this answers the question for a file that may live outside the running
-/// project (a tool composing a `.usda` by absolute path), so it walks ancestors
-/// instead of assuming the CWD is the project.
+/// Distinct from [`crate::assets_dir_abs`], which selects the runtime library
+/// root from executable and current-directory ancestry: this answers the
+/// question for a file that may live outside the running project (a tool
+/// composing a `.usda` by absolute path), so it walks that file's ancestors.
 pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
     path.ancestors()
         .find(|a| a.file_name() == Some(std::ffi::OsStr::new(ASSETS_DIR_NAME)))
@@ -72,8 +72,7 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
 /// again. A drive-qualified Windows path is already absolute and passes through.
 pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
     match parse_lunco_uri(id) {
-        Some(rel) if crate::asset_path::is_safe_relative_path(rel) => Some(assets_root?.join(rel)),
-        Some(_) => None,
+        Some(rel) => Some(assets_root?.join(crate::asset_path::relative_path(rel)?)),
         None => {
             let p = PathBuf::from(id);
             Some(if p.is_absolute() {
@@ -99,15 +98,24 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
         })?;
         return std::fs::read(path);
     };
-    let mut roots = Vec::new();
-    if let Some(root) = assets_root {
-        roots.push(root.to_path_buf());
-    }
-    roots.extend(crate::cache_roots());
-    let relative = Path::new(rel);
+    let default_root;
+    let root = match assets_root {
+        Some(root) => root,
+        None => {
+            default_root = crate::assets_dir_abs();
+            &default_root
+        }
+    };
+    let roots = crate::library_roots(root);
+    let relative = crate::asset_path::relative_path(rel).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe library asset path `{rel}`"),
+        )
+    })?;
     for root in roots {
         #[cfg(not(target_arch = "wasm32"))]
-        match existing_path_within_root(&root, relative)? {
+        match existing_path_within_root(&root, &relative)? {
             Some(path) => return std::fs::read(path),
             None => continue,
         }
@@ -249,16 +257,59 @@ mod tests {
             id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())),
             Some(root.path().join("terrain/moon.usda"))
         );
+        assert_eq!(
+            id_to_disk_path(r"lunco://terrain\moon.usda", Some(root.path())),
+            Some(root.path().join("terrain/moon.usda"))
+        );
         for id in [
             "lunco://../outside.usda",
             "lunco://terrain/../../outside.usda",
-            r"lunco://terrain\outside.usda",
+            r"lunco://terrain\..\outside.usda",
         ] {
             assert!(
                 id_to_disk_path(id, Some(root.path())).is_none(),
                 "unsafe library id must be rejected: {id}"
             );
         }
+    }
+
+    #[test]
+    fn library_reads_default_to_the_runtime_asset_root() {
+        let bytes = read_asset_bytes("lunco://scenes/base/lunar_surface.usda", None)
+            .expect("authored engine asset is available without a caller root");
+        assert!(bytes.starts_with(b"#usda 1.0"));
+    }
+
+    #[test]
+    fn library_reads_an_explicit_package_cache_before_the_shared_cache() {
+        let package_assets = tempfile::tempdir().expect("temporary package assets root");
+        let packed = package_assets.path().join(".cache/scenes/base");
+        std::fs::create_dir_all(&packed).expect("packed cache directory");
+        std::fs::write(packed.join("lunar_surface.usda"), b"packed package asset")
+            .expect("packed asset");
+
+        assert_eq!(
+            read_asset_bytes(
+                "lunco://scenes/base/lunar_surface.usda",
+                Some(package_assets.path())
+            )
+            .expect("explicit package cache asset"),
+            b"packed package asset"
+        );
+    }
+
+    #[test]
+    fn library_reads_normalize_windows_separators_before_lookup() {
+        let root = tempfile::tempdir().expect("temporary asset root");
+        let scene = root.path().join("scenes/base/lunar_surface.usda");
+        std::fs::create_dir_all(scene.parent().expect("scene parent")).expect("scene directory");
+        std::fs::write(&scene, b"windows-authored path").expect("scene");
+
+        assert_eq!(
+            read_asset_bytes(r"lunco://scenes\base\lunar_surface.usda", Some(root.path()))
+                .expect("Windows-authored URI"),
+            b"windows-authored path"
+        );
     }
 
     #[cfg(unix)]
@@ -316,8 +367,8 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root
-/// in [`cache_roots`](crate::cache_roots) order.
+/// Build the `lunco://` [`AssetSourceBuilder`] from the authored library root,
+/// its packed cache, and the shared cache in [`crate::library_roots`] order.
 ///
 /// Only the authored `assets/` tree is watched. Cache roots are read-only
 /// materialized artifacts and can contain tens of thousands of directories;
@@ -325,12 +376,10 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
 /// authoring and can exhaust the process' watch quota before the app starts.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
     let watch_root = assets_dir.to_string_lossy().into_owned();
-    let mut roots = vec![assets_dir.to_string_lossy().into_owned()];
-    roots.extend(
-        crate::cache_roots()
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned()),
-    );
+    let roots = crate::library_roots(assets_dir)
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
     let reader_roots = roots.clone();
     AssetSourceBuilder::new(move || {
         Box::new(FallbackReader {

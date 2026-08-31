@@ -599,16 +599,20 @@ fn asset_reader_error(error: TwinRootsError) -> AssetReaderError {
 
 impl AssetReader for TwinReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        if !crate::asset_path::is_safe_relative_components(path) {
+        let Some(path) = crate::asset_path::relative_path(&crate::asset_path::slashed(path)) else {
             return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
-        }
+        };
         // In-memory overlay wins over the on-disk file (E1b: a scene document's
         // composed source projected into the live world). Keyed by the exact
         // reader-facing `<name>/<rel>` path.
-        if let Some(bytes) = self.roots.overlay_for(path).map_err(asset_reader_error)? {
+        if let Some(bytes) = self
+            .roots
+            .overlay_for(path.as_path())
+            .map_err(asset_reader_error)?
+        {
             return Ok(VecReader::new((*bytes).clone()));
         }
-        let Some(full) = self.resolve(path).map_err(asset_reader_error)? else {
+        let Some(full) = self.resolve(path.as_path()).map_err(asset_reader_error)? else {
             return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
         let bytes = read_bytes(&full).await?;
