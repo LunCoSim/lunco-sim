@@ -254,7 +254,10 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
     )
     {
-        double3 xformOp:translate = (0.0, 0.65, 0.35)
+        # The shared radio's housing starts 0.03 m above its host origin. The
+        # solar deck's top is y=0.23 m, so this host mount places the housing
+        # bottom at y=0.25 m with the intended 0.02 m mating overlap.
+        double3 xformOp:translate = (0.0, 0.22, 0.35)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
