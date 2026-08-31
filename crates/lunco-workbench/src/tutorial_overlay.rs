@@ -506,6 +506,21 @@ fn tutorial_anchor_rect(
         .filter(|rect| rect.width() > 4.0 && rect.height() > 4.0)
 }
 
+fn clip_target_to_content(
+    anchor: &str,
+    target: Option<egui::Rect>,
+    content: egui::Rect,
+) -> Option<egui::Rect> {
+    if anchor.starts_with("menu.") {
+        return None;
+    }
+
+    target.and_then(|rect| {
+        let clipped = rect.intersect(content);
+        (clipped.width() > 4.0 && clipped.height() > 4.0).then_some(clipped)
+    })
+}
+
 fn report_missing_anchor(hud: &mut TutorialHud, commands: &mut Commands, anchor: &str) {
     if hud.reported_missing_anchor.as_deref() == Some(anchor) {
         return;
@@ -551,10 +566,7 @@ fn draw_spotlight(
         return;
     }
 
-    let target_in_content = target.and_then(|rect| {
-        let clipped = rect.intersect(screen);
-        (clipped.width() > 4.0 && clipped.height() > 4.0).then_some(clipped)
-    });
+    let target_in_content = clip_target_to_content(&key, target, screen);
 
     if target.is_some() {
         // Paint the scrim directly. A non-interactable Area still creates an
@@ -772,10 +784,7 @@ fn draw_tour(
             .as_ref()
             .is_some_and(|viewport| viewport.active_camera.is_none());
     let show_scrim = !empty_viewport;
-    let target_in_content = target.and_then(|rect| {
-        let clipped = rect.intersect(screen);
-        (clipped.width() > 4.0 && clipped.height() > 4.0).then_some(clipped)
-    });
+    let target_in_content = clip_target_to_content(&step.anchor, target, screen);
 
     // ── Card placement — pick the side that fits around the target, matching
     // the lunica tour's Right/Below/Above/Left/Over/Centred logic.
@@ -1189,5 +1198,33 @@ impl Plugin for TutorialOverlayPlugin {
             (draw_spotlight, draw_tour, draw_tutorial_recovery)
                 .in_set(crate::ApplicationOverlayRenderSet),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_target_stays_in_titlebar_when_expansion_crosses_content_boundary() {
+        let target =
+            egui::Rect::from_min_max(egui::pos2(10.0, 2.0), egui::pos2(20.0, 34.0)).expand(6.0);
+        let content = egui::Rect::from_min_max(egui::pos2(0.0, 30.0), egui::pos2(100.0, 100.0));
+
+        assert!(
+            clip_target_to_content("menu.perspective.sandbox_view", Some(target), content)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn content_target_is_clipped_to_the_visible_content_region() {
+        let target = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(20.0, 50.0));
+        let content = egui::Rect::from_min_max(egui::pos2(0.0, 30.0), egui::pos2(100.0, 100.0));
+
+        let clipped = clip_target_to_content("panel.center", Some(target), content)
+            .expect("content target should remain visible");
+        assert_eq!(clipped.min, egui::pos2(10.0, 30.0));
+        assert_eq!(clipped.max, egui::pos2(20.0, 50.0));
     }
 }
