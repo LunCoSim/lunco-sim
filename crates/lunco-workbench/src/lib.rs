@@ -130,7 +130,7 @@ pub use window_placement::WindowPlacement;
 pub use workspace_state::{
     finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
     DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, WorkspaceState,
-    WorkspaceStatePlugin,
+    WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
 };
 
 pub use menu::{MenuCtx, UndoProbeCtx};

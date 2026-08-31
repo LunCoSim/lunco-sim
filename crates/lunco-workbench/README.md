@@ -123,6 +123,10 @@ cargo run --bin lunica      # Modelica workbench
   transparent so a Bevy 3D scene shows through.
 - **`WorkspaceResource`** — single source of truth for open Twins +
   documents + the active Twin / Document / Perspective.
+- **`WorkspaceStateRestorePolicy`** — a host may provide a one-shot initial
+  perspective for an explicit launch request. It takes precedence during the
+  first Twin restore and is then consumed; ordinary user perspective changes
+  continue to persist per Twin.
 - **Twin Browser** — built-in side-panel that renders `BrowserSection`
   impls contributed by domain plugins, reading the active Twin from
   `WorkspaceResource`.

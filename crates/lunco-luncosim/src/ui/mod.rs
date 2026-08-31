@@ -193,6 +193,21 @@ impl Plugin for SandboxUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin);
+        // An explicit scene launch is a presentation request for the simulator:
+        // restore the scene/3D View even if this Twin was last closed in the
+        // embedded Modelica workspace. The workspace owner consumes this once;
+        // subsequent Twin switches still restore their own saved perspectives.
+        let has_explicit_scene = app
+            .world()
+            .get_resource::<crate::ScenePath>()
+            .is_some_and(|scene| scene.0.is_some());
+        if has_explicit_scene {
+            app.insert_resource(
+                lunco_workbench::WorkspaceStateRestorePolicy::with_initial_perspective(
+                    "sandbox_view",
+                ),
+            );
+        }
         #[cfg(not(target_arch = "wasm32"))]
         app.add_plugins(update::UpdatePlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
@@ -275,16 +290,6 @@ impl Plugin for SandboxUiPlugin {
                 app.add_observer(models_palette::on_scene_click_attach);
                 app.add_systems(Update, models_palette::attach_escape_system);
             })
-            // View is the default simulation presentation. A loaded Twin must
-            // show its authored 3D camera immediately; the Modelica workbench
-            // remains an explicit operator choice instead of covering the scene
-            // during startup.
-            .add_systems(
-                Startup,
-                |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-                    layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
-                },
-            )
             .add_systems(
                 Startup,
                 (

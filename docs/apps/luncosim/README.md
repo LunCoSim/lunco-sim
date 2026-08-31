@@ -97,7 +97,7 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `--no-ui` | Run headless — no window, no GPU. Also via `LUNCO_NO_UI=1`. |
 | `--headless-max-speed` | With `--no-ui` (or the headless server launcher), run the fixed simulation lattice as fast as the CPU and causal participants permit. This removes wall-clock pacing; it does not bypass the co-simulation barrier. |
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
-| `--scene <PATH>` | Load a specific USD scene from a relative or absolute filesystem path. Startup resolves its owning root and mounts it through the canonical `twin://` address. Without it, luncosim starts with an empty persistent world shell. |
+| `--scene <PATH>` | Load a specific USD scene from a relative or absolute filesystem path. Startup resolves its owning root and mounts it through the canonical `twin://` address, and opens the simulator in the **View** perspective even if that Twin was last left in Design/Lunica. Without it, luncosim starts with an empty persistent world shell. |
 | `--render-profile <standard\|fast>` | Select the startup compatibility profile. `fast` uses unlit, texture-free materials and disables HDR, bloom, and MSAA. |
 | `--render-quality <low\|balanced\|high>` | Override the Graphics quality for this process. `high` is the highest shipped visual preset, raising shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |

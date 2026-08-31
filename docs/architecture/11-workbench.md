@@ -458,6 +458,13 @@ restart:
   churn, and personal layout never leaks into a shared project.
 The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur.
 
+An explicit host launch may provide a one-shot
+`WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when
+the first real Twin becomes active, so a scene-oriented launch can open its
+View presentation without allowing a stale Design/Lunica choice to cover it.
+Later Twin switches and ordinary launches continue to restore the persisted
+per-Twin perspective.
+
 **Reconciliation.** Restore maps stored string ids back to the panels /
 perspectives registered in *this* binary (luncosim and lunica ship
 different sets) and **drops anything unknown** — `PanelId` /
@@ -718,7 +725,7 @@ lunica         = workbench + CodeEditor + Diagram + PackageBrowser +
 
 Same workbench shell for the two windowed apps, with different panel sets and
 default perspectives. `lunica` opens in the Analyze perspective; `luncosim`
-opens in the scene/Build perspective.
+opens in the View perspective for an explicit scene launch.
 
 
 ## 14. Open questions

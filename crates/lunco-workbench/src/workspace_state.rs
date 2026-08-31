@@ -10,7 +10,8 @@
 //! ## What's stored (and what isn't)
 //!
 //! - **Active perspective** — restored on Twin activation (workbench
-//!   local, side-effect free).
+//!   local, side-effect free). A host may provide a one-shot initial
+//!   perspective for an explicit launch through [`WorkspaceStateRestorePolicy`].
 //! - **Open document paths + active document** — persisted so a future
 //!   session-restore can reopen them. We do *not* auto-reopen yet:
 //!   reopening means replaying domain-specific open commands
@@ -40,6 +41,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::{PanelId, WorkbenchLayout};
 use lunco_workspace::WorkspaceResource;
+
+/// Host-supplied presentation intent for the first per-Twin workspace restore.
+///
+/// An explicit launch request can have a stronger presentation contract than
+/// the last editor session. The host consumes this intent once, after a real
+/// Twin becomes active; later Twin switches restore each Twin's persisted
+/// perspective normally.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceStateRestorePolicy {
+    initial_perspective: Option<String>,
+}
+
+impl WorkspaceStateRestorePolicy {
+    /// Select a perspective for the first Twin restored in this process.
+    pub fn with_initial_perspective(id: impl Into<String>) -> Self {
+        Self {
+            initial_perspective: Some(id.into()),
+        }
+    }
+
+    fn take_initial_perspective(&mut self) -> Option<String> {
+        self.initial_perspective.take()
+    }
+}
 
 /// Hot-exit snapshot of one open document — VSCode-style. Carries the
 /// **live editor buffer** (`source`), not just a path, so unsaved edits
@@ -651,16 +676,24 @@ fn restore_workspace_state(world: &mut World) {
         applied.twin = active;
     }
 
+    let initial_perspective = if active.is_some() {
+        world
+            .resource_mut::<WorkspaceStateRestorePolicy>()
+            .take_initial_perspective()
+    } else {
+        None
+    };
+
     let root = active_twin_root(world);
     let Some(state) = WorkspaceState::load(&root) else {
         return;
     };
 
     // Perspective: reconcile against the registered set (unknown → drop).
-    if let Some(persp) = &state.perspective {
+    if let Some(persp) = initial_perspective.or(state.perspective) {
         world
             .resource_mut::<WorkbenchLayout>()
-            .activate_perspective_by_str(persp);
+            .activate_perspective_by_str(&persp);
     }
 
     // Open every saved document once — the doc set is GLOBAL (shared
@@ -829,6 +862,7 @@ impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
+            .init_resource::<WorkspaceStateRestorePolicy>()
             .init_resource::<DocumentSessionRegistry>()
             .add_systems(
                 Update,
@@ -845,6 +879,17 @@ impl Plugin for WorkspaceStatePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_perspective_is_consumed_once() {
+        let mut policy = WorkspaceStateRestorePolicy::with_initial_perspective("sandbox_view");
+
+        assert_eq!(
+            policy.take_initial_perspective().as_deref(),
+            Some("sandbox_view")
+        );
+        assert_eq!(policy.take_initial_perspective(), None);
+    }
 
     /// FNV-1a is stable for a given input — the keying must not drift,
     /// or yesterday's state files become unfindable.
