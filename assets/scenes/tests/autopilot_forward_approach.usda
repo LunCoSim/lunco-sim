@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "AutopilotForwardApproachTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production regression for the autopilot's rear-to-goal approach. The goal is
+# deliberately behind the rover's authored -Z heading. The scenario must make
+# the rover turn first and then approach with positive throttle.
+def Xform "AutopilotForwardApproachTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "A rover whose waypoint starts behind it; the autopilot must turn and approach forward without reverse motion."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (400.0, 1.0, 400.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </AutopilotForwardApproachTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    over "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (14.0, 10.0, 18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "autopilot-forward-approach"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/autopilot_forward_approach.rhai@
+        }
+    }
+}
