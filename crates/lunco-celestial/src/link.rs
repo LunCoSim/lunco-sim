@@ -2127,7 +2127,10 @@ mod tests {
         world.add_observer(|ev: On<TelemetryEvent>, mut seen: ResMut<SeenEvents>| {
             let data = match &ev.data {
                 TelemetryValue::String(s) => s.clone(),
-                _ => String::new(),
+                TelemetryValue::F64(v) => v.to_string(),
+                TelemetryValue::I64(v) => v.to_string(),
+                TelemetryValue::Bool(v) => v.to_string(),
+                TelemetryValue::Array(_) | TelemetryValue::Map(_) => String::new(),
             };
             seen.0.push((ev.name.clone(), data));
         });

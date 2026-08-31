@@ -41,6 +41,7 @@
 //! belongs there, not here.
 
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 /// Severity of a telemetry incident, ordered by urgency.
 ///
@@ -60,7 +61,9 @@ pub enum Severity {
 ///
 /// **Why**: Ensures that the telemetry transport layer is agnostic of the
 /// internal Rust type (f32, i32, bool), allowing external subscribers to
-/// deserialize data into a unified variant type.
+/// deserialize data into a unified variant type. Structured maps and arrays
+/// keep event parameters typed at the bus boundary instead of forcing each
+/// consumer to parse a string.
 #[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
 #[reflect(Debug, PartialEq, Default)]
 pub enum TelemetryValue {
@@ -68,6 +71,8 @@ pub enum TelemetryValue {
     I64(i64),
     Bool(bool),
     String(String),
+    Array(Vec<TelemetryValue>),
+    Map(BTreeMap<String, TelemetryValue>),
 }
 
 impl Default for TelemetryValue {

@@ -91,7 +91,7 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
-| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` **next** tick) |
+| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` **next** tick); scalar, array, and map payloads keep their typed structure |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded per `(entity,tick,hook)`) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |

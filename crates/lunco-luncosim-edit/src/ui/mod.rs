@@ -679,9 +679,6 @@ impl Plugin for SceneEditUiPlugin {
                     waypoint_click::sync_route_visual_meshes
                         .after(waypoint_click::rebuild_waypoint_route_projection)
                         .run_if(resource_changed::<waypoint_click::RouteVisualProjection>),
-                    waypoint_click::sync_waypoint_marker_visuals
-                        .after(waypoint_click::rebuild_waypoint_route_projection)
-                        .run_if(resource_changed::<waypoint_click::RouteVisualProjection>),
                     trail::rebuild_vehicle_trail_projection
                         .after(trail::arm_trail_projection_rebuild)
                         .run_if(trail::trail_projection_rebuild_is_pending),

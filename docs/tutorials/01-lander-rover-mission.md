@@ -827,15 +827,20 @@ The rover's job is to visit three spots. The reusable waypoint asset at
 ground-anchored trigger volume:
 
 ```usda
-def Xform "WaypointMarker"
+def Xform "WaypointMarker" (
+    prepend apiSchemas = ["LunCoWaypointAPI"]
+)
 {
+    float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38)
+
     def Sphere "Dome"
     {
         double radius = 2.5
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.95, 0.5)]
-        float[] primvars:displayOpacity = [0.45]
+        float[] primvars:displayOpacity = [0.2]
+        bool lunco:surface:additive = true
     }
     def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {
@@ -851,9 +856,9 @@ The dome is visual only. The `Trigger` uses standard USD `radius`, collision, an
 `lunco:triggerZone` properties to provide the non-solid Sensor footprint. The
 shared waypoint projection consumes its physics overlap, records the composed
 marker path in `ReachedWaypoints`, and emits the canonical `waypoint.reached`
-event. The marker stays visible after arrival; the route UI tints only the marker
-recorded as reached. The lower-level Sensor/zone notification is an engine
-mechanism, not the mission completion contract.
+event with a typed `{ path, state, index }` payload. The shared Rhai waypoint helper
+applies the authored inactive look through the USD runtime layer. The lower-level
+Sensor/zone notification is an engine mechanism, not the mission completion contract.
 
 For a visual review, use the authored `assets/scenes/tests/waypoint_visual.usda`
 companion with the production `target/debug/luncosim` binary from the tutorial
@@ -906,12 +911,16 @@ or an event.
 fn on_event(me, evt) {
     let rover = find("/Mission/SkidRover");
     if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    if evt.value == "/Mission/RoverTarget1" {
-        emit("waypoint_1_reached");
-    } else if evt.value == "/Mission/RoverTarget2" {
-        emit("waypoint_2_reached");
-    } else if evt.value == "/Mission/RoverTarget3" {
-        emit("waypoint_3_reached");
+    let index = waypoint_event_index(evt);
+    if index == () { return; }
+    apply_waypoint_reached(evt);
+    let milestones = [
+        "waypoint_1_reached",
+        "waypoint_2_reached",
+        "waypoint_3_reached",
+    ];
+    if index < milestones.len() {
+        emit(milestones[index]);
     }
 }
 
@@ -941,7 +950,7 @@ fn task(me) {
         }),
 
         // The course. The scene's Sensor events are the only arrival facts;
-        // the marker projection owns the visited tint.
+        // the shared Rhai waypoint helper owns the authored inactive look.
         wait_for("waypoint_1_reached"),
         once(|m| notify_kind("Waypoint 1 reached (2 of 3).", "success")),
         wait_for("waypoint_2_reached"),

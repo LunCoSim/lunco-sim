@@ -8,8 +8,8 @@
 # Reusable mission waypoint marker — a softly translucent glowing DOME a vehicle is
 # meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
 # body. The physics Sensor is consumed by the shared route projection, which
-# emits the canonical `waypoint.reached` event for Rhai; mission code does not
-# poll a duplicate distance tolerance.
+# emits the canonical `waypoint.reached` event with a typed {path,state,index} payload
+# for Rhai; mission code does not poll a duplicate distance tolerance.
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`. The emissive
 # material keeps the marker independent of scene lighting; the standard
@@ -28,6 +28,9 @@ def Xform "WaypointMarker" (
     # Arrival is session state on the vessel's `ReachedWaypoints` component.
     # The marker remains authored geometry and is never rewritten or deleted
     # when a route leg completes. This keeps the scene reusable and replayable.
+    # Rhai reads the authored inactive color below and applies it as a runtime
+    # USD opinion when the waypoint.reached event arrives.
+    float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38)
 
     # Emission REQUIRES a material. `displayColor` is a real UsdGeomGprim
     # primvar and stays on the geometry, but USD has no "display emissive" —
@@ -67,7 +70,7 @@ def Xform "WaypointMarker" (
     # through the annotation while the emissive-only material keeps its colour
     # independent of scene lighting.
     def Sphere "Dome" (
-        prepend apiSchemas = ["MaterialBindingAPI"]
+        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
     )
     {
         custom string lunco:interaction:left = "pass_through"
@@ -79,7 +82,12 @@ def Xform "WaypointMarker" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
-        float[] primvars:displayOpacity = [0.45]
+        # Keep the annotation legible without washing the rover in green. The
+        # additive surface policy also prevents the dome from occluding the
+        # scene behind it while retaining its emissive navigation cue. The
+        # mission script changes this primvar in the runtime layer on arrival.
+        float[] primvars:displayOpacity = [0.2]
+        bool lunco:surface:additive = true
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow. The
         # emissive-only UsdPreviewSurface above also makes its appearance

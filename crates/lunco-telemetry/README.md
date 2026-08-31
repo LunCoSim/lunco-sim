@@ -8,7 +8,7 @@ This crate implements the simulation's **"Optical Fibers"**—a generic, "No-Cod
 
 - **Automated Sampling** — High-frequency sampling of internal physics and software values.
 - **Reflection-Based Extraction** — Uses Bevy's `Reflect` capabilities to drill into components via string paths (e.g., `"Port.value"`).
-- **Unified Transport Format** — Maps heterogeneous Rust types into a standardized `TelemetryValue` (F64, I64, Bool, String).
+- **Unified Transport Format** — Maps heterogeneous Rust types into a standardized `TelemetryValue` (F64, I64, Bool, String, Array, Map).
 - **Headless Monitoring** — Provides the primary "eyes-and-ears" for simulations running without a GPU.
 - **Mission Control Bridge** — Facilitates broadcasting data to external Mission Control systems (YAMCS, XTCE).
 

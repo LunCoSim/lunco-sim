@@ -1698,10 +1698,12 @@ pub fn on_set_usd_connection(
 /// add a LunCo schema or mutate an ECS component: the USD type and literal are
 /// passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
 /// remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
-/// `point3f[] points` without a Rust handler for every geometry type.
+/// `point3f[] points` without a Rust handler for every geometry type. The path
+/// may name a composed child of a referenced asset; the runtime layer is the
+/// stronger session opinion and does not flatten or rewrite that reference.
 #[Command(default)]
 pub struct SetUsdAttribute {
-    /// Absolute USD prim path owned by the active document.
+    /// Absolute USD prim path in the active document's composed namespace.
     pub path: String,
     /// Attribute name, for example `points` or `inputs:radius`.
     pub name: String,
@@ -1724,25 +1726,20 @@ pub fn on_set_usd_attribute(
         warn!("SET_USD_ATTRIBUTE: path, name, and type_name are required");
         return;
     }
-    let Ok(path) = lunco_usd_bevy::SdfPath::new(&cmd.path) else {
+    if !cmd.path.starts_with('/') {
+        warn!("SET_USD_ATTRIBUTE: path must be absolute: `{}`", cmd.path);
+        return;
+    }
+    if lunco_usd_bevy::SdfPath::new(&cmd.path).is_err() {
         warn!("SET_USD_ATTRIBUTE: invalid prim path `{}`", cmd.path);
         return;
-    };
+    }
     let Some(doc) = workspace.as_deref().and_then(|ws| ws.0.active_document) else {
         debug!("SET_USD_ATTRIBUTE: no active document");
         return;
     };
-    let Some(host) = usd_registry.host(doc) else {
+    if usd_registry.host(doc).is_none() {
         warn!("SET_USD_ATTRIBUTE: active document {doc} is unavailable");
-        return;
-    };
-    if host.document().data().spec(&path).is_none()
-        && host.document().runtime_data().spec(&path).is_none()
-    {
-        warn!(
-            "SET_USD_ATTRIBUTE: prim `{}` is not owned by the active document",
-            cmd.path
-        );
         return;
     }
     commands.trigger(ApplyUsdOp {

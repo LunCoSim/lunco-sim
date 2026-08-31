@@ -899,7 +899,10 @@ fn numeric_of(v: &TelemetryValue) -> Option<f64> {
     match v {
         TelemetryValue::F64(f) => Some(*f),
         TelemetryValue::I64(i) => Some(*i as f64),
-        _ => None,
+        TelemetryValue::Bool(_)
+        | TelemetryValue::String(_)
+        | TelemetryValue::Array(_)
+        | TelemetryValue::Map(_) => None,
     }
 }
 

@@ -1409,9 +1409,9 @@ pub fn hash_str(s: &str) -> u64 {
 
 // ── Verbs: events ───────────────────────────────────────────────────────────
 
-/// `emit(name, value)` — fire a `TelemetryEvent` on the shared bus. The scalar
-/// payload is taken from a JSON value (the native→JSON projection at the call
-/// site is trivial for scalars). Returns whether a World was in scope.
+/// `emit(name, value)` — fire a `TelemetryEvent` on the shared bus. The
+/// payload preserves scalar, array, and map structure. Returns whether a World
+/// was in scope.
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
         let timestamp = world
@@ -1454,6 +1454,15 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
         TelemetryValue::I64(x) => b.int(*x),
         TelemetryValue::Bool(x) => b.bool(*x),
         TelemetryValue::String(x) => b.string(x),
+        TelemetryValue::Array(items) => {
+            b.array(items.iter().map(|item| telemetry_value(b, item)).collect())
+        }
+        TelemetryValue::Map(entries) => b.map(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), telemetry_value(b, value)))
+                .collect(),
+        ),
     }
 }
 

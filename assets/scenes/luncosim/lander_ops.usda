@@ -260,9 +260,9 @@ def Xform "LanderTest" (
     # ── Rover drive-to waypoints ────────────────────────────────────────────
     # Three translucent glowing markers (the same reusable marker asset) forming a
     # course. Each marker has a visible dome and a ground-anchored overlap-only
-    # Trigger; the runtime emits `waypoint.reached` and `rover_surface_ops.rhai`
-    # translates those authoritative events for anything downstream (the tutorial)
-    # to wait on.
+    # Trigger; the runtime emits a structured `waypoint.reached` payload and
+    # `rover_surface_ops.rhai` applies the authored inactive look and translates
+    # the authoritative event for anything downstream (the tutorial) to wait on.
     def Xform "RoverTarget1" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )

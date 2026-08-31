@@ -60,17 +60,21 @@
         </button>
       </node>
       <text id="rover-hud-frame">site frame · metres</text>
-      <node id="rover-hud-altitude-block">
-        <text id="rover-hud-altitude-label">ALT</text>
-        <text id="rover-hud-altitude">{altitude} m</text>
-      </node>
-      <node id="rover-hud-geo">
-        <text id="rover-hud-geographic">{geographic}</text>
-        <text id="rover-hud-geo-heading">HDG {heading}</text>
-      </node>
-      <node id="rover-hud-local">
-        <text id="rover-hud-local-position">{local_position}</text>
-        <text id="rover-hud-local-heading">HDG {heading}</text>
+      <node id="rover-hud-nav-details">
+        <node id="rover-hud-altitude-block">
+          <text id="rover-hud-altitude-label">ALT</text>
+          <text id="rover-hud-altitude">{altitude} m</text>
+        </node>
+        <node id="rover-hud-position-block">
+          <node id="rover-hud-geo">
+            <text id="rover-hud-geographic">{geographic}</text>
+            <text id="rover-hud-geo-heading">HDG {heading}</text>
+          </node>
+          <node id="rover-hud-local">
+            <text id="rover-hud-local-position">{local_position}</text>
+            <text id="rover-hud-local-heading">HDG {heading}</text>
+          </node>
+        </node>
       </node>
 
       <node id="rover-hud-comms">

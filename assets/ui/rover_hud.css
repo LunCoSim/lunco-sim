@@ -32,10 +32,11 @@
 #rover-hud-nav {
   display: flex;
   position: absolute;
-  bottom: 32px;
+  bottom: 24px;
   flex-direction: column;
-  row-gap: 7px;
-  padding: 12px;
+  row-gap: 6px;
+  padding: 10px;
+  box-sizing: border-box;
   border-top-width: 1px;
   border-right-width: 1px;
   border-bottom-width: 1px;
@@ -52,7 +53,7 @@
 
 #rover-hud-nav {
   right: 14px;
-  width: 420px;
+  width: 340px;
 }
 
 #rover-hud-attitude-title,
@@ -79,6 +80,35 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+#rover-hud-nav-details {
+  display: flex;
+  align-items: center;
+  column-gap: 12px;
+  min-width: 0px;
+  padding-top: 2px;
+}
+
+#rover-hud-altitude-block {
+  align-items: flex-start;
+  width: 38%;
+  min-width: 0px;
+}
+
+#rover-hud-position-block {
+  display: flex;
+  flex-direction: column;
+  row-gap: 4px;
+  width: 62%;
+  min-width: 0px;
+}
+
+#rover-hud-geo,
+#rover-hud-local {
+  width: 100%;
+  min-width: 0px;
+  column-gap: 6px;
 }
 
 #rover-hud-tilt-readout,
@@ -151,7 +181,7 @@
 #rover-hud-speed,
 #rover-hud-altitude {
   color: var(--accent-color);
-  font-size: 26px;
+  font-size: 23px;
   font-weight: 700;
 }
 
@@ -194,8 +224,8 @@
 #rover-hud-telemetry {
   display: var(--ui-comms-display);
   flex-direction: column;
-  row-gap: 4px;
-  padding-top: 7px;
+  row-gap: 3px;
+  padding-top: 6px;
   border-top-width: 1px;
   border-top-color: rgba(166, 173, 200, 0.35);
 }
@@ -204,6 +234,10 @@
 #rover-hud-comms-detail,
 #rover-hud-telemetry-heading {
   flex-direction: column;
+}
+
+#rover-hud-comms-heading {
+  flex-direction: row;
 }
 
 #rover-hud-comms-status {
@@ -225,5 +259,6 @@
 #rover-hud-telemetry-summary {
   width: 100%;
   color: var(--text-color);
+  font-size: 11px;
   overflow: hidden;
 }

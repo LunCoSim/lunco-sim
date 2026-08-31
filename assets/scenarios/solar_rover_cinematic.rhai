@@ -5,12 +5,16 @@
 fn on_event(me, evt) {
     let rover = find("/SolarRoverTest/SolarRover");
     if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    if evt.value == "/SolarRoverTest/RoverTarget1" {
-        emit("waypoint_1_reached");
-    } else if evt.value == "/SolarRoverTest/RoverTarget2" {
-        emit("waypoint_2_reached");
-    } else if evt.value == "/SolarRoverTest/RoverTarget3" {
-        emit("waypoint_3_reached");
+    let index = waypoint_event_index(evt);
+    if index == () { return; }
+    apply_waypoint_reached(evt);
+    let milestones = [
+        "waypoint_1_reached",
+        "waypoint_2_reached",
+        "waypoint_3_reached",
+    ];
+    if index < milestones.len() {
+        emit(milestones[index]);
     }
 }
 

@@ -240,16 +240,21 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   emissive-only surface: `diffuseColor` 0, `emissiveColor` C).
 - Navigational annotations use the authored opacity appropriate to their visual
   job. The reusable waypoint dome uses `float[] primvars:displayOpacity =
-  [0.45]` so a rover inside remains readable; landing locations and predicted
+  [0.2]` so a rover inside remains readable; landing locations and predicted
   landing annotations remain opaque unless their own review contract changes.
   All three use the emissive-only surface with
   `primvars:doNotCastShadows = true`, so appearance stays independent of scene
   lighting and the waypoint's invisible Trigger remains separate from its
   translucent visual dome.
 - For an emissive annotation that must remain visible without occluding geometry
-  behind it, author `bool lunco:surface:additive = true` on the gprim. This uses
-  the existing additive, depth-tested/non-depth-writing render intent; do not
-  hide the problem with a camera offset or a second overlay mechanism.
+  behind it, author `bool lunco:surface:additive = true` on the gprim (as the
+  waypoint dome does). This uses the existing additive,
+  depth-tested/non-depth-writing render intent; do not hide the problem with a
+  camera offset or a second overlay mechanism.
+- Reusable waypoint markers also author `float3
+  lunco:waypoint:inactiveColor` on the marker root. Rhai reads that composed USD
+  value on arrival and writes the visited color to the bound visual at runtime;
+  do not hardcode a visited tint in Rust or in each mission script.
 - Textures: `UsdUVTexture` via `inputs:file`, `wrapS`/`wrapT`,
   `inputs:sourceColorSpace`. **There is no UV primvar reader** —
   `UsdPrimvarReader_float2`/`inputs:st` is inert; UVs come from the mesh's own

@@ -1783,6 +1783,9 @@ class "LunCoWaypointAPI" (
     bool lunco:waypoint = false (
         doc = "Whether this prim is a mission waypoint marker."
     )
+    float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38) (
+        doc = "Linear RGB color used by mission Rhai when this waypoint has been visited."
+    )
 }
 
 class "LunCoUiSchemaAPI" (
