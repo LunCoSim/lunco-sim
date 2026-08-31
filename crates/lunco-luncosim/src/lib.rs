@@ -3754,6 +3754,28 @@ mod terrain_status_tests {
             .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
             lunco_terrain_surface::TerrainStreamStatus {
                 wanted: 2,
+                resident: 1,
+                pending: 1,
+                ..Default::default()
+            };
+        app.update();
+        {
+            let bus = app
+                .world()
+                .resource::<lunco_workbench::status_bus::StatusBus>();
+            let progress: Vec<_> = bus
+                .active_progress()
+                .filter(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .collect();
+            assert_eq!(progress.len(), 1, "stream ticks must replace one live status");
+            assert_eq!(progress[0].message, "Streaming terrain tiles 1/2");
+            assert!(bus.history().next().is_none());
+        }
+
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+            lunco_terrain_surface::TerrainStreamStatus {
+                wanted: 2,
                 resident: 2,
                 ..Default::default()
             };
