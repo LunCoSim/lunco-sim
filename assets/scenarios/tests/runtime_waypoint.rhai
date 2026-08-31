@@ -16,9 +16,10 @@ fn on_start(me) {
 fn on_event(me, evt) {
     if evt.name == "waypoint.reached" && evt.source == this.rover {
         this.arrival_events += 1;
-        if this.arrival_events == 1 { this.first_arrival = evt.value; }
-        if this.arrival_events == 2 { this.second_arrival = evt.value; }
-        print("[runtime-waypoint] collision arrival event: " + evt.value);
+        let path = waypoint_event_path(evt);
+        if this.arrival_events == 1 { this.first_arrival = path; }
+        if this.arrival_events == 2 { this.second_arrival = path; }
+        print("[runtime-waypoint] collision arrival event: " + path);
     }
 }
 

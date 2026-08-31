@@ -133,10 +133,16 @@ re-derives one:
 | "already addressable?" | `has_scheme` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Any URI → local path | `local_path(reference, twins)` |
-| Library root | `assets_dir_abs` (executable/package ancestry, then current-directory ancestry) |
+| Library root | `assets_dir_abs` (`LUNCO_ASSET_ROOT` when set; otherwise executable/package ancestry, then current-directory ancestry) |
 | Library root (of a file) | `shipped_asset_root` |
 | Id → disk path | `id_to_disk_path` |
 | Scenario staging dir | `scenarios_dir` |
+
+`LUNCO_ASSET_ROOT` is an explicit native launch/test boundary. It names the
+directory containing the selected `assets/` library and fails at startup when
+the directory does not exist; it never silently falls through to the packaged
+binary root. This is how a production binary from another worktree can be run
+against the current checkout's authored assets while retaining one resolver.
 
 The reason this is a hard rule rather than a preference: a copy of the mapping
 drifts from the readers actually registered, and then the *same URI resolves two

@@ -2315,102 +2315,6 @@ pub(crate) fn clear_route_visual_projection(
     }
 }
 
-/// Snapshot the authored dome look before tinting it, so a session-only visual
-/// state never becomes an authored USD change and can be restored on reload.
-#[derive(Component, Clone, Debug)]
-pub(crate) struct WaypointVisualBase(PbrLook);
-
-/// Resolve the session-only appearance of a waypoint from its authored look and
-/// live visit state. Keeping this decision pure makes the visible visited-state
-/// contract testable without a renderer or a spawned USD subtree.
-fn waypoint_look_for_visit(base: &PbrLook, visited: bool) -> PbrLook {
-    if !visited {
-        return base.clone();
-    }
-
-    let mut target = base.clone();
-    target.base_color = LinearRgba::new(0.38, 0.38, 0.38, target.base_color.alpha);
-    target.emissive = LinearRgba::new(0.10, 0.10, 0.10, target.emissive.alpha);
-    target.unshared = true;
-    target
-}
-
-/// Tint visited waypoint domes from the live route state. The marker geometry and
-/// its authored material remain in USD; only the resolved render intent is changed
-/// for this session. `unshared` is required because the tint is animated state and
-/// must not be put through the shared material cache.
-/// Apply the cached route progress to authored marker looks. This is a consumer
-/// of `RouteVisualProjection`; it never parses mission XML or scans route paths.
-pub(crate) fn sync_waypoint_marker_visuals(
-    projection: Res<RouteVisualProjection>,
-    q_markers: Query<
-        (Entity, Option<&RuntimeWaypointBinding>),
-        With<lunco_usd_sim::marker::WaypointMarker>,
-    >,
-    mut q_looks: Query<(
-        Entity,
-        &UsdPrimPath,
-        &mut PbrLook,
-        Option<&WaypointVisualBase>,
-    )>,
-    q_parents: Query<&ChildOf>,
-    mut commands: Commands,
-) {
-    let mut marker_visits = std::collections::HashMap::new();
-    for route in projection.routes.values() {
-        for target in &route.targets {
-            if let Some(entity) = target.entity {
-                marker_visits.insert(entity, target.visited);
-            }
-        }
-    }
-    for (marker, binding) in q_markers.iter() {
-        let Some(binding) = binding else { continue };
-        if let Some(route) = projection.routes.get(&binding.vessel) {
-            marker_visits.insert(
-                marker,
-                route
-                    .targets
-                    .get(binding.index)
-                    .is_some_and(|target| target.visited),
-            );
-        }
-    }
-
-    for (entity, path, mut look, base) in q_looks.iter_mut() {
-        if !path.path.ends_with("/Dome") {
-            continue;
-        }
-        let mut current = entity;
-        let mut marker = None;
-        for _ in 0..32 {
-            if marker_visits.contains_key(&current) {
-                marker = Some(current);
-                break;
-            }
-            let Ok(parent) = q_parents.get(current) else {
-                break;
-            };
-            current = parent.parent();
-        }
-        let Some(marker) = marker else { continue };
-        let visited = marker_visits.get(&marker).copied().unwrap_or(false);
-        let mut target = if let Some(base) = base {
-            base.0.clone()
-        } else {
-            let authored = look.clone();
-            commands
-                .entity(entity)
-                .try_insert(WaypointVisualBase(authored.clone()));
-            authored
-        };
-        target = waypoint_look_for_visit(&target, visited);
-        if *look != target {
-            *look = target;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2420,7 +2324,7 @@ mod tests {
     };
     use crate::surface_pick::{resolve_cursor_surface, SurfacePickPolicy};
     use bevy::math::DVec3;
-    use bevy::prelude::{Entity, LinearRgba};
+    use bevy::prelude::Entity;
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
@@ -2447,7 +2351,6 @@ mod tests {
 
         assert_eq!(point, terrain.point.0);
     }
-    use lunco_render::PbrLook;
     use lunco_scene_commands::runtime_waypoint::append_runtime_patrol;
 
     #[test]
@@ -2803,37 +2706,5 @@ mod tests {
         let progress = route_visual_state(&targets, Some(&reached), Some(0), false, false);
 
         assert_eq!(progress.visited, vec![false]);
-    }
-
-    #[test]
-    fn visited_waypoint_look_is_gray_and_private() {
-        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
-        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
-
-        let visited = super::waypoint_look_for_visit(&authored, true);
-
-        assert_eq!(visited.base_color.red, 0.38);
-        assert_eq!(visited.base_color.green, 0.38);
-        assert_eq!(visited.base_color.blue, 0.38);
-        assert_eq!(visited.base_color.alpha, authored.base_color.alpha);
-        assert_eq!(visited.emissive.red, 0.10);
-        assert_eq!(visited.emissive.green, 0.10);
-        assert_eq!(visited.emissive.blue, 0.10);
-        assert!(
-            visited.unshared,
-            "animated visit state must not share authored materials"
-        );
-    }
-
-    #[test]
-    fn unvisited_waypoint_look_preserves_authored_appearance() {
-        let mut authored = PbrLook::matte(LinearRgba::new(0.12, 0.72, 0.34, 0.8));
-        authored.emissive = LinearRgba::new(0.02, 0.3, 0.08, 1.0);
-
-        assert_eq!(
-            super::waypoint_look_for_visit(&authored, false),
-            authored,
-            "unvisited markers must keep the authored look"
-        );
     }
 }

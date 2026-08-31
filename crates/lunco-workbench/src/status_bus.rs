@@ -843,6 +843,7 @@ pub fn surface_error_telemetry(
         TelemetryValue::F64(v) => v.to_string(),
         TelemetryValue::I64(v) => v.to_string(),
         TelemetryValue::Bool(v) => v.to_string(),
+        TelemetryValue::Array(_) | TelemetryValue::Map(_) => format!("{:?}", ev.data),
     };
 
     let message = if detail.is_empty() {

@@ -25,6 +25,7 @@ use lunco_usd::document::{
 };
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_sim::billboard::{BillboardIndex, UsdBillboard};
+use std::collections::BTreeMap;
 
 use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 
@@ -504,6 +505,13 @@ pub fn mark_reached_waypoints_on_enter(
         if !set.insert(key.clone()) {
             continue;
         }
+        let index = match &ordered {
+            ArrivalOrder::Runtime { index } => *index,
+            ArrivalOrder::Authored { targets } => targets
+                .iter()
+                .position(|target| target == &key)
+                .expect("an admitted authored waypoint must be in its route"),
+        };
         commands
             .entity(vessel)
             .try_insert(ReachedWaypoints(set.clone()));
@@ -512,10 +520,21 @@ pub fn mark_reached_waypoints_on_enter(
             name: "waypoint.reached".to_string(),
             source: q_gids.get(vessel).map(GlobalEntityId::get).unwrap_or(0),
             severity: Severity::Info,
-            data: TelemetryValue::String(key),
+            data: waypoint_reached_payload(key, index),
             timestamp: world_time.as_ref().map(|time| time.sim_secs).unwrap_or(0.0),
         });
     }
+}
+
+fn waypoint_reached_payload(path: String, index: usize) -> TelemetryValue {
+    TelemetryValue::Map(BTreeMap::from([
+        ("path".to_string(), TelemetryValue::String(path)),
+        ("index".to_string(), TelemetryValue::I64(index as i64)),
+        (
+            "state".to_string(),
+            TelemetryValue::String("reached".to_string()),
+        ),
+    ]))
 }
 
 enum ArrivalOrder {
@@ -560,8 +579,9 @@ pub fn register(app: &mut App) {
 mod tests {
     use super::{
         append_runtime_patrol, authored_waypoint_is_next, runtime_waypoint_billboard,
-        runtime_waypoint_is_next, runtime_waypoint_key,
+        runtime_waypoint_is_next, runtime_waypoint_key, waypoint_reached_payload,
     };
+    use lunco_core::TelemetryValue;
     use lunco_usd_sim::billboard::BillboardIndex;
     use std::collections::HashSet;
 
@@ -633,5 +653,22 @@ mod tests {
             billboard.fade_end,
             lunco_usd::document::WAYPOINT_BILLBOARD_FADE_END
         );
+    }
+
+    #[test]
+    fn waypoint_reached_payload_keeps_path_state_and_index_typed() {
+        let TelemetryValue::Map(payload) = waypoint_reached_payload("/Route/W7".to_string(), 7)
+        else {
+            panic!("waypoint arrival payload must be structured");
+        };
+        assert_eq!(
+            payload.get("path"),
+            Some(&TelemetryValue::String("/Route/W7".to_string()))
+        );
+        assert_eq!(
+            payload.get("state"),
+            Some(&TelemetryValue::String("reached".to_string()))
+        );
+        assert_eq!(payload.get("index"), Some(&TelemetryValue::I64(7)));
     }
 }

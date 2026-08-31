@@ -93,7 +93,7 @@ fn on_event(me, evt) {
         this.deployed = true;
         print("[descent-runtime] rover_deployed rover=" + world_pos(this.rover));
     } else if evt.name == "waypoint.reached" {
-        print("[descent-runtime] waypoint_reached value=" + evt.value +
+        print("[descent-runtime] waypoint_reached path=" + evt.value.path +
               " rover=" + world_pos(this.rover));
     } else if evt.name == "course_complete" {
         print("[descent-runtime] course_complete observed; finalizing acceptance");

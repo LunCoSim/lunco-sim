@@ -160,7 +160,7 @@ fn marker_assets_are_emissive_and_shadowless() {
     const PREDICTED_LANDING: &str =
         include_str!("../../../assets/vessels/markers/predicted_landing.usda");
     let markers = [
-        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.45)),
+        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.2)),
         (
             "landing location",
             LANDING_LOCATION,
@@ -227,8 +227,8 @@ fn marker_assets_are_emissive_and_shadowless() {
         match expected_opacity {
             Some(opacity) => {
                 assert!(
-                    matches!(look.alpha, SurfaceAlpha::Blend),
-                    "{name} must blend"
+                    matches!(look.alpha, SurfaceAlpha::Add),
+                    "{name} must use additive blending"
                 );
                 assert!(
                     (look.base_color.alpha - opacity).abs() < 1e-4,

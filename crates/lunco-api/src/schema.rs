@@ -170,6 +170,14 @@ fn telemetry_value_to_json(value: &lunco_core::TelemetryValue) -> serde_json::Va
         lunco_core::TelemetryValue::I64(v) => serde_json::json!(*v),
         lunco_core::TelemetryValue::Bool(v) => serde_json::json!(*v),
         lunco_core::TelemetryValue::String(v) => serde_json::json!(v),
+        lunco_core::TelemetryValue::Array(v) => {
+            serde_json::Value::Array(v.iter().map(telemetry_value_to_json).collect())
+        }
+        lunco_core::TelemetryValue::Map(v) => serde_json::Value::Object(
+            v.iter()
+                .map(|(key, value)| (key.clone(), telemetry_value_to_json(value)))
+                .collect(),
+        ),
     }
 }
 

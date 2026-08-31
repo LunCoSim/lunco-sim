@@ -104,8 +104,8 @@ impl ValueBuilder for RhaiBuilder {
     }
 }
 
-/// Map a rhai value to the engine-wide [`TelemetryValue`] for `emit`. Scalars
-/// map directly; everything else stringifies; unit is a bare pulse.
+/// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,
+/// and maps retain their structure; unit is a bare pulse.
 fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
     if value.is_unit() {
         TelemetryValue::Bool(true)
@@ -115,6 +115,15 @@ fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
         TelemetryValue::I64(i)
     } else if let Ok(b) = value.as_bool() {
         TelemetryValue::Bool(b)
+    } else if let Some(items) = value.clone().try_cast::<rhai::Array>() {
+        TelemetryValue::Array(items.iter().map(rhai_to_telemetry).collect())
+    } else if let Some(entries) = value.clone().try_cast::<Map>() {
+        TelemetryValue::Map(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), rhai_to_telemetry(&value)))
+                .collect(),
+        )
     } else {
         TelemetryValue::String(value.to_string())
     }
@@ -2473,6 +2482,9 @@ mod tests {
     //! `compile` checks syntax (unresolved function
     //! calls resolve at runtime, so calling prelude verbs here is fine).
 
+    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+    use rhai::{Dynamic, Map};
+
     /// **H6** — a re-entrant call into the bridge must not take down the app.
     ///
     /// A live `RhaiTaskCtx` (or any script/REPL call that re-enters the bridge)
@@ -2570,6 +2582,49 @@ mod tests {
         // scalar stays scalar
         let s = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &7.5_f64).unwrap();
         assert_eq!(s.as_float().unwrap(), 7.5);
+    }
+
+    #[test]
+    fn emitted_rhai_maps_reach_event_hooks_as_typed_payloads() {
+        let mut payload = Map::new();
+        payload.insert("path".into(), Dynamic::from("/Mission/RoverTarget1"));
+        payload.insert("state".into(), Dynamic::from("reached"));
+
+        let value = super::rhai_to_telemetry(&Dynamic::from_map(payload));
+        let TelemetryValue::Map(value) = value else {
+            panic!("structured Rhai event payload must remain a map");
+        };
+        assert_eq!(
+            value.get("path"),
+            Some(&TelemetryValue::String("/Mission/RoverTarget1".to_string()))
+        );
+        assert_eq!(
+            value.get("state"),
+            Some(&TelemetryValue::String("reached".to_string()))
+        );
+
+        let event = TelemetryEvent {
+            name: "waypoint.reached".to_string(),
+            source: 42,
+            severity: Severity::Info,
+            data: TelemetryValue::Map(value),
+            timestamp: 12.0,
+        };
+        let built = crate::bridge_core::build_event(&super::RhaiBuilder, &event)
+            .try_cast::<Map>()
+            .expect("event must be a Rhai map");
+        let event_value = built
+            .get("value")
+            .expect("event payload field")
+            .clone()
+            .try_cast::<Map>()
+            .expect("event payload must remain a Rhai map");
+        assert_eq!(
+            event_value
+                .get("path")
+                .and_then(|value| value.clone().into_string().ok()),
+            Some("/Mission/RoverTarget1".to_string())
+        );
     }
 
     #[test]

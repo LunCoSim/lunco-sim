@@ -66,11 +66,10 @@ measured body-rate damping while the suspension settles. The later accepted
 handoff gates the normalized throttle and every body-torque output, so stale
 filtered commands or late scenario writes cannot reopen the main engine or RCS.
 The remaining motion is therefore resolved by the authored Avian bodies, the
-native prismatic geometry, the authored passive crush cartridges, contact, and
-damping rather than by a transform clamp or controller freeze. A passive
-cartridge is not a Modelica actuator: its constitutive state belongs to the
-`LunCoPrismaticSuspensionAPI` material projected by `lunco-usd-sim` and solved
-in Avian's existing substep schedule.
+native prismatic geometry and standard linear drive, contact, and damping rather
+than by a transform clamp or controller freeze. The landing member is not a
+Modelica actuator: its physical response belongs to the USD drive projected to
+Avian's native prismatic joint in the existing substep schedule.
 
 ## Visualization and live state
 

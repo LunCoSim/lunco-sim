@@ -79,19 +79,23 @@ The marker has one authored USD identity and one runtime arrival path:
   The dome is softly translucent and emissive, so its authored green display
   remains visible while a rover inside it stays readable and its appearance
   remains independent of scene lighting. Its standard `primvars:displayOpacity`
-  is authored as an array (`float[]`, here `0.45` opacity); the separate Trigger
-  remains invisible and fully independent. The standard
+  is authored as an array (`float[]`, here `0.2` opacity), and the dome uses the
+  authored additive surface policy so it does not occlude the rover; the
+  separate Trigger remains invisible and fully independent. The standard
   `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
   without adding a marker renderer. This keeps the visible dome lifted above
   terrain while the overlap volume remains useful on slopes.
 - **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
-  vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with the marker
-  path. The route UI uses that set for visited appearance; an autopilot cursor may
-  identify the active leg but cannot mark a waypoint visited.
+  vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with a typed
+  `{ path, state, index }` payload. The shared Rhai prelude consumes that event, reads
+  `lunco:waypoint:inactiveColor` from composed USD, and applies the inactive
+  material opinion through the runtime layer. Route projection may identify the
+  active leg, but it does not own waypoint colors.
 
-This keeps USD as the source of truth for identity, geometry, placement, and sensor
-size. Rhai consumes the event and sequences mission policy; it does not scale marker
-meshes or poll a duplicate distance tolerance.
+This keeps USD as the source of truth for identity, geometry, placement, sensor size,
+and inactive look parameters. Rust owns collision and event mechanics; Rhai consumes
+the structured event and sequences mission policy. It does not poll a duplicate
+distance tolerance.
 
 The authored graphics companion at `assets/scenes/tests/waypoint_visual.usda`
 reuses the six-wheel rover and places this marker at the rover's terrain anchor.
@@ -109,7 +113,7 @@ and projects that render pose with the active camera. Route projection does not
 draw a second label, subtract active-frame positions from camera positions, or
 reimplement distance/coordinate conversion. This keeps a label attached to its
 waypoint when celestial parents rotate and leaves the route snapshot responsible
-only for terrain-grid ribbon geometry and visited-marker state. The editor's
+only for terrain-grid ribbon geometry and active-leg presentation. The editor's
 waypoint authoring helper writes this contract for every new authored marker;
 runtime-only markers attach the same data-only `UsdBillboard` contract plus the
 generic `BillboardIndex` fact to their shared USD marker root. Their `Name`
@@ -147,8 +151,8 @@ def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 transform, visibility, material, and collision are standard USD/UsdPhysics data.
 `lunco-usd-bevy::read_shape_dims` projects both spheres from their authored
 radius, while only `Trigger` is projected into the Avian overlap sensor. The
-visual dome remains present after arrival; the live route projection tints only
-entries in `ReachedWaypoints` gray.
+visual dome remains present after arrival; the shared Rhai waypoint helper reads
+the authored inactive color and applies it through the USD runtime layer.
 
 ### Visual progress uses the authoritative live binding
 
@@ -157,8 +161,10 @@ vessel's `TargetBindings` map. The route visualizer associates that exact
 path-to-entity binding with the authored marker entity; it does not scan marker
 paths, reinterpret a path relative to another prim, or rely on ECS query order.
 Runtime-only targets use their explicit `RuntimeWaypointBinding` instead. If an authored binding is
-unavailable, the marker keeps its authored appearance and no visited state is
-inferred. This makes gray/green progress a projection of the same live target
+unavailable, the route keeps its authored geometry and no visited state is
+inferred. The gray/green material transition is therefore driven by the
+structured arrival event and the marker's own USD metadata, while the route
+visualizer remains responsible only for active-leg presentation.
 identity that drives the behavior tree, so a waypoint cannot oscillate because
 two unrelated path representations happen to match.
 

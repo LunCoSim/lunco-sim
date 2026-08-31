@@ -94,6 +94,13 @@ pub use twin_source::{
     parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
 };
 
+/// Explicit native asset-library root override.
+///
+/// This is used by cross-worktree production tests and custom installations
+/// when the executable's packaged `assets/` directory must not win discovery.
+/// The value is the directory containing the asset library, not its parent.
+pub const ASSET_ROOT_ENV: &str = "LUNCO_ASSET_ROOT";
+
 // ============================================================================
 // Cache Directory Resolution
 // ============================================================================
@@ -440,10 +447,31 @@ pub fn assets_dir() -> PathBuf {
 /// and test runners on the same asset root without depending on the process
 /// working directory.
 ///
+/// On native targets, [`ASSET_ROOT_ENV`] takes precedence. An explicit root is
+/// validated and canonicalized here; an invalid override is a startup error and
+/// never falls through to another root.
+///
 /// Anything reaching library bytes off the `AssetServer` must anchor here rather
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
 /// of whoever calls it, which is how the same reference resolved two ways.
 pub fn assets_dir_abs() -> PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(configured) = std::env::var_os(ASSET_ROOT_ENV) {
+        let root = PathBuf::from(configured);
+        if !root.is_dir() {
+            panic!(
+                "{ASSET_ROOT_ENV} must name an existing asset directory, got {}",
+                root.display()
+            );
+        }
+        return std::fs::canonicalize(&root).unwrap_or_else(|error| {
+            panic!(
+                "{ASSET_ROOT_ENV} could not be canonicalized ({}): {error}",
+                root.display()
+            )
+        });
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {

@@ -2075,20 +2075,6 @@ fn read_joint_spec(
     Some(spec)
 }
 
-/// Read the standard linear drive on a prismatic joint through the same
-/// composed USD reader used by joint projection. Passive material extensions
-/// use this to reuse the standard target, stiffness, damping, and force-limit
-/// properties instead of defining duplicate `lunco:*` fields.
-pub fn read_linear_joint_drive(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
-    path: &SdfPath,
-) -> Result<Option<JointDrive>, ()> {
-    if reader.type_name(path).as_deref() != Some("PhysicsPrismaticJoint") {
-        return Err(());
-    }
-    Ok(read_joint_spec(reader, path).and_then(|joint| joint.drive))
-}
-
 /// Reduce a generic `UsdPhysicsJoint` (D6) to the Avian primitive matching its
 /// free degrees of freedom by reading each per-DOF `UsdPhysicsLimitAPI`
 /// (`limit:{transX..rotZ}`). A DOF is locked when `low > high` and free when

@@ -39,15 +39,14 @@ use serde_json::json;
 
 /// Build the complete USD lint fact map from every owner of a USD simulation
 /// projection. Standard `Physics*Joint` facts come from `lunco-usd-avian`;
-/// `PhysxPhysicsGearJoint` and passive prismatic material facts come from the
-/// `lunco-usd-sim` readers that own those projections. The policy sees one map
-/// and one authoritative value for each subject.
+/// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim` reader that owns
+/// that projection. The policy sees one map and one authoritative value for
+/// each subject.
 pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
     let mut facts = lunco_usd_avian::physics_facts(view);
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
     lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
-    lunco_usd_sim::lint::append_passive_suspension_facts(view, &mut facts);
     facts
 }
 

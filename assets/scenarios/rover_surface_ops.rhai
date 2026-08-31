@@ -21,17 +21,24 @@
 // reaches into this script's state, and this script knows about neither.
 
 // The marker's invisible ground-anchored Trigger is its overlap Sensor. The
-// runtime emits `waypoint.reached` with the composed marker path as its value;
-// mission policy translates that event into the named course events.
+// runtime emits `waypoint.reached` with a structured {path, state, index} value.
+// The shared prelude applies the authored inactive look through the USD runtime
+// layer; this script only translates the arrival into mission events.
 fn on_event(me, evt) {
     let rover = find("/LanderTest/SkidRover");
     if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    if evt.value == "/LanderTest/RoverTarget1" {
-        emit("waypoint_1_reached");
-    } else if evt.value == "/LanderTest/RoverTarget2" {
-        emit("waypoint_2_reached");
-    } else if evt.value == "/LanderTest/RoverTarget3" {
-        emit("waypoint_3_reached");
+    let index = waypoint_event_index(evt);
+    if index == () { return; }
+    apply_waypoint_reached(evt);
+    let milestones = [
+        "waypoint_1_reached",
+        "waypoint_2_reached",
+        "waypoint_3_reached",
+    ];
+    if index < milestones.len() {
+        emit(milestones[index]);
+    }
+    if index == milestones.len() - 1 {
         emit("course_complete");
     }
 }

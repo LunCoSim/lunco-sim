@@ -512,7 +512,7 @@ ground-station/ROS interop):
 
 - `TelemetryEvent { name, severity: Severity, data: TelemetryValue, timestamp }`
   (`:57`) — "discrete notification of a system state change." THIS is the sim event.
-- `TelemetryValue` (F64/I64/Bool/String, serde) (`:41`) — the payload value.
+- `TelemetryValue` (F64/I64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
 - `Severity` (YAMCS 5-tier) (`:25`); `SampledParameter` (`:101`) — continuous data;
   `Parameter { name, unit, path }` (`:87`) — reflection-path monitor source for the
   lunco-telemetry sampling engine.
