@@ -235,6 +235,38 @@ fn material_for(
     cache.resolve(look, materials, |l| shader_material(l, asset_server))
 }
 
+/// Bind a shader look to its one render owner.
+///
+/// A procedural sky uses the dedicated fullscreen background pass. It has no
+/// mesh material because its shader is a fullscreen fragment stage, not a mesh
+/// vertex/fragment pair. Keeping both render paths on the same entity would
+/// submit an invalid mesh pipeline in addition to the valid background item.
+fn bind_shader_render_components(
+    entity: Entity,
+    handle: Handle<ShaderMaterial>,
+    look: &ShaderLook,
+    skybox: bool,
+    asset_server: &AssetServer,
+    commands: &mut Commands,
+) {
+    let mut entity_commands = commands.entity(entity);
+    entity_commands.try_remove::<MeshMaterial3d<StandardMaterial>>();
+    if skybox {
+        entity_commands.try_remove::<MeshMaterial3d<ShaderMaterial>>();
+        entity_commands.try_insert((
+            ShaderLookBound,
+            crate::procedural_sky::ProceduralSkyboxMaterial::new(
+                handle,
+                &look.shader,
+                asset_server,
+            ),
+        ));
+    } else {
+        entity_commands.try_insert((MeshMaterial3d(handle), ShaderLookBound));
+        entity_commands.try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
+    }
+}
+
 /// Does the material carry exactly the texture set the look states?
 ///
 /// Slot-by-slot identity compare, so a driven TEXTURED look can take the
@@ -278,16 +310,7 @@ fn bind_shader_look(
     // material component types on one mesh submits it twice with incompatible
     // pipelines (visible as bright, serrated fragments at wheel silhouettes).
     let skybox = skyboxes.get(e).is_ok();
-    let mut entity = commands.entity(e);
-    entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
-    entity.try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
-    if skybox {
-        entity.try_insert(crate::procedural_sky::ProceduralSkyboxMaterial::new(
-            handle,
-            &look.shader,
-            &asset_server,
-        ));
-    }
+    bind_shader_render_components(e, handle, look, skybox, &asset_server, &mut commands);
     apply_shadow_intent(&mut commands, e, look);
 }
 
@@ -304,18 +327,7 @@ fn bind_added_skybox_shader_look(
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
     let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-    commands
-        .entity(e)
-        .try_remove::<MeshMaterial3d<StandardMaterial>>()
-        .try_insert((
-            MeshMaterial3d(handle.clone()),
-            ShaderLookBound,
-            crate::procedural_sky::ProceduralSkyboxMaterial::new(
-                handle,
-                &look.shader,
-                &asset_server,
-            ),
-        ));
+    bind_shader_render_components(e, handle, look, true, &asset_server, &mut commands);
 }
 
 /// Mirror [`ShaderLook::no_shadow_cast`] onto the entity as `NotShadowCaster`.
@@ -430,6 +442,9 @@ fn rebind_changed_shader_look(
                     );
                 }
                 if skybox {
+                    commands
+                        .entity(e)
+                        .try_remove::<MeshMaterial3d<ShaderMaterial>>();
                     if let Some(handle) = current_handle {
                         commands.entity(e).try_insert(
                             crate::procedural_sky::ProceduralSkyboxMaterial::new(
@@ -449,18 +464,14 @@ fn rebind_changed_shader_look(
         }
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
-        let mut entity = commands.entity(e);
-        entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
-        entity.try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
-        if skybox {
-            entity.try_insert(crate::procedural_sky::ProceduralSkyboxMaterial::new(
-                handle.clone(),
-                &look.shader,
-                &asset_server,
-            ));
-        } else {
-            entity.try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
-        }
+        bind_shader_render_components(
+            e,
+            handle.clone(),
+            look,
+            skybox,
+            &asset_server,
+            &mut commands,
+        );
         // A content-key change normally needs to clear the entity's readiness
         // latch: the replacement material may still be waiting for reflection
         // or one of its declared images. Edge-stitch updates are the important
@@ -477,7 +488,7 @@ fn rebind_changed_shader_look(
                 material_is_render_ready(material, shaders, images, schemas)
             });
         if !same_material && was_ready && !replacement_ready {
-            entity.try_remove::<ShaderLookReady>();
+            commands.entity(e).try_remove::<ShaderLookReady>();
         }
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
@@ -977,5 +988,41 @@ mod tests {
             !entity.contains::<MeshMaterial3d<StandardMaterial>>(),
             "the shader material must replace, not overlay, the PBR material"
         );
+    }
+
+    #[test]
+    fn procedural_skybox_owns_background_pass_without_mesh_material() {
+        let mut app = app();
+        let existing = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        let before_look = app
+            .world_mut()
+            .spawn((
+                ShaderLook::new("shaders/starfield.wgsl"),
+                ProceduralSkybox,
+                MeshMaterial3d(existing.clone()),
+            ))
+            .id();
+        let after_look = app
+            .world_mut()
+            .spawn(ShaderLook::new("shaders/starfield.wgsl"))
+            .id();
+
+        app.update();
+        app.world_mut()
+            .entity_mut(after_look)
+            .insert(ProceduralSkybox);
+        app.update();
+
+        for entity in [before_look, after_look] {
+            let entity_ref = app.world().entity(entity);
+            assert!(
+                !entity_ref.contains::<MeshMaterial3d<ShaderMaterial>>(),
+                "a procedural sky must not enter the mesh material pipeline"
+            );
+            assert!(entity_ref.contains::<crate::procedural_sky::ProceduralSkyboxMaterial>());
+        }
     }
 }
