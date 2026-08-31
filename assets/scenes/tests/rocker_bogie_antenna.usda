@@ -7,8 +7,9 @@
 )
 
 # Focused production fixture for the rocker-bogie antenna assembly. The rover
-# asset owns the only antenna instance; this scene supplies the celestial frame
-# so its existing controller remains live while the rover is driven.
+# asset owns the only antenna instance in each composed variant; this scene
+# supplies the celestial frame so both existing controllers remain live while
+# the two power realizations are driven.
 def Xform "RockerBogieAntennaTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
@@ -52,9 +53,27 @@ def Xform "RockerBogieAntennaTest" (
 
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "infinite"
+            string generation = "none"
+            string thermal = "none"
+        }
     )
     {
-        double3 xformOp:translate = (0, 0.9, 0)
+        double3 xformOp:translate = (-2.4, 0.9, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "RoverBattery" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "battery"
+            string generation = "none"
+            string thermal = "none"
+        }
+    )
+    {
+        double3 xformOp:translate = (2.4, 0.9, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

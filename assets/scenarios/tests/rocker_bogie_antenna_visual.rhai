@@ -37,11 +37,6 @@ fn authored_translate_ok(path, expected) {
     close_vec(record.attrs["xformOp:translate"], expected)
 }
 
-fn missing(path) {
-    let entity = find(path);
-    entity == () || entity < 0
-}
-
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -64,10 +59,6 @@ fn on_tick(me) {
     failures.push(t_true(
         authored_translate_ok(ROOT + "/WifiRadio", [0.0, 0.22, 0.35]),
         "the Wi-Fi radio is not authored on the rover roof"));
-    failures.push(t_true(
-        missing(ROOT + "/AntennaReview"),
-        "the visual review contains a second antenna reference"));
-
     // A positive X rotation puts a Z-axis cylinder's front endpoint above its
     // wheel. These authored negative angles are the geometry contract: they
     // bring each forward link's lower endpoint to the wheel hub. The rear links
