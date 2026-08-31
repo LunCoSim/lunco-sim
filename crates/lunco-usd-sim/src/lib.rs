@@ -131,7 +131,7 @@ const PASSIVE_SUSPENSION_YIELD_ATTR: &str = "lunco:prismaticSuspension:yieldForc
 /// marker adds only the missing yield load and changes the drive realization to
 /// the one-sided elastoplastic material path.
 pub(crate) fn passive_prismatic_suspension_from_usd(
-    reader: &lunco_usd_bevy::StageView<'_>,
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PassivePrismaticSuspension>, String> {
     if !reader.has_api_schema(prim, PASSIVE_PRISMATIC_SUSPENSION_API) {
@@ -148,7 +148,7 @@ pub(crate) fn passive_prismatic_suspension_from_usd(
         ));
     }
 
-    let drive = lunco_usd_avian::read_linear_joint_drive(reader.stage(), prim)
+    let drive = lunco_usd_avian::read_linear_joint_drive(reader, prim)
         .map_err(|_| "standard linear drive could not be read".to_string())?
         .ok_or_else(|| "standard linear drive has no authored physical coefficients".to_string())?;
     let rest_position = drive.target_position.unwrap_or(0.0);

@@ -152,7 +152,10 @@ pub fn append_wheel_attachment_facts(reader: &StageView<'_>, facts: &mut H) {
 /// Add passive prismatic material facts using the exact reader used by runtime
 /// projection. A malformed API is retained as an invalid fact so policy can
 /// reject it before a scene reaches the physics schedule.
-pub fn append_passive_suspension_facts(reader: &StageView<'_>, facts: &mut H) {
+pub fn append_passive_suspension_facts(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    facts: &mut H,
+) {
     let H::Map(entries) = facts else {
         return;
     };

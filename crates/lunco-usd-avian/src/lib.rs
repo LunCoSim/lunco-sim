@@ -2079,12 +2079,14 @@ fn read_joint_spec(
 /// composed USD reader used by joint projection. Passive material extensions
 /// use this to reuse the standard target, stiffness, damping, and force-limit
 /// properties instead of defining duplicate `lunco:*` fields.
-pub fn read_linear_joint_drive(stage: &Stage, path: &SdfPath) -> Result<Option<JointDrive>, ()> {
-    let view = StageView::new(stage);
-    if view.prim_type_name(path).as_deref() != Some("PhysicsPrismaticJoint") {
+pub fn read_linear_joint_drive(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+) -> Result<Option<JointDrive>, ()> {
+    if reader.type_name(path).as_deref() != Some("PhysicsPrismaticJoint") {
         return Err(());
     }
-    Ok(read_joint_spec(&view, path).and_then(|joint| joint.drive))
+    Ok(read_joint_spec(reader, path).and_then(|joint| joint.drive))
 }
 
 /// Reduce a generic `UsdPhysicsJoint` (D6) to the Avian primitive matching its
