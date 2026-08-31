@@ -168,8 +168,11 @@ host its own MSAA / format / HDR setting** — for that camera these are not loo
 choices, they are the texture-sharing key.
 
 When no window `Camera3d` is active at all (Design perspective, the Modelica
-workbench), nothing clears the target — `render_layout` handles that case by
-painting a full-window backdrop on egui's background layer.
+workbench, or the short handoff while a selected camera is being activated),
+nothing clears the target — `render_layout` handles that case by painting a
+full-window backdrop on egui's background layer. It checks the selected
+camera's actual `Camera::is_active` state, not only the selection binding, so
+direct perspective switches cannot expose the previous framebuffer.
 
 Domain-owned diagram overlays remain leaf-local. A direct painter uses the
 owning leaf's clip rectangle, and a separate egui `Area` constrains itself to

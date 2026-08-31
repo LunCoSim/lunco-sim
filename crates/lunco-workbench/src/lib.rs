@@ -3774,17 +3774,16 @@ fn render_layout(
     // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
     // the backdrop because `Camera3d` paints the full window; with no camera
     // that assumption breaks and the *last rendered frame* (stale rovers) would
-    // show through. The camera binding is the authoritative no-camera signal,
-    // so cover the framebuffer immediately, even before the domain placeholder
-    // resource catches up after deferred scene teardown. Painted here (before
-    // the menu/status panels) so it stays on the background layer *under* the
-    // chrome — painting it after the panels would overdraw them.
+    // show through. The selected camera's actual render state is the
+    // authoritative signal: cover the framebuffer until that camera is
+    // active, even before the domain placeholder resource catches up after
+    // deferred scene teardown. Painted here (before the menu/status panels)
+    // so it stays on the background layer *under* the chrome — painting it
+    // after the panels would overdraw them.
     let viewport_empty = world
         .get_resource::<viewport::ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
-    let no_active_scene_camera = world
-        .get_resource::<lunco_core::SceneViewport>()
-        .is_some_and(|viewport| viewport.active_camera.is_none());
+    let no_active_scene_camera = !scene_camera_is_rendering(world);
     let needs_full_backdrop = (!viewport::layout_is_empty(layout)
         && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
         || viewport_empty
@@ -4976,6 +4975,28 @@ fn render_layout(
                 });
         }
     }
+}
+
+/// Return whether the camera bound by the viewport is currently rendering.
+///
+/// `SceneViewport::active_camera` is the selection binding, while
+/// `Camera::is_active` is the renderer's actual state. A perspective switch
+/// can publish a new visible layout before the camera reconciler has activated
+/// the bound camera; treating the binding alone as rendered exposes the prior
+/// framebuffer through egui's load-preserving host.
+fn scene_camera_is_rendering(world: &World) -> bool {
+    let Some(active_camera) = world
+        .get_resource::<lunco_core::SceneViewport>()
+        .and_then(|viewport| viewport.active_camera)
+    else {
+        return false;
+    };
+
+    world
+        .get_entity(active_camera)
+        .ok()
+        .and_then(|entity| entity.get::<Camera>())
+        .is_some_and(|camera| camera.is_active)
 }
 
 /// Build the title-bar perspective entries from the registered perspectives.
@@ -6436,6 +6457,30 @@ mod tests {
         app.world_mut().trigger(FocusPanel {
             id: "not_mounted".into(),
         });
+    }
+
+    #[test]
+    fn backdrop_waits_for_the_bound_camera_to_be_active() {
+        let mut world = World::new();
+        let camera = world
+            .spawn(Camera {
+                is_active: false,
+                ..default()
+            })
+            .id();
+        world.insert_resource(lunco_core::SceneViewport {
+            active_camera: Some(camera),
+            ..default()
+        });
+
+        assert!(!scene_camera_is_rendering(&world));
+
+        world
+            .entity_mut(camera)
+            .get_mut::<Camera>()
+            .unwrap()
+            .is_active = true;
+        assert!(scene_camera_is_rendering(&world));
     }
 
     #[test]
