@@ -13,6 +13,13 @@ is the single internal authority for play/pause and rate; UI, API, and input
 surfaces dispatch its typed command rather than maintaining another pause or rate
 state.
 
+The live transport exposes one bounded user ladder: `1x, 2x, 4x, 8x, 16x` run
+the causal fixed-step world, while `32x, 64x, 100x` select the explicit
+`KinematicWarp` regime. In that regime the deterministic tick, Avian, and
+Modelica are frozen and only pure epoch consumers advance. `100x` is the live
+transport ceiling; higher values are rejected. A presentation-only celestial
+clock can use its own `SetClock` scale when a larger rate is useful.
+
 `WorldTime` is a derived view. Calendar and Julian-date values are computed from
 the transport anchor and tick; they are not independently accumulated by a
 consumer. A re-anchor is an explicit transport event and must remain
@@ -153,9 +160,11 @@ The production split is:
 | avatar/camera/UI presentation cadence | `InteractionSchedule` |
 | calendar scales, sidereal and ephemeris projections | celestial/time consumers |
 
-The API surface is `SetTimeTransport` for the live world and
+The API surface is `SetTimeTransport` for the bounded live world and
 `ControlAnimation` for the preview or an explicitly addressed driven domain.
-Consumers do not invent aliases for either command.
+Consumers do not invent aliases for either command. `SetClock` is the separate
+API for a pure celestial presentation clock, including scales above the live
+transport ceiling.
 
 ## 11. Current clock-tree boundaries
 

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**195 commands** across **27** crates. All documented.
+**196 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -28,7 +28,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (6 commands)
+- [`lunco-usd`](#lunco-usd) (7 commands)
 - [`lunco-usd-bevy`](#lunco-usd-bevy) (5 commands)
 - [`lunco-usd-sim`](#lunco-usd-sim) (3 commands)
 
@@ -287,10 +287,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Delete an entity from the scene.
 
- The typed verb for "remove this", replacing the ad-hoc `world.despawn(entity)` the
- Inspector used to do in two places. A bare despawn is invisible to the document:
- the prim survives in the layer, so the deletion never journals, never replicates,
- never persists, and the next projection can bring the entity straight back.
+ The typed verb for "remove this" authors a `RemovePrim` in the backing
+ document, so deletion is journaled, replicated, persisted, and undoable.
 
  This despawns AND (via [`persist_delete_to_runtime_layer`]) authors a `RemovePrim`
  — which is what makes deletion undoable, because the document hands back an
@@ -571,11 +569,10 @@ actually call, with the fields the deserializer actually accepts. See the
  This is the generic authoring verb for data-driven editor tools. It does not
  add a LunCo schema or mutate an ECS component: the USD type and literal are
  passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
- remains the source of truth. The path may address a composed child from a
- referenced asset; the operation writes only the ephemeral runtime layer.
- Rhai reaches this command through the generic `cmd()` bridge, so a tool such
- as `nurbs.rhai` can edit `point3f[] points` without a Rust handler for each
- geometry type.
+ remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
+ `point3f[] points` without a Rust handler for every geometry type. The path
+ may name a composed child of a referenced asset; the runtime layer is the
+ stronger session opinion and does not flatten or rewrite that reference.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
@@ -727,6 +724,18 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
+
+#### `SetActiveUsdViewport`
+
+ Retarget the shared USD viewport at `doc`. Browser row clicks fire
+ this; HTTP API / MCP / scripts can fire it directly. Idempotent —
+ calling with the already-active doc is a no-op.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  The USD document to surface in the viewport. |
 
 #### `SetDomeLight`
 
@@ -1865,7 +1874,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | `String` |  The id string of a registered perspective (e.g. `"rover_build"`). |
+| `id` | `String` |  The id string of a registered perspective (e.g. `"assembly"`). |
 
 #### `CaptureFromCamera`
 
@@ -2738,16 +2747,20 @@ actually call, with the fields the deserializer actually accepts. See the
  [`ControlAnimation`] which drives the keyframe preview. Each field optional so
  one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
- `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
- API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
- so a cutscene or a "reload-then-pause" one-liner can freeze the world.
+ `{"rate":4.0}` runs it 4× realtime, and the bounded live ladder ends at
+ 100×. Rates 32×–100× enter the explicit kinematic-warp regime: the physics
+ tick freezes while pure epoch consumers advance. Use `SetClock` for a
+ presentation-only celestial rate above 100×. This is THE pause command:
+ exposed on the API/MCP and wrapped by the rhai prelude verbs
+ `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
+ one-liner can freeze the world.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it. |
-| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime); `None` leaves it. |
+| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 100.0 for the  live transport); `None` leaves it. |
 
 ## Celestial, environment & comms
 
@@ -2980,7 +2993,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target_res` | `u32` |  Visual-quality downsample target (samples per side). `0` = native (no  decimation). Re-issue the command with a different value to rebuild the  same site at another quality and compare. |
 | `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of  one static mesh; collider/physics unchanged. Production visual path. |
 | `collider_ring` | `bool` |  Stream a canonical-res collider ring around runtime physical support  footprints instead of one static full-DEM collider (replaces it — physics  rides the streamed tiles). |
-| `collider` | `TerrainColliderSettings` |  Physics-only collider-ring lattice (`max_depth` and `tile_resolution`); independent of graphics quality and headless/rendered execution. |
+| `collider` | `crate :: collider_ring :: TerrainColliderSettings` |  Physics-only collider-ring lattice. Omitted command fields use the  documented terrain-physics defaults and never read graphics quality. |
 | `crater_density` | `f32` |  Convenience: add a crater layer at this density (craters per hectare). `0`  (default) = no craters. The USD path instead composes layers as child prims  (see [`crate::terrain_layers`]); this is for the quick command path. |
 
 ## Obstacle fields
@@ -3285,7 +3298,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 195 commands from the runtime schema; scanned 677 .rs files for docs (0 parse failure(s) skipped).
+<!-- 196 commands from the runtime schema; scanned 682 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

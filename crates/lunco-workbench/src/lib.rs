@@ -4463,8 +4463,8 @@ fn render_layout(
             // for mid-drive.
             //
             // Domain plugins contribute rows via
-            // `WorkbenchLayout::register_time_menu` (the celestial sky clock, the
-            // >8x warp band), so nothing about the sky is hardcoded here.
+            // `WorkbenchLayout::register_time_menu` (the celestial sky clock and
+            // optional overlays), so nothing about the sky is hardcoded here.
             let r_time = ui.menu_button("Time", |ui| {
                 ui.label(egui::RichText::new("Simulation rate").weak().small());
                 let (paused, rate) = world
@@ -4477,14 +4477,15 @@ fn render_layout(
                     })
                     .unwrap_or((false, 1.0));
 
-                // ONLY the physics-real band is offered here. At or below
+                // The live transport has two explicit bands. At or below
                 // `MAX_REALTIME_RATE` the rate multiplies the NUMBER of fixed steps
                 // per frame, so bodies genuinely integrate faster — a rover really
                 // does drive 4x faster, with identical solver fidelity. Past that
                 // ceiling `advance_clock` selects `TimeRegime::KinematicWarp` and
                 // returns relative_speed 0: the tick FREEZES and only the epoch
-                // moves. That is a sky-viewing tool, not a fast-forward, so it stays
-                // in the celestial/mission-control panels.
+                // moves. The bounded warp choices stay explicit in this same
+                // transport menu; faster sky-only presentation belongs to `SetClock`.
+                ui.label(egui::RichText::new("Physics realtime").weak().small());
                 ui.horizontal(|ui| {
                     for &m in lunco_time::REALTIME_RATE_OPTIONS {
                         let on = !paused && (rate - m).abs() < f64::EPSILON;
@@ -4500,7 +4501,25 @@ fn render_layout(
                         }
                     }
                 });
-                if rate > lunco_time::MAX_REALTIME_RATE {
+                ui.label(egui::RichText::new("Kinematic warp — physics frozen").weak().small());
+                ui.horizontal(|ui| {
+                    for &m in lunco_time::KINEMATIC_WARP_RATE_OPTIONS {
+                        let on = !paused && (rate - m).abs() < f64::EPSILON;
+                        if ui
+                            .selectable_label(on, format!("{m:.0}x"))
+                            .on_hover_text(
+                                "Advance pure epoch consumers at this rate; the simulation tick and physics remain frozen.",
+                            )
+                            .clicked()
+                        {
+                            world.trigger(lunco_time::SetTimeTransport {
+                                playing: Some(true),
+                                rate: Some(m),
+                            });
+                        }
+                    }
+                });
+                if !rate.is_finite() || rate > lunco_time::MAX_TRANSPORT_RATE {
                     // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads
                     // a per-frame copy that only the Modelica canvas ever publishes,
                     // so everywhere else it silently returns `Theme::dark()`.
@@ -4509,11 +4528,12 @@ fn render_layout(
                         .map(|t| t.tokens.warning)
                         .unwrap_or(egui::Color32::YELLOW);
                     ui.label(
-                        egui::RichText::new(format!("{rate:.0}x sky — tick frozen")).color(warn),
+                        egui::RichText::new(format!("Unsupported live rate: {rate:.0}x"))
+                            .color(warn),
                     )
                     .on_hover_text(
-                        "Kinematic warp: the sim tick is frozen. Bodies do not move; \
-                         only the epoch advances.",
+                        "Live transport is bounded to 100x. Use the celestial SetClock \
+                         control for presentation-only rates above that limit.",
                     );
                 }
 
