@@ -38,11 +38,9 @@ use bevy_egui::egui;
 use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualRegistry};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
-use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_doc::DocumentId;
 use lunco_modelica::ui::commands::FocusDocumentByName;
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
@@ -128,6 +126,22 @@ impl Default for UsdCanvasState {
     }
 }
 
+impl UsdCanvasState {
+    fn clear(&mut self) {
+        self.canvas.scene = Scene::default();
+        self.canvas.selection.clear();
+        self.stage_id = None;
+        self.doc = None;
+        self.topo_hash = 0;
+        self.built = false;
+        self.needs_fit = false;
+        self.source_nodes.clear();
+        self.source_wires.clear();
+        self.schema_roots.clear();
+        self.active_schema_root = None;
+    }
+}
+
 /// Order-stable hash of the projected topology (paths + connectors + wires).
 /// Node positions and selection are intentionally excluded so a drag doesn't
 /// trigger a re-layout.
@@ -163,29 +177,50 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
 /// canvas scene when the topology changes. Runs on the main thread because
 /// `StageView` is `!Send`.
 pub fn produce_usd_canvas(
-    q: Query<&UsdPrimPath>,
+    q: Query<(Entity, &UsdPrimPath)>,
+    q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
-    asset_server: Res<AssetServer>,
-    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     viewport_state: Option<Res<UsdViewportState>>,
     mut state: ResMut<UsdCanvasState>,
 ) {
-    // Pick the scene stage = the stage id with the most prim entities.
-    let mut counts: HashMap<AssetId<UsdStageAsset>, (usize, Handle<UsdStageAsset>)> =
-        HashMap::new();
-    for p in q.iter() {
-        let entry = counts
-            .entry(p.stage_handle.id())
-            .or_insert_with(|| (0, p.stage_handle.clone()));
-        entry.0 += 1;
+    let Some(viewport) = viewport_state.as_deref() else {
+        state.clear();
+        return;
+    };
+    let Some(doc) = viewport.active_doc() else {
+        state.clear();
+        return;
+    };
+    let Some(handle) = viewport.active_stage_handle().cloned() else {
+        state.clear();
+        return;
+    };
+    let Some(preview_root) = viewport.preview_scene_root() else {
+        state.clear();
+        return;
+    };
+    let stage_id = handle.id();
+
+    // Retire the previous document's graph before waiting for the new preview
+    // stage to become available. A loading document must not leave an old
+    // document visible or editable through this panel.
+    if state.doc != Some(doc) || state.stage_id != Some(stage_id) {
+        state.clear();
     }
-    let Some((stage_id, handle)) = counts
-        .into_iter()
-        .max_by_key(|(_, (c, _))| *c)
-        .map(|(id, (_, h))| (id, h))
-    else {
-        return; // no USD prims yet
+
+    // The Assembly preview root is the document boundary. The live simulation
+    // can contain the same stage handle, but those entities are not editable
+    // through this file-scoped graph.
+    let is_preview_entity = |entity: Entity| {
+        let mut current = entity;
+        while let Ok(parent) = q_parents.get(current) {
+            current = parent.parent();
+            if current == preview_root {
+                return true;
+            }
+        }
+        false
     };
 
     // Ensure the canonical stage is built (mirrors rewire_usd_connections).
@@ -202,8 +237,8 @@ pub fn produce_usd_canvas(
     // miss composed children.
     let prim_paths: Vec<String> = q
         .iter()
-        .filter(|p| p.stage_handle.id() == stage_id)
-        .map(|p| p.path.clone())
+        .filter(|(entity, p)| p.stage_handle.id() == stage_id && is_preview_entity(*entity))
+        .map(|(_, p)| p.path.clone())
         .collect();
     let view = cs.view();
     let (source_nodes, source_wires) = collect_graph(&view, &prim_paths);
@@ -253,12 +288,7 @@ pub fn produce_usd_canvas(
     state.topo_hash = hash;
     state.stage_id = Some(stage_id);
     state.built = true;
-    state.doc = resolve_doc(
-        &handle,
-        &asset_server,
-        usd_registry.as_deref(),
-        viewport_state.as_deref(),
-    );
+    state.doc = Some(doc);
 
     // Request a frame-to-fit after every topology rebuild.  Composed scenes
     // can acquire late Modelica participants while their programs compile;
@@ -273,31 +303,14 @@ pub fn produce_usd_canvas(
     }
 }
 
-/// Resolve the editable document backing a scene's stage handle — the same
-/// suffix-match-then-active-doc fallback the Inspector uses for its own edits.
-fn resolve_doc(
-    handle: &Handle<UsdStageAsset>,
-    asset_server: &AssetServer,
-    usd_registry: Option<&DocumentRegistry<UsdDocument>>,
-    viewport_state: Option<&UsdViewportState>,
-) -> Option<DocumentId> {
-    let by_path = asset_server
-        .get_path(handle.id())
-        .zip(usd_registry)
-        .and_then(|(asset_path, reg)| {
-            let path_str = asset_path.path().to_string_lossy().to_string();
-            reg.ids().find(|id| {
-                reg.host(*id)
-                    .map(|h| match h.document().origin() {
-                        DocumentOrigin::File { path, .. } => {
-                            path.to_string_lossy().ends_with(&path_str)
-                        }
-                        _ => false,
-                    })
-                    .unwrap_or(false)
-            })
-        });
-    by_path.or_else(|| viewport_state.and_then(|v| v.active_doc()))
+/// Wake the Assembly connection graph when its explicit preview document or
+/// the composed USD stage changes. A missing preview clears the graph through
+/// the producer instead of leaving the previous document visible.
+pub fn assembly_canvas_changed(
+    viewport: Option<Res<UsdViewportState>>,
+    revision: Res<lunco_usd_bevy::UsdStageRevision>,
+) -> bool {
+    viewport.is_some_and(|state| state.is_changed()) || revision.is_changed()
 }
 
 // ─── Write-back: SceneEvent → UsdOp ─────────────────────────────────────────
@@ -439,7 +452,9 @@ impl Panel for UsdCanvasPanel {
         ctx.resource_scope::<UsdCanvasState, ()>(|ctx, state| {
             if !state.built {
                 ui.centered_and_justified(|ui| {
-                    ui.label("No wired scene loaded — open a USD scene to see its connections.");
+                    ui.label(
+                        "No Assembly document selected — choose a USD document in the Twin Browser.",
+                    );
                 });
                 return;
             }

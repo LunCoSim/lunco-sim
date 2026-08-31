@@ -1857,7 +1857,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Activate a registered [`Perspective`](crate::Perspective) by its
  `PerspectiveId` string. The luncosim registers `sandbox_view`,
- `rover_build`, `terrain_sculpt`, and `object_builder`; the last two are
+ `rover_build`, `terrain_sculpt`, and `assembly`; the last two are
  explicit authoring modes and are hidden from the default title-bar
  switcher. Unknown ids produce a user-visible status error.
 

@@ -1,4 +1,4 @@
-//! Regression: the physics an Object Builder new-attach produces must step without
+//! Regression: the physics an Assembly new-attach produces must step without
 //! crashing the solver.
 //!
 //! The new-attach (doc 48 §3.1) references a component in as a `Dynamic` rigid body

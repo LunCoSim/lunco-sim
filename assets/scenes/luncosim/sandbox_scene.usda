@@ -638,7 +638,7 @@ def Xform "SandboxScene" (
 
     # --- Mount-frame demo: snap a child part onto the socket it declares ---
     #
-    # The Object Builder retrofit (doc 48 §3.1). `Base` (blue, kinematic) is a
+    # The Assembly editor retrofit (doc 48 §3.1). `Base` (blue, kinematic) is a
     # host body explicitly advertising ONE socket; `Arm` (yellow) is
     # a CHILD body carrying a plug frame, deliberately authored off to the side so
     # its transform DISAGREES with the socket. Select `Base` → Inspector "🔩 Mount"

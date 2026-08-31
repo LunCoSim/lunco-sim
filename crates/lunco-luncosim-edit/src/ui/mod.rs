@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, TheLocalAvatar};
+use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
     PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
@@ -151,6 +152,24 @@ pub fn usd_selection_view_changed(
     selection.is_changed() || target.is_changed() || revision.is_changed()
 }
 
+/// A document switch changes the meaning of every entity-backed editor target.
+/// Clear those transient selections at the explicit document boundary so the
+/// Assembly Inspector cannot display or author against the previous file.
+fn clear_selection_on_assembly_document_switch(
+    viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
+    mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut last_doc: Local<Option<lunco_doc::DocumentId>>,
+) {
+    let active_doc = viewport.and_then(|state| state.active_doc());
+    if *last_doc == active_doc {
+        return;
+    }
+    *last_doc = active_doc;
+    selected.entities.clear();
+    inspector_target.part = None;
+}
+
 // `every_frame()` (an always-true gate handed to `add_view_model`) is gone: it
 // said the right thing to a reader and the wrong thing to the tracker, which
 // dutifully reported both users as broken gates every launch. The intent now
@@ -278,6 +297,7 @@ impl Plugin for SceneEditUiPlugin {
         // the gate.
         app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
+        app.add_systems(Update, clear_selection_on_assembly_document_switch);
 
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();
@@ -421,12 +441,13 @@ impl Plugin for SceneEditUiPlugin {
                     has_tour: false,
                 },
             )
-            .register_perspective(ObjectBuilderPerspective)
+            .register_perspective(AssemblyPerspective)
             .register_perspective_help(
-                PerspectiveId("object_builder"),
+                PerspectiveId("assembly"),
                 lunco_workbench::PerspectiveHelp {
-                    description: "Assemble and edit objects from parts. Navigate the \
-                                  object's structure in the tree, attach components from \
+                    description: "Assemble and edit a USD document. Choose the \
+                                  document in the Twin Browser, navigate its structure, \
+                                  attach components from \
                                   the palette, and tune the selected prim's parameters in \
                                   the Inspector.",
                     shortcuts: vec![
@@ -522,7 +543,7 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<connection_canvas::UsdCanvasState>();
         app.add_view_model(
             connection_canvas::produce_usd_canvas,
-            resource_changed::<lunco_usd_bevy::UsdStageRevision>,
+            connection_canvas::assembly_canvas_changed,
         );
 
         // Autopilot graph: a small O(1) read of the selected vessel's derived
@@ -538,7 +559,7 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<usd_prim_tree::UsdPrimTreeView>();
         app.add_view_model(
             usd_prim_tree::produce_usd_prim_tree,
-            resource_changed::<lunco_usd_bevy::UsdStageRevision>,
+            usd_prim_tree::assembly_prim_tree_changed,
         );
 
         // USD parameter sliders: harvest the selected prim's customData-ranged
@@ -809,45 +830,48 @@ impl Perspective for BuildPerspective {
     }
 }
 
-/// Object Builder mode — assemble and edit objects from parts.
+/// Assembly mode — edit one explicit USD assembly document.
 ///
-/// Distinct from Build (which leads with the spawn palette for dropping loose
-/// props into a scene): this leads with the **object's structure** — the entity
-/// tree on the left, so you navigate and select a rover's rocker → bogie → wheel
-/// — with the component palette beneath it for attaching parts, the 3D view in the
-/// centre, and the Inspector on the right to tune the selected prim's parameters.
-/// The panels are the proven ones (tree / palette / viewport / inspector); this is
-/// the workspace that arranges them for building rather than observing.
+/// Distinct from Build (which edits the live simulation scene): Assembly leads
+/// with the selected document's USD structure and isolated USD preview. The
+/// document is selected explicitly in the Twin Browser; the preview subtree,
+/// prim tree, Inspector, and all authoring commands then share that document
+/// identity. No live scene stage is inferred from entity counts.
 ///
 /// The Rhai editor lives beside this build surface. The USD connection canvas
 /// is opened from the Connections entry in the Lunica/Twin navigation so the
 /// graph has one discoverable home instead of another top-level perspective.
-pub struct ObjectBuilderPerspective;
+pub struct AssemblyPerspective;
 
-impl Perspective for ObjectBuilderPerspective {
+impl Perspective for AssemblyPerspective {
     fn id(&self) -> PerspectiveId {
-        PerspectiveId("object_builder")
+        PerspectiveId("assembly")
     }
     fn title(&self) -> String {
-        "Object Builder".into()
+        "Assembly".into()
     }
     fn show_in_switcher(&self) -> bool {
         false
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Structure first: the USD prim tree (the object's authoring hierarchy)
+        // Structure first: the USD prim tree (the assembly's authoring hierarchy)
         // to navigate/select parts, the entity list as an alternate view, and the
         // palette to add parts. (Unknown ids are filtered.)
         layout.set_side_browser_tabs(vec![
+            TWIN_BROWSER_PANEL_ID,
             usd_prim_tree::USD_PRIM_TREE_PANEL_ID,
             PanelId("entity_list"),
             PanelId("spawn_palette"),
         ]);
-        // Central tabs: the 3D build view and the Rhai behaviour editor. The
+        // Central tabs: the isolated USD document preview and the Rhai
+        // behaviour editor. The
         // USD connection graph is opened from the Connections entry in the
         // Lunica/Twin navigation, so it is not a second Build workflow.
-        layout.set_center(vec![VIEWPORT_PANEL_ID, PanelId("rhai_editor")]);
+        layout.set_center(vec![
+            lunco_usd::ui::USD_VIEWPORT_PANEL_ID,
+            PanelId("rhai_editor"),
+        ]);
         // The Inspector alone on the right — parameter editing is the point here.
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
