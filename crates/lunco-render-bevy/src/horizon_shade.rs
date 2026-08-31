@@ -15,9 +15,10 @@
 //! material directly — they just do it from the one crate that is allowed to name
 //! one. Same reasoning, same shape as `terrain_maps.rs`.
 //!
-//! Ordering: both systems run in `Update` AFTER
-//! `lunco_environment::horizon::finish_shadow_cache_bake`, preserving the original
-//! single-crate `.chain()`.
+//! Ordering: horizon/material discovery runs in `Update` after
+//! `lunco_environment::horizon::finish_shadow_cache_bake`. The blueprint frame
+//! projection runs separately in `PostUpdate`, after BigSpace has finished
+//! propagating the floating-origin frame used by the renderer.
 
 use crate::shader_material::ShaderMaterial;
 use bevy::asset::AssetId;
@@ -54,13 +55,23 @@ pub(crate) fn build(app: &mut App) {
             ensure_terrain_materials,
             wire_terrain_materials,
             wire_sun_for_non_terrain_materials,
-            wire_blueprint_origin,
         )
             .chain()
             .after(finish_shadow_cache_bake)
             // The bake half is gated on the asset stores existing; the material
             // half needs them too (plus the material assets, which are `Option`al
             // below so an app without `ShaderMaterialPlugin` degrades quietly).
+            .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
+    );
+    // `wire_blueprint_origin` consumes the same finalized render-space frame as
+    // the mesh GlobalTransforms. The camera-origin writer runs before BigSpace's
+    // recenter/propagation phases; running this in Update would read the previous
+    // frame's LocalFloatingOrigin and make the shader's Cartesian coordinates
+    // disagree with the vertices for one frame whenever the origin moves.
+    app.add_systems(
+        PostUpdate,
+        wire_blueprint_origin
+            .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
 }
@@ -498,6 +509,8 @@ pub fn wire_sun_for_non_terrain_materials(
 /// frame in which an authored terrain grid is defined. The shader receives the
 /// current floating-origin cell offset plus the active frame's render-space
 /// origin and inverse rotation before evaluating its periodic coordinates.
+/// This runs after BigSpace's low-precision propagation so those uniforms and
+/// the rendered vertices are derived from one finalized floating-origin state.
 pub fn wire_blueprint_origin(
     origin: Query<(&CellCoord, &Grid), With<lunco_core::OriginAnchor>>,
     active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
@@ -630,6 +643,111 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.add_systems(Update, ensure_terrain_materials);
         app
+    }
+
+    /// The blueprint material must be updated after the origin writer and all
+    /// BigSpace propagation phases in the same frame. If it runs in `Update`,
+    /// it samples the previous `LocalFloatingOrigin` while the mesh receives
+    /// the new origin-relative transform in `PostUpdate`, producing the
+    /// systematic angle-dependent line displacement seen in the sandbox.
+    #[test]
+    fn blueprint_frame_uniform_tracks_finalized_big_space_origin() {
+        use big_space::plugin::BigSpaceMinimalPlugins;
+        use big_space::prelude::BigSpaceSystems;
+        use std::sync::Arc;
+
+        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_core::OriginAnchor>>) {
+            origins
+                .single_mut()
+                .expect("the test has one canonical origin anchor")
+                .set_if_neq(CellCoord::new(10, 0, 0));
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<ShaderMaterial>();
+
+        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let origin = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<lunco_core::OriginAnchor>>();
+            query.single(app.world()).expect("one origin anchor")
+        };
+        app.world_mut()
+            .entity_mut(origin)
+            .insert(GlobalTransform::default());
+
+        let frame = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::default(),
+                Transform::from_xyz(5.0, 0.0, 0.0),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+
+        let schema = lunco_materials::ParamSchema::parse(
+            "struct Material {\n\
+                blueprint_origin: vec3<f32>,\n\
+                blueprint_frame_origin: vec3<f32>,\n\
+                blueprint_frame_rotation: vec4<f32>,\n\
+            }",
+        )
+        .expect("the blueprint engine fields must be reflectable");
+        let mut material = ShaderMaterial::default();
+        material.set_schema(Arc::new(schema));
+        let material_handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(material);
+        app.world_mut()
+            .spawn(MeshMaterial3d::<ShaderMaterial>(material_handle.clone()));
+
+        // Exercise the production registration, including its PostUpdate
+        // ordering, rather than registering the system again in the test.
+        build(&mut app);
+
+        // This models the authoritative camera-origin writer. It changes the
+        // origin before BigSpace's own recenter and propagation phases.
+        app.add_systems(
+            PostUpdate,
+            move_origin_once.before(BigSpaceSystems::RecenterLargeTransforms),
+        );
+        app.update();
+
+        let expected = {
+            let world_grid_component = app
+                .world()
+                .get::<Grid>(world_grid)
+                .expect("canonical WorldGrid must remain a BigSpace grid");
+            lunco_core::coords::grid_absolute_pose_to_render(
+                world_grid_component,
+                lunco_core::coords::GridPos(bevy::math::DVec3::new(5.0, 0.0, 0.0)),
+                lunco_core::coords::GridRot(bevy::math::DQuat::IDENTITY),
+            )
+            .0
+             .0
+            .as_vec3()
+        };
+        let actual = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&material_handle)
+            .and_then(|material| material.get_vec3("blueprint_frame_origin"))
+            .expect("blueprint frame origin must be written");
+
+        assert_eq!(actual, expected);
+        assert_ne!(actual, Vec3::new(5.0, 0.0, 0.0));
     }
 
     /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.
