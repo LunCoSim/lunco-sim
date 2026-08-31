@@ -161,8 +161,8 @@ pub struct ShaderMaterial {
     pub alpha_mode: AlphaMode,
     /// Render both faces (authored `doubleSided` on the gprim). Not a bind-group
     /// resource — it drives pipeline specialization (`cull_mode: None`) through
-    /// [`ShaderKey`]. The sky dome is the case that needs it: viewed from
-    /// INSIDE, a backface-culled dome shows no sky at all.
+    /// [`ShaderKey`]. It applies only to authored gprims; procedural camera
+    /// backgrounds use the fullscreen pass and have no mesh faces to cull.
     pub double_sided: bool,
 }
 

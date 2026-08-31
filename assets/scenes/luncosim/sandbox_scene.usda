@@ -70,7 +70,7 @@ def Xform "SandboxScene" (
     # camera background, not a finite shell: the explicit owner marker selects
     # the renderer's fullscreen procedural path and therefore has no radius,
     # culling AABB, or far-plane coupling.
-    def Xform "SkyDome" (
+    def Xform "Sky" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     )
     {

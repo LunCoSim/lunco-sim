@@ -104,6 +104,17 @@ zero is a no-op, not a reset.
 (`crates/lunco-usd-bevy/src/lib.rs`). `Cube.width/height/depth` do **not** exist.
 `extent` is never read.
 
+### Procedural camera backgrounds
+
+Use the reusable `environment/starfield_sky.usda` pattern for a procedural
+camera background: author an `Xform` with `MaterialBindingAPI`, bind its
+`UsdShade` material, and set `bool lunco:surface:skybox = true`. This vendor
+intent is needed because USD has no standard field for a renderer-specific
+procedural camera background. The projection stamps the existing
+render-free `ProceduralSkybox` intent and creates no mesh. Use
+`UsdLuxDomeLight` when the scene needs a textured environment light; it is a
+different USD concept and must not be represented by a skybox marker.
+
 If a referenced component supplies a generic visual proxy but the enclosing
 vehicle needs a different authored shape, keep the reference for its ports and
 domain facets, set the referencing visual prim's standard `visibility` to

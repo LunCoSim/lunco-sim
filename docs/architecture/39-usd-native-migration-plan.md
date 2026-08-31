@@ -244,8 +244,11 @@ Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical 
   the `query("Links")` snapshot. The USD vocabulary is `lunco:linkNode` / `lunco:link:*`. See
   `49-connectivity-link-kernel.md`. A comms *domain* (link budget, `CommsLink.mo`, margin validation) is
   authored content on top of that kernel — the domain-package shape of doc 38 — and remains open work.
-- **P6.4 — Sky:** reuse Earth `GlobeLod` (coarse `max_lod:0` default), honor `DomeLight.texture:file` →
-  `Skybox`/`EnvironmentMapLight` (doc 36 §2).
+- **P6.4 — Sky:** author a procedural camera background as an `Xform` with
+  `lunco:surface:skybox = true` and a standard `UsdShade` material binding;
+  project it to the render-free `ProceduralSkybox` intent and draw it through
+  the fullscreen background pass. Use `UsdLuxDomeLight` separately for
+  textured environment lighting.
 
 ---
 

@@ -162,11 +162,9 @@ pub struct ShaderLook {
     /// `PbrLook`, so a prim that authored the primvar silently started casting the
     /// moment it was given a `.wgsl`.
     ///
-    /// It is load-bearing for anything that ENCLOSES the scene. A sky dome is the
-    /// worked example: a shell of radius R sits between the sun and every cascade,
-    /// so the shadow pass sees a solid occluder covering the whole frustum and the
-    /// entire scene renders in shadow. The mesh is emissive and infinitely distant
-    /// in intent — it has no business in a shadow map at all.
+    /// It is load-bearing for authored meshes that enclose or surround a scene:
+    /// such a mesh can occlude every shadow cascade unless it opts out. A
+    /// procedural camera background has no mesh and is not represented here.
     ///
     /// **Not part of [`key`](Self::key).** It is an entity-level render flag, not
     /// material state, so two looks that differ only here still share one material
@@ -192,9 +190,9 @@ pub struct ShaderLook {
     ///
     /// Here for the reason `no_shadow_cast` and `alpha` are: taking the shader
     /// path REMOVES the `PbrLook` that carried it, so a `doubleSided` prim
-    /// silently became backface-culled the moment it was given a `.wgsl`. The
-    /// sky dome is the worked example: viewed from INSIDE, only its back faces
-    /// are visible, so dropping the flag culls the entire sky.
+    /// silently became backface-culled the moment it was given a `.wgsl`.
+    /// Procedural camera backgrounds do not use this mesh property; they are
+    /// drawn by the fullscreen background pass.
     ///
     /// **Part of [`key`](Self::key), like `alpha`.** Cull mode is pipeline
     /// state, so two looks that differ here cannot share one material.

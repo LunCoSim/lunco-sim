@@ -12,8 +12,11 @@
 //! up to and including the emitted ECS components is checked here.
 
 use bevy::prelude::*;
+use lunco_materials::ProceduralSkybox;
 use lunco_render::PbrLook;
-use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{
+    CanonicalStage, CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset, UsdVisualSyncFailed,
+};
 
 const SCENE: &str = r#"#usda 1.0
 ( defaultPrim = "World", metersPerUnit = 1 )
@@ -34,6 +37,11 @@ def Xform "World"
     {
         rel material:binding = </World/Mat>
         double size = 2
+    }
+    def Xform "Sky" ( prepend apiSchemas = ["MaterialBindingAPI"] )
+    {
+        bool lunco:surface:skybox = true
+        rel material:binding = </World/Mat>
     }
     def DistantLight "Sun"
     {
@@ -160,7 +168,6 @@ fn recipe_asset_instantiates_from_prepared_projection_plan() {
         }
         std::thread::yield_now();
     }
-
     // (a) Initial materialisation does not open the non-Send live stage. The
     // prepared plan is the complete composed reader for generation zero; the
     // live stage is opened only when an authored edit needs it.
@@ -194,6 +201,20 @@ fn recipe_asset_instantiates_from_prepared_projection_plan() {
     assert!(
         app.world().get::<Mesh3d>(box_e).is_some(),
         "Box has a Mesh3d"
+    );
+
+    // A procedural camera background is an Xform appearance intent. It is
+    // projected once and consumed by the fullscreen background pass; the USD
+    // projection must not create a mesh or leave mesh state from a prior
+    // generation on the owner.
+    let sky_e = entity_at(&mut app, "/World/Sky").expect("Sky prim entity");
+    assert!(
+        app.world().get::<ProceduralSkybox>(sky_e).is_some(),
+        "the authored skybox intent must be projected onto the Xform"
+    );
+    assert!(
+        app.world().get::<Mesh3d>(sky_e).is_none(),
+        "a procedural skybox Xform must never receive mesh geometry"
     );
     let lin = look.base_color;
     assert!(
@@ -295,6 +316,99 @@ fn recipe_asset_instantiates_from_prepared_projection_plan() {
     assert!(
         app.world().get::<Mesh3d>(cutter_e).is_none(),
         "a prim under a `purpose = \"guide\"` ancestor must not render"
+    );
+}
+
+#[test]
+fn procedural_skybox_requires_an_xform_owner() {
+    const SCENE: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def Sphere "Sky"
+    {
+        bool lunco:surface:skybox = true
+        double radius = 1000
+    }
+}
+"#;
+
+    let mut app = app();
+    let stage_handle = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+        UsdStageAsset::from_recipe(StageRecipe::from_source("invalid-sky.usda", SCENE))
+            .expect("prepare stage asset"),
+    );
+    let sky_e = app
+        .world_mut()
+        .spawn((
+            Name::new("Sky"),
+            UsdPrimPath {
+                stage_handle,
+                path: "/World/Sky".into(),
+            },
+        ))
+        .id();
+
+    app.update();
+
+    assert!(
+        app.world().get::<UsdVisualSyncFailed>(sky_e).is_some(),
+        "a skybox flag on a gprim must fail the USD projection visibly"
+    );
+    assert!(
+        app.world().get::<ProceduralSkybox>(sky_e).is_none(),
+        "an invalid skybox owner must not enter the background path"
+    );
+    assert!(
+        app.world().get::<Mesh3d>(sky_e).is_none(),
+        "an invalid skybox owner must not receive a mesh"
+    );
+}
+
+#[test]
+fn procedural_skybox_projection_removes_existing_mesh_state() {
+    const SCENE: &str = r#"#usda 1.0
+(
+    defaultPrim = "Sky"
+)
+def Xform "Sky"
+{
+    bool lunco:surface:skybox = true
+}
+"#;
+
+    let mut app = app();
+    let stage_handle = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+        UsdStageAsset::from_recipe(StageRecipe::from_source("sky.usda", SCENE))
+            .expect("prepare stage asset"),
+    );
+    let stale_mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Cuboid::default());
+    let sky_e = app
+        .world_mut()
+        .spawn((
+            Name::new("Sky"),
+            Mesh3d(stale_mesh),
+            UsdPrimPath {
+                stage_handle,
+                path: "/Sky".into(),
+            },
+        ))
+        .id();
+
+    app.update();
+
+    assert!(
+        app.world().get::<ProceduralSkybox>(sky_e).is_some(),
+        "the authored skybox intent must own the projection"
+    );
+    assert!(
+        app.world().get::<Mesh3d>(sky_e).is_none(),
+        "re-projecting a procedural skybox must remove stale mesh state"
     );
 }
 
