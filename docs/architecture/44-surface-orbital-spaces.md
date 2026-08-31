@@ -68,6 +68,12 @@ selected frame. Orbital orientation is derived from the inertial frame. This
 keeps the ground below the view while preserving the Moon/Earth orientation
 when the camera changes mode.
 
+Orbital presentation visibility only manages unanchored local roots, whose
+geometry has no celestial position. A site-anchored scene remains in its
+body-fixed surface frame, so its descendants retain authored visibility; this
+also keeps hidden render-only templates hidden while their runtime driver owns
+any cloned presentation geometry.
+
 ## Trajectories and links
 
 Trajectory data carries an explicit semantic reference frame. Samples are

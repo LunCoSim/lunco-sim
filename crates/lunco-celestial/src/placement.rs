@@ -231,19 +231,16 @@ pub fn attach_site_scene_to_surface_grid(
 /// on exit. Geometry parked at the world origin has no celestial identity, so
 /// from an orbital viewpoint it would float in space in front of the body.
 ///
-/// The SITE-ANCHORED scene is the opposite case and stays VISIBLE: the one-time
-/// surface-grid attachment places it at its true geodetic point on the anchor body, and under
-/// doc 47 Phase 6 the camera flies while the scene never moves — so from
-/// lunar orbit the moonbase genuinely lies on the Moon, exactly where it
-/// belongs. (The blanket hide dated from the retired world-pin design, where
-/// the celestial tree was slid away from the site and the local scene stayed
-/// glued to the parked camera, filling the foreground — "focused Earth but it
-/// shows ground". That geometry no longer exists.)
+/// The SITE-ANCHORED scene is not managed here: the one-time surface-grid
+/// attachment places it at its true geodetic point on the anchor body, and the
+/// camera flies while the scene stays in that physical frame. Its descendants
+/// retain their authored visibility, including hidden render-only templates
+/// consumed by runtime drivers.
 ///
 /// Subtlety established by experiment: hiding a scene ROOT is not enough —
 /// USD prims spawn with an explicit `Visibility::Visible`, which overrides an
-/// ancestor's `Hidden` rather than inheriting it. Every descendant must be
-/// toggled.
+/// ancestor's `Hidden` rather than inheriting it. Every descendant of an
+/// unanchored root must be toggled.
 #[allow(clippy::type_complexity)]
 pub fn orbital_pin_scene_visibility(
     orbital_pin: Res<OrbitalViewPin>,
@@ -257,8 +254,6 @@ pub fn orbital_pin_scene_visibility(
             Without<KeplerOrbit>,
         ),
     >,
-    // The site-anchored scene root (carries GeodeticAnchor + SiteAnchor).
-    q_site_root: Query<Entity, With<SiteAnchor>>,
     // Single `&mut Visibility` param: several overlapping ones are a B0001
     // conflict panic.
     mut q_vis: Query<&mut Visibility>,
@@ -281,14 +276,13 @@ pub fn orbital_pin_scene_visibility(
         Visibility::Inherited
     };
 
-    // Collect each root plus its full subtree — descendants override the root's
-    // visibility, so the root alone would leave the ground on screen. Unanchored
-    // locals toggle with the mode; the site-anchored subtree is mounted onto its
-    // body surface Grid and is force-VISIBLE every pass (also self-heals scenes hidden by the
-    // pre-Phase-6 blanket hide).
+    // Collect each unanchored root plus its full subtree — descendants override
+    // the root's visibility, so the root alone would leave the ground on screen.
+    // Site-anchored content is already in its physical body-fixed frame and is
+    // deliberately absent from this ownership boundary: its authored child
+    // visibility must not be replaced by the orbital presentation mode.
     let mut targets: Vec<(Entity, Visibility)> = Vec::new();
     let mut stack: Vec<(Entity, Visibility)> = q_local.iter().map(|e| (e, target)).collect();
-    stack.extend(q_site_root.iter().map(|e| (e, Visibility::Inherited)));
     while let Some((e, t)) = stack.pop() {
         targets.push((e, t));
         if let Ok(children) = q_children.get(e) {
@@ -898,6 +892,52 @@ mod tests {
         assert!((rotation * DVec3::Y - tangent.up).length() < 1e-9);
         assert!((rotation * DVec3::X - tangent.east).length() < 1e-9);
         assert!((rotation * DVec3::NEG_Z - tangent.north).length() < 1e-9);
+    }
+
+    #[test]
+    fn orbital_visibility_preserves_authored_site_descendant_visibility() {
+        let mut app = App::new();
+        app.insert_resource(OrbitalViewPin {
+            active: true,
+            body: crate::ephemeris_id::MOON,
+            ..default()
+        });
+        app.add_systems(Update, orbital_pin_scene_visibility);
+
+        let site = app
+            .world_mut()
+            .spawn((
+                SiteAnchor,
+                GeodeticAnchor {
+                    body: crate::ephemeris_id::MOON,
+                    geodetic: Geodetic::new(25.28, 307.60, 0.0),
+                },
+                lunco_core::GridAnchor,
+                Visibility::Visible,
+            ))
+            .id();
+        let hidden_template = app
+            .world_mut()
+            .spawn((Visibility::Hidden, ChildOf(site)))
+            .id();
+        let visible_mesh = app
+            .world_mut()
+            .spawn((Visibility::Visible, ChildOf(site)))
+            .id();
+
+        app.update();
+
+        let world = app.world();
+        assert_eq!(
+            *world.get::<Visibility>(hidden_template).unwrap(),
+            Visibility::Hidden,
+            "orbital presentation must not expose a site-owned render template"
+        );
+        assert_eq!(
+            *world.get::<Visibility>(visible_mesh).unwrap(),
+            Visibility::Visible,
+            "orbital presentation must not rewrite authored site visibility"
+        );
     }
 
     #[test]
