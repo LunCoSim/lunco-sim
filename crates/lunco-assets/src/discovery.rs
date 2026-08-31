@@ -1,7 +1,7 @@
 //! Project-wide asset discovery — *which files exist*.
 //!
 //! One DRY scanner for "what files of extension `ext` does the project have": the
-//! engine asset *library* (`<cwd>/assets`, the default/`lunco://` source) plus
+//! engine asset *library* (the runtime `assets/` root, the default/`lunco://` source) plus
 //! every open Twin root (`twin://<name>/…`). Consumers (the spawn catalog for
 //! `usda`, the shader catalog for `wgsl`, pickers, the API) call [`list_assets`]
 //! instead of each re-walking the disk with their own scan.
@@ -57,7 +57,7 @@ pub struct AssetFile {
 
 /// The engine asset library's file listing — every `*.usda`/`*.wgsl` that ships.
 ///
-/// Populated once at startup: by walking `<cwd>/assets` on native, by fetching
+/// Populated once at startup: by walking the runtime `assets/` root on native, by fetching
 /// `assets/manifest.json` on the web.
 ///
 /// Because it lands *late* on the web, consumers must not treat "not loaded" as
@@ -208,7 +208,7 @@ impl Plugin for AssetDiscoveryPlugin {
     }
 }
 
-/// Native: walk `<cwd>/assets` once. The filesystem IS the manifest here — there
+/// Native: walk the runtime `assets/` root once. The filesystem IS the manifest here — there
 /// is no artifact to go stale against.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {

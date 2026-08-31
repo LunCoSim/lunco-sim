@@ -5009,7 +5009,9 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             level: e.level,
             progress_pct: e.progress_pct(),
         });
-        let history: Vec<_> = bus.history().cloned().collect();
+        let mut history: Vec<_> = bus.history().cloned().collect();
+        history.extend(bus.active_progress().cloned());
+        history.sort_by_key(|event| event.at);
         (latest, history)
     };
     let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
@@ -5229,6 +5231,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 ui.set_max_height(360.0);
                 ui.heading("Recent status events");
                 ui.separator();
+                let mut popup_attention_source = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if history.is_empty() {
                         ui.label(egui::RichText::new("(no events yet)").weak());
@@ -5236,70 +5239,170 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                     }
                     // Newest first.
                     for (index, ev) in history.iter().rev().enumerate() {
-                        if matches!(ev.level, StatusLevel::Warn | StatusLevel::Error) {
-                            let summary = status_message_summary(&ev.message);
-                            let heading = format!(
-                                "{} · [{}] {}",
-                                status_level_label(ev.level),
-                                ev.source,
-                                summary
-                            );
-                            egui::CollapsingHeader::new(
-                                egui::RichText::new(heading)
-                                    .small()
-                                    .color(status_level_color(ev.level, theme)),
-                            )
-                            .id_salt(("workbench_status_event", index))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("Full diagnostics").small().strong(),
-                                    );
-                                    if ui.small_button("Copy diagnostics").clicked() {
-                                        ui.ctx().copy_text(ev.message.clone());
-                                    }
-                                });
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&ev.message).small().monospace(),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        } else {
-                            let level_tag = status_level_label(ev.level);
-                            ui.horizontal(|ui| {
-                                // Reserve the whole row so the message gets the
-                                // remaining width and wraps within the popup,
-                                // rather than making the row only as wide as its
-                                // contents.
-                                ui.set_width(ui.available_width());
-                                ui.label(
-                                    egui::RichText::new(level_tag)
-                                        .small()
-                                        .monospace()
-                                        .color(status_level_color(ev.level, theme)),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("[{}]", ev.source))
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.add_sized(
-                                    [ui.available_width(), 0.0],
-                                    egui::Label::new(egui::RichText::new(&ev.message).small())
-                                        .wrap()
-                                        // `add_sized` uses a centered child layout;
-                                        // keep every wrapped explanation anchored to
-                                        // the start of its message column.
-                                        .halign(egui::Align::LEFT),
-                                );
-                            });
+                        if render_status_event_row(
+                            ui,
+                            ev,
+                            theme,
+                            ui.make_persistent_id(("workbench_status_event", index)),
+                        ) {
+                            popup_attention_source = Some(ev.source);
                         }
                     }
                 });
+                if let Some(source) = popup_attention_source {
+                    world.trigger(StatusBarAction { source });
+                }
             });
     });
+}
+
+const STATUS_EVENT_LEVEL_WIDTH: f32 = 64.0;
+const STATUS_EVENT_SOURCE_WIDTH: f32 = 100.0;
+const STATUS_EVENT_PROGRESS_WIDTH: f32 = 120.0;
+const STATUS_EVENT_ACTION_WIDTH: f32 = 80.0;
+
+/// Render every history item through the same level/source/message/progress/action
+/// columns. Warn/Error add their complete diagnostic below that row, while
+/// Attention uses the action column to emit the owning status action.
+fn render_status_event_row(
+    ui: &mut egui::Ui,
+    event: &status_bus::StatusEvent,
+    theme: &lunco_theme::Theme,
+    details_id: egui::Id,
+) -> bool {
+    let has_details = matches!(
+        event.level,
+        status_bus::StatusLevel::Warn | status_bus::StatusLevel::Error
+    );
+    let mut details = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        details_id,
+        false,
+    );
+    let row_width = ui.available_width();
+    let compact = row_width < 420.0;
+    let level_width = if compact {
+        48.0
+    } else {
+        STATUS_EVENT_LEVEL_WIDTH
+    };
+    let source_width = if compact {
+        68.0
+    } else {
+        STATUS_EVENT_SOURCE_WIDTH
+    };
+    let progress_width = if compact {
+        72.0
+    } else {
+        STATUS_EVENT_PROGRESS_WIDTH
+    };
+    let action_width = if compact {
+        56.0
+    } else {
+        STATUS_EVENT_ACTION_WIDTH
+    };
+    let column_gap = if compact {
+        4.0
+    } else {
+        ui.spacing().item_spacing.x
+    };
+    let message_width =
+        (row_width - level_width - source_width - progress_width - action_width - column_gap * 4.0)
+            .max(1.0);
+    let display_message = if has_details {
+        status_message_summary(&event.message)
+    } else {
+        event.message.as_str()
+    };
+    let mut attention_clicked = false;
+
+    ui.horizontal_top(|ui| {
+        ui.set_width(row_width);
+        ui.spacing_mut().item_spacing.x = column_gap;
+
+        ui.add_sized(
+            [level_width, 0.0],
+            egui::Label::new(
+                egui::RichText::new(status_level_label(event.level))
+                    .strong()
+                    .color(status_level_color(event.level, theme)),
+            ),
+        );
+        ui.add_sized(
+            [source_width, 0.0],
+            egui::Label::new(egui::RichText::new(event.source).strong()).truncate(),
+        )
+        .on_hover_text(event.source);
+        ui.add_sized(
+            [message_width, 0.0],
+            egui::Label::new(egui::RichText::new(display_message))
+                .wrap()
+                .halign(egui::Align::LEFT),
+        )
+        .on_hover_text(&event.message);
+
+        if let Some(pct) = event.progress_pct() {
+            ui.add_sized(
+                [progress_width, 0.0],
+                egui::ProgressBar::new((pct as f32) / 100.0)
+                    .desired_width(progress_width)
+                    .desired_height(6.0),
+            );
+        } else if event.level == status_bus::StatusLevel::Progress {
+            ui.allocate_ui_with_layout(
+                egui::vec2(progress_width, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spinner();
+                },
+            );
+        } else {
+            ui.allocate_exact_size(
+                egui::vec2(progress_width, ui.spacing().interact_size.y),
+                egui::Sense::hover(),
+            );
+        }
+
+        if event.level == status_bus::StatusLevel::Attention {
+            attention_clicked = ui
+                .add_sized(
+                    [action_width, 0.0],
+                    egui::Button::new(if compact { "Act" } else { "Continue" }),
+                )
+                .on_hover_text("Continue")
+                .clicked();
+        } else if has_details && !details.is_open() {
+            if ui
+                .add_sized([action_width, 0.0], egui::Button::new("Details"))
+                .clicked()
+            {
+                details.toggle(ui);
+            }
+        } else {
+            ui.allocate_exact_size(
+                egui::vec2(action_width, ui.spacing().interact_size.y),
+                egui::Sense::hover(),
+            );
+        }
+    });
+
+    if has_details {
+        details.show_body_unindented(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Diagnostics")
+                        .strong()
+                        .color(status_level_color(event.level, theme)),
+                );
+                if ui.small_button("Copy diagnostics").clicked() {
+                    ui.ctx().copy_text(event.message.clone());
+                }
+            });
+            ui.add(egui::Label::new(egui::RichText::new(&event.message)).wrap());
+        });
+    }
+
+    attention_clicked
 }
 
 fn status_level_label(level: status_bus::StatusLevel) -> &'static str {

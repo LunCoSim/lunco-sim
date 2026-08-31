@@ -1075,10 +1075,9 @@ fn handle_trajectory_mesh_tasks(
                 num_points,
             });
         }
-        // ALPHA 1.0 IS CORRECT HERE, and it is correct for the opposite reason to
-        // `assets/shaders/starfield.wgsl`, which must output alpha 0 to be additive.
-        // The trajectory material reaches bevy's premultiply path, so zeroing the
-        // vertex alpha would make the line invisible rather than more additive.
+        // The trajectory material reaches Bevy's premultiply path, so keeping the
+        // vertex alpha at 1.0 preserves the authored line instead of making it
+        // invisible.
         let look = PbrLook {
             base_color: trajectory_color(data.color),
             unlit: true,

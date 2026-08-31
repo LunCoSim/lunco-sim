@@ -21,6 +21,7 @@ pub(crate) fn build(app: &mut App) {
         .insert_resource(ClusterableObjectCount(initial_clusterable_object_count))
         .init_resource::<lunco_render::RenderingQualitySettings>()
         .init_resource::<lunco_render::SceneBloomOverride>()
+        .add_observer(configure_added_scene_camera)
         .add_observer(bind_scene_camera)
         .add_observer(bind_camera_cluster_config)
         .add_observer(track_clusterable_object_added::<PointLight>)
@@ -181,11 +182,11 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderP
     // SPACE IS BLACK. The global `ClearColor` is the WINDOW's colour and is set to the
     // workbench panel fill (`0x1a1a1a`) so the chrome has no seam; a `Camera3d` that
     // inherits it renders the vacuum as that same grey. That is not cosmetic: the
-    // starfield is an ADDITIVE emissive backdrop, and 0x1a1a1a is ~0.01 linear — enough
-    // to swamp every star the shader adds to it (measured: sky region mean 26/255,
-    // σ 0.4 — a flat grey with the stars mathematically present and invisible). Clearing
-    // the SCENE camera to black leaves the chrome's own clear untouched and gives the
-    // additive sky something to add to.
+    // the starfield is an emissive backdrop written into the opaque scene pass, and
+    // 0x1a1a1a is ~0.01 linear — enough to swamp its dim stars (measured: sky region
+    // mean 26/255, σ 0.4 — a flat grey with the stars invisible). Clearing the SCENE
+    // camera to black leaves the chrome's own clear untouched and gives the authored
+    // background its intended black space.
     //
     // `Hdr` is a marker component in `bevy_camera` — render-FREE. So "this camera is
     // HDR" is expressible headless too; only the pipeline that acts on it is not.
@@ -295,6 +296,21 @@ fn configure_camera(camera: Option<&mut Camera>) {
     }
 }
 
+/// Configure the clear intent when `Camera3d` supplies a required `Camera`
+/// component after the `SceneCamera` observer has already run.
+fn configure_added_scene_camera(
+    add: On<Add, Camera>,
+    scene_cameras: Query<(), With<SceneCamera>>,
+    mut cameras: Query<&mut Camera>,
+) {
+    let entity = add.entity;
+    if scene_cameras.get(entity).is_ok() {
+        if let Ok(mut camera) = cameras.get_mut(entity) {
+            configure_camera(Some(&mut camera));
+        }
+    }
+}
+
 fn bind_scene_camera(
     add: On<Add, SceneCamera>,
     cams: Query<&SceneCamera>,
@@ -346,6 +362,20 @@ mod tests {
             a.world().entity(e).get::<Tonemapping>(),
             Some(&Tonemapping::AgX)
         );
+    }
+
+    #[test]
+    fn scene_camera_clears_starfield_backdrop_to_black() {
+        let mut a = app();
+        let e = a.world_mut().spawn(SceneCamera::default()).id();
+        a.update();
+
+        let ClearColorConfig::Custom(clear_color) =
+            a.world().entity(e).get::<Camera>().unwrap().clear_color
+        else {
+            panic!("scene cameras must use an explicit clear color");
+        };
+        assert_eq!(clear_color.to_linear(), Color::BLACK.to_linear());
     }
 
     #[test]

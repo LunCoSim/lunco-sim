@@ -36,8 +36,23 @@ def Xform "SixWheelVisual" (
         prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
     )
     {
+        # Front three-quarter take for the lowered front camera, headlights,
+        # and the near wheel bank.
         double3 lunco:cameraLookAt = (0.0, 0.4, -1.0)
         double3 xformOp:translate = (5.0, 2.8, -9.0)
+        float focalLength = 24.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Camera "VisualCameraRear" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        # The complementary rear three-quarter take exposes the opposite
+        # wheel bank; together the two authored frames review all six wheels
+        # without pretending a single occluded angle proves the assembly.
+        double3 lunco:cameraLookAt = (0.0, 0.4, 1.0)
+        double3 xformOp:translate = (-5.0, 2.8, 9.0)
         float focalLength = 24.0
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -48,6 +63,7 @@ def Xform "SixWheelVisual" (
     {
         token lunco:activeCamera.timeSamples = {
             0: "VisualCamera",
+            0.5: "VisualCameraRear",
         }
     }
 

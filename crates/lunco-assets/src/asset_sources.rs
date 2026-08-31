@@ -102,7 +102,7 @@ fn unregister_twin_root(
 ///
 /// | Scheme | Resolves to | Notes |
 /// |---|---|---|
-/// | `lunco://` | `<cwd>/assets`, then `<cache>` | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
+/// | `lunco://` | the runtime `assets/` root, its packed cache, then the shared cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
 /// | `twin://<name>/…` | open Twin roots | Twin scenes AND downloaded scenarios — native fs + web OPFS, via `lunco_storage` |
 ///
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because
@@ -146,9 +146,6 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     let schemes = crate::scheme_registry::SchemeRegistry::default();
     schemes
         .register(crate::LUNCO_SCHEME, move |rel| {
-            if !crate::asset_path::is_safe_relative_path(rel) {
-                return None;
-            }
             crate::engine_asset_local_path(&crate::asset_path::uri(crate::LUNCO_SCHEME, rel))
         })
         .expect("register the canonical lunco asset scheme");

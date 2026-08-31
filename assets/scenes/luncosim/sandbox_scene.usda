@@ -226,13 +226,17 @@ def Xform "SandboxScene" (
     }
 
     # --- Ramp obstacles (static terrain) ---
+    # The top face is the driving surface.  The low (+/-X) edge is aligned to
+    # the ground plane, so the ramp is a visible obstacle rather than a slab
+    # buried through the ground.  For a 60 m half-length at 17.1887 degrees,
+    # the top-face datum is y = 30*sin(angle) - cos(angle) ~= 7.91 m.
     def Cube "Ramp"
     (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (25, 4, 0)
+        double3 xformOp:translate = (25, 7.91, 0)
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -248,7 +252,7 @@ def Xform "SandboxScene" (
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (25, 4, 80)
+        double3 xformOp:translate = (25, 7.91, 80)
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -470,8 +474,13 @@ def Xform "SandboxScene" (
         }
     )
     {
-        double3 xformOp:translate = (25.0, 5.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        # Start on the flat ground before the low edge of Ramp and face +X,
+        # the ramp's authored rise direction.  The previous (25,5,0) pose was
+        # inside the rotated slab at its centre, which made the rover appear to
+        # drive through the ramp and destabilised its first contacts.
+        double3 xformOp:translate = (-15.0, 1.0, 0.0)
+        double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
         # Per-instance livery: magenta display color
         over "Chassis"

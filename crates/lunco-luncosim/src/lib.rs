@@ -3146,6 +3146,8 @@ impl Plugin for SandboxCorePlugin {
         app.add_systems(
             Update,
             report_scene_spawn_status
+                .after(lunco_usd_bevy::process_queued_usd_visuals)
+                .before(lunco_workbench::screenshot::OfflineRecordingReadinessSet)
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
@@ -3811,9 +3813,9 @@ fn report_terrain_generation_status(
 /// other:
 ///
 /// * [`SceneLoadInFlight`](lunco_usd_sim::cosim::SceneLoadInFlight) — present from
-///   `LoadScene` until every `UsdAwaitingStage` prim for that stage has been
-///   drained by `sync_usd_visuals`. This covers the gap BEFORE any prim entity
-///   exists, which an entity count alone reads as "nothing to wait for".
+///   `LoadScene` until every visual projection phase for that stage has drained.
+///   This covers the gap BEFORE any prim entity exists, which an entity count
+///   alone reads as "nothing to wait for".
 /// * `UsdAwaitingStage` entities — prims queued on a stage that has not resolved.
 ///   This covers spawns with no `LoadScene` guard behind them (deferred instance
 ///   and reference spawns), which the resource alone would miss.
@@ -4264,10 +4266,15 @@ impl Plugin for SandboxOffscreenPlugin {
                 .chain(),
         );
 
-        // Keep the windowless render contract observable at the render boundary: a main-world
-        // camera can have a valid image target while extraction or ViewTarget preparation still
-        // drops it. This is a one-shot diagnostic for an offscreen session, not a per-frame poll.
+        // Keep the windowless render contract observable at the render boundary: the main world
+        // cannot know whether visibility and phase binning actually admitted a mesh. The render
+        // acknowledgement is consumed by the recorder before it starts virtual time.
         if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            render_app.init_resource::<lunco_workbench::screenshot::OfflineRenderReadiness>();
+            render_app.add_systems(
+                bevy::render::ExtractSchedule,
+                copy_offscreen_render_readiness_to_main_world,
+            );
             render_app.add_systems(
                 bevy::render::Render,
                 report_offscreen_render_view.in_set(bevy::render::RenderSystems::Prepare),
@@ -4287,12 +4294,18 @@ fn report_offscreen_render_view(
         &bevy::render::camera::ExtractedCamera,
         Option<&bevy::render::view::ExtractedView>,
         Option<&bevy::render::view::visibility::RenderVisibleEntities>,
-        Option<&bevy::render::view::ViewTarget>,
     )>,
     opaque_phases: Option<
         Res<
             bevy::render::render_phase::ViewBinnedRenderPhases<
                 bevy::core_pipeline::core_3d::Opaque3d,
+            >,
+        >,
+    >,
+    alpha_mask_phases: Option<
+        Res<
+            bevy::render::render_phase::ViewBinnedRenderPhases<
+                bevy::core_pipeline::core_3d::AlphaMask3d,
             >,
         >,
     >,
@@ -4303,14 +4316,12 @@ fn report_offscreen_render_view(
             >,
         >,
     >,
-    mut reported: Local<bool>,
+    pipeline_cache: Res<bevy::render::render_resource::PipelineCache>,
+    mut readiness: ResMut<lunco_workbench::screenshot::OfflineRenderReadiness>,
+    mut ready_reported: Local<bool>,
 ) {
-    if *reported {
-        return;
-    }
-    let mut count = 0;
-    for (entity, camera, view, visible, target) in &cameras {
-        count += 1;
+    *readiness = Default::default();
+    for (_entity, camera, view, visible) in &cameras {
         let visible_entities = visible.map_or(0, |visible| {
             visible
                 .classes
@@ -4331,6 +4342,48 @@ fn report_offscreen_render_view(
                     + phase.non_mesh_items.len()
             })
             .unwrap_or(0);
+        let opaque_pipelines_ready = view.and_then(|view| {
+            opaque_phases.as_deref().and_then(|phases| {
+                phases.0.get(&view.retained_view_entity).map(|phase| {
+                    let has_items = !phase.multidrawable_meshes.is_empty()
+                        || !phase.batchable_meshes.is_empty()
+                        || !phase.unbatchable_meshes.is_empty()
+                        || !phase.non_mesh_items.is_empty();
+                    has_items
+                        && phase
+                            .multidrawable_meshes
+                            .keys()
+                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
+                        && phase.batchable_meshes.keys().all(|(key, _)| {
+                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
+                        })
+                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
+                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
+                        })
+                })
+            })
+        });
+        let alpha_mask_pipelines_ready = view.and_then(|view| {
+            alpha_mask_phases.as_deref().and_then(|phases| {
+                phases.0.get(&view.retained_view_entity).map(|phase| {
+                    let has_items = !phase.multidrawable_meshes.is_empty()
+                        || !phase.batchable_meshes.is_empty()
+                        || !phase.unbatchable_meshes.is_empty()
+                        || !phase.non_mesh_items.is_empty();
+                    has_items
+                        && phase
+                            .multidrawable_meshes
+                            .keys()
+                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
+                        && phase.batchable_meshes.keys().all(|(key, _)| {
+                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
+                        })
+                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
+                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
+                        })
+                })
+            })
+        });
         let transparent_items = view
             .and_then(|view| {
                 transparent_phases
@@ -4338,29 +4391,62 @@ fn report_offscreen_render_view(
                     .and_then(|phases| phases.0.get(&view.retained_view_entity))
             })
             .map_or(0, |phase| phase.items.len());
-        info!(
-            "[offscreen] render view entity={entity} main={:?} target={:?} physical_target={:?} physical_viewport={:?} world_translation={:?} order={} hdr={} output_mode={:?} visible_entities={visible_entities} opaque_bins={opaque_bins} transparent_items={transparent_items} view_target={} output_target={} main_format={:?} output_format={:?}",
-            view.map(|view| view.retained_view_entity.main_entity),
-            camera.target,
-            camera.physical_target_size,
-            camera.physical_viewport_size,
-            view.map(|view| view.world_from_view.translation()),
-            camera.order,
-            camera.hdr,
+        let transparent_pipelines_ready = view.and_then(|view| {
+            transparent_phases.as_deref().and_then(|phases| {
+                phases.0.get(&view.retained_view_entity).map(|phase| {
+                    !phase.items.is_empty()
+                        && phase
+                            .items
+                            .values()
+                            .all(|item| pipeline_cache.get_render_pipeline(item.pipeline).is_some())
+                })
+            })
+        });
+        let is_capture_view = matches!(
             camera.output_mode,
-            target.is_some(),
-            target.is_some_and(|target| target.out_texture().is_some()),
-            target.map(|target| target.main_texture_format()),
-            target.and_then(|target| target.out_texture_view_format()),
-        );
+            bevy::camera::CameraOutputMode::Write { .. }
+        ) && camera
+            .target
+            .as_ref()
+            .is_some_and(|target| matches!(target, bevy::camera::NormalizedRenderTarget::Image(_)));
+        if is_capture_view {
+            if let Some(view) = view {
+                readiness.camera = Some(view.retained_view_entity.main_entity.id());
+                readiness.visible_entities = visible_entities;
+                readiness.opaque_items = opaque_bins;
+                readiness.transparent_items = transparent_items;
+                readiness.pipelines_ready = opaque_pipelines_ready.unwrap_or(false)
+                    || alpha_mask_pipelines_ready.unwrap_or(false)
+                    || transparent_pipelines_ready.unwrap_or(false);
+                if !*ready_reported && opaque_bins + transparent_items > 0 {
+                    info!(
+                        "[offscreen] capture view submitted scene items: main={:?} world_translation={:?} visible_entities={visible_entities} opaque_bins={opaque_bins} transparent_items={transparent_items} pipelines_ready={}",
+                        view.retained_view_entity.main_entity,
+                        view.world_from_view.translation(),
+                        readiness.pipelines_ready,
+                    );
+                    *ready_reported = true;
+                }
+            }
+        }
     }
-    if count == 0 {
-        // Camera extraction runs before USD projection has spawned the authored
-        // camera. Wait for the first real render view; reporting the startup
-        // empty query would hide the useful result for the whole session.
-        return;
+}
+
+/// Copy the previous render-frame acknowledgement into the main world during
+/// extraction. `MainWorld` is available at this boundary, while render-phase
+/// bins are only available later in `RenderSystems::Prepare`; the two systems
+/// therefore form one explicit one-frame handoff rather than observing a main
+/// world approximation of render participation.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn copy_offscreen_render_readiness_to_main_world(
+    mut main_world: ResMut<bevy::render::MainWorld>,
+    readiness: Res<lunco_workbench::screenshot::OfflineRenderReadiness>,
+) {
+    if let Some(mut main_readiness) =
+        main_world.get_resource_mut::<lunco_workbench::screenshot::OfflineRenderReadiness>()
+    {
+        *main_readiness = *readiness;
     }
-    *reported = true;
 }
 
 /// Create the offscreen render-target image and expose it to the recorder as
@@ -4382,10 +4468,10 @@ fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut co
     commands.insert_resource(lunco_workbench::screenshot::OfflineCaptureTarget(handle));
 }
 
-/// Point every camera that targets a window at the offscreen image instead.
-/// Runs every frame because cameras spawn throughout a session (scene loads,
-/// camera paths, possession) and each spawns targeting the — nonexistent —
-/// primary window; the rewrite is a cheap match on a handful of entities.
+/// Point cameras that target a window at the offscreen image. The authored
+/// camera remains the explicit non-writing pose owner and the maintained image
+/// camera below is its render consumer. Runs every frame because cameras spawn
+/// throughout a session (scene loads, camera paths, possession).
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn retarget_cameras_to_offscreen(
     target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
@@ -4423,6 +4509,85 @@ fn retarget_cameras_to_offscreen(
 struct OffscreenRenderCamera(Entity);
 
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn skybox_matches(left: &bevy::light::Skybox, right: &bevy::light::Skybox) -> bool {
+    left.image == right.image
+        && left.brightness == right.brightness
+        && left.rotation == right.rotation
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn generated_environment_map_matches(
+    left: &bevy::light::GeneratedEnvironmentMapLight,
+    right: &bevy::light::GeneratedEnvironmentMapLight,
+) -> bool {
+    left.environment_map == right.environment_map
+        && left.intensity == right.intensity
+        && left.rotation == right.rotation
+        && left.affects_lightmapped_mesh_diffuse == right.affects_lightmapped_mesh_diffuse
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn sync_offscreen_environment(
+    commands: &mut Commands,
+    mirror_entity: Entity,
+    source_skybox: Option<&bevy::light::Skybox>,
+    source_environment: Option<&bevy::light::GeneratedEnvironmentMapLight>,
+    mut mirror_skybox: Option<&mut bevy::light::Skybox>,
+    mut mirror_environment: Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
+    mirror_derived_environment: Option<&bevy::light::EnvironmentMapLight>,
+) {
+    let skybox_changed = match (source_skybox, mirror_skybox.as_deref()) {
+        (Some(source), Some(mirror)) => !skybox_matches(source, mirror),
+        (Some(_), None) | (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    if skybox_changed {
+        match source_skybox {
+            Some(source) => {
+                if let Some(mirror) = mirror_skybox.as_deref_mut() {
+                    *mirror = source.clone();
+                } else {
+                    commands.entity(mirror_entity).insert(source.clone());
+                }
+            }
+            None => {
+                commands
+                    .entity(mirror_entity)
+                    .remove::<bevy::light::Skybox>();
+            }
+        }
+    }
+
+    let environment_changed = match (source_environment, mirror_environment.as_deref()) {
+        (Some(source), Some(mirror)) => !generated_environment_map_matches(source, mirror),
+        (Some(_), None) | (None, Some(_)) => true,
+        (None, None) => mirror_derived_environment.is_some(),
+    };
+    if environment_changed {
+        match source_environment {
+            Some(source) => {
+                if let Some(mirror) = mirror_environment.as_deref_mut() {
+                    *mirror = source.clone();
+                } else {
+                    commands.entity(mirror_entity).insert(source.clone());
+                }
+            }
+            None => {
+                commands.entity(mirror_entity).remove::<(
+                    bevy::light::GeneratedEnvironmentMapLight,
+                    bevy::light::EnvironmentMapLight,
+                )>();
+            }
+        }
+        if mirror_derived_environment.is_some() {
+            commands
+                .entity(mirror_entity)
+                .remove::<bevy::light::EnvironmentMapLight>();
+        }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn maintain_offscreen_render_camera(
     target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
     sources: Query<
@@ -4430,8 +4595,13 @@ fn maintain_offscreen_render_camera(
             Entity,
             &Transform,
             &Projection,
+            &bevy::camera::Exposure,
+            &bevy::core_pipeline::tonemapping::Tonemapping,
+            &bevy::render::view::Msaa,
             Option<&ChildOf>,
             Option<&CellCoord>,
+            Option<&bevy::light::Skybox>,
+            Option<&bevy::light::GeneratedEnvironmentMapLight>,
         ),
         (
             With<lunco_render::SceneCamera>,
@@ -4447,17 +4617,36 @@ fn maintain_offscreen_render_camera(
         ),
     >,
     mut mirrors: Query<(
+        Entity,
         &OffscreenRenderCamera,
         &mut Transform,
         &mut Projection,
         &mut Camera,
+        Option<&mut bevy::camera::Exposure>,
+        Option<&mut bevy::core_pipeline::tonemapping::Tonemapping>,
+        Option<&mut bevy::render::view::Msaa>,
         Option<&mut CellCoord>,
+        Option<&mut bevy::light::Skybox>,
+        Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
+        Option<&bevy::light::EnvironmentMapLight>,
     )>,
     mut commands: Commands,
 ) {
     let Some(target) = target else { return };
     let mut source_iter = sources.iter();
-    let Some((source, source_transform, projection, parent, cell)) = source_iter.next() else {
+    let Some((
+        source,
+        source_transform,
+        projection,
+        source_exposure,
+        source_tonemapping,
+        source_msaa,
+        parent,
+        cell,
+        source_skybox,
+        source_environment,
+    )) = source_iter.next()
+    else {
         return;
     };
     if source_iter.next().is_some() {
@@ -4465,17 +4654,37 @@ fn maintain_offscreen_render_camera(
         return;
     }
 
-    if let Ok(mut camera) = source_cameras.get_mut(source) {
+    let source_camera_settings = source_cameras.get_mut(source).ok().map(|mut camera| {
+        let settings = (
+            camera.viewport.clone(),
+            camera.msaa_writeback,
+            camera.clear_color.clone(),
+            camera.invert_culling,
+            camera.sub_camera_view.clone(),
+        );
         camera.output_mode = bevy::camera::CameraOutputMode::Skip;
         // Keep the authored camera active for the scene's camera-driven LOD and
         // pose systems, but give the non-writing source a distinct priority so
         // Bevy does not report two active cameras for the image target.
         camera.order = -1;
-    }
+        settings
+    });
 
     let mut found = false;
-    for (mirror, mut mirror_transform, mut mirror_projection, mut camera, mut mirror_cell) in
-        &mut mirrors
+    for (
+        mirror_entity,
+        mirror,
+        mut mirror_transform,
+        mut mirror_projection,
+        mut camera,
+        mirror_exposure,
+        mirror_tonemapping,
+        mirror_msaa,
+        mut mirror_cell,
+        mut mirror_skybox,
+        mut mirror_environment,
+        mirror_derived_environment,
+    ) in &mut mirrors
     {
         if mirror.0 != source {
             camera.is_active = false;
@@ -4484,9 +4693,44 @@ fn maintain_offscreen_render_camera(
         found = true;
         *mirror_transform = source_transform.clone();
         *mirror_projection = projection.clone();
+        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
+            &source_camera_settings
+        {
+            camera.viewport = viewport.clone();
+            camera.msaa_writeback = *msaa_writeback;
+            camera.clear_color = clear_color.clone();
+            camera.invert_culling = *invert_culling;
+            camera.sub_camera_view = sub_camera_view.clone();
+        }
+        if let Some(mut exposure) = mirror_exposure {
+            *exposure = *source_exposure;
+        } else {
+            commands.entity(mirror_entity).try_insert(*source_exposure);
+        }
+        if let Some(mut tonemapping) = mirror_tonemapping {
+            *tonemapping = *source_tonemapping;
+        } else {
+            commands
+                .entity(mirror_entity)
+                .try_insert(*source_tonemapping);
+        }
+        if let Some(mut msaa) = mirror_msaa {
+            *msaa = *source_msaa;
+        } else {
+            commands.entity(mirror_entity).try_insert(*source_msaa);
+        }
         if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
             *mirror_cell = *source_cell;
         }
+        sync_offscreen_environment(
+            &mut commands,
+            mirror_entity,
+            source_skybox,
+            source_environment,
+            mirror_skybox.as_deref_mut(),
+            mirror_environment.as_deref_mut(),
+            mirror_derived_environment,
+        );
         camera.is_active = true;
     }
     if !found {
@@ -4496,7 +4740,28 @@ fn maintain_offscreen_render_camera(
             bevy::camera::RenderTarget::Image(target.0.clone().into()),
             source_transform.clone(),
             projection.clone(),
+            *source_exposure,
+            *source_tonemapping,
+            *source_msaa,
         ));
+        if let Some(source_skybox) = source_skybox {
+            entity.insert(source_skybox.clone());
+        }
+        if let Some(source_environment) = source_environment {
+            entity.insert(source_environment.clone());
+        }
+        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
+            &source_camera_settings
+        {
+            entity.insert(Camera {
+                viewport: viewport.clone(),
+                msaa_writeback: *msaa_writeback,
+                clear_color: clear_color.clone(),
+                invert_culling: *invert_culling,
+                sub_camera_view: sub_camera_view.clone(),
+                ..default()
+            });
+        }
         if let Some(parent) = parent {
             entity.insert(parent.clone());
         }

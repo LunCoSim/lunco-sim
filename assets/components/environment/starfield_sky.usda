@@ -6,10 +6,10 @@
 )
 
 # Reusable lunar night sky. The starfield shader owns the sky appearance; this
-# component owns the standard USD material binding and the additive presentation
-# contract that lets terrain in front of it remain visible.
+# component owns the standard USD material binding and the opaque background
+# presentation contract that lets terrain in front of it remain visible.
 def Xform "StarfieldSky" (
-    doc = "Reusable additive lunar procedural camera background."
+    doc = "Reusable opaque lunar procedural camera background."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "MaterialBindingAPI"]
 )
@@ -41,7 +41,7 @@ def Xform "StarfieldSky" (
                 # presentation profile gives the star points enough integrated
                 # flux to survive the display transform without turning the
                 # galaxy into a flat white backdrop.
-                float inputs:brightness = 0.50
+                float inputs:brightness = 5.0
                 float inputs:band_intensity = 0.35
                 float inputs:point_size = 3.00
                 float inputs:glow = 0.35

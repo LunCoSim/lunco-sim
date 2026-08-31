@@ -56,9 +56,12 @@ luncosim --api 4101 --offscreen --render-quality high \
 | `--record-size WxH` | Offscreen target resolution (default 1280x720 — the windowed default, so offscreen takes match windowed ones). |
 | `--render-quality <low\|balanced\|high>` | Explicit renderer quality for this process. `high` is the highest shipped preset and raises shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. It does not replace shader sources authored by the USD scene. |
 
-After the authored camera contract is present, offscreen recording holds virtual time
-for a one-second cold-GPU render warm-up before numbering frame 0. This fence lets
-pipelines finish compiling without emitting a clear-color first frame.
+After the authored camera contract and the complete USD visual projection are
+present, offscreen recording holds virtual time for a one-second cold-GPU render
+warm-up before numbering frame 0. Scene completion includes queued projections
+and asynchronously generated meshes, so the recorder cannot begin with a valid
+camera and an incomplete render participant set. This fence lets pipelines finish
+compiling without emitting a clear-color first frame.
 
 Scene test observers use the same separation: a Rhai test under
 `assets/scenarios/tests/` is headless unless it declares
@@ -76,10 +79,14 @@ lunar-surface appearance.
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
 explicit active presentation camera, an authored `LocalAvatar` presentation camera,
 or an authored camera track with a valid camera binding. The recorder consumes that
-authored presentation contract and renders it through a target-born offscreen camera;
-the authored camera remains the pose owner. It does not select a camera by entity
+authored presentation contract and renders it through a target-born offscreen camera.
+That camera mirrors the source camera's transform, projection, exposure, tonemapping,
+MSAA, and camera-owned environment views (`Skybox` and generated image-based-lighting
+intent); the authored camera remains the pose owner. Derived environment maps are
+rebuilt by Bevy when the source cubemap changes. It does not select a camera by entity
 order. A scene with no valid presentation camera fails the recording readiness contract
-and reports the exact camera diagnostic instead of producing an incorrectly framed take.
+and reports the exact camera diagnostic instead of producing an incorrectly framed or
+graded take.
 
 ---
 

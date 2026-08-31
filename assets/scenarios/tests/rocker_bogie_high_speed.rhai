@@ -1,8 +1,8 @@
 // Full-throttle straight-line regression for the articulated rocker-bogie.
 //
-// This deliberately measures the chassis pose, not only distance. A rover can
-// keep making forward progress while the solver alternates wheel contact and
-// sends the body through a visible back-and-forth oscillation.
+// This measures both authoritative velocity and chassis pose. A rover can keep
+// making forward progress while the solver alternates wheel contact and sends
+// the body through a visible back-and-forth oscillation.
 
 const SETTLE_S = 4.0;
 const DRIVE_S = 12.0;
@@ -84,7 +84,15 @@ fn on_tick(me) {
         drive(this.rover, 1.0, 0.0);
 
         let d = vdist(p, this.prev);
-        let v = d / dt();
+        // Scenario ticks run before Avian's FixedPostUpdate integration. Two
+        // adjacent pose reads can therefore observe the same solved position,
+        // while the canonical rigid-body speed port still reports the live
+        // solver state. Do not turn schedule cadence into a motion verdict.
+        let v = get(this.rover, "speed");
+        if v == () {
+            finish_failure(this, "rocker-bogie rigid body did not publish speed");
+            return;
+        }
         this.travel += d;
         if this.last_speed != () {
             let dv = (v - this.last_speed).abs();

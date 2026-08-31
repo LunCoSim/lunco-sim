@@ -30,7 +30,11 @@ target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps
 ```
 
 - Recording starts **after the scene-visuals readiness gate**, not at process
-  start — don't be surprised by a few seconds of warm-up before frame 0.
+  start — don't be surprised by a few seconds of warm-up before frame 0. For a
+  USD scene this gate includes the stage's awaiting prims, queued visual
+  projections, asynchronously generated meshes, and the selected image camera;
+  a Rhai verdict or one early `Mesh3d` is not sufficient evidence that the render
+  view has participants.
 - **Destination picks the format**: `.mp4`/`.mkv`/`.mov` streams into `ffmpeg`
   (one small file); any other path is a directory of `frame_%06d.png`. No
   `ffmpeg` installed ⇒ loud warn + PNG fallback in `<name>.frames/`.
@@ -49,6 +53,10 @@ target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps
 - No workbench exists, so the recorder activates the scene's first **authored**
   `SceneCamera` (e.g. the luncosim `WideShot`). A scene with no authored camera
   records black and logs a warning — author a camera, don't fight the picker.
+- The target-born offscreen camera mirrors the selected authored camera's transform,
+  projection, exposure, tonemapping, MSAA, and camera-owned environment views
+  (`Skybox` plus generated image-based-lighting intent), so PNG/video output uses the
+  same authored grade and DomeLight background as the windowed presentation.
 - `--offscreen --api PORT` (without `--record-offline`) gives a windowless
   interactive instance: `StartOfflineRecording` / `CaptureScreenshot` work over
   HTTP and read the offscreen target.
