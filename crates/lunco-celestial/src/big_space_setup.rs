@@ -451,17 +451,13 @@ pub fn setup_big_space_hierarchy(
         ..Default::default()
     };
     // Physical sun identity is environmental state. Camera exposure remains
-    // authored by each `UsdGeomCamera`: changing every live `Exposure` here
-    // used to overwrite a scene's standard ISO/shutter/f-stop immediately
-    // after its Avatar had been composed, making low-light scenes black.
+    // authored by each `UsdGeomCamera`, so each scene keeps its own standard
+    // ISO/shutter/f-stop calibration.
     commands.insert_resource(ls);
     // NOTE on shadow readability: the ~23-stop lunar range (128 klx direct
-    // sun vs sub-lux earthshine) is NOT handled here with a global ambient —
-    // that lit the sky dome gray while the terrain march (which multiplies
-    // the FINAL color) killed it on the very terrain it was meant to lift.
-    // The fill lives in the march itself: `horizon_march.wgsl` floors sun
-    // visibility at a few percent, so shadowed terrain keeps its relief and
-    // space stays black.
+    // sun vs sub-lux earthshine) is not represented by a global ambient
+    // resource. The terrain march owns its authored shadow-floor policy so
+    // shadowed terrain keeps its relief while empty space stays black.
     commands.insert_resource(sun.shadow_map());
 
     // ── EMB Grid (inertial anchor for Earth-Moon system) ───────────────────
@@ -795,7 +791,9 @@ pub fn sync_site_gravity(
         return;
     }
     *gravity = Gravity::Surface;
-    info!("celestial takeover: site scene selected body-fixed surface gravity; stage-frame PhysicsScene gravity is not valid after site alignment");
+    info!(
+        "celestial takeover: site scene selected body-fixed surface gravity; stage-frame PhysicsScene gravity is not valid after site alignment"
+    );
 }
 
 #[cfg(test)]

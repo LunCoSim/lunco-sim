@@ -3647,8 +3647,9 @@ fn mirror_recording_to_terrain_lockstep(
 /// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
 /// [`StatusBus`](lunco_workbench::status_bus::StatusBus) so scene-open tile
 /// baking is visible ("streaming terrain N/M" + progress bar) instead of an
-/// unexplained black viewport. Progress entries auto-clear once the wanted set
-/// is fully resident.
+/// unexplained black viewport. The active progress entry is the sole live
+/// streaming state; once it clears, publish the current terminal count so the
+/// status bar cannot fall back to an obsolete start message.
 #[cfg(feature = "ui")]
 fn report_terrain_stream_status(
     status: Res<lunco_terrain_surface::TerrainStreamStatus>,
@@ -3663,16 +3664,10 @@ fn report_terrain_stream_status(
     const STREAM_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     const DERIVED_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE;
     let streaming = status.wanted > 0 && status.resident < status.wanted;
-    if streaming && !mirror.streaming {
-        bus.push(
-            STREAM_SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
-            format!(
-                "Terrain streaming started ({}/{})",
-                status.resident, status.wanted
-            ),
-        );
-    }
+    let completed = mirror.streaming
+        && status.wanted > 0
+        && status.resident >= status.wanted
+        && status.pending == 0;
     if streaming {
         bus.set_progress(
             STREAM_SOURCE,
@@ -3685,6 +3680,16 @@ fn report_terrain_stream_status(
         );
     } else {
         bus.remove_progress(STREAM_SOURCE);
+    }
+    if completed {
+        bus.push(
+            STREAM_SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
+            format!(
+                "Terrain streaming ready ({}/{})",
+                status.resident, status.wanted
+            ),
+        );
     }
     mirror.streaming = streaming;
 
@@ -3712,6 +3717,91 @@ fn report_terrain_stream_status(
         bus.remove_progress(DERIVED_SOURCE);
     }
     mirror.deriving = derived.active;
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod terrain_status_tests {
+    use super::*;
+
+    #[test]
+    fn terrain_progress_ends_with_current_terminal_status() {
+        let mut app = App::new();
+        app.insert_resource(lunco_terrain_surface::TerrainStreamStatus {
+            wanted: 2,
+            resident: 0,
+            pending: 2,
+            ..Default::default()
+        })
+        .insert_resource(lunco_terrain_surface::TerrainDerivedStatus::default())
+        .insert_resource(lunco_workbench::status_bus::StatusBus::default())
+        .insert_resource(TerrainStatusMirrorState::default())
+        .add_systems(Update, report_terrain_stream_status);
+
+        app.update();
+        {
+            let bus = app
+                .world()
+                .resource::<lunco_workbench::status_bus::StatusBus>();
+            let progress = bus
+                .active_progress()
+                .find(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .expect("terrain streaming must expose live progress");
+            assert_eq!(progress.message, "Streaming terrain tiles 0/2");
+            assert!(bus.history().next().is_none());
+        }
+
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+            lunco_terrain_surface::TerrainStreamStatus {
+                wanted: 2,
+                resident: 1,
+                pending: 1,
+                ..Default::default()
+            };
+        app.update();
+        {
+            let bus = app
+                .world()
+                .resource::<lunco_workbench::status_bus::StatusBus>();
+            let progress: Vec<_> = bus
+                .active_progress()
+                .filter(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .collect();
+            assert_eq!(progress.len(), 1, "stream ticks must replace one live status");
+            assert_eq!(progress[0].message, "Streaming terrain tiles 1/2");
+            assert!(bus.history().next().is_none());
+        }
+
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+            lunco_terrain_surface::TerrainStreamStatus {
+                wanted: 2,
+                resident: 2,
+                ..Default::default()
+            };
+        app.update();
+        {
+            let bus = app
+                .world()
+                .resource::<lunco_workbench::status_bus::StatusBus>();
+            assert!(bus
+                .active_progress()
+                .all(|event| event.source != lunco_workbench::status_bus::TERRAIN_SOURCE));
+            let history: Vec<_> = bus.history().collect();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].message, "Terrain streaming ready (2/2)");
+        }
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<lunco_workbench::status_bus::StatusBus>()
+                .history()
+                .count(),
+            1,
+            "a settled terrain must not publish duplicate terminal events"
+        );
+    }
 }
 
 #[cfg(feature = "ui")]

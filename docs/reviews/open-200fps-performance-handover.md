@@ -202,6 +202,24 @@ application shim is retained. Future generic propagation optimization belongs
 upstream in BigSpace and must be adopted only after an upstream revision is
 available and measured against the same production scene.
 
+#### 2026-08-31 prepared-solve admission ordering
+
+The sandbox startup trace isolated the remaining cold Modelica delay to the
+first prepared-solve lookup. `ModelicaCompiler` had already admitted the needed
+source roots, but `PreparedSolveCache` then recursively scanned `assets/models`
+and the MSL tree before reading its existing prepared artifact. The scan took
+approximately 0.69 s in the focused trace and approximately 2.29 s in an
+earlier normal run; the prepared artifact read itself completed in milliseconds
+and live session construction was below 1 ms.
+
+The cache now consumes a deterministic aggregate revision recorded by
+`ModelicaCompiler` while each source root is admitted. The disk format is
+versioned as `prepared-solve-v4`, and the readiness barrier remains unchanged:
+USD, Modelica, authored joints, and the fixed solver initialization must all be
+terminal before physics and scenario execution open. This makes cache
+validation part of the existing source-admission order instead of adding a
+second startup traversal.
+
 #### 2026-08-28 verification after source-owner fixes
 
 - `rustup run nightly-2026-02-27 cargo test -p lunco-avatar --lib -j 4` passed
@@ -570,6 +588,44 @@ were not repeated after this run.
   shader-fallback fixture does not produce its expected red pixel. The
   parallel scheduler itself published every result and cleaned up every
   production process.
+
+#### 2026-08-31 native parallel DAE solve preparation
+
+The remaining cold sandbox startup cost was not Modelica source compilation:
+the worker was lowering each compiled DAE into live solve IR serially before it
+could construct a `LiveStepper`. Rumoca's lowering entry point takes an owned
+DAE plus `SimOptions`, uses request-local evaluation state, and returns pure
+`SolveModel` data; it does not require the mutable compiler session. The native
+worker now submits those cache-miss lowerings to a bounded four-worker Rayon
+pool. Only the worker thread commits cache entries and constructs the
+non-`Send` live steppers, so the architecture does not move compiler/session or
+simulation ownership across threads.
+
+The scheduler treats preparation as lifecycle state. Steps and rebuilds for an
+entity wait for its result, source-root changes wait for every active
+preparation, and despawned jobs remain counted until their already-running pool
+task drains. This preserves the existing readiness barrier: physics starts only
+after all compile results and visual participants are ready.
+
+Evidence from the USD checkout's `target/` with an empty prepared-solve-v4
+directory and no overlapping luncosim session:
+
+- `cargo test -p lunco-modelica --lib -j4`: **294 passed, 1 ignored**.
+- `cargo build -p lunco-luncosim --bin luncosim -j4`: passed.
+- Production `target/debug/luncosim --api 4194 --no-vsync --no-throttle
+  --log-diag --render-quality high --scene
+  assets/scenes/luncosim/sandbox_scene.usda`: `/api/ready` reached
+  `ready=true`, `world_hold=false`, `pending_count=0` in **5.42 s** from
+  window creation; typed `Exit` was accepted and port 4194 closed.
+- Detailed trace on port 4195 measured the six large cache-miss lowerings at
+  approximately **1.80–2.61 s each while overlapped**, with readiness at
+  **4.78 s after the first compile command**. This is a cold-start reduction
+  from the earlier serial ~13 s observation, but it is not the <2 s target.
+
+The measured bottleneck is now Rumoca solve lowering itself and its memory
+bandwidth under bounded concurrency; increasing the pool beyond four is not a
+legitimate optimization without new measurements because the earlier
+28-worker run increased individual large-model lowering to roughly 6.4–7.0 s.
 
 #### 2026-08-30 BigSpace stationary streamed visual tiles
 

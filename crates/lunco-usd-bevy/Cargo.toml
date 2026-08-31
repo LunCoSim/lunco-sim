@@ -66,6 +66,7 @@ openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
+lunco-materials = { path = "../lunco-materials" }
 big_space = { workspace = true }
 anyhow = { workspace = true }
 # CPU glyph rasterisation for the failed-asset diagnostic label: the

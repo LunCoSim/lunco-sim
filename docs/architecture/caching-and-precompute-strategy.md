@@ -334,11 +334,24 @@ the integrator state.
 4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica/src/worker.rs`
    keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    structural artifact cache that shares immutable DAE compilation across
-   scene instances. The prepared live solve IR is reused by DAE identity in
-   RAM and persisted by structural source key plus library fingerprint, solver,
-   and parameter overrides. Generated USD wrapper names and runtime-root
+   scene instances. The prepared live solve IR is reused by structural source
+   identity in RAM and persisted by structural source key plus the compiler-owned library
+   admission revision, solver, and parameter overrides. `ModelicaCompiler`
+   computes each root revision while it is already reading that root into its
+   Rumoca session; the cache never rescans the full Modelica tree during the
+   first live stepper build. Generated USD wrapper names and runtime-root
    identity are excluded from that key; authored source identity remains part
    of it.
+
+   Live solve-IR lowering is an immutable operation over the compiled DAE, so
+   native startup submits cache misses to a small bounded Rayon pool. The
+   worker thread remains the sole owner of compiler/session state and commits
+   each resulting `SolveModel` before constructing the non-`Send` live stepper.
+   Per-entity commands wait for that commit, source-root changes wait for all
+   active preparations, and despawned work remains counted until its pool job
+   drains. This keeps the readiness barrier and physics admission ordering
+   unchanged while overlapping independent models; it does not parallelize
+   mutable compilation or simulation stepping.
 
 **Static-scene shortcut (architectural):** the Moon scene is static terrain +
 slow sun + a few dynamic movers. Baked horizon shadows (§4.1) already cover

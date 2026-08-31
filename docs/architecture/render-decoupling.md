@@ -114,13 +114,15 @@ would let a look reflect like diamond and refract like glass, and would need to 
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
 `ProceduralSkybox` is a render-free scene intent that may accompany `ShaderLook`.
-The `lunco-render-bevy` binder keeps the same reflected `ShaderMaterial` and
-parameter values, but queues that material as one non-mesh item in Bevy's built-in
-`Opaque3d` phase. The phase renders it after opaque geometry in the same render
-pass, so Bevy owns the color/depth lifecycle and reverse-Z depth testing leaves
-the already-rendered scene in front while the clear value admits the background.
-It therefore has no mesh, radius, culling bound, or camera far-plane dependency.
-A scene must have at most one active
+The USD projection reads the authored `lunco:surface:skybox` flag once on its
+`Xform` owner, stamps this intent, and projects no `UsdGeomGprim` for that
+background. The `lunco-render-bevy` binder keeps the same reflected
+`ShaderMaterial` and parameter values, but queues that material as one non-mesh
+item in Bevy's built-in `Opaque3d` phase. The phase renders it after opaque
+geometry in the same render pass, so Bevy owns the color/depth lifecycle and
+reverse-Z depth testing leaves the already-rendered scene in front while the
+clear value admits the background. It therefore has no mesh, radius, culling
+bound, or camera far-plane dependency. A scene must have at most one active
 procedural background owner; multiple owners disable the pass until authoring is
 corrected. Textured `DomeLight` remains the separate environment-lighting path.
 

@@ -54,6 +54,11 @@ Before interpreting a live read as a finished scene, check
 `pending_count:0`. A port may be absent while its Modelica island is still
 compiling; that is different from a valid zero.
 
+For DEM terrain, read the typed `TerrainLodStatus` query as the authoritative
+stream state. A settled visual terrain requires `wanted == resident` and
+`pending == 0`; the status-bar text is presentation history and is not a
+readiness signal.
+
 ### Fixed-panel rover readout
 
 For a fixed solar deck, list the rover-root network entity and read its

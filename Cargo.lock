@@ -8123,6 +8123,7 @@ dependencies = [
  "half",
  "lunco-assets",
  "lunco-core",
+ "lunco-materials",
  "lunco-render",
  "lunco-settings",
  "lunco-time",

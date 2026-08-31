@@ -1809,13 +1809,13 @@ class "LunCoSurfaceAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Engine-side surface blend override for a gprim's material — what
-    core USD's opacity primvars cannot say."""
+    doc = """Engine-side surface blend override for an authored gprim's material —
+    what core USD's opacity primvars cannot say."""
 )
 {
     bool lunco:surface:additive = false (
         doc = """Render this surface with ADDITIVE blending — a glow (engine
-        plume, sky dome) that brightens without occluding. Distinct from
+        plume or other authored gprim) that brightens without occluding. Distinct from
         `primvars:displayOpacity` blending, which still occludes."""
     )
 }

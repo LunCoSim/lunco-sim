@@ -62,6 +62,7 @@ pub fn apply_usd_shader_materials(
             Entity,
             &UsdPrimPath,
             Option<&lunco_usd_bevy::UsdVisualMeshTarget>,
+            Has<ProceduralSkybox>,
         ),
         (With<UsdVisualSynced>, Without<UsdShaderResolved>),
     >,
@@ -78,7 +79,7 @@ pub fn apply_usd_shader_materials(
     asset_server: Res<AssetServer>,
 ) {
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    for (entity, prim_path, visual_target) in q.iter() {
+    for (entity, prim_path, visual_target, procedural_skybox) in q.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
@@ -97,6 +98,7 @@ pub fn apply_usd_shader_materials(
             enable_shaders,
             &asset_server,
             visual_target.map(|target| target.0),
+            procedural_skybox,
         );
     }
 }
@@ -115,6 +117,7 @@ fn apply_usd_shader_material_read(
     enable_shaders: bool,
     asset_server: &AssetServer,
     visual_target: Option<Entity>,
+    procedural_skybox: bool,
 ) {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
@@ -217,26 +220,6 @@ fn apply_usd_shader_material_read(
     // 88-92% identical and had already drifted apart twice; a shader_def cannot.
     let resolved_shader_path = shader_path;
 
-    // A procedural sky is an explicit scene owner, not an inference from a
-    // shader filename or from a finite Sphere. The renderer consumes the same
-    // ShaderLook values but routes this marked look through its camera
-    // background pass, so camera position and frustum size cannot make the sky
-    // disappear.
-    let procedural_skybox = match read_authored_bool_strict(
-        reader,
-        sdf_path,
-        "lunco:surface:skybox",
-    ) {
-        Ok(value) => value.unwrap_or(false),
-        Err(_) => {
-            error!(
-                "[shader] prim {} has malformed authored attribute `lunco:surface:skybox`; keeping its PbrLook",
-                prim_path.path
-            );
-            return;
-        }
-    };
-
     debug!(
         "[shader] applied {} to {}",
         resolved_shader_path, prim_path.path
@@ -270,9 +253,9 @@ fn apply_usd_shader_material_read(
     };
     // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
     // the two above and carried for the same reason: the PBR path maps it to
-    // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. The sky
-    // dome is the case that cannot work without it — viewed from INSIDE, a culled
-    // dome shows nothing (or, from outside, its far hemisphere: a disc of sky).
+    // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. This
+    // remains a property of authored gprims; procedural camera backgrounds use
+    // the fullscreen pass and never reach this mesh-material path.
     let double_sided = match read_authored_bool_strict(reader, sdf_path, "doubleSided") {
         Ok(value) => value.unwrap_or(false),
         Err(_) => {
@@ -340,12 +323,16 @@ fn apply_usd_shader_material_read(
         }
     };
     // Optional per-material VERTEX stage, named exactly as the fragment source is:
-    // `info:wgsl:vertexAsset` on the same `Shader` prim. Same normalisation as
-    // `sourceAsset` so `@lunco://…@` and bare paths agree. Procedural camera
-    // backgrounds omit this mesh stage and use the renderer's fullscreen vertex.
-    let vertex_shader = reader
-        .asset(&shader_prim, "info:wgsl:vertexAsset")
-        .map(|raw| lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(&raw)));
+    // `info:wgsl:vertexAsset` on the same `Shader` prim. Procedural camera
+    // backgrounds always use the renderer's fullscreen vertex and therefore do
+    // not read or carry a mesh vertex stage.
+    let vertex_shader = (!procedural_skybox)
+        .then(|| {
+            reader
+                .asset(&shader_prim, "info:wgsl:vertexAsset")
+                .map(|raw| lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(&raw)))
+        })
+        .flatten();
     let look = ShaderLook {
         shader,
         vertex_shader,
@@ -372,9 +359,6 @@ fn apply_usd_shader_material_read(
         lunco_core::PortSurfaceReady,
         lunco_usd_bevy::UsdVisualShaderBound,
     ));
-    if procedural_skybox {
-        entity_commands.try_insert(ProceduralSkybox);
-    }
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a

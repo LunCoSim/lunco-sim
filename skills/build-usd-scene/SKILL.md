@@ -81,7 +81,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
    The response `data` carries the new entity id.
 4. **Adjust:** `MoveEntity` or `TransformEntity` / `SetObjectProperty` (colour, mass, material, scale) /
    `SelectEntity` to inspect.
-5. **Confirm:** `CaptureScreenshot` → `/tmp/x.png` → Read it (see
+5. **Confirm:** `CaptureScreenshot` → `target/x.png` → Read it (see
    [`inspect-simulation`](../inspect-simulation/SKILL.md) for reading state back).
 6. **Persist:** to make it permanent, author it into the `.usda` scene file under
    `assets/scenes/` (the runtime edits are USD ops; save them into the layer).
@@ -103,7 +103,13 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 - **Bevy renders an axis-Y `Cone` with its APEX UP.** Verify the authored axis and orientation in a render before adding a corrective rotation.
 - **rhai has no float `pow`.** Exponentiation is registered under the OPERATOR name `**` only (`packages/arithmetic.rs`), so `pow(x, 0.7)` throws `Function not found: pow (f64, f64)` every tick — and because a scenario's error is per-tick and non-fatal, the rest of that function silently never runs. Use `x ** 0.7`.
 - **DUPLICATE NAMES ARE SILENT — check them before debugging unrelated rendering.** Two prims with the same name in one parent, or the same property authored twice on one prim, can be accepted without a diagnostic and change the composed result. Search the parent scope and property name before investigating shaders.
-- **A sphere you add for the Sun or Earth casts a shadow.** Sky bodies are real geometry sitting up-sun: they eclipse the DistantLight and sweep a hard shadow across the ground. Author `bool primvars:doNotCastShadows = true` (the starfield dome does; `big_space_setup.rs` stamps `NotShadowCaster` on the engine's own sun sphere). Better still, declare bodies with `LunCoCelestialBodyAPI` (`lunco:body = 399`) and let the ephemeris place them at true distance.
+- **A procedural camera background is not a sphere.** Author the existing
+  `environment/starfield_sky.usda` pattern: an `Xform` with
+  `MaterialBindingAPI` and `bool lunco:surface:skybox = true`. USD projection
+  stamps `ProceduralSkybox` and the renderer uses its fullscreen background
+  pass, so there is no radius, culling volume, collision surface, or mesh
+  vertex shader to maintain. Use `UsdLuxDomeLight` for a textured environment
+  light; it is a separate lighting contract.
 - **Custom-shader inputs are snake_case** — the ShaderMaterial reflection binds the WGSL struct's field names (`star_density`, `point_size`, `brightness`). A camelCase `inputs:starDensity` is a dead wire: no error, no effect, and hours of "why does tuning the sky do nothing".
 - **Exposure and illuminance only mean something together.** The frame's brightness is `illuminance / 2^EV100`, so a scene that copies a `DistantLight` intensity from one file and an `exposureEv100` from another lands stops away from either. Author both on purpose: the sun prim's `inputs:intensity` and the `LunCoEnvironment` prim's `lunco:env:exposureEv100`.
 - **Celestial time is an explicit scene choice.** A `SolarSystem` reference makes body poses ephemeris-driven; `LunCoEpochAPI` makes the scene responsible for choosing the mission epoch. Author both the API and `lunco:time:epochJd` together. If the lesson needs repeatable light but not astronomy, use the fixed `DistantLight` contract instead.

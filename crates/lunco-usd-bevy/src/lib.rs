@@ -11,9 +11,10 @@
 //! 2. The asset loader composes and snapshots the full default-time read surface on
 //!    the async asset path; `process_queued_usd_visuals` only binds that owned data
 //!    to Bevy over bounded frames.
-//! 3. For each prim, it uses the prepared authored structure and creates or schedules geometry
-//!    based on the prim type (`Cube`, `Cylinder`, `Sphere`) using explicit dimensions
-//!    from the USD file.
+//! 3. For each renderable prim, it uses the prepared authored structure and creates or schedules
+//!    geometry based on the prim type (`Cube`, `Cylinder`, `Sphere`) using explicit dimensions
+//!    from the USD file. A prim explicitly marked as a procedural camera background has no
+//!    geometry projection; its appearance intent is consumed by the background render pass.
 //! 4. It spawns the planned child hierarchy with pre-populated transforms so
 //!    physics systems see them in the correct positions.
 //!
@@ -45,6 +46,7 @@ use lunco_usd_compose::parse_usda;
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
 // See docs/architecture/render-decoupling.md.
+use lunco_materials::ProceduralSkybox;
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 pub use openusd::sdf::Path as SdfPath;
 // `UsdData` remains the Send-safe authored-layer representation used by document
@@ -1058,7 +1060,9 @@ pub fn instance_key(
 ///    the stage generation: the worker-produced plan initially, then the live
 ///    canonical stage after an authored change.
 /// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere), or schedules
-///    detached CPU geometry through the async mesh phase.
+///    detached CPU geometry through the async mesh phase. Procedural camera
+///    backgrounds are the explicit exception: they are render intents only and
+///    never create or schedule a mesh.
 /// 3. Applies the prim's transform (position + rotation + scale).
 /// 4. Spawns each prim child below its USD parent. A top-level child of the
 ///    nested scene Grid carries its own `CellCoord`; deeper descendants remain
@@ -1243,6 +1247,46 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
 
+        // A procedural camera background is an Xform-level appearance intent,
+        // not a USD gprim. Read the authored contract once at the USD
+        // projection boundary and let the existing render-free marker carry it
+        // to the shader binder. Geometry dispatch below is therefore never
+        // entered for the background owner.
+        let procedural_skybox =
+            match read_authored_bool_strict(reader, &sdf_path, "lunco:surface:skybox") {
+                Ok(value) => value.unwrap_or(false),
+                Err(error) => {
+                    let message = format!(
+                        "{} has malformed authored attribute `lunco:surface:skybox`: {error}",
+                        sdf_path.as_str()
+                    );
+                    error!("[usd-bevy] {message}");
+                    commands
+                        .entity(entity)
+                        .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    return;
+                }
+            };
+        if procedural_skybox && prim_type.as_deref() != Some("Xform") {
+            let message = format!(
+                "{} authors `lunco:surface:skybox` on `{}`; the intent must be on an Xform",
+                sdf_path.as_str(),
+                prim_type.as_deref().unwrap_or("untyped prim")
+            );
+            error!("[usd-bevy] {message}");
+            commands
+                .entity(entity)
+                .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+            lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+            return;
+        }
+        if procedural_skybox {
+            commands.entity(entity).try_insert(ProceduralSkybox);
+        } else {
+            commands.entity(entity).try_remove::<ProceduralSkybox>();
+        }
+
         // UsdLux light prims (`DistantLight` sun / `DomeLight` sky — see
         // `light.rs`, and `dome.rs` for a DomeLight that carries an HDRI). A
         // light produces no mesh; the shared transform path below still
@@ -1395,6 +1439,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // collider can't desync. Mesh-quality parameters come from the
         // Graphics profile — they're rendering-only and don't affect physics.
         let primitive_shape = if !invisible
+            && !procedural_skybox
             && !matches!(
                 prim_type.as_deref(),
                 Some("Mesh") | Some("NurbsPatch") | Some("BasisCurves") | Some("NurbsCurves")
@@ -1406,7 +1451,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             None
         };
         let mut mesh_pending = false;
-        let mesh_handle: Option<Handle<Mesh>> = if invisible {
+        let mesh_handle: Option<Handle<Mesh>> = if invisible || procedural_skybox {
             None
         } else if prim_type.as_deref() == Some("Mesh") {
             // Native UsdGeomMesh: decode points/faceVertexIndices/normals/st
@@ -1504,8 +1549,14 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
 
         if let Some(shape) = primitive_shape {
             commands.entity(entity).try_insert(UsdPrimitiveMesh(shape));
-        } else if mesh_handle.is_none() {
-            commands.entity(entity).remove::<UsdPrimitiveMesh>();
+        } else if mesh_handle.is_none() && !mesh_pending {
+            commands
+                .entity(entity)
+                .remove::<Mesh3d>()
+                .remove::<UsdPrimitiveMesh>()
+                .remove::<UsdCurveMesh>()
+                .remove::<PendingUsdMesh>()
+                .remove::<UsdVisualMeshPending>();
         }
 
         // Author the PBR appearance intent (`PbrLook`) with the USD
