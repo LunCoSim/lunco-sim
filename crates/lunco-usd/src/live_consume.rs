@@ -828,6 +828,11 @@ pub(crate) fn reconcile_structural_live(
         let live = find_live_entity(world, id, path);
         match (exists, live) {
             (false, Some(entity)) => {
+                if let Some(mut pending) =
+                    world.get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
+                {
+                    pending.remove(id, path);
+                }
                 lunco_usd_sim::cosim::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
@@ -859,7 +864,40 @@ pub(crate) fn reconcile_structural_live(
                         }
                     }
                 };
-                lunco_usd_sim::cosim::spawn_usd_child_under_parent(world, parent_entity, path, tf);
+                let mut instance_projection = world
+                    .get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
+                    .and_then(|mut pending| pending.take(id, path));
+                if let Some(projection) = instance_projection.as_mut() {
+                    projection.canonical_generation = world
+                        .get_non_send::<CanonicalStages>()
+                        .and_then(|stages| stages.get(id))
+                        .map_or(0, |stage| stage.generation);
+                }
+                let catalog_id = instance_projection.as_ref().and_then(|_| {
+                    world
+                        .non_send::<CanonicalStages>()
+                        .get(id)
+                        .and_then(|stage| stage.view().text(&sp, "lunco:catalogId"))
+                        .filter(|value| !value.trim().is_empty())
+                });
+                if let Some(entity) = lunco_usd_sim::cosim::spawn_usd_child_under_parent(
+                    world,
+                    parent_entity,
+                    path,
+                    tf,
+                ) {
+                    if let Some(mut projection) = instance_projection {
+                        projection.root = Some(entity);
+                        world
+                            .entity_mut(entity)
+                            .insert((lunco_usd_bevy::UsdInstanceRoot, projection));
+                    }
+                    if let Some(catalog_id) = catalog_id {
+                        world
+                            .entity_mut(entity)
+                            .insert(lunco_core::CatalogEntryId(catalog_id));
+                    }
+                }
             }
             // ALREADY LIVE, AND RESYNCED — not "nothing to do".
             //

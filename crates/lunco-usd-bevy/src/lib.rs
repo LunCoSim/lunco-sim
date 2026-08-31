@@ -998,6 +998,26 @@ pub struct UsdInstanceMember {
     pub root_path: String,
 }
 
+/// Prepared composed read data and identity scope for a referenced runtime instance.
+///
+/// The source asset is composed once on the asset worker. This remapped plan
+/// lets every descendant read the same composed facts at its scene instance
+/// path without reopening or repeatedly querying the live scene stage.
+#[derive(Component, Debug, Clone)]
+pub struct UsdInstanceProjection {
+    /// The runtime instance root whose USD identity scopes this projection.
+    /// It is assigned when the live-stage reconciliation creates the root and
+    /// is inherited by every projected descendant.
+    pub root: Option<Entity>,
+    pub plan: Arc<UsdStageProjectionPlan>,
+    /// Canonical-stage generation for which this prepared plan is valid.
+    ///
+    /// The generation is assigned when the live stage sink admits the
+    /// reference. Any later authored change advances the generation and
+    /// makes the entity reader use the live composed stage again.
+    pub canonical_generation: u64,
+}
+
 /// A USD instance member's *role*: its prim path relative to the instance root.
 /// `/SolarPanel` + `/SolarPanel/Frame/Bolt` → `Frame/Bolt`. Falls back to the
 /// full (leading-slash-trimmed) path if the prefix doesn't match.
@@ -1024,9 +1044,10 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
 /// `derive_id(parent, role)`, a pure function of identity, so a hot-swapped
 /// program re-resolves to the same endpoints). Returns:
 /// - `Some(root_gid)` for a runtime instance — a descendant reports its
-///   [`Provenance::Derived`](lunco_core::Provenance::Derived)`{ parent }` (the
-///   root's GID); the root itself (`Authoritative`, tagged [`UsdInstanceRoot`])
-///   reports its own GID.
+///   [`Provenance::Derived`](lunco_core::Provenance::Derived)`{ parent }` when
+///   identity assignment has completed, or resolves the same root through its
+///   durable [`UsdInstanceProjection`] while that projection is live; the root
+///   itself (`Authoritative`, tagged [`UsdInstanceRoot`]) reports its own GID.
 /// - `None` for authored scene prims, whose composed paths are already globally
 ///   unique, so they share one namespace safely.
 ///
@@ -1040,11 +1061,37 @@ pub fn instance_key(
     q_provenance: &Query<&lunco_core::Provenance>,
     q_gid: &Query<&lunco_core::GlobalEntityId>,
     q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: &Query<&UsdInstanceProjection>,
+) -> Option<u64> {
+    instance_key_from_projection(
+        entity,
+        q_provenance,
+        q_gid,
+        q_instance_root,
+        q_instance_projection.get(entity).ok(),
+    )
+}
+
+/// Resolve instance scope when the caller already fetched the entity's
+/// projection as part of its primary query.
+pub fn instance_key_from_projection(
+    entity: Entity,
+    q_provenance: &Query<&lunco_core::Provenance>,
+    q_gid: &Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+    projection: Option<&UsdInstanceProjection>,
 ) -> Option<u64> {
     match q_provenance.get(entity) {
         Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
-        _ if q_instance_root.contains(entity) => q_gid.get(entity).map(|g| g.get()).ok(),
-        _ => None,
+        _ => projection
+            .and_then(|projection| projection.root)
+            .and_then(|root| q_gid.get(root).map(|gid| gid.get()).ok())
+            .or_else(|| {
+                q_instance_root
+                    .contains(entity)
+                    .then(|| q_gid.get(entity).map(|gid| gid.get()).ok())
+                    .flatten()
+            }),
     }
 }
 
@@ -1080,6 +1127,7 @@ fn instantiate_usd_prim(
     existing_tf: Option<&Transform>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
+    instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
     parent_is_grid: bool,
     is_grid_entity: bool,
@@ -1099,7 +1147,8 @@ fn instantiate_usd_prim(
         );
         return;
     };
-    let (reader, stage_generation) = canonical.reader_for(id, stage_asset);
+    let (reader, stage_generation) =
+        canonical.reader_for_entity(id, stage_asset, instance_projection);
     instantiate_usd_prim_from_reader(
         &reader,
         entity,
@@ -1108,6 +1157,7 @@ fn instantiate_usd_prim(
         existing_tf,
         is_instance_root,
         inherited_member,
+        instance_projection,
         is_high_precision_parent,
         parent_is_grid,
         is_grid_entity,
@@ -1134,6 +1184,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     existing_tf: Option<&Transform>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
+    instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
     parent_is_grid: bool,
     is_grid_entity: bool,
@@ -1936,6 +1987,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             reader,
             &sdf_path,
             &child_member,
+            instance_projection,
             is_high_precision_parent,
             is_grid_entity,
             commands,
@@ -1993,6 +2045,7 @@ fn commit_usd_children<R: UsdRead>(
     reader: &R,
     parent_path: &SdfPath,
     child_member: &Option<UsdInstanceMember>,
+    instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
     is_grid_entity: bool,
     commands: &mut Commands,
@@ -2041,26 +2094,43 @@ fn commit_usd_children<R: UsdRead>(
                     member.clone(),
                     big_space::grid::propagation::LowPrecisionRoot,
                 ),
+                instance_projection.cloned(),
             ),
             Some(member) if is_grid_entity => queue_usd_child_spawn(
                 commands,
                 parent,
                 base_components,
                 (member.clone(), CellCoord::default()),
+                instance_projection.cloned(),
             ),
-            Some(member) => {
-                queue_usd_child_spawn(commands, parent, base_components, (member.clone(),))
-            }
+            Some(member) => queue_usd_child_spawn(
+                commands,
+                parent,
+                base_components,
+                (member.clone(),),
+                instance_projection.cloned(),
+            ),
             None if is_low_precision_root_target => queue_usd_child_spawn(
                 commands,
                 parent,
                 base_components,
                 (big_space::grid::propagation::LowPrecisionRoot,),
+                instance_projection.cloned(),
             ),
-            None if is_grid_entity => {
-                queue_usd_child_spawn(commands, parent, base_components, (CellCoord::default(),))
-            }
-            None => queue_usd_child_spawn(commands, parent, base_components, ()),
+            None if is_grid_entity => queue_usd_child_spawn(
+                commands,
+                parent,
+                base_components,
+                (CellCoord::default(),),
+                instance_projection.cloned(),
+            ),
+            None => queue_usd_child_spawn(
+                commands,
+                parent,
+                base_components,
+                (),
+                instance_projection.cloned(),
+            ),
         };
 
         if reader
@@ -2091,6 +2161,7 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
     parent: Entity,
     base: Base,
     extra: Extra,
+    projection: Option<UsdInstanceProjection>,
 ) -> Entity {
     let child = commands.spawn_empty().id();
     commands.queue(move |world: &mut World| {
@@ -2102,6 +2173,9 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
             return;
         };
         entity.insert((base, ChildOf(parent), extra));
+        if let Some(projection) = projection {
+            entity.insert(projection);
+        }
     });
     child
 }
@@ -2286,6 +2360,7 @@ pub fn process_queued_usd_visuals(
             Option<&Transform>,
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
+            Option<&UsdInstanceProjection>,
         ),
         (
             With<UsdVisualProjectionQueued>,
@@ -2331,7 +2406,7 @@ pub fn process_queued_usd_visuals(
     let started = web_time::Instant::now();
     let mut projected = 0usize;
 
-    for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
+    for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in q.iter() {
         if projected != 0 && started.elapsed() >= settings.frame_budget {
             break;
         }
@@ -2377,6 +2452,7 @@ pub fn process_queued_usd_visuals(
             tf,
             is_instance_root,
             member,
+            instance_projection,
             is_high_precision_parent,
             parent_is_grid,
             q_grid.contains(entity),

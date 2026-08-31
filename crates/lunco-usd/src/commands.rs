@@ -360,6 +360,7 @@ impl Plugin for UsdCommandsPlugin {
         // Referenced spawns whose asset closure is still loading (fetched once,
         // then authored onto the live stage — no whole-scene reload).
         app.init_resource::<crate::twin_projection::PendingRefSpawns>();
+        app.init_resource::<crate::twin_projection::PendingInstanceProjections>();
         // Gated on the asset pipeline: these need `AssetServer` (to fetch a
         // referenced asset's closure) and the `Assets<UsdSourceText>` store
         // (UsdBevyPlugin's `init_asset`). Both are absent in headless

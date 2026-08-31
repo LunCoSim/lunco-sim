@@ -44,7 +44,7 @@ use avian3d::{
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_usd_bevy::{instance_key, UsdInstanceRoot, UsdPrimPath};
+use lunco_usd_bevy::{instance_key, UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.
@@ -186,13 +186,20 @@ fn collider_owner(
     q_provenance: &Query<&lunco_core::Provenance>,
     q_gid: &Query<&lunco_core::GlobalEntityId>,
     q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: &Query<&UsdInstanceProjection>,
 ) -> Option<Entity> {
     let mut candidate = Some(path.to_string());
     while let Some(p) = candidate {
         if let Some((e, _)) = q_colliders.iter().find(|(e, up)| {
             up.path == p
                 && up.stage_handle == *stage_handle
-                && instance_key(*e, q_provenance, q_gid, q_instance_root) == root
+                && instance_key(
+                    *e,
+                    q_provenance,
+                    q_gid,
+                    q_instance_root,
+                    q_instance_projection,
+                ) == root
         }) {
             return Some(e);
         }
@@ -220,6 +227,7 @@ pub(crate) fn resolve_filtered_pairs(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    q_instance_projection: Query<&UsdInstanceProjection>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
@@ -235,7 +243,13 @@ pub(crate) fn resolve_filtered_pairs(
             resolve_ticks.insert(entity, ticks.saturating_add(1));
             continue;
         }
-        let root = instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
+        let root = instance_key(
+            entity,
+            &q_provenance,
+            &q_gid,
+            &q_instance_root,
+            &q_instance_projection,
+        );
 
         let Some(self_owner) = collider_owner(
             &prim.path,
@@ -245,6 +259,7 @@ pub(crate) fn resolve_filtered_pairs(
             &q_provenance,
             &q_gid,
             &q_instance_root,
+            &q_instance_projection,
         ) else {
             let ticks = ticks.saturating_add(1);
             if ticks == PAIR_RESOLVE_WARN_TICKS {
@@ -270,6 +285,7 @@ pub(crate) fn resolve_filtered_pairs(
                 &q_provenance,
                 &q_gid,
                 &q_instance_root,
+                &q_instance_projection,
             ) {
                 Some(other) if other == self_owner => {
                     // Two prims of ONE compound body: avian never pairs a body with

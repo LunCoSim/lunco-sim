@@ -590,43 +590,6 @@ fn exact_big_space_resplit(
 /// `update_child_collider_position` derives their pose from the body.
 type BridgeSynced = Or<(With<RigidBody>, Without<ColliderOf>)>;
 
-/// Return whether a moved ancestor is a physical input for `body`.
-///
-/// Bodies below the active frame are solved in that frame, so transforms above
-/// it are only the celestial render representation and must not be copied into
-/// Avian. Bodies outside that branch (for example a planet picking collider)
-/// must follow every changed ancestor when their pose is projected into the
-/// active frame.
-fn moved_in_active_frame(
-    body: Entity,
-    moved: Entity,
-    active_frame: Entity,
-    q_parents: &Query<&ChildOf>,
-) -> bool {
-    let mut current = body;
-    let mut reached_active_frame = false;
-    for _ in 0..32 {
-        let Ok(child_of) = q_parents.get(current) else {
-            return false;
-        };
-        current = child_of.parent();
-        if current == active_frame {
-            reached_active_frame = true;
-            // The active frame itself is part of the render representation.
-            // Its transform must never be copied into descendants' physics
-            // poses, even when it is the changed ancestor being inspected.
-            if current == moved {
-                return false;
-            }
-            continue;
-        }
-        if current == moved {
-            return !reached_active_frame;
-        }
-    }
-    false
-}
-
 fn is_below_active_frame(
     entity: Entity,
     active_frame: Entity,
@@ -708,6 +671,8 @@ fn pose_to_position(
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut frame_state: ResMut<PhysicsFrameTransportState>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
+    mut moved: Local<EntityHashSet>,
+    mut body_entities: Local<Vec<Entity>>,
     // Plain chain nodes have a representation shadow when they carry a
     // CellCoord. Transform-only nodes cannot be recentered and every change is
     // semantic. Either kind can carry physical descendants.
@@ -808,8 +773,7 @@ fn pose_to_position(
         frame_state.request_solver_reset();
     }
     // Pass 1 (read-only): which entities did an external writer touch?
-    let mut moved = EntityHashSet::default();
-    let mut plain_moved = false;
+    moved.clear();
     for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
         let representation_only = match (cell, shadow, child_of) {
             (Some(cell), Some(mut shadow), Some(child_of)) => {
@@ -824,7 +788,6 @@ fn pose_to_position(
         };
         if !representation_only {
             moved.insert(entity);
-            plain_moved = true;
         }
     }
     // A direct body change is a precise wake signal, not proof that the
@@ -835,25 +798,26 @@ fn pose_to_position(
     // baseline; once seeded, they leave that query permanently and steady
     // state is driven only by actual pose/topology changes.
     moved.extend(body_queries.p0().iter());
-    let process_all_bodies = first_read || handoff.is_some() || plain_moved;
+    let process_all_bodies = first_read || handoff.is_some();
     if !process_all_bodies && moved.is_empty() {
         return;
     }
 
-    // Pass 2: re-read a body if it moved OR any ancestor moved (the ancestor's
-    // new Transform is already in place, so the chain walk composes the
-    // carried pose).
-    let body_entities: Vec<_> = if process_all_bodies {
-        body_queries
-            .p1()
-            .iter()
-            .map(|(entity, ..)| entity)
-            .collect()
+    // Pass 2: re-read a body if it moved OR any physical ancestor moved. A
+    // changed render-only branch is not a reason to visit every body: filter
+    // the body query at the invalidation boundary and carry only affected
+    // entities into the pose path. First reads and frame handoffs still visit
+    // the complete body set because they transport lifecycle/frame state.
+    body_entities.clear();
+    if process_all_bodies {
+        body_entities.extend(body_queries.p1().iter().map(|(entity, ..)| entity));
     } else {
-        moved.iter().copied().collect()
-    };
+        body_entities.extend(body_queries.p1().iter().filter_map(|(entity, ..)| {
+            body_needs_pose_refresh(entity, &moved, active_frame, &q_parents).then_some(entity)
+        }));
+    }
     let mut q_bodies = body_queries.p1();
-    for e in body_entities {
+    for e in body_entities.iter().copied() {
         let Ok((e, cell, tf, mut pos, mut rot, mut linear, mut angular, mut shadow, pose_override)) =
             q_bodies.get_mut(e)
         else {
@@ -905,21 +869,10 @@ fn pose_to_position(
             shadow.capture(cell, tf, active_frame);
             continue;
         }
-        let direct_move = moved.contains(&e) || hierarchy_reanchored;
-        let ancestor_move = {
-            let mut cur = e;
-            let mut hit = false;
-            for _ in 0..32 {
-                let Ok(co) = q_parents.get(cur) else { break };
-                cur = co.parent();
-                if moved.contains(&cur) && moved_in_active_frame(e, cur, active_frame, &q_parents) {
-                    hit = true;
-                    break;
-                }
-            }
-            hit
-        };
-        if !direct_move && !ancestor_move {
+        if !hierarchy_reanchored
+            && process_all_bodies
+            && !body_needs_pose_refresh(e, &moved, active_frame, &q_parents)
+        {
             continue;
         }
         // Typed until the component write: the cell chain composes a
@@ -949,6 +902,43 @@ fn pose_to_position(
             commands.entity(e).remove::<Sleeping>();
         }
     }
+}
+
+/// Return whether `body` has a changed local pose or a changed ancestor whose
+/// motion belongs to the body's physics frame. Render-only ancestors above the
+/// active frame are intentionally excluded: celestial presentation movement
+/// must not transport local Avian state.
+fn body_needs_pose_refresh(
+    body: Entity,
+    moved: &EntityHashSet,
+    active_frame: Entity,
+    q_parents: &Query<&ChildOf>,
+) -> bool {
+    if moved.contains(&body) {
+        return true;
+    }
+
+    let mut current = body;
+    let mut reached_active_frame = false;
+    for _ in 0..32 {
+        let Ok(child_of) = q_parents.get(current) else {
+            return false;
+        };
+        current = child_of.parent();
+        if current == active_frame {
+            reached_active_frame = true;
+            // The active frame itself is a render representation boundary, not
+            // a local physics input.
+            if moved.contains(&current) {
+                return false;
+            }
+            continue;
+        }
+        if moved.contains(&current) {
+            return !reached_active_frame;
+        }
+    }
+    false
 }
 
 /// Invalidate Avian's frame-dependent solver caches after an active-frame
