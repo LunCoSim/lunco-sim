@@ -137,11 +137,7 @@ impl DatasetScope {
     /// copy.
     pub fn read_roots(&self) -> Vec<PathBuf> {
         match self {
-            DatasetScope::Engine => {
-                let mut roots = vec![crate::assets_dir_abs()];
-                roots.extend(crate::cache_roots());
-                roots
-            }
+            DatasetScope::Engine => crate::library_roots(&crate::assets_dir_abs()),
             DatasetScope::Twin { root, .. } => {
                 vec![
                     root.clone(),

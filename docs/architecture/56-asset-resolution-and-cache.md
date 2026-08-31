@@ -60,10 +60,10 @@ we distribute:
 During native development, downloads and processed outputs go directly to the
 machine-global cache. The packer copies selected manifest artifacts from that
 cache into `assets/.cache`, so a package remains self-contained while source
-runs and packaged runs use the same logical identities. `lunco_assets::cache_roots()`
-is the single place that order is decided; the `AssetSource`, the synchronous
-resolver (`engine_asset_local_path`) and the dataset registry all ask it, so a
-file the loader finds is a file the validator finds.
+runs and packaged runs use the same logical identities. `lunco_assets::library_roots()`
+is the single place that constructs the order for a particular `assets/` root;
+the `AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
+reader all use it, so a file the loader finds is a file the validator finds.
 
 Both `twin://` readers implement that fallback — the `AssetReader` and the
 `SchemeRegistry` handler — because they must agree: a file the asset server can
@@ -133,7 +133,7 @@ re-derives one:
 | "already addressable?" | `has_scheme` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Any URI → local path | `local_path(reference, twins)` |
-| Library root (CWD) | `assets_dir_abs` |
+| Library root | `assets_dir_abs` (executable/package ancestry, then current-directory ancestry) |
 | Library root (of a file) | `shipped_asset_root` |
 | Id → disk path | `id_to_disk_path` |
 | Scenario staging dir | `scenarios_dir` |

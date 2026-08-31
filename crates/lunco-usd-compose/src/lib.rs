@@ -285,6 +285,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn external_twin_composition_reads_authored_engine_layers() {
+        let temp = tempfile::tempdir().expect("temporary Twin root");
+        let scene = temp.path().join("scenes/griffin_1_surface_ops.usda");
+        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+            .expect("create scene parent");
+        std::fs::write(
+            &scene,
+            r#"#usda 1.0
+(
+    subLayers = [
+        @lunco://scenes\base\lunar_surface.usda@
+    ]
+)
+"#,
+        )
+        .expect("write Griffin-style scene");
+
+        compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
+            .expect("external Twin can resolve authored engine layers");
+    }
+
+    #[test]
     fn rejects_deep_nesting_before_recursive_parser() {
         let mut source = String::from("#usda 1.0\n");
         for depth in 0..=MAX_USDA_NESTING {

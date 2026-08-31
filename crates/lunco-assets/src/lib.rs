@@ -227,10 +227,28 @@ pub fn engine_manifest_text(group: &str) -> Option<String> {
 /// bytes all ask here, so a file found by the loader is a file found by the
 /// validator.
 pub fn cache_roots() -> Vec<PathBuf> {
-    let mut roots = vec![packed_cache_dir()];
-    let shared = cache_dir();
-    if !roots.contains(&shared) {
-        roots.push(shared);
+    library_roots(&assets_dir_abs())
+        .into_iter()
+        .skip(1)
+        .collect()
+}
+
+/// The complete search order for the engine asset library rooted at `assets`.
+///
+/// The root is an argument because a packaged or externally composed document
+/// can name a different asset tree than the process working directory. Every
+/// reader uses this function so the authored tree, its packed cache, and the
+/// shared cache cannot drift into different path interpretations.
+pub fn library_roots(assets_root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::with_capacity(3);
+    for root in [
+        assets_root.to_path_buf(),
+        assets_root.join(".cache"),
+        cache_dir(),
+    ] {
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
     }
     roots
 }
@@ -416,11 +434,11 @@ pub fn assets_dir() -> PathBuf {
 
 /// Resolves the shipped-library root used by Bevy's `AssetPlugin`.
 ///
-/// Packaged native binaries carry `assets/` beside the executable. Use that
-/// location when present so launching a Windows `.exe` from Explorer or a
-/// shortcut does not make asset lookup depend on the process working directory.
-/// Development/test binaries do not have a sibling `assets/` directory, so they
-/// retain the workspace-CWD behaviour.
+/// Packaged native binaries carry `assets/` beside the executable. Development
+/// and test binaries find the nearest `assets/` directory in their executable's
+/// ancestry, then the current-directory ancestry. This keeps direct launches
+/// and test runners on the same asset root without depending on the process
+/// working directory.
 ///
 /// Anything reaching library bytes off the `AssetServer` must anchor here rather
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
@@ -429,16 +447,27 @@ pub fn assets_dir_abs() -> PathBuf {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let packaged = parent.join(assets_dir());
-            if packaged.is_dir() {
-                return packaged;
+            if let Some(root) = find_assets_dir(parent) {
+                return root;
             }
         }
     }
 
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(assets_dir())
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(root) = find_assets_dir(&cwd) {
+            return root;
+        }
+        return cwd.join(assets_dir());
+    }
+
+    PathBuf::from(assets_dir())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_assets_dir(base: &Path) -> Option<PathBuf> {
+    base.ancestors()
+        .map(|parent| parent.join(assets_dir()))
+        .find(|candidate| candidate.is_dir())
 }
 
 /// On-disk root of a shipped Modelica package under `assets/models/` — the
@@ -525,13 +554,14 @@ pub fn has_scheme(reference: impl AsRef<str>) -> bool {
 /// knowledge in two places — and the literal `"assets"` belongs to
 /// [`ASSETS_DIR_NAME`], not to a caller.
 pub fn engine_asset_uri(reference: &str) -> String {
-    if has_scheme(reference) {
-        return reference.to_string();
+    let reference = asset_path::slashed(reference);
+    if has_scheme(&reference) {
+        return reference;
     }
     let rel = reference
         .strip_prefix(ASSETS_DIR_NAME)
         .and_then(|r| r.strip_prefix('/'))
-        .unwrap_or(reference);
+        .unwrap_or(&reference);
     asset_path::uri(LUNCO_SCHEME, rel)
 }
 
@@ -551,7 +581,7 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// (`twin://`, `http…`) and therefore has no engine-library path.
 ///
 /// This is the read-side companion of [`engine_asset_uri`]: it mirrors the
-/// `lunco://` → `<cwd>/assets` mapping that [`register_lunco_asset_sources`]
+/// `lunco://` → runtime `assets/` mapping that [`register_lunco_asset_sources`]
 /// installs, so code that must inspect an asset WITHOUT the `AssetServer` (e.g.
 /// the shader `@fragment` pre-validator) resolves a reference exactly as the
 /// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
@@ -567,47 +597,33 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     if has_scheme(rel) {
         return None; // another scheme's root — not in the shipped library
     }
-    if !asset_path::is_safe_relative_path(rel) {
-        return None;
-    }
-    let authored = assets_dir_abs().join(rel);
-    if authored.exists() {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            return match existing_path_within_root(&assets_dir_abs(), Path::new(rel)) {
-                Ok(path) => path.filter(|path| path.is_file()),
-                Err(error) => {
-                    bevy::log::warn!(
-                        "[lunco-assets] cannot resolve authored asset `{rel}`: {error}"
-                    );
-                    None
-                }
-            };
-        }
-        #[cfg(target_arch = "wasm32")]
-        return Some(authored);
-    }
-    for root in cache_roots() {
-        let candidate = root.join(rel);
-        if candidate.exists() {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                return match existing_path_within_root(&root, Path::new(rel)) {
-                    Ok(path) => path.filter(|path| path.is_file()),
-                    Err(error) => {
-                        bevy::log::warn!(
-                            "[lunco-assets] cannot resolve cached asset `{rel}` under {}: {error}",
-                            root.display()
-                        );
-                        None
-                    }
-                };
+    let relative = asset_path::relative_path(rel)?;
+    let roots = library_roots(&assets_dir_abs());
+
+    #[cfg(not(target_arch = "wasm32"))]
+    for root in &roots {
+        match existing_path_within_root(root, &relative) {
+            Ok(Some(path)) => return Some(path).filter(|path| path.is_file()),
+            Ok(None) => {}
+            Err(error) => {
+                bevy::log::warn!(
+                    "[lunco-assets] cannot resolve asset `{rel}` under {}: {error}",
+                    root.display()
+                );
+                return None;
             }
-            #[cfg(target_arch = "wasm32")]
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    for root in &roots {
+        let candidate = root.join(&relative);
+        if candidate.exists() {
             return Some(candidate);
         }
     }
-    Some(authored)
+
+    Some(roots[0].join(relative))
 }
 
 /// The local filesystem path ANY reference resolves to, whichever root owns it —
@@ -734,5 +750,30 @@ mod tests {
                 "unsafe engine reference must be rejected: {reference}"
             );
         }
+    }
+
+    #[test]
+    fn library_roots_keep_an_explicit_package_root_self_contained() {
+        let package_assets = Path::new("/package/assets");
+        assert_eq!(
+            library_roots(package_assets),
+            vec![
+                PathBuf::from("/package/assets"),
+                PathBuf::from("/package/assets/.cache"),
+                cache_dir(),
+            ]
+        );
+    }
+
+    #[test]
+    fn engine_asset_uri_normalizes_windows_separators() {
+        assert_eq!(
+            engine_asset_uri(r"assets\scenes\base\lunar_surface.usda"),
+            "lunco://scenes/base/lunar_surface.usda"
+        );
+        assert_eq!(
+            engine_asset_uri(r"lunco://scenes\base\lunar_surface.usda"),
+            "lunco://scenes/base/lunar_surface.usda"
+        );
     }
 }

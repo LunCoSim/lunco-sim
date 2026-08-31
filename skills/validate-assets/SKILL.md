@@ -159,14 +159,15 @@ is the reflected param schema (`info.shader_params` with `name`/`type`/`offset`/
 
 1. **`Path::new(ref).is_file()`** — absolute, or **relative to the current
    working directory**.
-2. `lunco_assets::engine_asset_local_path(ref)` — the `lunco://` root, itself
-   `cwd`-joined.
+2. `lunco_assets::engine_asset_local_path(ref)` — the runtime `lunco://` root,
+   selected from the executable/package ancestry and then the current-directory
+   ancestry.
 
 Consequences:
 
 - ❌ `models/X.mo` is ambiguous: it resolves to `<cwd>/models/X.mo` if that
-  exists, **shadowing** `<cwd>/assets/models/X.mo`.
-- ❌ Running from a subdirectory silently changes what `lunco://` means.
+  exists, **shadowing** `<runtime-assets>/models/X.mo`.
+- ✅ `lunco://` keeps the same runtime root when launched from a subdirectory.
 - ✅ Run from the repo root and pass either `assets/models/X.mo` (unambiguous
   filesystem) or `lunco://models/X.mo` (unambiguous scheme).
 - ❌ **`twin://` cannot be resolved at all**, even with an instance running —

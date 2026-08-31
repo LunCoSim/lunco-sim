@@ -71,8 +71,11 @@ evaluated ad hoc, not browsed as an authored asset.
 
 ## The `lunco://` scheme
 
-`lunco://<rel>` = `<repo>/assets/<rel>`, with the packed/development/global
-cache roots after authored assets (`crates/lunco-assets/src/lunco_source.rs`).
+`lunco://<rel>` = the runtime `assets/<rel>`, with that root's packed cache and
+the shared cache after authored assets. The runtime root is selected by
+`lunco_assets::assets_dir_abs()` from the executable/package ancestry before
+the current-directory ancestry; the complete order is built by
+`lunco_assets::library_roots()` (`crates/lunco-assets/src/lunco_source.rs`).
 `twin://<name>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
