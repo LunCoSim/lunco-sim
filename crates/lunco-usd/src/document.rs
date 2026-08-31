@@ -83,7 +83,9 @@ use std::collections::VecDeque;
 use bevy::log::warn;
 use bevy::math::DVec3;
 use bevy::reflect::Reflect;
-use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
+use lunco_doc::{
+    Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, ForkableDocument,
+};
 use lunco_usd_bevy::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
@@ -569,7 +571,7 @@ impl lunco_twin_journal::OpPayload for UsdOp {
 /// that bumps on every successful op. The flattened, composed scene (references
 /// resolved) is a *separate* derived artifact built by the asset loader
 /// ([`lunco_usd_bevy::UsdStageAsset`]); the document layer never holds it.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UsdDocument {
     id: DocumentId,
     /// The **base** layer: the authored scene's specs (references intact). This
@@ -587,6 +589,11 @@ pub struct UsdDocument {
     /// are rejected; a base [`UsdOp::ReplaceSource`] clears it.
     parse_error: Option<String>,
     generation: u64,
+    /// Revision of the authored base layer. It is independent from the
+    /// document generation so derived caches can name every layer input.
+    base_revision: u64,
+    /// Revision of the runtime overlay layer.
+    runtime_revision: u64,
     origin: DocumentOrigin,
     /// Generation at which the document was last persisted to disk.
     /// `None` = never saved (freshly created in-memory); `Some(g)` =
@@ -604,15 +611,41 @@ pub struct UsdDocument {
     /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
     /// See [`ops_since`](Self::ops_since).
     op_log: VecDeque<(u64, UsdOp)>,
-    /// Memoized `base ⊕ runtime` composition, keyed by the `generation` it was
-    /// composed at. [`composed`](Self::composed) is O(stage) (a full layer-stack
-    /// merge) and is called several times per edit (the twin overlay serialize AND
-    /// the doc-backed terrain re-parse), so without this a single brush stroke
-    /// recomposed a thousand-prim stage 2–3× on the main thread. `Arc<Mutex<…>>` so
-    /// the field stays `Clone`; the inner `Arc<sdf::Data>` makes a cache hit a
-    /// refcount bump, not a stage copy. Shared across `Clone`s is safe — it's keyed
-    /// by generation, and equal generations mean equal content.
-    composed_cache: std::sync::Arc<std::sync::Mutex<Option<(u64, std::sync::Arc<sdf::Data>)>>>,
+    /// Memoized `base ⊕ runtime` composition. The cache is private to this
+    /// document instance; its key names the document identity and both layer
+    /// revisions, so derived data cannot cross a fork boundary or survive a
+    /// changed layer.
+    composed_cache: std::sync::Mutex<Option<(UsdCompositionKey, std::sync::Arc<sdf::Data>)>>,
+}
+
+/// Inputs to the document's authored-layer composition memo.
+///
+/// Full USD stage composition remains owned by `lunco-usd-compose` and its
+/// resolver recipe. This key is only for the local `base ⊕ runtime` merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UsdCompositionKey {
+    document: DocumentId,
+    base_revision: u64,
+    runtime_revision: u64,
+}
+
+impl Clone for UsdDocument {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            base: self.base.clone(),
+            runtime: self.runtime.clone(),
+            parse_error: self.parse_error.clone(),
+            generation: self.generation,
+            base_revision: self.base_revision,
+            runtime_revision: self.runtime_revision,
+            origin: self.origin.clone(),
+            last_saved_generation: self.last_saved_generation,
+            changes: self.changes.clone(),
+            op_log: self.op_log.clone(),
+            composed_cache: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl UsdDocument {
@@ -656,11 +689,13 @@ impl UsdDocument {
             runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
             parse_error,
             generation: 0,
+            base_revision: 0,
+            runtime_revision: 0,
             origin,
             last_saved_generation,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
-            composed_cache: Default::default(),
+            composed_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -709,24 +744,26 @@ impl UsdDocument {
         (*self.composed_arc()).clone()
     }
 
-    /// The composed view as a shared [`Arc`], memoized by [`generation`](Document::generation).
-    /// Prefer this over [`composed`](Self::composed) on hot paths (the twin projection,
+    /// The composed view as a shared [`Arc`], memoized by document identity and
+    /// authored-layer revisions. Prefer this over [`composed`](Self::composed) on hot paths
+    /// (the twin projection,
     /// the doc-backed terrain re-bake) — repeated calls within one edit share the same
     /// recompose instead of each paying a full O(stage) layer merge.
     pub fn composed_arc(&self) -> std::sync::Arc<sdf::Data> {
-        let gen = self.generation;
-        // Poison recovery: this is the hot compose path, hit every frame. A panic
-        // anywhere under the lock would otherwise poison it permanently, turning
-        // one glitch into an unrecoverable per-frame panic. The cache is a pure
-        // memo of `(generation, composed)` — a stale or absent entry is always
-        // safe (it just recomputes), so there is no invariant to protect.
+        let key = UsdCompositionKey {
+            document: self.id,
+            base_revision: self.base_revision,
+            runtime_revision: self.runtime_revision,
+        };
+        // A cache miss is always safe: the value is a derived memo and can be
+        // recomputed from the two authoritative layers.
         {
             let cache = self
                 .composed_cache
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some((cached_gen, data)) = &*cache {
-                if *cached_gen == gen {
+                .expect("USD composition cache mutex poisoned");
+            if let Some((cached_key, data)) = &*cache {
+                if *cached_key == key {
                     return data.clone();
                 }
             }
@@ -735,7 +772,7 @@ impl UsdDocument {
         *self
             .composed_cache
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some((gen, data.clone()));
+            .expect("USD composition cache mutex poisoned") = Some((key, data.clone()));
         data
     }
 
@@ -753,6 +790,31 @@ impl UsdDocument {
             );
             EMPTY_USDA.to_string()
         })
+    }
+
+    /// Create a new editable untitled snapshot of this document.
+    ///
+    /// The base and runtime USD layers, revision history, dirty baseline, and
+    /// projection journals are copied as values. The derived composition memo
+    /// is created empty by Clone, so equal-generation forks cannot share a
+    /// composed result. The registry assigns the new id and Save-As later
+    /// establishes a file identity.
+    pub fn fork(&self, id: DocumentId, name: impl Into<String>) -> Result<Self, DocumentError> {
+        if id.is_unassigned() {
+            return Err(DocumentError::ValidationFailed(
+                "fork requires an assigned document id".into(),
+            ));
+        }
+        if id == self.id {
+            return Err(DocumentError::ValidationFailed(format!(
+                "fork id {id} is already owned by the source document"
+            )));
+        }
+        let mut fork = self.clone();
+        fork.id = id;
+        fork.origin = DocumentOrigin::untitled(name);
+        fork.last_saved_generation = None;
+        Ok(fork)
     }
 
     /// Replace the entire **runtime** layer with `data` — a session-restore
@@ -841,6 +903,8 @@ impl UsdDocument {
         };
         self.base = base;
         self.runtime = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        self.base_revision += 1;
+        self.runtime_revision += 1;
         self.generation += 1;
         if self.changes.len() == CHANGE_HISTORY_CAPACITY {
             self.changes.pop_front();
@@ -982,8 +1046,14 @@ impl UsdDocument {
     /// successful op mutates state.
     fn commit(&mut self, t: TargetLayer, data: sdf::Data, change: UsdChange) {
         match t {
-            TargetLayer::Base => self.base = data,
-            TargetLayer::Runtime => self.runtime = data,
+            TargetLayer::Base => {
+                self.base = data;
+                self.base_revision += 1;
+            }
+            TargetLayer::Runtime => {
+                self.runtime = data;
+                self.runtime_revision += 1;
+            }
         }
         self.generation += 1;
         if self.changes.len() == CHANGE_HISTORY_CAPACITY {
@@ -1173,6 +1243,12 @@ impl lunco_doc::FileBacked for UsdDocument {
 
     fn reset_to_source(&mut self, source: &str) -> bool {
         UsdDocument::reset_to_source(self, source)
+    }
+}
+
+impl ForkableDocument for UsdDocument {
+    fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError> {
+        UsdDocument::fork(self, id, name)
     }
 }
 
@@ -2634,6 +2710,128 @@ mod tests {
             DocumentOrigin::writable_file("/tmp/scene.usda"),
         );
         assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn forks_isolate_layers_revisions_and_composed_cache() {
+        const SCENE: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
+        let source = UsdDocument::with_origin(
+            DocumentId::new(10),
+            SCENE,
+            DocumentOrigin::writable_file("/tmp/source.usda"),
+        );
+        let mut left = source.fork(DocumentId::new(11), "Left.usda").unwrap();
+        let mut right = source.fork(DocumentId::new(12), "Right.usda").unwrap();
+
+        assert_eq!(left.generation(), right.generation());
+        assert!(left.is_dirty() && right.is_dirty());
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        left.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Ball".into(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "2".into(),
+        })
+        .unwrap();
+        right
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "3".into(),
+            })
+            .unwrap();
+
+        assert_eq!(left.generation(), right.generation());
+        assert_eq!(
+            left.composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(2.0)
+        );
+        assert_eq!(
+            right
+                .composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(3.0)
+        );
+        assert_eq!(
+            left.composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(2.0),
+            "a later equal-generation fork must not replace the first fork's memo"
+        );
+        assert_eq!(
+            source
+                .composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(1.0)
+        );
+
+        left.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/".into(),
+            name: "RuntimeOnly".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        })
+        .unwrap();
+        assert!(left
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_some());
+        assert!(right
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+        assert!(source
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+
+        left.mark_saved();
+        assert!(!left.is_dirty());
+        assert!(right.is_dirty());
+        let cached = left.composed_arc();
+        let cached_weak = std::sync::Arc::downgrade(&cached);
+        drop(cached);
+        drop(left);
+        assert!(
+            cached_weak.upgrade().is_none(),
+            "dropping a fork must release its derived cache"
+        );
+    }
+
+    #[test]
+    fn fork_requires_new_identity_and_makes_readonly_sources_editable() {
+        let source = UsdDocument::with_origin(
+            DocumentId::new(10),
+            "#usda 1.0\ndef Xform \"World\" {}\n",
+            DocumentOrigin::bundled("World.usda"),
+        );
+
+        assert!(matches!(
+            source.fork(DocumentId::default(), "Invalid.usda"),
+            Err(DocumentError::ValidationFailed(_))
+        ));
+        assert!(matches!(
+            source.fork(DocumentId::new(10), "Invalid.usda"),
+            Err(DocumentError::ValidationFailed(_))
+        ));
+
+        let mut fork = source.fork(DocumentId::new(11), "World-copy.usda").unwrap();
+        assert!(fork.origin().is_untitled());
+        assert!(fork.origin().accepts_mutations());
+        fork.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "EditableCopy".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        })
+        .unwrap();
     }
 
     #[test]

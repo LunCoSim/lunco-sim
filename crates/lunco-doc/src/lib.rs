@@ -15,6 +15,8 @@
 //!
 //! - [`Document`] — a typed, mutable artifact with a unique id and generation.
 //! - [`DocumentOp`] — a typed, reversible mutation.
+//! - [`ForkableDocument`] — an independently editable untitled snapshot of a
+//!   file-backed document.
 //! - [`DocumentHost`] — holds a Document and runs the op/apply/undo/redo loop.
 //! - [`DocumentError`] — the fallible-apply error type.
 //! - [`crate::DocumentId`] — stable identifier for a Document.
@@ -625,6 +627,20 @@ pub trait FileBacked: Document + Sized {
     }
 }
 
+/// A file-backed document that can create an independently editable,
+/// untitled snapshot with a new [`DocumentId`].
+///
+/// A fork has not been written to a destination file, so binding it to a path
+/// before Save-As would make file identity ambiguous and could create two
+/// documents that save over one another. Implementations must create an
+/// [`DocumentOrigin::Untitled`] origin from `name`, copy all mutable authored
+/// state, and invalidate private derived state; the caller remains responsible
+/// for installing the returned document in its registry and journal scope.
+pub trait ForkableDocument: FileBacked + Clone {
+    /// Create an editable fork with a fresh identity and untitled name.
+    fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError>;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DocumentHost
 // ─────────────────────────────────────────────────────────────────────────────
@@ -675,6 +691,8 @@ pub trait OpRecorder<O>: Send + Sync {
 /// - [`apply_group`](Self::apply_group) validates and commits several local
 ///   ops as one history group, so one undo reverses the complete authored
 ///   intent.
+/// - [`fork`](Self::fork) creates a new document identity with copied history
+///   and a fresh document-owned derived-state cache.
 /// - [`undo`](Self::undo) applies the most recent inverse group and pushes the
 ///   resulting forward group onto the redo stack.
 /// - [`redo`](Self::redo) applies the most recently undone forward group and
@@ -716,6 +734,27 @@ impl<D: Document> DocumentHost<D> {
             seen_ops: VecDeque::with_capacity(SEEN_OPS_CAP),
             recorder: None,
         }
+    }
+
+    /// Create an independent host snapshot around a typed document fork.
+    ///
+    /// Undo/redo groups and replay ids are copied as owned values so the fork
+    /// can continue from the same edit point without sharing mutable state.
+    /// The recorder is deliberately not copied: a registry must install a new
+    /// recorder bound to the fork's document id while retaining the one
+    /// Twin-level journal as the canonical history.
+    pub fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError>
+    where
+        D: ForkableDocument,
+    {
+        let document = self.document.fork(id, name)?;
+        Ok(Self {
+            document,
+            undo_stack: self.undo_stack.clone(),
+            redo_stack: self.redo_stack.clone(),
+            seen_ops: self.seen_ops.clone(),
+            recorder: None,
+        })
     }
 
     /// Install the op recorder that mirrors every apply/undo/redo into an
@@ -1172,6 +1211,119 @@ mod tests {
                 text: "!".into()
             }
         );
+    }
+
+    #[test]
+    fn test_fork_copies_history_but_not_recorder_or_document_state() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct VecRecorder(Mutex<Vec<(TextOp, TextOp)>>);
+
+        impl OpRecorder<TextOp> for VecRecorder {
+            fn record(&self, forward: &TextOp, inverse: &TextOp) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((forward.clone(), inverse.clone()));
+            }
+        }
+
+        #[derive(Clone)]
+        struct ForkableTextDocument {
+            document: TextDocument,
+            origin: DocumentOrigin,
+        }
+
+        impl Document for ForkableTextDocument {
+            type Op = TextOp;
+
+            fn id(&self) -> DocumentId {
+                self.document.id()
+            }
+
+            fn generation(&self) -> u64 {
+                self.document.generation()
+            }
+
+            fn apply(&mut self, op: TextOp) -> Result<TextOp, DocumentError> {
+                self.document.apply(op)
+            }
+        }
+
+        impl FileBacked for ForkableTextDocument {
+            fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+                Self {
+                    document: TextDocument {
+                        id,
+                        text: source,
+                        generation: 0,
+                    },
+                    origin,
+                }
+            }
+
+            fn origin(&self) -> &DocumentOrigin {
+                &self.origin
+            }
+
+            fn is_dirty(&self) -> bool {
+                true
+            }
+
+            fn reload_base(&mut self, source: &str) -> bool {
+                self.document.text = source.to_string();
+                self.document.generation += 1;
+                true
+            }
+        }
+
+        impl ForkableDocument for ForkableTextDocument {
+            fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError> {
+                let mut fork = self.clone();
+                fork.document.id = id;
+                fork.origin = DocumentOrigin::untitled(name);
+                Ok(fork)
+            }
+        }
+
+        let source_recorder = Arc::new(VecRecorder::default());
+        let mut source = DocumentHost::new(ForkableTextDocument::with_origin(
+            DocumentId::new(10),
+            "x".into(),
+            DocumentOrigin::untitled("Source.txt"),
+        ));
+        source.set_recorder(source_recorder.clone());
+        source
+            .apply(Mutation::local(TextOp::Insert {
+                pos: 1,
+                text: "y".into(),
+            }))
+            .unwrap();
+
+        let mut fork = source.fork(DocumentId::new(11), "Fork.txt".into()).unwrap();
+        assert!(
+            !fork.has_recorder(),
+            "the source recorder must not be shared"
+        );
+        assert_eq!(
+            fork.undo_depth(),
+            1,
+            "the fork starts at the same edit point"
+        );
+
+        let fork_recorder = Arc::new(VecRecorder::default());
+        fork.set_recorder(fork_recorder.clone());
+        assert!(fork.undo().unwrap());
+        assert_eq!(fork.document().document.text, "x");
+        assert_eq!(source.document().document.text, "xy");
+        assert_eq!(source.undo_depth(), 1);
+        assert_eq!(fork.redo_depth(), 1);
+
+        assert!(fork.redo().unwrap());
+        assert_eq!(fork.document().document.text, "xy");
+        assert_eq!(source_recorder.0.lock().unwrap().len(), 1);
+        assert_eq!(fork_recorder.0.lock().unwrap().len(), 2);
     }
 
     #[test]
