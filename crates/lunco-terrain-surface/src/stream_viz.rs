@@ -1479,10 +1479,12 @@ struct BakedTile {
 pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
 /// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
-/// sun-visibility texture from `lunco-environment`'s horizon solution. Streamed
-/// tiles do not cast into the directional cascade; that cascade remains free to
-/// carry dynamic-object shadows onto the terrain receiver, while this cache is
-/// the sole owner of terrain-on-terrain occlusion at every distance.
+/// sun-visibility texture from `lunco-environment`'s horizon solution. The
+/// cache owns terrain-on-terrain occlusion at every distance; streamed tiles
+/// remain directional-shadow casters and do not receive the same terrain
+/// shadow a second time. The cascade therefore remains available for
+/// terrain-to-dynamic-object occlusion (rover, rocks, equipment) in its
+/// camera-relative range.
 ///
 /// Written by the app glue (which can see both `HorizonShadowCache` and this
 /// crate); consumed by tile materials. `on == 0` disables sampling without
@@ -1721,13 +1723,13 @@ fn spawn_tile(
 /// Establish the one shadow ownership split for a streamed terrain tile.
 ///
 /// Terrain self-shadow is sampled from the DEM horizon cache, so the mesh must
-/// not cast a duplicate into the directional cascade. The mesh remains a CSM
-/// receiver so independent dynamic casters (rover, rocks, equipment) can cast
-/// onto it. Keeping both operations here prevents initial spawn and late cache
-/// binding from drifting into different contracts again.
+/// not receive a duplicate from the directional cascade. It remains a CSM
+/// caster so it occludes direct sun on dynamic objects (rover, rocks,
+/// equipment). Keeping both operations here prevents initial spawn and late
+/// cache binding from drifting into different contracts again.
 fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>) {
-    tile.try_insert(bevy::light::NotShadowCaster);
-    tile.try_remove::<bevy::light::NotShadowReceiver>();
+    tile.try_insert(bevy::light::NotShadowReceiver);
+    tile.try_remove::<bevy::light::NotShadowCaster>();
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -3420,7 +3422,7 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn late_shadow_cache_keeps_dynamic_shadow_receiving_and_removes_legacy_exclusion() {
+    fn late_shadow_cache_keeps_terrain_caster_for_dynamic_shadow_occlusion() {
         let mut app = App::new();
         app.add_systems(Update, bind_shadow_cache_to_tiles);
 
@@ -3428,9 +3430,10 @@ mod draw_partition_tests {
             .world_mut()
             .spawn((
                 ShaderLook::new("shaders/terrain_geomorph.wgsl"),
-                // Regression setup: this was the former workaround. The
-                // authoritative binder must remove it, including on a live
-                // shader/cache reload where the entity predates the cutover.
+                // A resident tile may carry stale shadow flags when its cache
+                // is rebound. The shared helper must restore the current
+                // terrain caster/receiver contract.
+                bevy::light::NotShadowCaster,
                 bevy::light::NotShadowReceiver,
             ))
             .id();
@@ -3459,8 +3462,8 @@ mod draw_partition_tests {
         app.update();
 
         let tile_ref = app.world().entity(tile);
-        assert!(tile_ref.contains::<bevy::light::NotShadowCaster>());
-        assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
+        assert!(!tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(tile_ref.contains::<bevy::light::NotShadowReceiver>());
         let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
         assert_eq!(
             look.textures.get(&TextureLayer::ShadowCache),
