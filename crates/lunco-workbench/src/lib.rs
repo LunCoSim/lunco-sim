@@ -5321,21 +5321,26 @@ fn render_status_event_row(
         ui.set_width(row_width);
         ui.spacing_mut().item_spacing.x = column_gap;
 
-        ui.add_sized(
-            [level_width, 0.0],
+        // Keep the level column width identical for every row so that
+        // diagnostic rows do not shift the source or message columns.
+        add_status_text_right(
+            ui,
+            level_width,
             egui::Label::new(
                 status_event_rich_text(status_level_label(event.level))
                     .strong()
                     .color(status_level_color(event.level, theme)),
             ),
         );
-        ui.add_sized(
-            [source_width, 0.0],
+        add_status_text(
+            ui,
+            source_width,
             egui::Label::new(status_event_rich_text(event.source).strong()).truncate(),
         )
         .on_hover_text(event.source);
-        ui.add_sized(
-            [message_width, 0.0],
+        add_status_text(
+            ui,
+            message_width,
             egui::Label::new(status_event_rich_text(display_message))
                 .wrap()
                 .halign(egui::Align::LEFT),
@@ -5410,6 +5415,44 @@ fn render_status_event_row(
     }
 
     attention_clicked
+}
+
+/// Add fixed-width status text without egui's justified child layout.
+///
+/// `Ui::add_sized` creates a justified child UI. A wrapped label in that
+/// layout stretches inter-word gaps to fill its column, which makes long
+/// status messages appear as character-spaced text. A normal horizontal child
+/// keeps the column width while leaving the label's galley proportional.
+fn add_status_text(ui: &mut egui::Ui, width: f32, label: egui::Label) -> egui::Response {
+    add_status_text_with_layout(
+        ui,
+        width,
+        egui::Layout::left_to_right(egui::Align::Center),
+        label,
+    )
+}
+
+fn add_status_text_right(ui: &mut egui::Ui, width: f32, label: egui::Label) -> egui::Response {
+    add_status_text_with_layout(
+        ui,
+        width,
+        egui::Layout::right_to_left(egui::Align::Center),
+        label,
+    )
+}
+
+fn add_status_text_with_layout(
+    ui: &mut egui::Ui,
+    width: f32,
+    layout: egui::Layout,
+    label: egui::Label,
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        layout,
+        |ui| ui.add(label),
+    )
+    .inner
 }
 
 fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f32 {
@@ -6376,7 +6419,7 @@ mod tests {
     }
 
     #[test]
-    fn status_popup_width_fits_narrow_windows_and_caps_wide_windows() {
+    fn status_popup_width_preserves_compact_popup_with_viewport_margin() {
         assert_eq!(status_popup_width(200.0), 176.0);
         assert_eq!(status_popup_width(320.0), 296.0);
         assert_eq!(status_popup_width(1024.0), 560.0);
