@@ -132,9 +132,11 @@ the stable WorldGrid position and then map it into that authored frame.
 `lunco-render-bevy` owns this bridge through the `blueprint_origin`,
 `blueprint_frame_origin`, and `blueprint_frame_rotation` engine shader
 parameters. The blueprint shader performs that conversion before computing grid
-coordinates. Do not use a render-relative global X/Z directly for an authored
-site grid, and do not move the terrain or physics frame to compensate for a
-visual pattern.
+coordinates. The bridge is projected in `PostUpdate` after BigSpace's
+`PropagateLowPrecision` phase, so its frame parameters and mesh transforms use
+the same finalized floating-origin state. Do not use a render-relative global
+X/Z directly for an authored site grid, and do not move the terrain or physics
+frame to compensate for a visual pattern.
 
 ## Physics boundary
 
