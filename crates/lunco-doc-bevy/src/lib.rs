@@ -1191,6 +1191,44 @@ where
         self.install(|id| D::with_origin(id, source, origin))
     }
 
+    /// Fork `source` into a new untitled document with copied document
+    /// history and an independent host recorder.
+    ///
+    /// The new document receives a fresh id from this registry and the
+    /// existing Twin journal remains the single history store. The host
+    /// recorder itself is not cloned; `attach_recorder` binds a new recorder
+    /// to the fork's id, while undo/redo and replay state are copied as owned
+    /// values. The fork's untitled origin makes Save-As the only operation
+    /// that can assign a file identity to it.
+    pub fn fork(
+        &mut self,
+        source: DocumentId,
+        name: String,
+    ) -> Result<DocumentId, lunco_doc::Reject>
+    where
+        D: lunco_doc::ForkableDocument,
+    {
+        let new_id = self
+            .next_doc_id
+            .checked_add(1)
+            .map(DocumentId::new)
+            .ok_or_else(|| lunco_doc::Reject::InvalidOp("document id space exhausted".into()))?;
+        let forked_host = {
+            let source_host = self.hosts.get(&source).ok_or_else(|| {
+                lunco_doc::Reject::InvalidOp(format!("unknown source document {source}"))
+            })?;
+            source_host
+                .fork(new_id, name)
+                .map_err(|error| lunco_doc::Reject::InvalidOp(error.to_string()))?
+        };
+        self.next_doc_id = new_id.raw();
+        self.hosts.insert(new_id, forked_host);
+        self.attach_recorder(new_id);
+        self.pending_opened.push(new_id);
+        self.pending_changes.push(new_id);
+        Ok(new_id)
+    }
+
     /// The document backing `path`, if that file is open. **The path IS the
     /// identity** of a file-backed document.
     pub fn doc_for_file(&self, path: &std::path::Path) -> Option<DocumentId> {

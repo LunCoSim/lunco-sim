@@ -82,6 +82,19 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+### Assembly document snapshots
+
+Assembly editing starts from the existing document system. Use
+`DocumentRegistry::fork` and the domain's `ForkableDocument` implementation to
+make an untitled document with a fresh identity; do not create a second scene
+model or copy a registry. The document implementation copies authored layers
+and invalidates private derived state, while `DocumentHost` copies undo/redo
+history by value. The registry attaches a recorder for the new id to the same
+Twin journal. Save-As is the first path binding. A derived cache must be
+document-owned and keyed by all authoritative layer revisions; full USD
+composition and dependency resolution stay with `lunco-usd-compose` and its
+existing resolver path.
+
 The render-side camera binder also owns Bevy's clustered-light policy.
 Use Bevy's `ClusterConfig::Single` for automatic cameras while the ECS topology
 has no point lights, spot lights, light probes, or clustered decals, and follow

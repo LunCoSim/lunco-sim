@@ -197,6 +197,84 @@ mod tests {
     }
 
     #[test]
+    fn fork_allocates_new_untitled_identity_and_journals_by_fork_id() {
+        use lunco_doc::PathlessOrigin;
+        use lunco_doc_bevy::JournalResource;
+        use lunco_twin_journal::EntryKind;
+
+        let mut reg = reg();
+        let journal = JournalResource::default();
+        reg.set_journal(journal.clone());
+        let source = reg.allocate(
+            TINY_USDA.to_string(),
+            PathlessOrigin::untitled("Source.usda"),
+        );
+        reg.drain_pending();
+
+        reg.apply(
+            source,
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/".into(),
+                name: "SourceOnly".into(),
+                type_name: Some("Xform".into()),
+                reference: None,
+            },
+        )
+        .unwrap();
+
+        let fork = reg.fork(source, "AssemblyFork.usda".into()).unwrap();
+        assert_ne!(source, fork);
+        assert_eq!(
+            reg.host(fork).unwrap().document().origin().canonical_path(),
+            None
+        );
+        assert!(reg.host(fork).unwrap().has_recorder());
+        assert_eq!(
+            reg.drain_pending().opened,
+            vec![fork],
+            "fork insertion uses the same document lifecycle owner"
+        );
+
+        reg.apply(
+            fork,
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/".into(),
+                name: "ForkOnly".into(),
+                type_name: Some("Xform".into()),
+                reference: None,
+            },
+        )
+        .unwrap();
+        assert!(reg
+            .host(source)
+            .unwrap()
+            .document()
+            .data()
+            .spec(&openusd::sdf::Path::new("/ForkOnly").unwrap())
+            .is_none());
+        assert!(reg
+            .host(fork)
+            .unwrap()
+            .document()
+            .data()
+            .spec(&openusd::sdf::Path::new("/ForkOnly").unwrap())
+            .is_some());
+
+        let (source_ops, fork_ops) = journal.with_read(|j| {
+            let count = |doc| {
+                j.entries_for_doc(doc)
+                    .filter(|entry| matches!(entry.kind, EntryKind::Op { .. }))
+                    .count()
+            };
+            (count(source), count(fork))
+        });
+        assert_eq!(source_ops, 1);
+        assert_eq!(fork_ops, 1);
+    }
+
+    #[test]
     fn apply_marks_changed() {
         let mut reg = reg();
         let id = reg.allocate(
