@@ -227,6 +227,70 @@ pub mod icon_warmer;
 pub mod lock_ext;
 pub mod source_roots;
 
+const MODEL_LIBRARY_REVISION_VERSION: u32 = 1;
+
+/// Hash source content at the source-root admission boundary. The caller has
+/// already read these files to seat them into Rumoca, so cache validation does
+/// not need a second filesystem traversal during the first compile.
+fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries = files
+        .iter()
+        .map(|(uri, source)| (uri.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    entries.sort_unstable();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+    id.hash(&mut hasher);
+    for (uri, source) in entries {
+        uri.hash(&mut hasher);
+        source.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Identity for the pre-parsed Modelica Standard Library artifact. The
+/// artifact tag is the producer contract; native metadata distinguishes a
+/// rebuilt bundle without scanning the source tree. Source-root cache keys are
+/// preferred when Rumoca supplies one for a direct source load.
+fn msl_artifact_revision() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+    "Modelica".hash(&mut hasher);
+    lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let bundle_path = msl_dir().join("parsed-msl.bin");
+        if let Ok(metadata) = std::fs::metadata(bundle_path) {
+            metadata.len().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    elapsed.as_secs().hash(&mut hasher);
+                    elapsed.subsec_nanos().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    hasher.finish()
+}
+
+fn cache_key_revision(id: &str, cache_key: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let Some(cache_key) = cache_key else {
+        return msl_artifact_revision();
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+    id.hash(&mut hasher);
+    cache_key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Compile Modelica models through one session-owned source-root admission
 /// boundary and one strict reachable-DAE call. Source roots are admitted from
 /// the parsed source before compilation; an unresolved dependency is a terminal
@@ -290,6 +354,10 @@ pub struct ModelicaCompiler {
     /// never in here — it returns before the strip loop (it is instantiated, not
     /// compiled as a target).
     library_input_defaults: std::collections::HashMap<String, f64>,
+    /// Content revisions of the source roots admitted into this session.
+    /// These are computed from bytes already read by the admission boundary;
+    /// the prepared solve cache uses the aggregate without rescanning disk.
+    library_revisions: std::collections::HashMap<String, u64>,
 }
 
 impl Default for ModelicaCompiler {
@@ -318,6 +386,7 @@ impl ModelicaCompiler {
             requested_source_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
             library_input_defaults: std::collections::HashMap::new(),
+            library_revisions: std::collections::HashMap::new(),
         }
     }
 
@@ -339,6 +408,8 @@ impl ModelicaCompiler {
         let t = web_time::Instant::now();
         if Self::preload_from_global(&mut self.session, t) {
             self.installed_roots.insert("Modelica".to_string());
+            self.library_revisions
+                .insert("Modelica".to_string(), msl_artifact_revision());
         }
         self.installed_roots.contains("Modelica")
     }
@@ -1099,6 +1170,8 @@ impl ModelicaCompiler {
                     total,
                 );
                 self.installed_roots.insert(id.to_string());
+                self.library_revisions
+                    .insert(id.to_string(), msl_artifact_revision());
                 return rumoca_compile::compile::SourceRootLoadReport {
                     source_set_id: id.to_string(),
                     source_root_path: lunco_assets::msl_dir()
@@ -1125,6 +1198,10 @@ impl ModelicaCompiler {
             );
             if report.diagnostics.is_empty() {
                 self.installed_roots.insert(id.to_string());
+                self.library_revisions.insert(
+                    id.to_string(),
+                    cache_key_revision(id, report.cache_key.as_deref()),
+                );
             }
             return report;
         }
@@ -1277,7 +1354,7 @@ impl ModelicaCompiler {
                 }
             }
         }
-        rumoca_compile::compile::SourceRootLoadReport {
+        let report = rumoca_compile::compile::SourceRootLoadReport {
             source_set_id: id.to_string(),
             source_root_path: label.to_string(),
             parsed_file_count: file_count,
@@ -1286,7 +1363,12 @@ impl ModelicaCompiler {
             cache_key: None,
             cache_file: None,
             diagnostics,
+        };
+        if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
+            self.library_revisions
+                .insert(id.to_string(), source_set_revision(id, &files));
         }
+        report
     }
 
     /// Record the authored top-level namespace(s) supplied by one source-root
@@ -1322,6 +1404,28 @@ impl ModelicaCompiler {
     /// `apply_input_defaults_validated` path as the primary document's.
     pub fn library_input_defaults(&self) -> &std::collections::HashMap<String, f64> {
         &self.library_input_defaults
+    }
+
+    /// Return one deterministic revision for the complete set of admitted
+    /// source roots. The ordering of the source-root map is not semantic, so
+    /// root identifiers are sorted before hashing.
+    pub(crate) fn library_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut roots = self
+            .library_revisions
+            .iter()
+            .map(|(id, revision)| (id.as_str(), *revision))
+            .collect::<Vec<_>>();
+        roots.sort_unstable_by(|left, right| left.0.cmp(right.0));
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+        for (id, revision) in roots {
+            id.hash(&mut hasher);
+            revision.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 }
 
@@ -2278,6 +2382,40 @@ mod observables_smoke {
             multi_result.is_ok(),
             "the multi-document path must share source-root ownership: {:?}",
             multi_result.err()
+        );
+    }
+
+    #[test]
+    fn admitted_library_revision_is_order_independent_and_content_sensitive() {
+        let first = vec![
+            ("b.mo".to_string(), "model B end B;".to_string()),
+            ("a.mo".to_string(), "model A end A;".to_string()),
+        ];
+        let mut reordered = first.clone();
+        reordered.reverse();
+
+        assert_eq!(
+            source_set_revision("demo", &first),
+            source_set_revision("demo", &reordered),
+            "source admission revision must not depend on filesystem enumeration order"
+        );
+        assert_ne!(
+            source_set_revision("demo", &first),
+            source_set_revision(
+                "demo",
+                &[("a.mo".to_string(), "model A end A; changed".to_string())]
+            ),
+            "a source edit must invalidate prepared solve IR"
+        );
+
+        let mut compiler = ModelicaCompiler::new();
+        let empty_revision = compiler.library_revision();
+        let report = compiler.load_source_root_in_memory("demo", "test-root", first);
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+        assert_ne!(
+            empty_revision,
+            compiler.library_revision(),
+            "successful source-root admission must update the compiler revision"
         );
     }
 

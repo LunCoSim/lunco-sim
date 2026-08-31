@@ -110,7 +110,17 @@ segment through the normal Modelica search-path inventory; do not add a
 library-specific Rust load call. The compiler loads a cold structured root on
 the unresolved-reference path and retries. A generated policy's `source_roots`
 metadata can prewarm a dependency, but it is not the source of truth for class
-discovery.
+discovery. The worker's prepared-solve cache keys library state from the
+revisions that `ModelicaCompiler` records while admitting source roots; it does
+not scan the complete Modelica tree during the first live stepper build.
+
+On native desktop startup, cache-miss solve-IR lowering runs in the worker's
+bounded preparation pool because the DAE input and solve options are immutable.
+The worker alone commits the resulting solve model and constructs the live
+stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
+ordered behind that commit. Readiness is still the completion barrier, so
+physics must not be started before `/api/ready` reports `ready=true`,
+`world_hold=false`, and `pending_count=0`.
 
 For policy-owned generated models, keep contract assertions in
 `assets/scripting/tests/*.rhai`. Rust should provide the composed facts and
