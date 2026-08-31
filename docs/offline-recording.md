@@ -81,10 +81,12 @@ explicit active presentation camera, an authored `LocalAvatar` presentation came
 or an authored camera track with a valid camera binding. The recorder consumes that
 authored presentation contract and renders it through a target-born offscreen camera.
 That camera mirrors the source camera's transform, projection, exposure, tonemapping,
-and MSAA intent; the authored camera remains the pose owner. It does not select a
-camera by entity order. A scene with no valid presentation camera fails the recording
-readiness contract and reports the exact camera diagnostic instead of producing an
-incorrectly framed or graded take.
+MSAA, and camera-owned environment views (`Skybox` and generated image-based-lighting
+intent); the authored camera remains the pose owner. Derived environment maps are
+rebuilt by Bevy when the source cubemap changes. It does not select a camera by entity
+order. A scene with no valid presentation camera fails the recording readiness contract
+and reports the exact camera diagnostic instead of producing an incorrectly framed or
+graded take.
 
 ---
 

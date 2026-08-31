@@ -4482,6 +4482,85 @@ fn retarget_cameras_to_offscreen(
 struct OffscreenRenderCamera(Entity);
 
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn skybox_matches(left: &bevy::light::Skybox, right: &bevy::light::Skybox) -> bool {
+    left.image == right.image
+        && left.brightness == right.brightness
+        && left.rotation == right.rotation
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn generated_environment_map_matches(
+    left: &bevy::light::GeneratedEnvironmentMapLight,
+    right: &bevy::light::GeneratedEnvironmentMapLight,
+) -> bool {
+    left.environment_map == right.environment_map
+        && left.intensity == right.intensity
+        && left.rotation == right.rotation
+        && left.affects_lightmapped_mesh_diffuse == right.affects_lightmapped_mesh_diffuse
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn sync_offscreen_environment(
+    commands: &mut Commands,
+    mirror_entity: Entity,
+    source_skybox: Option<&bevy::light::Skybox>,
+    source_environment: Option<&bevy::light::GeneratedEnvironmentMapLight>,
+    mut mirror_skybox: Option<&mut bevy::light::Skybox>,
+    mut mirror_environment: Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
+    mirror_derived_environment: Option<&bevy::light::EnvironmentMapLight>,
+) {
+    let skybox_changed = match (source_skybox, mirror_skybox.as_deref()) {
+        (Some(source), Some(mirror)) => !skybox_matches(source, mirror),
+        (Some(_), None) | (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    if skybox_changed {
+        match source_skybox {
+            Some(source) => {
+                if let Some(mirror) = mirror_skybox.as_deref_mut() {
+                    *mirror = source.clone();
+                } else {
+                    commands.entity(mirror_entity).insert(source.clone());
+                }
+            }
+            None => {
+                commands
+                    .entity(mirror_entity)
+                    .remove::<bevy::light::Skybox>();
+            }
+        }
+    }
+
+    let environment_changed = match (source_environment, mirror_environment.as_deref()) {
+        (Some(source), Some(mirror)) => !generated_environment_map_matches(source, mirror),
+        (Some(_), None) | (None, Some(_)) => true,
+        (None, None) => mirror_derived_environment.is_some(),
+    };
+    if environment_changed {
+        match source_environment {
+            Some(source) => {
+                if let Some(mirror) = mirror_environment.as_deref_mut() {
+                    *mirror = source.clone();
+                } else {
+                    commands.entity(mirror_entity).insert(source.clone());
+                }
+            }
+            None => {
+                commands.entity(mirror_entity).remove::<(
+                    bevy::light::GeneratedEnvironmentMapLight,
+                    bevy::light::EnvironmentMapLight,
+                )>();
+            }
+        }
+        if mirror_derived_environment.is_some() {
+            commands
+                .entity(mirror_entity)
+                .remove::<bevy::light::EnvironmentMapLight>();
+        }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn maintain_offscreen_render_camera(
     target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
     sources: Query<
@@ -4494,6 +4573,8 @@ fn maintain_offscreen_render_camera(
             &bevy::render::view::Msaa,
             Option<&ChildOf>,
             Option<&CellCoord>,
+            Option<&bevy::light::Skybox>,
+            Option<&bevy::light::GeneratedEnvironmentMapLight>,
         ),
         (
             With<lunco_render::SceneCamera>,
@@ -4518,6 +4599,9 @@ fn maintain_offscreen_render_camera(
         Option<&mut bevy::core_pipeline::tonemapping::Tonemapping>,
         Option<&mut bevy::render::view::Msaa>,
         Option<&mut CellCoord>,
+        Option<&mut bevy::light::Skybox>,
+        Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
+        Option<&bevy::light::EnvironmentMapLight>,
     )>,
     mut commands: Commands,
 ) {
@@ -4532,6 +4616,8 @@ fn maintain_offscreen_render_camera(
         source_msaa,
         parent,
         cell,
+        source_skybox,
+        source_environment,
     )) = source_iter.next()
     else {
         return;
@@ -4568,6 +4654,9 @@ fn maintain_offscreen_render_camera(
         mirror_tonemapping,
         mirror_msaa,
         mut mirror_cell,
+        mut mirror_skybox,
+        mut mirror_environment,
+        mirror_derived_environment,
     ) in &mut mirrors
     {
         if mirror.0 != source {
@@ -4606,6 +4695,15 @@ fn maintain_offscreen_render_camera(
         if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
             *mirror_cell = *source_cell;
         }
+        sync_offscreen_environment(
+            &mut commands,
+            mirror_entity,
+            source_skybox,
+            source_environment,
+            mirror_skybox.as_deref_mut(),
+            mirror_environment.as_deref_mut(),
+            mirror_derived_environment,
+        );
         camera.is_active = true;
     }
     if !found {
@@ -4619,6 +4717,12 @@ fn maintain_offscreen_render_camera(
             *source_tonemapping,
             *source_msaa,
         ));
+        if let Some(source_skybox) = source_skybox {
+            entity.insert(source_skybox.clone());
+        }
+        if let Some(source_environment) = source_environment {
+            entity.insert(source_environment.clone());
+        }
         if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
             &source_camera_settings
         {
