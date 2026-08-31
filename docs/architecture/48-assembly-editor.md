@@ -24,6 +24,12 @@ listed below; they do not introduce a second authoring model.
 - `DocumentId` is the identity of an open assembly/USD file. The existing
   `DocumentRegistry<UsdDocument>` owns its source, generation, origin, undo
   stack, and lifecycle; the Assembly editor never creates a parallel registry.
+- `DocumentRegistry::fork` creates a new untitled assembly snapshot with a
+  fresh `DocumentId`. `UsdDocument::fork` copies the base/runtime authored
+  layers and edit history while creating a document-owned composition cache;
+  the host copies undo/redo state by value and the registry attaches a new
+  recorder to the same Twin journal. Save-As is the first operation that can
+  bind the snapshot to a filesystem path.
 - `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only write path. It supplies journaling,
   inverse operations, save, undo, and live projection.
 - The editor operates on an explicitly opened USD document. The existing
@@ -54,6 +60,21 @@ binding. The Connections graph is empty until that preview document is selected;
 it never infers an editable stage from entity counts or the live simulation.
 Do not add a second graph library, a special rover assembly implementation, or
 direct ECS mutation for convenience.
+
+### Snapshot and edit contract
+
+An Assembly editor may start from a reusable USD component or an existing
+assembly by forking its current document. The fork is a full authored
+base-plus-runtime snapshot with a new identity; equal generations do not imply
+shared content. Its derived composition memo is private to the fork and keyed
+by the document identity plus both layer revisions. The composed USD stage and
+resolver remain owned by the existing USD composition path, so the editor does
+not introduce a second scene cache or dependency traversal.
+
+The fork has no file identity until Save-As. Its subsequent operations are
+journalled under the new document id, while the existing Twin journal remains
+the one cross-document history stream. Per-document undo/redo remains on that
+document's `DocumentHost`.
 
 ## Mount and attach contract
 

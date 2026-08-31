@@ -220,6 +220,14 @@ pub trait DocumentOp:
     fn commutes_with(&self, _other: &Self) -> bool { false }
 }
 
+/// A file-backed document that can be duplicated into an independently
+/// editable untitled snapshot. The implementation copies authored state and
+/// invalidates private derived state; Save-As is the first operation that can
+/// bind the fork to a filesystem path.
+pub trait ForkableDocument: FileBacked + Clone {
+    fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError>;
+}
+
 /// A panel that observes a specific document.
 pub trait DocumentView<D: Document> {
     fn on_change(&mut self, doc: &D, op: &D::Op);
@@ -241,6 +249,9 @@ pub struct DocumentHost<D: Document> {
 }
 
 impl<D: Document> DocumentHost<D> {
+    pub fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError>
+    where
+        D: ForkableDocument;
     pub fn apply<M: Into<Mutation<D::Op>>>(&mut self, mutation: M) -> Result<Ack, Reject>;
     pub fn apply_group(
         &mut self,
@@ -252,6 +263,14 @@ impl<D: Document> DocumentHost<D> {
     pub fn generation(&self) -> u64;
 }
 ```
+
+`DocumentHost::fork` creates the document and its host history as one typed
+operation: the authored snapshot and undo/redo groups are copied by value, the
+new document owns a fresh derived-state cache, and the external recorder is
+not copied. `DocumentRegistry::fork` assigns the new `DocumentId` and attaches
+another recorder for that id to the same Twin journal, so the journal remains
+one cross-document history without sharing document state. A fork is untitled
+until Save-As; it cannot create a second owner for an existing file path.
 
 `DocumentHost` knows nothing about views, UI, or Bevy. Panels (hosted by
 `lunco-workbench`, with widgets in `lunco-ui` and per-domain `ui` modules)
