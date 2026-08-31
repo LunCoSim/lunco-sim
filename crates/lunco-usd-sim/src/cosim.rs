@@ -51,7 +51,7 @@ use lunco_scripting::{
 use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset, UsdVisualMeshPending,
+    UsdInstanceRoot, UsdPrimPath, UsdSceneRoot, UsdStageAsset, UsdVisualMeshPending,
     UsdVisualProjectionQueued,
 };
 use openusd::sdf::{Path as SdfPath, Value};
@@ -1075,7 +1075,7 @@ fn project_usd_telemetry(
 }
 
 /// Reads one cosim prim's attributes and dispatches its model + wires + events
-/// from the live composed [`UsdRead`] surface.
+/// from the live composed [`lunco_usd_bevy::UsdRead`] surface.
 fn process_usd_cosim_prim_read(
     reader: &dyn UsdReadObject,
     entity: Entity,
