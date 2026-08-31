@@ -39,6 +39,14 @@ const TRAIL_MAX_POINTS: usize = 1024;
 const TRAIL_HALF_WIDTH_M: f32 = 0.16;
 const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.09;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrailSurfaceMode {
+    /// The Avian contact point is already the authoritative surface sample.
+    PhysicsContact,
+    /// Reproject the contact's horizontal coordinates through the DEM oracle.
+    AnalyticTerrain,
+}
+
 /// Terrain-owned physics colliders that may produce a trail contact. Other
 /// static bodies, such as a step or a rover-mounted obstacle, are not ground.
 type TerrainCollider = Or<(
@@ -360,21 +368,22 @@ pub(crate) fn trail_projection_rebuild_is_pending(
 fn project_trail_to_surface(
     points: impl Iterator<Item = DVec3>,
     surface: &lunco_terrain_surface::GridSurfaceQuery,
-    surface_present: bool,
+    mode: TrailSurfaceMode,
 ) -> Option<Vec<DVec3>> {
-    if !surface_present {
+    if mode == TrailSurfaceMode::PhysicsContact {
         // The solved physics contact is already on the authored collider when
         // the scene has no analytic DEM. Keep that contact instead of inventing
         // a chassis-height or terrain-height fallback.
-        return Some(points.collect());
+        Some(points.collect())
+    } else {
+        points
+            .map(|point| {
+                surface
+                    .height_at(GridPos(point))
+                    .map(|height| DVec3::new(point.x, height, point.z))
+            })
+            .collect()
     }
-    points
-        .map(|point| {
-            surface
-                .height_at(GridPos(point))
-                .map(|height| DVec3::new(point.x, height, point.z))
-        })
-        .collect()
 }
 
 /// Convert all retained physics-frame history into one atomic render snapshot.
@@ -390,7 +399,11 @@ pub(crate) fn rebuild_vehicle_trail_projection(
     request.pending = false;
     let frame = active_frame.0;
     let surface_key = surface.surface_key();
-    let surface_present = surface_key.is_some();
+    let surface_mode = if surface_key.is_some() {
+        TrailSurfaceMode::AnalyticTerrain
+    } else {
+        TrailSurfaceMode::PhysicsContact
+    };
     let mut trails: HashMap<Entity, Vec<TrailLane>> = HashMap::new();
     for (vehicle, history) in q_vehicles.iter() {
         if history.frame != Some(frame) {
@@ -403,7 +416,7 @@ pub(crate) fn rebuild_vehicle_trail_projection(
                 continue;
             }
             let Some(points) =
-                project_trail_to_surface(lane.points.iter().copied(), &surface, surface_present)
+                project_trail_to_surface(lane.points.iter().copied(), &surface, surface_mode)
             else {
                 continue;
             };
@@ -670,7 +683,11 @@ mod tests {
         let mut app = App::new();
         let system = app.world_mut().register_system(
             move |surface: lunco_terrain_surface::GridSurfaceQuery| {
-                project_trail_to_surface(points.into_iter(), &surface, false)
+                project_trail_to_surface(
+                    points.into_iter(),
+                    &surface,
+                    TrailSurfaceMode::PhysicsContact,
+                )
             },
         );
         let projected = app.world_mut().run_system(system).unwrap();
