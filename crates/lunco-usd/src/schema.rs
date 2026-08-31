@@ -715,12 +715,11 @@ mod tests {
             "LunCoTerrainAPI",
             "LunCoTerrainLayerAPI",
             "LunCoShadowAPI",
-            // The vehicle extension APIs (doc 53) carry the LunCo-specific
-            // suspension/wheel attrs that have no PhysX equivalent. One API per
-            // prim role — see the schema. Pinned here so a schema/generatedSchema
-            // drift doesn't silently make them `custom`.
+            // The vehicle extension APIs (doc 53) carry only LunCo-specific
+            // facts that have no PhysX equivalent. One API per prim role — see
+            // the schema. Pinned here so schema/generatedSchema drift does not
+            // silently make them `custom`.
             "LunCoSuspensionAPI",
-            "LunCoPrismaticSuspensionAPI",
             "LunCoWheelAPI",
             "LunCoSuspensionVisualAPI",
             "LunCoMassContributionAPI",

@@ -915,27 +915,6 @@ class "LunCoJointDampingAPI" (
     )
 }
 
-class "LunCoPrismaticSuspensionAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """Marks a standard PhysicsPrismaticJoint linear drive as a passive,
-    crushable landing cartridge. The standard PhysicsDriveAPI:linear carries the
-    rest position, stiffness, damping, and force capacity. This API adds only the
-    yield load and selects one-sided elastic/plastic material semantics; the
-    prismatic joint still owns travel limits and rotational lock."""
-)
-{
-    float lunco:prismaticSuspension:yieldForce (
-        customData = {
-            double min = 0
-            string unit = "N"
-        }
-        doc = "Elastic crush load at which the unloaded reference begins permanent compression. Required."
-    )
-}
-
 class "LunCoWheelAPI" (
     inherits = </APISchemaBase>
     customData = {

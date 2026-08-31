@@ -218,21 +218,6 @@ fn on_tick(me) {
             ", expected error"));
     }
 
-    let invalid_passive = by_rule(findings, "invalid-passive-suspension");
-    f.push(t_true(invalid_passive.len() == 1,
-        "invalid-passive-suspension fired " + invalid_passive.len() +
-        " time(s), expected exactly 1 (/LintSelftest/BadPassiveSuspension)"));
-    if invalid_passive.len() == 1 {
-        f.push(t_true(invalid_passive[0].subject == "/LintSelftest/BadPassiveSuspension",
-            "invalid-passive-suspension named " + invalid_passive[0].subject +
-            ", expected the malformed passive cartridge"));
-        f.push(t_true(invalid_passive[0].severity == "error",
-            "invalid-passive-suspension is severity " + invalid_passive[0].severity +
-            ", expected error"));
-        f.push(t_true(invalid_passive[0].message.contains("PhysicsPrismaticJoint"),
-            "invalid-passive-suspension did not report the owning joint contract"));
-    }
-
     // THE FALSE-POSITIVE GUARD. A jointed nested body is the normal wheel mount.
     f.push(t_true(!mentions(findings, "/LintSelftest/Vehicle/Wheel"),
         "a finding names /LintSelftest/Vehicle/Wheel — that is a correctly jointed " +

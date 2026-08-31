@@ -10,13 +10,13 @@ This document specifies the canonical USD/Omniverse representation for vehicle w
 
 The repo has two, and they are not interchangeable. Pick by what the spring carries.
 
-| | **Raycast vehicle suspension** | **Passive prismatic suspension** |
+| | **Raycast vehicle suspension** | **Physical prismatic suspension** |
 | --- | --- | --- |
 | Use for | **raycast wheels** on a reduced vehicle realization | any **physical suspension member** whose load passes through a rigid-body joint: wheels, landing legs, dampers, deployables |
-| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with `LunCoPrismaticSuspensionAPI`; the joint owns axis, anchors, limits, and rotational lock, while the material owns only the axial reaction |
-| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | standard `drive:linear:physics:{targetPosition,targetVelocity,stiffness,damping,maxForce,type}` plus `lunco:prismaticSuspension:yieldForce`; `physics:lowerLimit` / `:upperLimit` own the stroke |
+| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with the standard `PhysicsDriveAPI:linear`; the joint owns axis, anchors, limits, and rotational lock, and the drive owns the axial spring-damper |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | standard `drive:linear:physics:{targetPosition,targetVelocity,stiffness,damping,maxForce,type}`; `physics:lowerLimit` / `:upperLimit` own the stroke |
 | Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
-| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | `lunco-cosim`'s passive material constraint in Avian's existing substep solver; no second geometric solve |
+| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | Avian's native prismatic joint drive in the existing substep solver |
 | Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
 
 Both are legitimate realizations of the same authored wheel contract; neither is
@@ -27,24 +27,17 @@ revolute wheel joint, so its load and wheel torque pass through the authored
 rigid-body topology.
 
 Sections 1–5 below specify the **raycast** mechanism and its shared authoring
-contracts. A passive physical member is a `PhysicsPrismaticJoint` with the
-standard `PhysicsDriveAPI:linear` plus the narrow
-`LunCoPrismaticSuspensionAPI` extension: `physics:lowerLimit` / `:upperLimit`
-bound the stroke, `physics:localRot0/1` carry the authored frame, and anchors are
-left unauthored when the body transforms already place the joint at zero. The
-standard drive carries the target, elastic coefficients, and force capacity;
-the extension adds only the yield load and selects one-sided elastic/plastic
-material semantics. The native bilateral motor is disabled for this marked
-passive role, so it cannot become a second axial mechanism or return energy on
-rebound. The joint publishes the material reaction through its output-only
-`force` port.
-`assets/vessels/landers/descent_lander.usda` uses this passive boundary; a
-commandable elevator or actuator may still use the standard drive contract.
+contracts. A physical member is a `PhysicsPrismaticJoint` with the standard
+`PhysicsDriveAPI:linear`: `physics:lowerLimit` / `:upperLimit` bound the stroke,
+`physics:localRot0/1` carry the authored frame, and anchors are left unauthored
+when the body transforms already place the joint at zero. The standard drive
+is the sole axial spring-damper and its output-only `force` port is the runtime
+load readback. `assets/vessels/landers/descent_lander.usda` uses this boundary.
 
 ### 0.3 Schema reuse decision
 
-The standard schemas were checked before defining the passive extension. The
-ownership boundary is:
+The standard schemas were checked before retaining the narrow raycast-only
+extensions. The ownership boundary is:
 
 | Physical fact | Existing owner | LunCo addition |
 | --- | --- | --- |
@@ -52,14 +45,14 @@ ownership boundary is:
 | Rest target, stiffness, damping, and maximum force | `PhysicsDriveAPI:linear` | none; do not duplicate these under `lunco:*` |
 | Contact friction and restitution | `PhysicsMaterialAPI` | none |
 | Raycast-wheel spring, damper, and travel | `PhysxVehicleSuspensionAPI` | `LunCoSuspensionAPI` only supplies the missing raycast `restLength` |
-| One-sided compression with irreversible plastic set on an arbitrary rigid-body joint | no standard USD/PhysX schema | `LunCoPrismaticSuspensionAPI` only supplies `yieldForce` and the passive-role marker |
+| Elastic/damped axial response on a rigid-body joint | `PhysicsDriveAPI:linear` | none |
 
-`PhysicsLimitAPI` constrains travel but does not define a material reaction.
-`PhysxVehicleSuspensionAPI` belongs to the PhysX wheel/raycast attachment model;
-it has no yield or permanent-crush state and is not a substitute for a physical
-prismatic landing member. Therefore the custom prismatic API remains only for
-the one constitutive fact no inspected standard schema owns. All duplicated
-elastic and force-capacity fields have been removed.
+`PhysicsLimitAPI` constrains travel but does not define a material reaction;
+`PhysicsDriveAPI:linear` supplies that reaction for a physical prismatic member.
+`PhysxVehicleSuspensionAPI` belongs to the PhysX wheel/raycast attachment model
+and is not a substitute for a physical prismatic landing member. The lander
+contract does not require permanent plastic crush, so the standard schemas cover
+the complete authored mechanism without a LunCo-specific prismatic API.
 
 ### 0.1 A prismatic strut is only as good as its foot
 
@@ -149,7 +142,6 @@ prim:
 | `LunCoSuspensionAPI` | `float lunco:suspension:restLength` | suspension prim, beside `PhysxVehicleSuspensionAPI` | PhysX has no `restLength` (`travelDistance` + `sprungMass` instead) |
 | `LunCoSuspensionVisualAPI` | `uniform token lunco:suspensionVisual:role` | a strut's moving visual parts | the PhysX vehicle schema is physics-only |
 | `LunCoMassContributionAPI` | standard `PhysicsMassAPI` values | a physical child represented as a reduced-realization contribution | standard USD does not declare how a realization folds a child mass into a reduced body |
-| `LunCoPrismaticSuspensionAPI` | `float lunco:prismaticSuspension:yieldForce` | a `PhysicsPrismaticJoint` carrying a passive crush cartridge | standard `UsdPhysics` defines bilateral drives, but not one-sided elastic/plastic landing absorption |
 
 `restLength` is `float` to match the `physxVehicleSuspension:*` attrs it sits beside — and the `travelDistance` it stands in for.
 
@@ -271,26 +263,19 @@ never converted into a permanent activation hold or a guessed world-up placement
 * The `SetObjectProperty` live mutation system queries the `Suspension` component directly when setting suspension properties (`spring_k`, `damping_c`, `rest_length`).
 * This enables live CLI suspension tuning to work uniformly across both **joint-based** and **raycast** vehicles.
 
-### 3.5. Passive prismatic material projection (`lunco-usd-sim` + `lunco-cosim`)
+### 3.5. Physical prismatic drive projection (`lunco-usd-avian` + `lunco-cosim`)
 
-`LunCoPrismaticSuspensionAPI` is projected only when the prim is a
-`PhysicsPrismaticJoint` that also applies `PhysicsDriveAPI:linear`. The standard
-drive's `stiffness`, `damping`, and `maxForce`, plus the extension's `yieldForce`,
-are required, finite, and dimensionally positive; the standard target/type
-defaults remain the USD semantic defaults (`0` and `force`). Malformed or
-incomplete authoring fails the prim's projection. The extension is the explicit
-passive-role marker: the runtime disables the standard bilateral motor and uses
-the standard coefficients in its one-sided material law, so there are not two
-active owners of the axial DOF.
-
-The native Avian prismatic joint remains responsible for anchors, alignment,
-rotation lock, and limits. `lunco-cosim` adds one material impulse at Avian's
-existing substep velocity boundary: compression produces a compressive
-reaction, the damping is implicit, and yield advances an irreversible unloaded
-reference. The impulse is applied through both bodies' generalized inverse mass,
-including anchor lever arms and locked axes. No extra global substeps, outer-tick
-force accumulator, transform write, or second geometric joint solve is part of
-this contract.
+A physical member is projected from the standard `PhysicsPrismaticJoint` and
+`PhysicsDriveAPI:linear` schemas. The drive's target, type, stiffness, damping,
+and force capacity are read once through the composed `StageView` and lowered to
+Avian's native implicit spring-damper motor. The native prismatic joint remains
+responsible for anchors, alignment, rotation lock, limits, and the drive
+reaction. The physics owner performs one fixed, generic contact-coupling pass
+for touching prismatic joints after contact relaxation, giving a contact impulse
+through a long suspension link its native return path without increasing
+substeps or applying an asset-specific correction. No custom material component,
+outer-tick force accumulator, transform write, or vehicle-specific branch is
+involved.
 
 ---
 
@@ -312,7 +297,7 @@ A wheel with no travel is still authored explicitly — "no suspension" is never
 spelled as "omit the schema", which §4.1 rejects. Two authored realizations are
 valid:
 * **Raycast, zero travel** — reference `components/mobility/suspensions/rigid.usda`, which applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI` with `restLength = 0` and a stiff, damped spring. The wheel remains on the raycast path.
-* **Physical wheel** — author a rigid suspension carrier with `PhysicsRigidBodyAPI`, connect the chassis to that carrier with a `PhysicsPrismaticJoint`, and connect the wheel body to the carrier with a `PhysicsRevoluteJoint`. A commandable carrier may carry `PhysicsDriveAPI:linear`; a passive crush cartridge carries the standard drive plus `LunCoPrismaticSuspensionAPI`. Zero travel is expressed by the prismatic limits, not by bypassing the carrier or attaching the wheel directly to the chassis.
+* **Physical wheel** — author a rigid suspension carrier with `PhysicsRigidBodyAPI`, connect the chassis to that carrier with a `PhysicsPrismaticJoint`, and connect the wheel body to the carrier with a `PhysicsRevoluteJoint`. The carrier may carry `PhysicsDriveAPI:linear`; zero travel is expressed by the prismatic limits, not by bypassing the carrier or attaching the wheel directly to the chassis.
 
 The reusable `physical_drivetrain.usda` is this second form. The rover owns the
 carrier placement; the shared drivetrain owns the joint graph; and the reduced

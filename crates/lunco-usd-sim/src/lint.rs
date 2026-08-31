@@ -149,67 +149,6 @@ pub fn append_wheel_attachment_facts(reader: &StageView<'_>, facts: &mut H) {
     ));
 }
 
-/// Add passive prismatic material facts using the exact reader used by runtime
-/// projection. A malformed API is retained as an invalid fact so policy can
-/// reject it before a scene reaches the physics schedule.
-pub fn append_passive_suspension_facts(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
-    facts: &mut H,
-) {
-    let H::Map(entries) = facts else {
-        return;
-    };
-    let suspensions = reader
-        .prim_paths()
-        .into_iter()
-        .filter(|path| reader.has_api_schema(path, super::PASSIVE_PRISMATIC_SUSPENSION_API))
-        .map(|path| {
-            let result = super::passive_prismatic_suspension_from_usd(reader, &path);
-            let (valid, error, values) = match result {
-                Ok(Some(value)) => (
-                    true,
-                    String::new(),
-                    Some((
-                        value.rest_position,
-                        value.spring_k,
-                        value.damping_c,
-                        value.yield_force,
-                        value.max_force,
-                    )),
-                ),
-                Ok(None) => unreachable!("the API filter guarantees a passive suspension"),
-                Err(error) => (false, error, None),
-            };
-            H::map([
-                ("path", H::str(path.to_string())),
-                ("valid", H::Bool(valid)),
-                ("error", H::str(error)),
-                (
-                    "rest_position",
-                    values.map(|values| H::Float(values.0)).unwrap_or(H::Unit),
-                ),
-                (
-                    "stiffness",
-                    values.map(|values| H::Float(values.1)).unwrap_or(H::Unit),
-                ),
-                (
-                    "damping",
-                    values.map(|values| H::Float(values.2)).unwrap_or(H::Unit),
-                ),
-                (
-                    "yield_force",
-                    values.map(|values| H::Float(values.3)).unwrap_or(H::Unit),
-                ),
-                (
-                    "max_force",
-                    values.map(|values| H::Float(values.4)).unwrap_or(H::Unit),
-                ),
-            ])
-        })
-        .collect();
-    entries.push(("passive_suspensions".to_string(), H::Array(suspensions)));
-}
-
 fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
     let mut facts = Vec::new();
     for path in reader.prim_paths() {
@@ -366,33 +305,5 @@ mod tests {
             facts.get("invalid_wheel_attachments"),
             Some(&H::Array(vec![H::str("/Rig/Wheel")])),
         );
-    }
-
-    #[test]
-    fn passive_facts_use_the_runtime_contract_reader_and_mark_invalid_values() {
-        let recipe = StageRecipe::from_source(
-            "passive_suspension_lint.usda",
-            "#usda 1.0\n\
-             def Xform \"BadSuspension\" ( prepend apiSchemas = [\"PhysicsDriveAPI:linear\", \"LunCoPrismaticSuspensionAPI\"] )\n\
-             {\n\
-                 token drive:linear:physics:type = \"force\"\n\
-                 float drive:linear:physics:stiffness = -1.0\n\
-                 float drive:linear:physics:damping = 0.0\n\
-                 float drive:linear:physics:maxForce = 100.0\n\
-                 float lunco:prismaticSuspension:yieldForce = 100.0\n\
-             }\n",
-        );
-        let stage = CanonicalStage::from_recipe(&recipe).expect("passive fixture composes");
-        let mut facts = H::Map(Vec::new());
-        append_passive_suspension_facts(&stage.view(), &mut facts);
-        let Some(H::Array(suspensions)) = facts.get("passive_suspensions") else {
-            panic!("passive suspension facts");
-        };
-        assert_eq!(suspensions.len(), 1);
-        assert_eq!(suspensions[0].get("valid"), Some(&H::Bool(false)));
-        assert!(suspensions[0]
-            .get("error")
-            .and_then(H::as_str)
-            .is_some_and(|error| error.contains("PhysicsPrismaticJoint")));
     }
 }

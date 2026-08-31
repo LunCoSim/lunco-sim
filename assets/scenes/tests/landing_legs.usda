@@ -73,7 +73,7 @@ def Xform "LandingLegsTest" (
         double3 xformOp:translate = (0, 8.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        # Exercise the passive gear by itself. The reusable vehicle normally
+        # Exercise the landing gear by itself. The reusable vehicle normally
         # stabilises attitude even with no mission guidance; that would fire
         # physical RCS jets after an asymmetric pad strike and turn this into a
         # coupled flight-control test. Zeroing the documented airframe gain here
