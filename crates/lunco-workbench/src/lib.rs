@@ -5260,11 +5260,10 @@ const STATUS_EVENT_LEVEL_WIDTH: f32 = 64.0;
 const STATUS_EVENT_SOURCE_WIDTH: f32 = 100.0;
 const STATUS_EVENT_PROGRESS_WIDTH: f32 = 120.0;
 const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
-const STATUS_EVENT_DETAILS_WIDTH: f32 = 28.0;
 
 /// Render every history item through the same level/source/message/progress
-/// columns. Warn/Error add a compact diagnostics control and their complete
-/// diagnostic below that row, while Attention adds the owning status action.
+/// columns. Warn/Error rows expand their complete diagnostic when clicked,
+/// while Attention adds the owning status action.
 fn render_status_event_row(
     ui: &mut egui::Ui,
     event: &status_bus::StatusEvent,
@@ -5297,18 +5296,18 @@ fn render_status_event_row(
     } else {
         STATUS_EVENT_PROGRESS_WIDTH
     };
-    let control_width = status_event_control_width(event.level, has_details, compact);
+    let action_width = status_event_action_width(event.level, compact);
     let column_gap = if compact {
         4.0
     } else {
         ui.spacing().item_spacing.x
     };
-    let column_gaps = if control_width > 0.0 { 4.0 } else { 3.0 };
+    let column_gaps = if action_width > 0.0 { 4.0 } else { 3.0 };
     let message_width = (row_width
         - level_width
         - source_width
         - progress_width
-        - control_width
+        - action_width
         - column_gap * column_gaps)
         .max(1.0);
     let display_message = if has_details {
@@ -5318,26 +5317,26 @@ fn render_status_event_row(
     };
     let mut attention_clicked = false;
 
-    ui.horizontal_top(|ui| {
+    let row_response = ui.horizontal_top(|ui| {
         ui.set_width(row_width);
         ui.spacing_mut().item_spacing.x = column_gap;
 
         ui.add_sized(
             [level_width, 0.0],
             egui::Label::new(
-                egui::RichText::new(status_level_label(event.level))
+                status_event_rich_text(status_level_label(event.level))
                     .strong()
                     .color(status_level_color(event.level, theme)),
             ),
         );
         ui.add_sized(
             [source_width, 0.0],
-            egui::Label::new(egui::RichText::new(event.source).strong()).truncate(),
+            egui::Label::new(status_event_rich_text(event.source).strong()).truncate(),
         )
         .on_hover_text(event.source);
         ui.add_sized(
             [message_width, 0.0],
-            egui::Label::new(egui::RichText::new(display_message))
+            egui::Label::new(status_event_rich_text(display_message))
                 .wrap()
                 .halign(egui::Align::LEFT),
         )
@@ -5368,41 +5367,37 @@ fn render_status_event_row(
         if event.level == status_bus::StatusLevel::Attention {
             attention_clicked = ui
                 .add_sized(
-                    [control_width, 0.0],
+                    [action_width, 0.0],
                     egui::Button::new(if compact { "Act" } else { "Continue" }),
                 )
                 .on_hover_text("Continue")
                 .clicked();
-        } else if has_details && !details.is_open() {
-            if icon_button_sized(
-                ui,
-                UiIcon::Info,
-                "Show diagnostics",
-                egui::vec2(control_width, ui.spacing().interact_size.y),
-            )
-            .clicked()
-            {
-                details.toggle(ui);
-            }
-        } else if has_details {
-            if icon_button_sized(
-                ui,
-                UiIcon::Close,
-                "Hide diagnostics",
-                egui::vec2(control_width, ui.spacing().interact_size.y),
-            )
-            .clicked()
-            {
-                details.toggle(ui);
-            }
         }
     });
+
+    if has_details {
+        let row_interaction = ui
+            .interact(
+                row_response.response.rect,
+                details_id.with("toggle"),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(if details.is_open() {
+                "Click to hide diagnostics"
+            } else {
+                "Click to show diagnostics"
+            });
+        if row_interaction.clicked() {
+            details.toggle(ui);
+        }
+    }
 
     if has_details {
         details.show_body_unindented(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("Diagnostics")
+                    status_event_rich_text("Diagnostics")
                         .strong()
                         .color(status_level_color(event.level, theme)),
                 );
@@ -5410,29 +5405,27 @@ fn render_status_event_row(
                     ui.ctx().copy_text(event.message.clone());
                 }
             });
-            ui.add(egui::Label::new(egui::RichText::new(&event.message)).wrap());
+            ui.add(egui::Label::new(status_event_rich_text(event.message.as_str())).wrap());
         });
     }
 
     attention_clicked
 }
 
-fn status_event_control_width(
-    level: status_bus::StatusLevel,
-    has_details: bool,
-    compact: bool,
-) -> f32 {
+fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f32 {
     if level == status_bus::StatusLevel::Attention {
         if compact {
             56.0
         } else {
             STATUS_EVENT_ATTENTION_WIDTH
         }
-    } else if has_details {
-        STATUS_EVENT_DETAILS_WIDTH
     } else {
         0.0
     }
+}
+
+fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).family(egui::FontFamily::Proportional)
 }
 
 fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
@@ -6400,17 +6393,21 @@ mod tests {
     }
 
     #[test]
-    fn status_event_controls_reserve_only_their_required_width() {
+    fn status_event_rows_reserve_width_only_for_attention_action() {
         assert_eq!(
-            status_event_control_width(status_bus::StatusLevel::Info, false, false),
+            status_event_action_width(status_bus::StatusLevel::Info, false),
             0.0
         );
         assert_eq!(
-            status_event_control_width(status_bus::StatusLevel::Warn, true, false),
-            STATUS_EVENT_DETAILS_WIDTH
+            status_event_action_width(status_bus::StatusLevel::Warn, false),
+            0.0
         );
         assert_eq!(
-            status_event_control_width(status_bus::StatusLevel::Attention, false, false),
+            status_event_action_width(status_bus::StatusLevel::Error, true),
+            0.0
+        );
+        assert_eq!(
+            status_event_action_width(status_bus::StatusLevel::Attention, false),
             STATUS_EVENT_ATTENTION_WIDTH
         );
     }
