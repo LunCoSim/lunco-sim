@@ -23,6 +23,7 @@ def Xform "BatteryMountsTest" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
         variants = {
             string power = "battery"
+            string generation = "solar"
         }
     )
     {
@@ -34,6 +35,7 @@ def Xform "BatteryMountsTest" (
         prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
         variants = {
             string power = "battery"
+            string generation = "solar"
         }
     )
     {
@@ -45,6 +47,7 @@ def Xform "BatteryMountsTest" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
         variants = {
             string power = "battery"
+            string generation = "solar"
         }
     )
     {

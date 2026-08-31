@@ -46,12 +46,13 @@ different envelope may override the case scale on its `Battery` instance. A
 mounted battery is a child of the rover's single rigid body, so do not add a
 second `PhysicsRigidBodyAPI` or a joint for it.
 
-The compact skid and six-wheel rovers seat the nominal pack on the chassis
-top face at `(0, 0.25, 0)`. Rocker-bogie uses a `1.0 × 0.3 × 1.5 m` case
-inside its shorter body, while Rucheyok uses a `4.0 × 0.8 × 6.0 m` case
-centred in its `15.0 × 4.0 × 20.0 m` body. The authored
-`scenes/tests/battery_mounts.usda` fixture checks these composed transforms for
-all four battery-bearing rover assets.
+The compact skid and six-wheel rovers center the nominal pack inside their
+chassis at `(0, 0, 0)`, below the solar-panel plane. Rocker-bogie uses a
+`0.8 × 0.3 × 1.2 m` case centred in its composed `0.95 × 0.5 × 1.5 m` body,
+below the solar deck, while Rucheyok uses a `4.0 × 0.8 × 6.0 m` case centred
+in its `15.0 × 4.0 × 20.0 m` body. The authored
+`scenes/tests/battery_mounts.usda` fixture checks the composed envelope and
+solar clearance for all four battery-bearing rover assets.
 
 ### 6. Drivetrain & Motor Network (Authored in USD)
 Controlling traction and speed:
