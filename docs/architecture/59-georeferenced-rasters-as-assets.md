@@ -127,22 +127,24 @@ Ordered, with the load-bearing item flagged.
 The fixed-slot GPU path is already in place for authored terrain appearance:
 `TextureLayer` declares the slots (`materials/src/look.rs:73`),
 `terrain_layered.wgsl` and the streamed `terrain_geomorph.wgsl` bind the authored
-albedo/mineral maps with mix weights, and `shader_look.rs:73-83` maps them. The
-runtime binder publishes those USD material-network inputs as
+albedo/mineral/surface/normal maps with their USD weights, and `shader_look.rs`
+maps them. The runtime binder publishes those USD material-network inputs as
 `TerrainAuthoredMaps`, and resident streamed tiles receive the same handles and
-weights. This is the current PNG/asset-handle path; it does not yet provide the
-general `GeoRaster` loader, georeference validation, or arbitrary raster-layer
-stack described above.
+weights. The streamed shader chooses the authored surface or normal role over the
+engine-derived product; a positive-weight authored role is never overwritten by a
+late derived-map publication. This is the current PNG/asset-handle path; it does
+not yet provide the general `GeoRaster` loader, georeference validation, or
+arbitrary raster-layer stack described above.
 
 ### Scoping trap
 
 Do not infer the current rendered path from the generalized design below. The
 school twin uses streamed CDLOD tiles, and those tiles now consume
 `TerrainAuthoredMaps` through `terrain_geomorph.wgsl`; bindings 2–5 are the
-authored albedo/mineral inputs, while bindings 6–11 remain the surface/derived
-slots. A missing `GeoRaster` importer is therefore an ingest limitation, not a
-reason for an authored USD albedo map to disappear from an existing streamed
-scene.
+authored albedo/mineral inputs, while bindings 6–11 are the shared per-role
+surface/normal slots selected between authored and derived sources. A missing
+`GeoRaster` importer is therefore an ingest limitation, not a reason for an
+authored USD layer to disappear from an existing streamed scene.
 
 ## Routes are not rasters
 

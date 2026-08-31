@@ -612,9 +612,14 @@ pub fn suspension_ray_max_distance(rest_length: f64) -> f64 {
 /// The returned point is the point at which the ground reaction acts. Both the
 /// analytical suspension force and the analytical tire force must use this
 /// point so the reduced realization preserves the contact lever arm and load
-/// transfer of the physical wheel realization.
+/// transfer of the physical wheel realization. The wheel entity is the axle
+/// and the authored ray starts at the strut top. Presentation consumers use
+/// this same reconstruction for contact-derived annotations rather than
+/// rebuilding a second wheel geometry model.
+///
+/// This is the solved ground-contact point for a raycast wheel.
 #[inline]
-fn ray_contact_point(
+pub fn raycast_contact_point(
     hub_position: DVec3,
     hub_rotation: DQuat,
     rest_length: f64,
@@ -1222,7 +1227,7 @@ fn apply_wheel_suspension(
                     if apply_force {
                         forces.apply_force_at_point(
                             force_vec,
-                            ray_contact_point(
+                            raycast_contact_point(
                                 world_pos.0,
                                 world_rot.0,
                                 susp.rest_length,
@@ -1419,7 +1424,7 @@ fn apply_wheel_drive(
                     // forward/back contact limit cycle. The ray starts at the
                     // authored strut top, so reconstruct its hit point in the
                     // same grid-absolute frame as the chassis and ray query.
-                    let contact_point = ray_contact_point(
+                    let contact_point = raycast_contact_point(
                         hub_pos_world.0,
                         hub_rot_world.0,
                         susp.rest_length,
@@ -2229,7 +2234,7 @@ mod force_law_tests {
 
         // The authored ray starts 0.8 m along local +Y and travels 0.25 m
         // along local -Y. Under this rotation those directions are -X and +X.
-        let contact = ray_contact_point(hub, rotation, 1.2, 0.4, 0.25);
+        let contact = raycast_contact_point(hub, rotation, 1.2, 0.4, 0.25);
 
         assert!((contact - DVec3::new(1.45, 3.0, 4.0)).length() < 1.0e-12);
     }

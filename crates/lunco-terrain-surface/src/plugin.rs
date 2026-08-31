@@ -114,14 +114,11 @@ impl Plugin for TerrainSurfacePlugin {
                     crate::stream_viz::retire_terrain_tiles,
                 )
                     .chain(),
-                // Late-bind: derived maps / shadow cache finish baking seconds
-                // after the first tiles exist — restate the resident tiles' looks
-                // (no tile churn, no re-bake).
-                crate::stream_viz::bind_derived_maps_to_tiles,
-                crate::stream_viz::unbind_derived_maps_from_tiles,
-                // Authored maps land later still — the layer binder needs the
-                // composed stage — and re-land on every live weight/map edit.
-                crate::stream_viz::bind_authored_maps_to_tiles,
+                // Reconcile one complete terrain material source selection when
+                // USD-authored or engine-derived maps publish. This keeps the
+                // two source owners from racing through separate late binders.
+                crate::stream_viz::bind_terrain_maps_to_tiles,
+                crate::stream_viz::sync_removed_terrain_maps_to_tiles,
                 crate::stream_viz::bind_shadow_cache_to_tiles,
                 // Change-driven: early-outs unless a `TerrainLodViz` removal
                 // event fired this frame (stays in `Update` so its

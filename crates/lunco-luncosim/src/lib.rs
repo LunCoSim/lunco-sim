@@ -3448,6 +3448,13 @@ struct LayerRole {
     weights: &'static [&'static str],
 }
 
+#[cfg(feature = "ui")]
+struct AuthoredLayerMap {
+    role: &'static LayerRole,
+    rel: String,
+    weights: Vec<(&'static str, f32)>,
+}
+
 /// GUI-only: read the terrain's **layer maps** from its bound **UsdShade
 /// Material network** (doc 18 §3) — the only authoring path:
 /// `rel material:binding` → Material → `outputs:surface.connect` → Shader,
@@ -3470,14 +3477,15 @@ struct LayerRole {
 /// worker-produced projection plan; authored generations use the live
 /// canonical stage.
 ///
-/// CONNECTED map inputs are skipped — a connected port is fed by a producer
-/// node (doc 18 Tier B, bake nodes), not by an authored file.
+/// Each role's weights are read independently. CONNECTED map inputs are skipped
+/// — a connected port is fed by a producer node (doc 18 Tier B, bake nodes), not
+/// by an authored file.
 #[cfg(feature = "ui")]
 fn read_material_network_layer_maps(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     sdf: &openusd::sdf::Path,
     roles: &'static [LayerRole],
-) -> Vec<(&'static LayerRole, String, f32)> {
+) -> Vec<AuthoredLayerMap> {
     let Some(shader) = lunco_usd_bevy::resolve_bound_shader(reader, sdf) else {
         return Vec::new();
     };
@@ -3489,14 +3497,19 @@ fn read_material_network_layer_maps(
                 return None;
             }
             let rel = reader.asset(&shader, &map_attr)?;
-            // One authored weight per role, mirroring the flat-attr contract
-            // (surface's two shader weights both receive it).
-            let weight = role
+            let weights = role
                 .weights
-                .first()
-                .and_then(|w| reader.real_f32(&shader, &format!("inputs:{w}")))
-                .unwrap_or(1.0);
-            Some((role, rel, weight))
+                .iter()
+                .map(|weight| {
+                    (
+                        *weight,
+                        reader
+                            .real_f32(&shader, &format!("inputs:{weight}"))
+                            .unwrap_or(1.0),
+                    )
+                })
+                .collect();
+            Some(AuthoredLayerMap { role, rel, weights })
         })
         .collect()
 }
@@ -4180,12 +4193,16 @@ fn bind_terrain_layers(
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
         // The bound UsdShade Material network is the ONLY source (doc 18 §3).
-        let authored: Vec<(&LayerRole, String, f32)> =
-            read_material_network_layer_maps(&reader, &sdf, ROLES);
+        let authored = read_material_network_layer_maps(&reader, &sdf, ROLES);
 
         if authored.is_empty() {
-            // No layer authored — stop re-scanning this terrain.
-            commands.entity(entity).try_insert(TerrainLayersBound);
+            // The USD material projection completed and has no external layer
+            // sources. Publish the empty projection so streamed Lit startup can
+            // make the same explicit derived-source decision as a mapped site.
+            commands
+                .entity(entity)
+                .try_insert(lunco_terrain_surface::TerrainAuthoredMaps::default())
+                .try_insert(TerrainLayersBound);
             continue;
         }
         // Layer paths are root-relative (`{base_uri}/{rel}` below), and the scene's
@@ -4240,32 +4257,44 @@ fn bind_terrain_layers(
         // orthophoto instead of pure procedural regolith (doc 18 step 4).
         let mut published = lunco_terrain_surface::TerrainAuthoredMaps::default();
 
-        for (role, rel, weight) in authored {
+        for AuthoredLayerMap { role, rel, weights } in authored {
             let uri = format!("{base_uri}/{rel}");
             let handle: Handle<Image> = asset_server.load(&uri);
             if let Some(material) = material.as_deref_mut() {
                 (role.set_slot)(material, handle.clone());
-                for w in role.weights {
-                    material.set(w, ParamValue::F32(weight));
+                for (weight_name, weight) in &weights {
+                    material.set(weight_name, ParamValue::F32(*weight));
                 }
             }
+            let weight = |name: &str| {
+                weights
+                    .iter()
+                    .find_map(|(weight_name, value)| (*weight_name == name).then_some(*value))
+                    .unwrap_or(1.0)
+            };
             match role.name {
                 "albedo" => {
                     published.albedo = Some(handle);
-                    published.weight_albedo = weight;
+                    published.weight_albedo = weight("weight_albedo");
                 }
                 "mineral" => {
                     published.mineral = Some(handle);
-                    published.weight_mineral = weight;
+                    published.weight_mineral = weight("weight_mineral");
                 }
-                // `surface`/`normal` are not forwarded: the streamed path bakes
-                // its own from the DEM at tile resolution (`TerrainDerivedMaps`)
-                // and its per-depth weights are a LOD decision, not the author's.
+                "surface" => {
+                    published.surface = Some(handle);
+                    published.weight_rough = weight("weight_rough");
+                    published.weight_ao = weight("weight_ao");
+                }
+                "normal" => {
+                    published.normal = Some(handle);
+                    published.weight_normal = weight("weight_normal");
+                }
                 _ => {}
             }
             info!(
-                "[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}",
-                role.name
+                "[usd-dem] bound terrain {} layer '{rel}' (weights {:?}) → {uri}",
+                role.name, weights
             );
         }
         commands.entity(entity).try_insert(published);

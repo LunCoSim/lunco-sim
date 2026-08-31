@@ -11,10 +11,10 @@
 //!
 //! and publish them as a [`TerrainDerivedMaps`] component. Consumers:
 //!
-//! - the **streamed-tile path** (`stream_viz`) sets them as the `Surface`/`Normal`
-//!   texture layers of every LOD tile's `ShaderLook` — this is what carries crater
-//!   rims / AO / tonal variation at distances where tile geometry and the procedural
-//!   FBM have LOD'd away;
+//! - the **streamed-tile path** (`stream_viz`) selects them as the `Surface`/`Normal`
+//!   texture layers of an LOD tile only when the corresponding USD role is absent.
+//!   The initial Lit tile set waits for this product, so publishing it cannot
+//!   rewrite a visible terrain's materials in one frame;
 //! - the **static-mesh path** binds them onto the terrain's own `ShaderMaterial`
 //!   (`terrain_layered.wgsl` slots). That semantic material is created by
 //!   `lunco-render-bevy`, so there is no intent component to restate — filling its
@@ -59,9 +59,10 @@ use crate::oracle::SurfaceOracle;
 use crate::stream_viz::TerrainLodViz;
 use crate::terrain::DemVisualTargetRes;
 
-/// Optional visual products derived from a ready DEM. The terrain surface and
-/// physics become usable before this work finishes; this resource only reports
-/// the non-blocking visual refinement owned by this module.
+/// Visual products derived from a ready DEM. The terrain surface and physics
+/// become usable before this work finishes. Streamed Lit presentation waits for
+/// its initial product so the first visible tile set has a stable material;
+/// static meshes and headless hosts may consume this lifecycle independently.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TerrainDerivedStatus {
     /// At least one terrain is waiting for or running a derived-map bake.
@@ -110,16 +111,14 @@ pub struct TerrainDerivedMaps {
 }
 
 /// The **authored** layer maps for a terrain, read off its bound UsdShade
-/// Material network (`inputs:albedo_map` / `inputs:mineral_map` and their
-/// `inputs:weight_*`) — the counterpart to [`TerrainDerivedMaps`], which the
-/// engine bakes rather than the author supplying.
+/// Material network (`inputs:*_map` and their `inputs:weight_*`) — the
+/// counterpart to [`TerrainDerivedMaps`], which the engine bakes rather than
+/// the author supplying.
 ///
 /// Published as a component for the same reason the derived maps are: BOTH
-/// terrain render paths need them. Before this existed only the static-mesh
-/// path bound authored rasters, so a site with `lodViz = true` — what every
-/// real DEM site uses — could bake a true NAC orthophoto, wire it correctly
-/// through the network, and still render pure procedural regolith. The map was
-/// authored, resolved, loaded, and never sampled.
+/// terrain render paths need them. The static and streamed paths consume the
+/// same USD layer roles and weights; the streamed path chooses an engine-derived
+/// product only for a role that USD did not author.
 ///
 /// The reader (`bind_terrain_layers`) lives in the editor crate because it
 /// needs the composed stage; it publishes here so the streaming path can
@@ -135,6 +134,36 @@ pub struct TerrainAuthoredMaps {
     pub weight_albedo: f32,
     /// `inputs:weight_mineral`; 0 = no drape.
     pub weight_mineral: f32,
+    /// `inputs:surface_map` — packed roughness/AO/hazard data.
+    pub surface: Option<Handle<Image>>,
+    /// `inputs:weight_rough`; controls the authored surface roughness channel.
+    pub weight_rough: f32,
+    /// `inputs:weight_ao`; controls the authored surface AO channel.
+    pub weight_ao: f32,
+    /// `inputs:normal_map` — a DEM-local ENU normal layer.
+    pub normal: Option<Handle<Image>>,
+    /// `inputs:weight_normal`; 0 = no authored normal contribution.
+    pub weight_normal: f32,
+}
+
+impl TerrainAuthoredMaps {
+    /// Whether USD's surface map is an active material source. A zero-weight
+    /// authored map is intentionally inactive, so the engine-derived product
+    /// remains available for that role.
+    pub fn has_active_surface(&self) -> bool {
+        self.surface.is_some() && (self.weight_rough > 0.0 || self.weight_ao > 0.0)
+    }
+
+    /// Whether USD's normal map is an active material source.
+    pub fn has_active_normal(&self) -> bool {
+        self.normal.is_some() && self.weight_normal > 0.0
+    }
+
+    /// Whether a streamed Lit terrain still needs the engine-derived product
+    /// for at least one material role.
+    pub fn needs_derived_maps(&self) -> bool {
+        !self.has_active_surface() || !self.has_active_normal()
+    }
 }
 
 /// The in-flight off-thread bake for a terrain's derived layers, plus the
