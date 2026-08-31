@@ -182,6 +182,12 @@ still records input changes between cadence ticks, so change detection remains
 lossless without paying the publisher's system-parameter setup every render
 frame.
 
+State mirrors must keep the live progress entry as the authoritative UI state
+for an in-flight operation and publish one current terminal event when that
+entry completes. They must not leave a historical "started" event as the only
+visible result: the status bar falls back to discrete history after progress is
+removed, which can make completed terrain appear stuck at an old tile count.
+
 ## 4. How to decide
 Quick checklist before you write a `Update` system:
 

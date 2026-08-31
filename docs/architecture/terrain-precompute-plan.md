@@ -217,6 +217,11 @@ The native and Web Worker DEM paths also share one `HeightGrid` content-key owne
 returns the key alongside its transferred full grid, so the Web path does not fold a
 multi-million-sample DEM again on the main thread when it publishes the refined surface.
 
+The status mirror exposes the active tile set through one progress entry and emits a terminal
+event with the current resident/wanted counts when that entry completes. It does not retain a
+historical start message as the live result; after progress removal the status bar otherwise
+falls back to an obsolete count and makes a settled stream look blocked.
+
 ## Sequencing
 
 1. **Measure the sparse set** (read-only; cannot regress anything). Answers all three open
