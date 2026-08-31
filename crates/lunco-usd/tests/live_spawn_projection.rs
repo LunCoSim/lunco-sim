@@ -15,6 +15,8 @@ use lunco_usd::{
 };
 use lunco_usd_bevy::*;
 
+mod support;
+
 /// True when an entity projecting `path` (in any live scene) exists.
 fn has_prim_entity(app: &mut App, path: &str) -> bool {
     let mut q = app.world_mut().query::<&UsdPrimPath>();
@@ -184,5 +186,64 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
         prims_under(&mut app, "/World/rover_1/") > 0,
         "the referenced rover's composed subtree must project under the spawn \
          (fetch → inject → author → sink), proving the reference composed live"
+    );
+}
+
+/// Two assembly documents may author the same prim paths. The explicit
+/// viewport document, rather than path or entity-count heuristics, determines
+/// which stage is projected and therefore which file receives edits.
+#[test]
+fn switching_assembly_documents_keeps_identical_paths_isolated() {
+    let mut app = boot_app();
+    let first_source = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Cube \"First\" {}\n}\n";
+    let second_source = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Cube \"Second\" {}\n}\n";
+    let (first, second) = {
+        let mut registry = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>();
+        (
+            registry.allocate(
+                first_source.to_string(),
+                lunco_doc::PathlessOrigin::untitled("first-assembly.usda"),
+            ),
+            registry.allocate(
+                second_source.to_string(),
+                lunco_doc::PathlessOrigin::untitled("second-assembly.usda"),
+            ),
+        )
+    };
+
+    app.world_mut()
+        .trigger(SetActiveUsdViewport { doc: first });
+    support::settle_visual_projection(&mut app);
+    let first_handle = app
+        .world()
+        .resource::<lunco_usd::ui::UsdViewportState>()
+        .active_stage_handle()
+        .expect("first assembly has an active stage")
+        .id();
+    assert!(has_prim_entity(&mut app, "/World/First"));
+
+    app.world_mut()
+        .trigger(SetActiveUsdViewport { doc: second });
+    support::settle_visual_projection(&mut app);
+    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let second_handle = state
+        .active_stage_handle()
+        .expect("second assembly has an active stage")
+        .id();
+    assert_ne!(first_handle, second_handle);
+    assert_eq!(state.active_doc(), Some(second));
+
+    let mut prims = app.world_mut().query::<&UsdPrimPath>();
+    let projected: Vec<_> = prims
+        .iter(app.world())
+        .filter(|prim| prim.path == "/World/First" || prim.path == "/World/Second")
+        .map(|prim| (prim.stage_handle.id(), prim.path.clone()))
+        .collect();
+    assert_eq!(
+        projected,
+        vec![(second_handle, "/World/Second".to_string())],
+        "the preview must contain only the explicitly selected document"
     );
 }

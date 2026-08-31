@@ -218,14 +218,12 @@ impl Plugin for SandboxUiPlugin {
         lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
-            // USD Twin browser. NOTE: the USD *viewport preview*
-            // (`UsdViewportPlugin`) is intentionally NOT added here. It is an
-            // editor tool that OWNS its own scene — it parses the active USD doc
-            // into a second `UsdStageAsset` and mounts a private `scene_root`. The
-            // luncosim is a sim app: its single scene is the live `LoadScene` world,
-            // viewed by the window camera. Adding the preview built the scene a
-            // SECOND time (doubled crater meshes / rocks). A view must not own a
-            // scene — see `docs/architecture/usd-source-of-truth.md`.
+            // USD Twin browser plus the explicit Assembly preview. The preview
+            // owns a private, render-layer-isolated projection only after the
+            // user selects a document in the Twin Browser; it never auto-mounts
+            // the simulation's default scene and therefore cannot duplicate the
+            // live world.
+            .add_plugins(lunco_usd::ui::UsdViewportPlugin)
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
             .add_plugins(lunco_luncosim_edit::SceneEditPlugin)
             .add_plugins(lunco_luncosim_edit::ui::SceneEditUiPlugin)
@@ -256,7 +254,7 @@ impl Plugin for SandboxUiPlugin {
                 );
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
-                // Rhai behaviour editor (Object Builder). Its view-model is
+                // Rhai behaviour editor (Assembly). Its view-model is
                 // produced each frame from the selection + ScriptRegistry.
                 app.register_panel(rhai_editor_panel::RhaiEditorPanel);
                 app.init_resource::<rhai_editor_panel::RhaiEditorVm>();

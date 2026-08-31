@@ -53,7 +53,7 @@ impl BrowserSection for ConnectionsSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
-        ui.label("Inspect and edit the authored USD wiring graph.");
+        ui.label("Inspect and edit the wiring graph of the selected Assembly document.");
         if ui.button("Open Connections graph").clicked() {
             ctx.actions.push(BrowserAction::OpenPanel {
                 id: USD_CONNECTION_CANVAS_PANEL_ID.0.to_string(),
@@ -64,7 +64,7 @@ impl BrowserSection for ConnectionsSection {
             .is_some_and(|view| view.stages.is_empty())
         {
             ui.label(
-                egui::RichText::new("Open a USD scene first to populate the graph.")
+                egui::RichText::new("Select a USD document first to populate the graph.")
                     .weak()
                     .italics(),
             );

@@ -24,9 +24,9 @@
 //!
 //! This crate names no material type and no egui/winit/picking/gizmo crate, so the
 //! headless server links it **without** linking the editor (`lunco-luncosim-edit`,
-//! which now depends on *this* crate rather than containing it). The one GUI-shaped
-//! concession is the optional `ui` feature, which only re-enables
-//! `doc_resolve`'s fallback to the viewport's active document — see that module.
+//! which now depends on *this* crate rather than containing it). The optional
+//! `ui` feature exposes shared USD UI types through the editor dependency graph;
+//! it does not change document resolution or authoring semantics.
 //!
 //! ## Adding New Spawn Types
 //!

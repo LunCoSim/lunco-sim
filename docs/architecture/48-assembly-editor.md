@@ -1,14 +1,14 @@
-# 48 — Object Builder
+# 48 — Assembly editor
 
 > Status: Implemented substrate; production program-attachment gate included · Audience:
-> contributors on the Object Builder and reusable components
+> contributors on the Assembly editor and reusable components
 
-The Object Builder is the authoring surface for assembling and editing a
-simulation object. It projects USD prims and connections into the existing
-canvas, prim-tree, inspector, and viewport surfaces. It does not create a second
-scene model or a vehicle-specific assembly API.
+The Assembly editor is the authoring surface for assembling and editing a
+separate USD document. It projects that document's prims and connections into
+the existing canvas, prim-tree, inspector, and isolated USD viewport surfaces.
+It does not create a second scene model or a vehicle-specific assembly API.
 
-The workbench exposes this surface through the registered `object_builder`
+The workbench exposes this surface through the registered `assembly`
 perspective. The registered `terrain_sculpt` perspective exposes the existing
 terrain tools and keeps sculpting separate from object assembly. Both are hidden
 from the default title-bar switcher, but remain available to authored tutorials
@@ -21,11 +21,15 @@ listed below; they do not introduce a second authoring model.
   connections, mount frames, and authored parameters.
 - `lunco-canvas` is a reusable view/projector. Modelica and USD connections use
   different projectors over the same canvas substrate.
+- `DocumentId` is the identity of an open assembly/USD file. The existing
+  `DocumentRegistry<UsdDocument>` owns its source, generation, origin, undo
+  stack, and lifecycle; the Assembly editor never creates a parallel registry.
 - `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only write path. It supplies journaling,
   inverse operations, save, undo, and live projection.
-- The builder operates on a document-backed Twin. A raw file path has no runtime
-  document layer to persist, so accepting it as an editable builder document
-  would discard edits on reload.
+- The editor operates on an explicitly opened USD document. The existing
+  `OpenFile`/`NewDocument`/`SaveAsDocument` commands provide the file lifecycle;
+  the Assembly preview is activated with an explicit `DocumentId` and is
+  isolated from the simulation scene.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -43,8 +47,13 @@ The existing implementation provides the substrate the perspective composes:
 | Component attach | Reference an asset, place it, and author the joint as one typed command |
 | Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
 
-The perspective must remain a composition of these surfaces. Do not add a second
-graph library, a special rover builder, or direct ECS mutation for convenience.
+The perspective must remain a composition of these surfaces. The Twin Browser
+selects which open document is edited; the USD preview, prim tree, Connections
+graph, Inspector, and command handlers consume that same explicit document
+binding. The Connections graph is empty until that preview document is selected;
+it never infers an editable stage from entity counts or the live simulation.
+Do not add a second graph library, a special rover assembly implementation, or
+direct ECS mutation for convenience.
 
 ## Mount and attach contract
 
@@ -98,7 +107,7 @@ Program attachment follows the same author-once rule. `AttachProgram` validates 
 complete `ProgramAttachSpec` and lowers it to one USD change set. An empty port
 contract is source-only; it is not silently treated as a running cosim model.
 The author must add explicit scalar ports and connections before expecting live
-value exchange. The palette, Rhai prelude, HTTP API, and future editor all call
+value exchange. The palette, Rhai prelude, HTTP API, and Assembly editor all call
 this same command.
 
 `AttachSpec::from_mount` and `resolve_mount_placement` own the frame math;
@@ -128,7 +137,7 @@ Modelica/electrical/data links. Undo restores the complete topology.
 
 - A movable mounted part needs a rigid body and a joint. A nested visual or
   collider must not silently become an unconnected body.
-- `UsdPhysics` owns bodies, joints, frames, limits, and drives. The builder only
+- `UsdPhysics` owns bodies, joints, frames, limits, and drives. The Assembly editor only
   authors those facts; Avian is the runtime projection.
 - A component may be reusable only when its default prim, units, mount contract,
   and physical ownership are explicit.

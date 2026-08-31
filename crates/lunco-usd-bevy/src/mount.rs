@@ -1,5 +1,5 @@
-//! Mount-frame reading — the socket/plug schema behind the Object Builder's
-//! retrofit *snap* (`docs/architecture/48-object-builder.md` §3.1).
+//! Mount-frame reading — the socket/plug schema behind the Assembly editor's
+//! retrofit *snap* (`docs/architecture/48-assembly-editor.md` §3.1).
 //!
 //! A host body explicitly advertises **sockets** with a relationship; an attached
 //! part advertises the **plug** frame it hangs by. Snapping re-derives the part's
