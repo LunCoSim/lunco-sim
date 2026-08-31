@@ -500,10 +500,10 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
 4. **Orbit→surface bridge app-wiring** — **landed**: `lunco-celestial` builds the
    live `CompositeHeightSource` from the retained DEM oracle and authored site
    tangent frame. Globe triangles are clipped only inside the exact DEM square;
-   boundary triangles sample the DEM through a collar whose width is derived from
-   the measured border datum and the body's sagitta, then meet the radial globe
-   exactly at the collar edge. There is no shell sink, guessed wall, or second
-   terrain source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs remains
+   boundary triangles use a one-posting C1 continuation that fades measured edge
+   relief onto the same body-curved datum, then meet the radial globe through the
+   existing source blend. There is no shell sink, guessed wall, or second terrain
+   source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs remains
    deferred.
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`

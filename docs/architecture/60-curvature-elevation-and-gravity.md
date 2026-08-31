@@ -67,7 +67,10 @@ descent is spread over a 1600 m band and reads as a distant rim rather than a wa
 2. **Edge-elevation apron** — kept the site datum instead of zero, but still
    invented values outside the authored raster.
 3. **Exact crop plus globe ownership** — the shipped implementation. The site
-   DEM owns its authored square; the globe owns the outside surface.
+   DEM owns its authored square; the globe owns the outside surface. The boundary
+   continuation preserves the measured one-sided edge slope, fades only edge
+   relief over one raster posting, and keeps the body's analytic curvature in the
+   datum surface before the source blend reaches the globe.
 
 ### Authoring guidance
 

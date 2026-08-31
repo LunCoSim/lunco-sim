@@ -17,10 +17,11 @@ whole celestial bodies seen from orbit.
 >   plus surface/regolith detail.
 >
 > The orbit→surface bridge is `CompositeHeightSource` (in `lunco-terrain-core`):
-> the site DEM inside its exact georeferenced square, a datum-derived collar at
-> the edge, and the globe height outside it. `lunco-celestial` wires the retained
-> surface oracle into the globe tile builder; no globe shell is left underneath the
-> DEM footprint. See the design narrative in
+> the site DEM inside its exact georeferenced square, a one-posting C1 collar that
+> fades measured edge relief onto the body-curved datum, and the globe height
+> outside it. `lunco-celestial` wires the retained surface oracle into the globe
+> tile builder; no globe shell is left underneath the DEM footprint. See the
+> design narrative in
 > [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 
 ## Responsibility

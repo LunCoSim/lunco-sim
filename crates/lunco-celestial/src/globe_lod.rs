@@ -25,7 +25,7 @@ use big_space::prelude::*;
 use lunco_core::SceneViewport;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
-use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
+use lunco_terrain_core::{normal_at_bounded, CompositeHeightSource, HeightSource, Square};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
 use lunco_terrain_globe::{
     create_quadsphere_tile_mesh, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch,
@@ -59,14 +59,16 @@ pub struct GlobeLod {
 /// The DEM owns exactly its authored square. Outside that square it has no
 /// measured samples, so extending the nearest edge sample through the whole
 /// globe collar would turn an edge crater/rim into a many-kilometre artificial
-/// apron. The only valid continuation is the measured border datum, reached
-/// over one raster posting so the handoff remains continuous at the boundary.
+/// apron. The only valid continuation is the measured border datum on the same
+/// body sphere, reached over one raster posting while preserving the measured
+/// edge slope. This makes the source C1 without inventing an outer terrain or
+/// removing the physical body curvature at the edge.
 #[derive(Clone)]
 struct BoundarySiteSource {
     oracle: Arc<SurfaceOracle>,
     region: Square,
-    half_extent: f64,
     datum_m: f64,
+    radius_m: f64,
     boundary_m: f64,
 }
 
@@ -76,16 +78,89 @@ impl HeightSource for BoundarySiteSource {
             return self.oracle.height_at(x, z);
         }
 
-        let edge_height = self.oracle.height_at(
-            x.clamp(-self.half_extent, self.half_extent),
-            z.clamp(-self.half_extent, self.half_extent),
+        let edge_x = x.clamp(
+            self.region.center[0] - self.region.half,
+            self.region.center[0] + self.region.half,
+        );
+        let edge_z = z.clamp(
+            self.region.center[1] - self.region.half,
+            self.region.center[1] + self.region.half,
         );
         if self.boundary_m <= 0.0 {
-            return self.datum_m;
+            return self.curved_datum_height(x, z);
         }
-        let t = (self.region.distance_to([x, z]) / self.boundary_m).clamp(0.0, 1.0);
-        let t = t * t * (3.0 - 2.0 * t);
-        edge_height + (self.datum_m - edge_height) * t
+        let distance_x = x - edge_x;
+        let distance_z = z - edge_z;
+        let distance = distance_x.hypot(distance_z);
+        if distance >= self.boundary_m {
+            return self.curved_datum_height(x, z);
+        }
+        let edge_height = self.oracle.height_at(edge_x, edge_z);
+        let t = (distance / self.boundary_m).clamp(0.0, 1.0);
+        let gradient = normal_at_bounded(
+            self.oracle.as_ref(),
+            edge_x,
+            edge_z,
+            self.boundary_m,
+            self.region.half,
+        );
+        let outward_slope = if distance > 0.0 {
+            let outward_x = distance_x / distance;
+            let outward_z = distance_z / distance;
+            -gradient[0] / gradient[1] * outward_x - gradient[2] / gradient[1] * outward_z
+        } else {
+            0.0
+        };
+        let datum_height = self.curved_datum_height(x, z);
+        let datum_slope = self.curved_datum_slope(x, z, distance_x, distance_z, distance);
+
+        // Cubic Hermite interpolation matches the measured one-sided edge
+        // derivative at d=0 and arrives on the curved datum with its physical
+        // derivative at d=boundary_m. A value-only smoothstep left a normal
+        // discontinuity exactly where the local terrain met the globe, while
+        // fading to the raw datum removed the body's curvature in the same
+        // posting and rendered that edge as a dark wall.
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+        let h10 = t3 - 2.0 * t2 + t;
+        let h01 = -2.0 * t3 + 3.0 * t2;
+        let h11 = t3 - t2;
+        h00 * edge_height
+            + h10 * self.boundary_m * outward_slope
+            + h01 * datum_height
+            + h11 * self.boundary_m * datum_slope
+    }
+}
+
+impl BoundarySiteSource {
+    fn curved_datum_height(&self, x: f64, z: f64) -> f64 {
+        self.datum_m
+            + (MeanSphereSource {
+                radius_m: self.radius_m + self.datum_m,
+            })
+            .height_at(x, z)
+    }
+
+    fn curved_datum_slope(
+        &self,
+        x: f64,
+        z: f64,
+        distance_x: f64,
+        distance_z: f64,
+        distance: f64,
+    ) -> f64 {
+        if distance <= 0.0 {
+            return 0.0;
+        }
+        let site_radius = self.radius_m + self.datum_m;
+        let radial = (site_radius * site_radius - (x * x + z * z))
+            .max(0.0)
+            .sqrt();
+        if radial <= f64::EPSILON {
+            return 0.0;
+        }
+        -(x * distance_x + z * distance_z) / (radial * distance)
     }
 }
 
@@ -200,8 +275,8 @@ impl GlobeHandoff {
             SiteSurfaceSource::Dem(BoundarySiteSource {
                 oracle: oracle.clone(),
                 region,
-                half_extent,
                 datum_m: border_datum,
+                radius_m,
                 boundary_m: oracle.spacing() as f64,
             }),
             MeanSphereSource { radius_m },
@@ -1162,14 +1237,80 @@ mod tests {
         let source = BoundarySiteSource {
             oracle,
             region,
-            half_extent: 10.0,
             datum_m: 100.0,
+            radius_m: 1.0e9,
             boundary_m: 10.0,
         };
 
         assert_eq!(source.height_at(10.0, 10.0), 200.0);
-        assert_eq!(source.height_at(20.0, 20.0), 100.0);
+        assert!((source.height_at(20.0, 20.0) - 100.0).abs() < 1.0e-5);
         assert!(source.height_at(15.0, 15.0) < 200.0);
+    }
+
+    #[test]
+    fn finite_dem_boundary_preserves_the_measured_edge_slope() {
+        use lunco_obstacle_field::field::HeightGrid;
+
+        let mut grid = HeightGrid::new_flat(5, 10.0);
+        for z in 0..grid.res {
+            for x in 0..grid.res {
+                grid.heights[z * grid.res + x] = -10.0 + x as f64 * 5.0;
+            }
+        }
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(grid)));
+        let source = BoundarySiteSource {
+            oracle: oracle.clone(),
+            region: Square {
+                center: [0.0, 0.0],
+                half: 10.0,
+            },
+            datum_m: 0.0,
+            radius_m: 1.0e9,
+            boundary_m: 5.0,
+        };
+        let epsilon = 1.0e-5;
+        let edge_slope =
+            (oracle.height_at(10.0, 0.0) - oracle.height_at(10.0 - epsilon, 0.0)) / epsilon;
+        let continuation_slope =
+            (source.height_at(10.0 + epsilon, 0.0) - source.height_at(10.0, 0.0)) / epsilon;
+
+        assert!((continuation_slope - edge_slope).abs() < 1.0e-3);
+        let outer_slope =
+            (source.height_at(15.0, 0.0) - source.height_at(15.0 - epsilon, 0.0)) / epsilon;
+        assert!(outer_slope.abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn finite_dem_boundary_continues_body_curvature() {
+        use lunco_obstacle_field::field::HeightGrid;
+
+        let radius_m = 1_000.0;
+        let datum_m = 100.0;
+        let grid = Arc::new(HeightGrid::new_flat(5, 10.0));
+        let oracle = Arc::new(SurfaceOracle::new(
+            grid,
+            vec![lunco_terrain_surface::HeightContribution {
+                modifier: Arc::new(lunco_terrain_core::BodyCurvature::new(radius_m, datum_m)),
+                content_key: 1,
+            }],
+        ));
+        let source = BoundarySiteSource {
+            oracle,
+            region: Square {
+                center: [0.0, 0.0],
+                half: 10.0,
+            },
+            datum_m,
+            radius_m,
+            boundary_m: 5.0,
+        };
+        let expected = datum_m
+            + MeanSphereSource {
+                radius_m: radius_m + datum_m,
+            }
+            .height_at(15.0, 0.0);
+
+        assert!((source.height_at(15.0, 0.0) - expected).abs() < 1.0e-9);
     }
 
     #[test]
