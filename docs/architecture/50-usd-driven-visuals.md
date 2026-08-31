@@ -49,7 +49,7 @@ highlight, preserving USD as the sole owner of scene facts.
 ## Motion trails are bounded physics history
 
 A vehicle trail answers a different question from a route ribbon: where the vehicle
-actually travelled. `lunco-luncosim-edit::ui::trail` records one bounded lane per
+actually travelled. `lunco-luncosim-edit::ui::trail::VehicleTrailPlugin` records one bounded lane per
 topology-derived wheel after the solved physics step, in the active physics/grid frame.
 Raycast lanes use the wheel's retained Avian `RayHits` and the same mobility-owned
 contact-point geometry used by suspension and tire forces. Jointed lanes use the
@@ -67,7 +67,9 @@ document edit. Scene teardown clears both the mesh and history, and an active-fr
 change starts a new history, so a later Twin or grid cannot inherit a stale path.
 `MobilityRoot` is the existing topology capability that selects vehicle owners; no
 name-based rover registry, second motion source, or second contact model is
-introduced.
+introduced. The same presentation plugin is installed by the interactive viewport
+and the GPU offscreen recorder; the recorder does not depend on the editor's egui,
+picking, or workbench plugin.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 
