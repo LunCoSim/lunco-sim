@@ -30,6 +30,7 @@ def Xform "RockerBogieDrive" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
+        token lunco:terrain:surfaceRole = "flat-site"
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
@@ -50,6 +51,21 @@ def Xform "RockerBogieDrive" (
         color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </RockerBogieDrive/PhysicsMaterials/Friction_1_0>
+    }
+
+    # A stable observer for the graphics acceptance take. The camera is
+    # authored at the fixture root so offscreen capture does not depend on a
+    # nested rover camera arriving during streaming.
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (12.0, 0.0, 0.0)
+        double3 xformOp:translate = (20.0, 22.0, 24.0)
+        float focalLength = 22.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     def Xform "Rover" (
