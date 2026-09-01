@@ -132,11 +132,12 @@ telemetry browser read the same SignalRegistry samples. The card must expose
 unavailable, compiling, ready, active, paused, handoff, and failure states;
 absence of an actuator sample is not permission to hide the authored surface.
 
-The Modelica diagram's `Show nets` toggle is a workbench/egui presentation
-setting stored on the per-tab `lunco-canvas::Canvas`. It hides rendered and
-interactive connection edges without changing authored topology. Keep this
-dynamic graph control in the canvas panel; HUI/Rhai does not provide the
-dynamic list and graph-state contract it would require.
+The Modelica diagram's `Show nets` checkbox is the Connections legend's single
+workbench/egui presentation control, backed by the per-tab
+`lunco-canvas::Canvas`. It hides rendered and interactive connection edges
+without changing authored topology. Keep the legend and this dynamic graph
+control in the canvas panel; HUI/Rhai does not provide the dynamic list and
+graph-state contract it would require.
 
 Canvas-owned diagram overlays must stay inside the owning leaf: direct painting
 uses the canvas clip rectangle, while an `egui::Area` uses `constrain_to` with
