@@ -289,21 +289,17 @@ pub fn on_select_entity_by_path(
 /// Finds the most appropriate entity to select from a hit entity.
 ///
 /// Walks up the parent chain (up to `MAX_DEPTH`, matching the avatar
-/// possession resolver) and returns the nearest ancestor carrying the
-/// `SelectableRoot` marker — so clicking a rover wheel selects the rover root,
-/// not the wheel mesh.
+/// possession resolver). A mobility root is the semantic owner of a vehicle
+/// assembly, so it wins over nested spawnable component markers. If the hit is
+/// not inside a mobility realization, the nearest `SelectableRoot` owns the
+/// selection.
 ///
-/// If no `SelectableRoot` exists in the chain, it falls back to the clicked
-/// entity itself, so ground, terrain and plain USD visual props (decorative
-/// cubes, ramps, the Perseverance placeholder) are all selectable — clicking
-/// any one of them switches the Inspector to it. (Earlier this returned `None`
-/// for un-tagged hits, which made those objects unselectable and left the
-/// Inspector "stuck" on the previous selection. That fallback was safe to add
-/// only once selection ray-cast from the correct camera — see the camera note
-/// on `handle_entity_selection`.)
+/// If neither marker exists in the chain, it falls back to the clicked entity,
+/// so ground, terrain and plain USD visual props remain selectable.
 fn find_selectable(
     hit: Entity,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
+    q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
     q_parents: &Query<&ChildOf>,
 ) -> Entity {
     // Deep enough to climb an imported glTF node tree (scene→node→…→mesh) up to
@@ -312,12 +308,17 @@ fn find_selectable(
     const MAX_DEPTH: usize = 32;
     let mut entity = hit;
     let mut depth = 0;
+    let mut selectable = None;
 
     loop {
-        // A `SelectableRoot` ancestor wins — clicking a rover wheel selects the
-        // rover root, not the wheel mesh.
-        if q_selectable.get(entity).is_ok() {
+        // `MobilityRoot` is stamped from the authored vehicle schema and owns
+        // the complete assembly. It must be considered before a nested
+        // spawnable component's `SelectableRoot`.
+        if q_mobility.get(entity).is_ok() {
             return entity;
+        }
+        if selectable.is_none() && q_selectable.get(entity).is_ok() {
+            selectable = Some(entity);
         }
 
         // Walk up one parent level
@@ -333,9 +334,7 @@ fn find_selectable(
         }
     }
 
-    // No `SelectableRoot` in the chain (ground, terrain, a plain prop) — select
-    // the clicked entity itself so it's still editable.
-    hit
+    selectable.unwrap_or(hit)
 }
 
 /// The nearest PRIM-BACKED entity on the chain from `hit` up to (excluding)
@@ -398,6 +397,7 @@ pub fn on_scene_click_select(
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
+    q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
     q_prims: Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     selected: Res<SelectedEntities>,
@@ -446,16 +446,17 @@ pub fn on_scene_click_select(
 
     // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer
     // would otherwise fire at every ancestor and select the wrong (top) one. We
-    // resolve the `SelectableRoot` ourselves via `find_selectable`, so stop the
-    // bubble at the picked leaf — this runs target-first, so we're at the leaf.
+    // resolve the semantic target ourselves, so stop the bubble at the picked
+    // leaf — this runs target-first, so we're at the leaf.
     click.propagate(false);
 
     let hit_entity = click.entity;
     let prev_selected = selected.primary();
 
-    // Resolve the picked mesh to its selectable (nearest `SelectableRoot`
-    // ancestor, or the hit entity itself for ground/props).
-    let entity = find_selectable(hit_entity, &q_selectable, &q_parents);
+    // Resolve the picked mesh to its semantic owner: a mobility root for a
+    // vehicle assembly, otherwise the nearest selectable root or the hit
+    // entity itself for ground/props.
+    let entity = find_selectable(hit_entity, &q_selectable, &q_mobility, &q_parents);
 
     // DRILL: **Alt+Shift+click** on a sub-part of the ALREADY-selected primary
     // aims the Inspector at that part. Its own modifier, NOT plain Shift+click:
@@ -663,6 +664,63 @@ pub fn draw_selection_bounds(
 mod tests {
     use super::*;
     use bevy::camera::primitives::Aabb;
+
+    #[test]
+    fn mobility_root_owns_nested_spawnable_component_selection() {
+        let mut app = App::new();
+        let rover = app
+            .world_mut()
+            .spawn((lunco_core::MobilityRoot, lunco_core::SelectableRoot))
+            .id();
+        let battery = app
+            .world_mut()
+            .spawn((lunco_core::SelectableRoot, ChildOf(rover)))
+            .id();
+        let hit = app.world_mut().spawn(ChildOf(battery)).id();
+
+        let mut q_selectable = app
+            .world_mut()
+            .query_filtered::<Entity, With<lunco_core::SelectableRoot>>();
+        let mut q_mobility = app
+            .world_mut()
+            .query_filtered::<Entity, With<lunco_core::MobilityRoot>>();
+        let mut q_parents = app.world_mut().query::<&ChildOf>();
+
+        assert_eq!(
+            find_selectable(
+                hit,
+                &q_selectable.query(app.world()),
+                &q_mobility.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            rover
+        );
+    }
+
+    #[test]
+    fn standalone_spawnable_component_remains_selectable() {
+        let mut app = App::new();
+        let component = app.world_mut().spawn(lunco_core::SelectableRoot).id();
+        let hit = app.world_mut().spawn(ChildOf(component)).id();
+
+        let mut q_selectable = app
+            .world_mut()
+            .query_filtered::<Entity, With<lunco_core::SelectableRoot>>();
+        let mut q_mobility = app
+            .world_mut()
+            .query_filtered::<Entity, With<lunco_core::MobilityRoot>>();
+        let mut q_parents = app.world_mut().query::<&ChildOf>();
+
+        assert_eq!(
+            find_selectable(
+                hit,
+                &q_selectable.query(app.world()),
+                &q_mobility.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            component
+        );
+    }
 
     #[test]
     fn possession_selects_the_controlled_vessel_for_the_inspector() {

@@ -91,6 +91,9 @@ def Xform "SolarPanel" (
 - Children with `PhysicsCollisionAPI` → shapes collected into parent's `Collider::compound()`
 - Children are pure visuals — no independent physics
 - Gizmo appears on root, whole assembly moves together
+- A vehicle schema stamps `MobilityRoot` on the assembly owner; viewport hits
+  resolve that owner before nested spawnable component markers such as a
+  mounted battery.
 
 This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggregates all descendant colliders into one compound rigid body. No joints needed.
 
