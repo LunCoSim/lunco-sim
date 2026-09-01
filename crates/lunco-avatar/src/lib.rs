@@ -537,6 +537,62 @@ pub struct SurfaceCamera {
 #[reflect(Component)]
 pub struct AdaptiveNearPlane;
 
+const CAMERA_NEAR_SURFACE_RATIO: f64 = 0.001;
+const CAMERA_NEAR_MIN_M: f64 = 0.1;
+const CAMERA_NEAR_MAX_M: f64 = 10_000.0;
+const CAMERA_FAR_MIN_M: f64 = 10_000_000.0;
+
+fn adaptive_camera_clip_planes(
+    nearest_surface_distance_m: f64,
+    farthest_body_distance_m: f64,
+) -> Option<(f32, f32)> {
+    if farthest_body_distance_m <= 0.0 {
+        if !farthest_body_distance_m.is_finite() {
+            return None;
+        }
+        return Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32));
+    }
+    if !nearest_surface_distance_m.is_finite() || !farthest_body_distance_m.is_finite() {
+        return None;
+    }
+    let near = (nearest_surface_distance_m * CAMERA_NEAR_SURFACE_RATIO)
+        .clamp(CAMERA_NEAR_MIN_M, CAMERA_NEAR_MAX_M);
+    let far = (farthest_body_distance_m * 1.05).max(CAMERA_FAR_MIN_M);
+    (near.is_finite() && far.is_finite() && far > near).then_some((near as f32, far as f32))
+}
+
+#[cfg(test)]
+mod camera_clip_tests {
+    use super::*;
+
+    #[test]
+    fn close_surface_approach_keeps_a_submetre_near_plane() {
+        let (near, far) = adaptive_camera_clip_planes(5.0, 1_000_000.0).unwrap();
+
+        assert_eq!(near, 0.1);
+        assert_eq!(far, CAMERA_FAR_MIN_M as f32);
+    }
+
+    #[test]
+    fn orbital_distance_scales_near_plane_with_a_precision_ceiling() {
+        let (near, _) = adaptive_camera_clip_planes(5_000_000.0, 100_000_000.0).unwrap();
+        assert_eq!(near, 5_000.0);
+
+        let (near, _) = adaptive_camera_clip_planes(20_000_000.0, 100_000_000.0).unwrap();
+        assert_eq!(near, CAMERA_NEAR_MAX_M as f32);
+    }
+
+    #[test]
+    fn bodyless_and_invalid_bounds_have_explicit_results() {
+        assert_eq!(
+            adaptive_camera_clip_planes(f64::INFINITY, 0.0),
+            Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32))
+        );
+        assert_eq!(adaptive_camera_clip_planes(f64::NAN, 1_000.0), None);
+        assert_eq!(adaptive_camera_clip_planes(1.0, f64::INFINITY), None);
+    }
+}
+
 /// Marker component: camera/rover operates in surface-relative mode.
 ///
 /// When present, camera systems use `LocalGravityField.local_up` as "up"
@@ -4527,95 +4583,42 @@ fn update_avatar_clip_planes_system(
     q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
 ) {
     for (mut projection, cam_gt) in q_camera.iter_mut() {
-        // Camera↔body distances come from `GlobalTransform`s: big_space
-        // rebases them around the floating origin, so both sides are in ONE
-        // consistent frame every frame. (The previous `Transform`-based
-        // query required `CellCoord` on bodies — which carry none by design —
-        // so zero bodies matched and the fallback `far = 1e7 m` clipped
-        // Earth, 1.9e7 m out at focus distance, to a black screen. And
-        // `world_position_seeded` is NOT a fix: it sums nested grid
-        // translations without grid rotations, so with the site-anchored
-        // solar grid — rotation `align`, translation ~1.5e11 m — the mixed-
-        // frame "distances" swing by kilometres per epoch tick and the clip
-        // planes flap, strobing the whole viewport.)
+        // Camera↔body distances come from `GlobalTransform`s: BigSpace rebases
+        // them around the floating origin, so both sides share one frame.
         let cam_pos = cam_gt.translation().as_dvec3();
-        // Peek through `&*` — NOT `*projection`. Deref-mut on a `Mut<Projection>`
-        // flags the component `Changed` even when the value it writes is
-        // identical, so a completely static camera re-triggered a frustum
-        // recompute and a view-uniform re-upload EVERY PostUpdate. Read here,
-        // compute, and take the mutable deref below only if a plane really moved.
+        // Read through `&*` and mutate only when a plane really moved so a
+        // parked camera does not dirty the projection every frame.
         let Projection::Perspective(current) = &*projection else {
             continue;
         };
-        {
-            // Adaptive near AND far, both derived from the bodies in frame.
-            // `near` tracks the nearest body surface (no near-clipping on
-            // approach); `far` tracks the FARTHEST body surface (+5% margin)
-            // instead of a static 1e15, so the depth dynamic range collapses to
-            // what the scene actually spans when no distant body is visible —
-            // e.g. ~Earth distance (4e8 m) on the lunar surface rather than 1e15
-            // (≈4 orders of magnitude of reverse-Z range recovered). The 1e7 m
-            // (10 000 km) floor keeps a sane frustum when no body is registered
-            // (e.g. the offscreen USD preview camera).
-            let mut min_dist = 1.0e15_f64;
-            let mut max_far = 0.0_f64;
-            for (body, b_gt) in q_bodies.iter() {
-                let center_d = cam_pos.distance(b_gt.translation().as_dvec3());
-                let near_edge = center_d - body.radius_m;
-                let far_edge = center_d + body.radius_m;
-                if near_edge < min_dist {
-                    min_dist = near_edge;
-                }
-                if far_edge > max_far {
-                    max_far = far_edge;
-                }
+        let mut min_dist = f64::INFINITY;
+        let mut max_far = 0.0_f64;
+        for (body, b_gt) in q_bodies.iter() {
+            let center_d = cam_pos.distance(b_gt.translation().as_dvec3());
+            let near_edge = center_d - body.radius_m;
+            let far_edge = center_d + body.radius_m;
+            if near_edge < min_dist {
+                min_dist = near_edge;
             }
-            let (near, far) = if max_far <= 0.0 {
-                // No `CelestialBody` contributed (flat luncosim scene, or the
-                // offscreen USD preview camera). The body-derived `min_dist` is
-                // still its 1e15 sentinel here — feeding it to the clamp below
-                // pins `near` to the 100 m ceiling, which clips away the ENTIRE
-                // nearby scene (rovers, ground) and renders black. Use a small
-                // near + the 10 000 km far floor so a body-less scene renders.
-                (0.1_f32, 1.0e7_f32)
-            } else {
-                // Near plane rides just in front of the NEAREST body surface, so
-                // it scales with viewing distance. The old `* 0.01` + clamp to
-                // [0.1, 100] pinned `near` ≤ 100 m: fine on the surface — near
-                // terrain hogs the 1/z (reverse-Z) depth precision even with a
-                // distant `far` — but in ORBITAL view the focused body sits ~2e7 m
-                // out while `far` reaches the Sun at ~1.5e11 m, so the globe lands
-                // ~0.01% into the depth range, in the starved tail where adjacent
-                // LOD tile seams z-fight and strobe frame-to-frame. Anchoring
-                // `near` to `min_dist` keeps the viewed surface AT the near plane,
-                // where reverse-Z precision peaks — killing the orbital flicker
-                // without touching the (already-fine) surface case, where
-                // `min_dist` collapses to ~0 and `near` floors at 0.1 m.
-                //
-                // Keep the reference surface halfway between the camera and
-                // near plane. The current-frame BigSpace propagation above
-                // makes this a geometric depth-precision policy, not stale-pose
-                // compensation. On or below the reference surface `min_dist`
-                // is non-positive and the ordinary 0.1 m camera floor applies.
-                (
-                    (min_dist * 0.5).max(0.1) as f32,
-                    ((max_far * 1.05).max(1.0e7)) as f32,
-                )
-            };
+            if far_edge > max_far {
+                max_far = far_edge;
+            }
+        }
+        let Some((near, far)) = adaptive_camera_clip_planes(min_dist, max_far) else {
+            error!("[camera] cannot derive finite clip planes from celestial body bounds");
+            continue;
+        };
 
-            // Relative-epsilon gate. The GTs jitter by metres at 1e8 m, so an
-            // exact compare would still fire most frames; 1e-4 relative is far
-            // below any visible clip-plane motion and leaves a parked camera
-            // byte-stable, which is what keeps `Changed<Projection>` quiet.
-            let moved = (current.near - near).abs() > near.abs() * 1e-4
-                || (current.far - far).abs() > far.abs() * 1e-4;
-            if !moved {
-                continue;
-            }
-            if let Projection::Perspective(perspective) = &mut *projection {
-                perspective.near = near;
-                perspective.far = far;
-            }
+        // Relative epsilon keeps a parked camera byte-stable while allowing
+        // meaningful changes as BigSpace moves through astronomical distances.
+        let moved = (current.near - near).abs() > near.abs() * 1e-4
+            || (current.far - far).abs() > far.abs() * 1e-4;
+        if !moved {
+            continue;
+        }
+        if let Projection::Perspective(perspective) = &mut *projection {
+            perspective.near = near;
+            perspective.far = far;
         }
     }
 }
