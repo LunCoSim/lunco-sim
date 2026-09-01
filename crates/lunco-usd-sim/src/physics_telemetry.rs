@@ -14,7 +14,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
-use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
+use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
 use std::collections::{HashMap, HashSet};
@@ -203,8 +203,11 @@ pub fn retain_physics_telemetry(
                 "m/s",
                 "World-frame linear-velocity component.",
             ));
-            samples.push((
-                "linear_speed".to_string(),
+            samples.push(PhysicsSample::summary(
+                "linear_speed",
+                "linear_velocity",
+                "speed",
+                "magnitude",
                 linear_velocity.length(),
                 "m/s",
                 "Magnitude of world-frame linear velocity.",
@@ -217,8 +220,11 @@ pub fn retain_physics_telemetry(
                 "rad/s",
                 "World-frame angular-rate component.",
             ));
-            samples.push((
-                "angular_speed".to_string(),
+            samples.push(PhysicsSample::summary(
+                "angular_speed",
+                "angular_velocity",
+                "speed",
+                "magnitude",
                 angular_velocity.length(),
                 "rad/s",
                 "Magnitude of world-frame angular velocity.",
@@ -239,8 +245,11 @@ pub fn retain_physics_telemetry(
                         "m/s^2",
                         "World-frame acceleration component.",
                     ));
-                    samples.push((
-                        "linear_acceleration".to_string(),
+                    samples.push(PhysicsSample::summary(
+                        "linear_acceleration",
+                        "linear_acceleration",
+                        "magnitude",
+                        "magnitude",
                         linear_acceleration.length(),
                         "m/s^2",
                         "Magnitude of world-frame linear acceleration.",
@@ -251,8 +260,11 @@ pub fn retain_physics_telemetry(
                         "rad/s^2",
                         "World-frame angular-acceleration component.",
                     ));
-                    samples.push((
-                        "angular_acceleration".to_string(),
+                    samples.push(PhysicsSample::summary(
+                        "angular_acceleration",
+                        "angular_acceleration",
+                        "magnitude",
+                        "magnitude",
                         angular_acceleration.length(),
                         "rad/s^2",
                         "Magnitude of world-frame angular acceleration.",
@@ -266,10 +278,10 @@ pub fn retain_physics_telemetry(
             .filter(|value| value.is_finite())
         {
             samples.extend(explicit_vector_channels(
-                "position",
                 position,
                 "m",
                 "Physics-frame position component.",
+                "position",
             ));
         }
         if let Some(rotation) = rotation
@@ -277,26 +289,34 @@ pub fn retain_physics_telemetry(
             .filter(|value| value.is_finite())
         {
             samples.extend([
-                (
-                    "orientation.quat.x".to_string(),
+                PhysicsSample::named_component(
+                    "orientation.quat.x",
+                    "orientation",
+                    "quaternion x",
                     rotation.x,
                     "1",
                     "Physics-body orientation quaternion x component.",
                 ),
-                (
-                    "orientation.quat.y".to_string(),
+                PhysicsSample::named_component(
+                    "orientation.quat.y",
+                    "orientation",
+                    "quaternion y",
                     rotation.y,
                     "1",
                     "Physics-body orientation quaternion y component.",
                 ),
-                (
-                    "orientation.quat.z".to_string(),
+                PhysicsSample::named_component(
+                    "orientation.quat.z",
+                    "orientation",
+                    "quaternion z",
                     rotation.z,
                     "1",
                     "Physics-body orientation quaternion z component.",
                 ),
-                (
-                    "orientation.quat.w".to_string(),
+                PhysicsSample::named_component(
+                    "orientation.quat.w",
+                    "orientation",
+                    "quaternion w",
                     rotation.w,
                     "1",
                     "Physics-body orientation quaternion w component.",
@@ -304,20 +324,26 @@ pub fn retain_physics_telemetry(
             ]);
             let (yaw, pitch, roll) = rotation.to_euler(bevy::math::EulerRot::YXZ);
             samples.extend([
-                (
-                    "yaw".to_string(),
+                PhysicsSample::named_component(
+                    "yaw",
+                    "orientation",
+                    "yaw",
                     yaw,
                     "rad",
                     "Physics-body yaw about the world-up axis.",
                 ),
-                (
-                    "pitch".to_string(),
+                PhysicsSample::named_component(
+                    "pitch",
+                    "orientation",
+                    "pitch",
                     pitch,
                     "rad",
                     "Physics-body pitch in the YXZ attitude convention.",
                 ),
-                (
-                    "roll".to_string(),
+                PhysicsSample::named_component(
+                    "roll",
+                    "orientation",
+                    "roll",
                     roll,
                     "rad",
                     "Physics-body roll in the YXZ attitude convention.",
@@ -325,7 +351,7 @@ pub fn retain_physics_telemetry(
             ]);
         }
         if let Some(mass) = mass.filter(|value| value.is_finite()) {
-            samples.push((
+            samples.push(PhysicsSample::scalar(
                 "mass".to_string(),
                 mass.value(),
                 "kg",
@@ -337,46 +363,58 @@ pub fn retain_physics_telemetry(
             .filter(|value| value.is_finite())
         {
             samples.extend(explicit_vector_channels(
-                "center_of_mass",
                 center_of_mass,
                 "m",
                 "Computed body-local center-of-mass component.",
+                "center_of_mass",
             ));
         }
         if let Some(inertia) = inertia.map(|value| value.value()) {
             samples.extend([
-                (
-                    "inertia.xx".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.xx",
+                    "inertia",
+                    "xx",
                     inertia.m00,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
                 ),
-                (
-                    "inertia.xy".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.xy",
+                    "inertia",
+                    "xy",
                     inertia.m01,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
-                (
-                    "inertia.xz".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.xz",
+                    "inertia",
+                    "xz",
                     inertia.m02,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
-                (
-                    "inertia.yy".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.yy",
+                    "inertia",
+                    "yy",
                     inertia.m11,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
                 ),
-                (
-                    "inertia.yz".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.yz",
+                    "inertia",
+                    "yz",
                     inertia.m12,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
-                (
-                    "inertia.zz".to_string(),
+                PhysicsSample::named_component(
+                    "inertia.zz",
+                    "inertia",
+                    "zz",
                     inertia.m22,
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
@@ -391,14 +429,14 @@ pub fn retain_physics_telemetry(
             let (contact, contact_force) =
                 lunco_cosim::avian::contact_of(graph, physics_dt, entity);
             samples.extend([
-                (
-                    "contact".to_string(),
+                PhysicsSample::scalar(
+                    "contact",
                     contact as u8 as f64,
                     "1",
                     "Whether this collider is touching a physical contact pair.",
                 ),
-                (
-                    "contact_force".to_string(),
+                PhysicsSample::scalar(
+                    "contact_force",
                     contact_force,
                     "N",
                     "Normal contact force derived from the live Avian contact impulse.",
@@ -442,38 +480,38 @@ pub fn retain_physics_telemetry(
             .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
         let distance = contact.map_or(suspension.rest_length, |hit| hit.distance);
         let samples = [
-            (
-                "suspension.compression".to_string(),
+            PhysicsSample::scalar(
+                "suspension.compression",
                 (suspension.rest_length - distance).max(0.0),
                 "m",
                 "Raycast suspension compression from the live support hit.",
             ),
-            (
-                "suspension.ground_distance".to_string(),
+            PhysicsSample::scalar(
+                "suspension.ground_distance",
                 distance,
                 "m",
                 "Distance from the authored suspension ray origin to the live support hit.",
             ),
-            (
-                "suspension.normal_force".to_string(),
+            PhysicsSample::scalar(
+                "suspension.normal_force",
                 wheel.last_normal_force,
                 "N",
                 "Suspension normal force applied during the last physics tick.",
             ),
-            (
-                "suspension.contact".to_string(),
+            PhysicsSample::scalar(
+                "suspension.contact",
                 contact.is_some() as u8 as f64,
                 "1",
                 "Whether the suspension ray has a valid non-degenerate support hit.",
             ),
-            (
-                "wheel.axle_angular_velocity".to_string(),
+            PhysicsSample::scalar(
+                "wheel.axle_angular_velocity",
                 wheel.axle_angular_velocity(),
                 "rad/s",
                 "Signed wheel axle angular velocity from the mobility model.",
             ),
-            (
-                "wheel.surface_speed".to_string(),
+            PhysicsSample::scalar(
+                "wheel.surface_speed",
                 wheel.surface_speed(),
                 "m/s",
                 "Wheel contact-patch speed implied by axle angular velocity.",
@@ -501,15 +539,15 @@ pub fn retain_physics_telemetry(
 }
 
 fn explicit_vector_channels(
-    prefix: &str,
     value: DVec3,
     unit: &'static str,
     description: &'static str,
-) -> [(String, f64, &'static str, &'static str); 3] {
+    group: &str,
+) -> [PhysicsSample; 3] {
     [
-        (format!("{prefix}.x"), value.x, unit, description),
-        (format!("{prefix}.y"), value.y, unit, description),
-        (format!("{prefix}.z"), value.z, unit, description),
+        PhysicsSample::component(group, "x", value.x, unit, description),
+        PhysicsSample::component(group, "y", value.y, unit, description),
+        PhysicsSample::component(group, "z", value.z, unit, description),
     ]
 }
 
@@ -518,11 +556,93 @@ fn vector_channels(
     value: DVec3,
     unit: &'static str,
     description: &'static str,
-) -> [(String, f64, &'static str, &'static str); 3] {
-    explicit_vector_channels(prefix, value, unit, description)
+) -> [PhysicsSample; 3] {
+    explicit_vector_channels(value, unit, description, prefix)
 }
 
-type PhysicsSample = (String, f64, &'static str, &'static str);
+struct PhysicsSample {
+    name: String,
+    value: f64,
+    unit: &'static str,
+    description: &'static str,
+    presentation: SignalPresentation,
+}
+
+impl PhysicsSample {
+    fn scalar(
+        name: impl Into<String>,
+        value: f64,
+        unit: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            unit,
+            description,
+            presentation: SignalPresentation::Scalar,
+        }
+    }
+
+    fn component(
+        group: &str,
+        component: &str,
+        value: f64,
+        unit: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self::named_component(
+            format!("{group}.{component}"),
+            group,
+            component,
+            value,
+            unit,
+            description,
+        )
+    }
+
+    fn named_component(
+        name: impl Into<String>,
+        group: &str,
+        component: &str,
+        value: f64,
+        unit: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            unit,
+            description,
+            presentation: SignalPresentation::Component {
+                group: group.to_string(),
+                component: component.to_string(),
+            },
+        }
+    }
+
+    fn summary(
+        name: impl Into<String>,
+        group: &str,
+        label: &str,
+        formula: &str,
+        value: f64,
+        unit: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            unit,
+            description,
+            presentation: SignalPresentation::Summary {
+                group: group.to_string(),
+                label: label.to_string(),
+                formula: formula.to_string(),
+            },
+        }
+    }
+}
 
 fn retain_samples(
     signals: &mut SignalRegistry,
@@ -536,11 +656,11 @@ fn retain_samples(
     metadata_dirty: bool,
 ) -> bool {
     let mut retained = false;
-    for (name, value, unit, description) in samples {
-        if !value.is_finite() {
+    for sample in samples {
+        if !sample.value.is_finite() {
             continue;
         }
-        let signal = SignalRef::new(entity, name);
+        let signal = SignalRef::new(entity, sample.name);
         let known = signals.scalar_history(&signal).is_some();
         if !known && *channel_count >= settings.max_channels {
             warn_once!(
@@ -551,10 +671,11 @@ fn retain_samples(
         }
         if metadata_dirty || !metadata.contains_key(&signal) {
             let signal_meta = SignalMeta {
-                description: Some(description.to_string()),
-                unit: Some(unit.to_string()),
+                description: Some(sample.description.to_string()),
+                unit: Some(sample.unit.to_string()),
                 provenance: Some("avian".to_string()),
                 group_path: Some(group_path.to_string()),
+                presentation: sample.presentation.clone(),
                 exposure: Default::default(),
                 ..Default::default()
             };
@@ -564,7 +685,7 @@ fn retain_samples(
         if signals.record_scalar_at_rate(
             signal,
             time,
-            value,
+            sample.value,
             settings.default_rate_hz,
             settings.default_retention,
         ) {
@@ -608,8 +729,28 @@ mod tests {
             "rad/s^2",
             "World-frame angular-acceleration component.",
         );
-        assert!(linear.iter().all(|(_, _, unit, _)| *unit == "m/s^2"));
-        assert!(angular.iter().all(|(_, _, unit, _)| *unit == "rad/s^2"));
+        assert!(linear.iter().all(|sample| sample.unit == "m/s^2"));
+        assert!(angular.iter().all(|sample| sample.unit == "rad/s^2"));
+    }
+
+    #[test]
+    fn vector_channels_publish_typed_component_presentation() {
+        let samples = vector_channels(
+            "linear_velocity",
+            DVec3::new(1.0, 2.0, 3.0),
+            "m/s",
+            "World-frame linear-velocity component.",
+        );
+
+        assert_eq!(samples[0].name, "linear_velocity.x");
+        assert_eq!(
+            samples[0].presentation,
+            SignalPresentation::Component {
+                group: "linear_velocity".into(),
+                component: "x".into(),
+            }
+        );
+        assert_eq!(samples[2].name, "linear_velocity.z");
     }
 
     #[test]

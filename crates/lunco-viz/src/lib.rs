@@ -42,7 +42,7 @@ pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCata
 pub use signal::{
     compact_channel_label, display_channel_label, humanize_identifier, operator_channel_label,
     operator_identifier_label, PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure,
-    SignalMeta, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
+    SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{

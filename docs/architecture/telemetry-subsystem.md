@@ -29,6 +29,14 @@ the boundary channel is the single public representation; its generated member a
 internal so one physical value cannot appear twice. The alias remains retained and queryable for
 diagnostics, with the canonical relationship shown in its metadata.
 
+Compound values use the same producer-owned metadata. `SignalMeta::presentation` is
+`SignalPresentation::Component { group, component }` for an axis, tensor, or quaternion member,
+or `SignalPresentation::Summary { group, label, formula }` for a derived headline such as speed.
+The scalar `SignalRef` addresses and histories remain unchanged; the telemetry browser uses the
+typed relationship to place components and summaries under one semantic group, while the query
+API exposes the metadata for other clients. Producers therefore define the unit, frame, and
+summary meaning once, and no UI parses channel names to reconstruct vectors.
+
 Retained history whose publisher has disappeared is not part of the normal live telemetry
 tree. The browser defaults to current publishers and exposes archived history only through
 an explicit display setting; `ListTelemetryChannels` keeps the `active` field so API clients

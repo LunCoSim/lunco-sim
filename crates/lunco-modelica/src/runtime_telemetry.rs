@@ -341,6 +341,7 @@ fn model_signal_meta(
         model_variable,
         source_asset,
         canonical_name: modelica_provenance.and_then(|identity| identity.canonical_name),
+        presentation: Default::default(),
     }
 }
 

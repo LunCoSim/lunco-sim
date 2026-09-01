@@ -612,6 +612,10 @@ fn retain_sample(
             .as_ref()
             .and_then(|meta| meta.source_asset.clone()),
         canonical_name: Some(channel.name.clone()),
+        presentation: producer_meta
+            .as_ref()
+            .map(|meta| meta.presentation.clone())
+            .unwrap_or_default(),
     };
     let expected_meta = RetainedSignalMeta {
         signal: signal_meta.clone(),

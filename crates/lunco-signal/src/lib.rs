@@ -248,6 +248,41 @@ pub enum SignalExposure {
     Internal,
 }
 
+/// How one scalar channel participates in an operator-facing compound value.
+///
+/// The registry remains scalar and keeps each [`SignalRef`] addressable. This
+/// metadata only tells presentation consumers that several addresses belong in
+/// one semantic group, and whether a row is a component or a derived summary.
+/// Producers own this relationship; consumers must not infer it from names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SignalPresentation {
+    /// A standalone scalar channel.
+    Scalar,
+    /// One named component of a vector or compound value.
+    Component {
+        /// Semantic group shared by the components and optional summary.
+        group: String,
+        /// Operator-facing component label, such as `x` or `quaternion w`.
+        component: String,
+    },
+    /// A producer-supplied summary of a semantic group.
+    Summary {
+        /// Semantic group shared by the components and this summary.
+        group: String,
+        /// Operator-facing label, such as `speed` or `magnitude`.
+        label: String,
+        /// Human-readable formula or definition, such as `magnitude`.
+        formula: String,
+    },
+}
+
+impl Default for SignalPresentation {
+    fn default() -> Self {
+        Self::Scalar
+    }
+}
+
 /// Descriptive metadata. Optional and non-load-bearing — viz kinds render without it,
 /// but tooltips, legends, and axis labels get better when it's populated.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +312,9 @@ pub struct SignalMeta {
     /// Canonical USD-facing name for this value, when the generated solver
     /// also exposes an implementation alias.
     pub canonical_name: Option<String>,
+    /// Producer-owned semantic grouping for vector and compound values.
+    #[serde(default)]
+    pub presentation: SignalPresentation,
 }
 
 /// One (time, value) pair for a [`SignalType::Scalar`] signal.

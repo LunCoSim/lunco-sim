@@ -132,6 +132,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
                     "model_variable": meta.and_then(|m| m.model_variable.clone()),
                     "source_asset": meta.and_then(|m| m.source_asset.clone()),
                     "canonical_name": meta.and_then(|m| m.canonical_name.clone()),
+                    "presentation": meta.map(|m| &m.presentation),
                     "exposure": meta.map(|m| match m.exposure {
                         lunco_signal::SignalExposure::Public => "public",
                         lunco_signal::SignalExposure::Internal => "internal",
@@ -461,6 +462,11 @@ mod tests {
                 model_variable: Some("power_draw_w".into()),
                 source_asset: Some("lunco://models/LunCo/Electrical/CameraPayload.mo".into()),
                 canonical_name: Some("science_power".into()),
+                presentation: lunco_signal::SignalPresentation::Summary {
+                    group: "power".into(),
+                    label: "total".into(),
+                    formula: "sum of measured channels".into(),
+                },
                 ..Default::default()
             },
         );
@@ -481,6 +487,12 @@ mod tests {
             "lunco://models/LunCo/Electrical/CameraPayload.mo"
         );
         assert_eq!(channel["canonical_name"], "science_power");
+        assert_eq!(channel["presentation"]["kind"], "summary");
+        assert_eq!(channel["presentation"]["group"], "power");
+        assert_eq!(
+            channel["presentation"]["formula"],
+            "sum of measured channels"
+        );
     }
 
     #[test]

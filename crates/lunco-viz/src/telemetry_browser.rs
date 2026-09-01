@@ -64,7 +64,7 @@ use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
 use crate::registry::VisualizationRegistry;
 use crate::signal::{
     display_channel_label, humanize_identifier, operator_identifier_label, ScalarHistory,
-    SignalExposure, SignalRef, SignalRegistry, TelemetryFocus,
+    SignalExposure, SignalPresentation, SignalRef, SignalRegistry, TelemetryFocus,
 };
 use crate::view::ViewTarget;
 use crate::viz::{SignalBinding, VisualizationConfig, VizId};
@@ -294,6 +294,7 @@ struct Row {
     model_variable: Option<String>,
     source_asset: Option<String>,
     canonical_name: Option<String>,
+    presentation: SignalPresentation,
     exposure: SignalExposure,
     in_focus: bool,
     active: bool,
@@ -370,6 +371,7 @@ fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
             model_variable: meta.and_then(|m| m.model_variable.clone()),
             source_asset: meta.and_then(|m| m.source_asset.clone()),
             canonical_name: meta.and_then(|m| m.canonical_name.clone()),
+            presentation: meta.map(|m| m.presentation.clone()).unwrap_or_default(),
             exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
             in_focus: sig.entity != Entity::PLACEHOLDER,
             active: reg.is_active(sig),
@@ -519,14 +521,19 @@ fn build_tree(
                     })
                     .collect()
             };
-        // A group path already names the owning component. Use the authored
-        // Modelica variable for its optional value namespace; generated solver
-        // spellings never become a second hierarchy. Without a group path,
-        // retain the ordinary producer path structure.
-        let structure_path = group_path
-            .and_then(|_| row.model_variable.as_deref())
-            .unwrap_or(&sig.path);
-        let mut structure = signal_structure(structure_path);
+        // A producer-owned semantic presentation group is a value namespace,
+        // not another entity in the ownership hierarchy. It therefore gets one
+        // explicit child below the owner and its rows retain their exact signal
+        // identities. Scalar channels keep the authored Modelica namespace or
+        // ordinary producer path structure.
+        let mut structure = if let Some(group) = presentation_group(&row.presentation) {
+            vec![(format!("signal-group:{group}"), humanize_identifier(group))]
+        } else {
+            let structure_path = group_path
+                .and_then(|_| row.model_variable.as_deref())
+                .unwrap_or(&sig.path);
+            signal_structure(structure_path)
+        };
         // Canonical authored paths may repeat the USD ancestry already
         // represented by the entity lineage. Remove the complete shared
         // prefix, then make the remaining nodes relative to their owner.
@@ -704,7 +711,15 @@ fn row_visible(
 /// visual distinction while the row detail tooltip retains the exact
 /// Modelica class, variable, and source asset.
 fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
-    if row.exposure == SignalExposure::Internal && !show_generated_names {
+    if show_generated_names {
+        return row.sig.path.clone();
+    }
+    match &row.presentation {
+        SignalPresentation::Component { component, .. } => return humanize_identifier(component),
+        SignalPresentation::Summary { label, .. } => return humanize_identifier(label),
+        SignalPresentation::Scalar => {}
+    }
+    if row.exposure == SignalExposure::Internal {
         // The tree already identifies the authored component.  Show the
         // Modelica variable here and keep the exact solver address in the
         // detail strip, so inspecting internal state does not require reading
@@ -722,6 +737,15 @@ fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
         row.unit.as_deref(),
         show_generated_names,
     )
+}
+
+fn presentation_group(presentation: &SignalPresentation) -> Option<&str> {
+    match presentation {
+        SignalPresentation::Scalar => None,
+        SignalPresentation::Component { group, .. } | SignalPresentation::Summary { group, .. } => {
+            Some(group)
+        }
+    }
 }
 
 fn telemetry_row_label_color(row: &Row, theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -915,6 +939,28 @@ fn render_tree_node(
 fn attach_row_tooltip(response: egui::Response, row: &Row) {
     response.on_hover_ui(|ui| {
         ui.label(egui::RichText::new(&row.sig.path).strong().monospace());
+        match &row.presentation {
+            SignalPresentation::Component { group, component } => {
+                ui.label(format!(
+                    "Component: {} ({})",
+                    humanize_identifier(component),
+                    humanize_identifier(group)
+                ));
+            }
+            SignalPresentation::Summary {
+                group,
+                label,
+                formula,
+            } => {
+                ui.label(format!(
+                    "Summary: {} ({})",
+                    humanize_identifier(label),
+                    humanize_identifier(group)
+                ));
+                ui.label(format!("Definition: {formula}"));
+            }
+            SignalPresentation::Scalar => {}
+        }
         if let Some(description) = &row.description {
             ui.label(description);
         } else {
@@ -1589,6 +1635,7 @@ mod tests {
             model_variable: Some("electrical_power".into()),
             source_asset: None,
             canonical_name: None,
+            presentation: SignalPresentation::Scalar,
             exposure: SignalExposure::Public,
             in_focus: false,
             active: true,
@@ -2020,6 +2067,84 @@ mod tests {
     }
 
     #[test]
+    fn semantic_presentations_group_components_and_summaries() {
+        let mut reg = SignalRegistry::default();
+        let entity = ent(1);
+        let component_signals = [
+            ("linear_velocity.x", "x"),
+            ("linear_velocity.y", "y"),
+            ("linear_velocity.z", "z"),
+        ];
+        for (path, component) in component_signals {
+            let signal = SignalRef::new(entity, path);
+            reg.push_scalar(signal.clone(), 0.0, 1.0);
+            reg.update_meta(
+                signal,
+                crate::signal::SignalMeta {
+                    group_path: Some("/Traverse/Rover".into()),
+                    presentation: SignalPresentation::Component {
+                        group: "linear_velocity".into(),
+                        component: component.into(),
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+        let summary = SignalRef::new(entity, "linear_speed");
+        reg.push_scalar(summary.clone(), 0.0, 1.0);
+        reg.update_meta(
+            summary,
+            crate::signal::SignalMeta {
+                group_path: Some("/Traverse/Rover".into()),
+                presentation: SignalPresentation::Summary {
+                    group: "linear_velocity".into(),
+                    label: "speed".into(),
+                    formula: "magnitude".into(),
+                },
+                ..Default::default()
+            },
+        );
+
+        let tree = build_tree(
+            &reg,
+            |_| Some("Rover".into()),
+            |_| None,
+            |_| None,
+            |_| false,
+            |_| false,
+        );
+        let rover = tree
+            .children
+            .get("/Traverse")
+            .unwrap()
+            .children
+            .get("/Traverse/Rover")
+            .unwrap();
+        let velocity = rover.children.get("signal-group:linear_velocity").unwrap();
+        assert_eq!(velocity.label, "linear velocity");
+        assert_eq!(velocity.rows.len(), 4);
+        assert_eq!(
+            velocity
+                .rows
+                .iter()
+                .find(|row| matches!(
+                    &row.presentation,
+                    SignalPresentation::Component { component, .. } if component == "x"
+                ))
+                .map(|row| telemetry_row_label(row, false)),
+            Some("x".into())
+        );
+        assert_eq!(
+            velocity
+                .rows
+                .iter()
+                .find(|row| matches!(&row.presentation, SignalPresentation::Summary { .. }))
+                .map(|row| telemetry_row_label(row, false)),
+            Some("speed".into())
+        );
+    }
+
+    #[test]
     fn focus_fingerprint_moves_with_the_selection() {
         use lunco_signal::TelemetryFocus;
         let empty = TelemetryFocus::default();
@@ -2119,6 +2244,7 @@ mod tests {
             model_variable: Some("p.v".into()),
             source_asset: None,
             canonical_name: None,
+            presentation: SignalPresentation::Scalar,
             exposure: SignalExposure::Internal,
             in_focus: false,
             active: true,

@@ -11,8 +11,8 @@
 //! *colour* — and that now comes from the **theme**.
 
 pub use lunco_signal::{
-    PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure, SignalMeta, SignalRef,
-    SignalRegistry, SignalType, TelemetryFocus, DEFAULT_CAPACITY,
+    PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure, SignalMeta,
+    SignalPresentation, SignalRef, SignalRegistry, SignalType, TelemetryFocus, DEFAULT_CAPACITY,
 };
 
 /// Convert an authored or generated identifier into the operator spelling used

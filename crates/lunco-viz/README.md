@@ -32,6 +32,13 @@ operation: "plot `thrust` on the main time-series" = create a
 `VisualizationConfig` with kind `LinePlot`, view `Panel2D`, and a
 `SignalBinding { source: (rocket, "thrust"), role: "y" }`.
 
+Compound telemetry remains addressable as scalar channels while producers
+describe its operator presentation once through `SignalMeta::presentation`.
+`SignalPresentation::Component` and `SignalPresentation::Summary` let the
+telemetry browser and channel dictionary show vector components with a shared
+group and a defined headline formula, without parsing channel names or
+duplicating a derived-value registry.
+
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged
 scenes do not rebuild entity lookup maps or rewrite plot bindings; missing
@@ -42,7 +49,7 @@ projection publishes them.
 
 | Module              | Role                                                        |
 |---------------------|-------------------------------------------------------------|
-| `signal`            | `SignalRef`, `SignalType`, `SignalRegistry` (Bevy resource) |
+| `signal`            | `SignalRef`, `SignalType`, `SignalMeta`, `SignalPresentation`, `SignalRegistry` |
 | `viz`               | `Visualization` trait, `VisualizationConfig`, `VizKindId`   |
 | `view`              | `ViewTarget`, `ViewKind`, compatibility matrix              |
 | `registry`          | `VisualizationRegistry` (Bevy resource)                     |
@@ -57,6 +64,7 @@ All of these are wired by `LuncoVizPlugin`.
 Implemented:
 
 - [x] `SignalRegistry` with scalar time-series support
+- [x] Producer-owned compound-value presentation metadata and telemetry grouping
 - [x] `Visualization` trait + registration via `App` extension
 - [x] `LinePlot` viz kind (2D time-series, feature-parity with the
       Modelica Graphs panel)
