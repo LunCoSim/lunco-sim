@@ -207,16 +207,20 @@ On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
 `lunco-usd/src/commands.rs`), exactly **one** stage resolves per the table above,
 after the asset boundary has registered the exact `twin://` authority, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
-`twin://` source, web-ready). If the persisted `runtime_persistence.load`
-setting is on, the `.lunco/runtime` overlay is restored into it; otherwise
-`.lunco` is ignored. When enabled, its composed (`base ⊕ runtime`) source is
-published as the twin byte-overlay — and only then does `LoadScene` fire, so the
-**single** projection already carries restored runtime spawns/moves (see the E1b flow in
+`twin://` source, web-ready). Generated runtime spawns and moves are restored
+and written only when the owning Twin manifest opts in with the generic
+`[settings] usd.runtime_persistence = true`; an omitted or false value makes
+the `.lunco/runtime` cache inert in both directions. When enabled, its
+composed (`base ⊕ runtime`) source is published as the twin byte-overlay — and
+only then does `LoadScene` fire, so the **single** projection already carries
+restored runtime spawns/moves (see the E1b flow in
 [18-unified-journal-and-history](18-unified-journal-and-history.md)). The
-Twin's other `.usda` files are *indexed* and shown in the browser but **not**
-mounted — a referenceable asset library, composed into the active document on
-demand by an `ApplyUsdOp` carrying `UsdOp::AddPrim { reference: Some(...) }`.
-Switching scenes re-points the single active stage; it never stacks.
+Settings menu changes this same Twin setting through `SetTwinSetting`; it is
+not a second global preference. The Twin's other `.usda` files are *indexed*
+and shown in the browser but **not** mounted — a referenceable asset library,
+composed into the active document on demand by an `ApplyUsdOp` carrying
+`UsdOp::AddPrim { reference: Some(...) }`. Switching scenes re-points the
+single active stage; it never stacks.
 
 ### `default_scene` is a path, the scene owns composition
 
