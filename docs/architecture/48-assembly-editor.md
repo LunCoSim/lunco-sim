@@ -37,7 +37,10 @@ listed below; they do not introduce a second authoring model.
   the Editor preview is opened with `OpenUsdPreview`, which carries an
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
   the lease shown by the dock and `CloseUsdPreview` releases only that lease.
-  All preview leases are isolated from the simulation scene.
+  All preview leases are isolated from the simulation scene. A click on a USD
+  file in any open Twin resolves that file at the emitting Twin's path, admits
+  it through the existing async `OpenFile` pipeline, then opens/focuses the
+  stable editor lease; it never becomes `LoadScene`.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open lease and paint only the focused

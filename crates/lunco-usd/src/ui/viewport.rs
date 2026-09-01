@@ -123,6 +123,7 @@ impl Plugin for UsdViewportPlugin {
         app.register_panel(UsdViewportPanel);
         app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
+        app.add_observer(on_browser_usd_document_ready);
         app.add_observer(on_viewport_measured);
         app.add_observer(on_viewport_orbit_input);
         app.add_systems(
@@ -131,6 +132,23 @@ impl Plugin for UsdViewportPlugin {
         );
         register_all_commands(app);
     }
+}
+
+/// Bind a browser-admitted document to the one editor preview lease and focus
+/// the USD viewport. The document and root edit target remain explicit, while
+/// repeated clicks reuse the same `EDITOR_PREVIEW_ID` by the lease contract.
+fn on_browser_usd_document_ready(
+    trigger: On<crate::commands::BrowserUsdDocumentReady>,
+    mut commands: Commands,
+) {
+    commands.trigger(OpenUsdPreview {
+        preview: EDITOR_PREVIEW_ID,
+        doc: trigger.event().doc,
+        edit_target: LayerId::root(),
+    });
+    commands.trigger(lunco_workbench::FocusPanel {
+        id: USD_VIEWPORT_PANEL_ID.0.to_string(),
+    });
 }
 
 /// Pointer-driven orbit camera (Blender-style preview). Anchored on a
@@ -697,8 +715,10 @@ fn validated_preview_illuminance(world: &World) -> Result<f32, String> {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Open one explicit document and authored edit target in an isolated preview
-/// session. Opening the same `preview` id replaces that lease; other sessions
-/// keep their roots, cameras, and stages untouched.
+/// session. Reopening the same `preview` id for its current document focuses
+/// and updates that lease in place; another document replaces only that
+/// explicit lease. Other sessions keep their roots, cameras, and stages
+/// untouched.
 #[Command(default)]
 pub struct OpenUsdPreview {
     /// Stable caller-owned identity of the preview lease.
@@ -753,6 +773,18 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                     edit_target.as_str()
                 ),
             );
+            return;
+        }
+        if world
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .is_some_and(|session| session.doc() == doc)
+        {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            if let Some(session) = state.session_mut(preview) {
+                session.edit_target = edit_target;
+            }
+            state.focus(preview);
             return;
         }
         let preview_illuminance = match validated_preview_illuminance(world) {
@@ -1236,6 +1268,7 @@ impl Panel for UsdViewportPanel {
 mod tests {
     use super::*;
     use crate::commands::UsdCommandsPlugin;
+    use lunco_workbench::{BrowserAction, BrowserActions};
 
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview lease or panic.
@@ -1270,6 +1303,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Image>();
+        app.init_asset::<UsdStageAsset>();
         app.add_plugins(UsdCommandsPlugin);
         app.add_plugins(UsdViewportPlugin);
 
@@ -1291,6 +1325,96 @@ mod tests {
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
             .contains(doc));
+    }
+
+    #[test]
+    fn reopening_the_same_preview_reuses_its_lease() {
+        let path = std::env::temp_dir().join("lunco_usd_preview_reopen_test.usda");
+        std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<UsdStageAsset>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(UsdViewportPlugin);
+
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .open_file(&path, "#usda 1.0\ndef Xform \"X\" {}\n".to_string())
+            .0;
+        app.update();
+        app.world_mut()
+            .trigger(crate::commands::BrowserUsdDocumentReady { doc });
+        app.update();
+        app.update();
+        let first_root = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(EDITOR_PREVIEW_ID)
+            .expect("first preview lease")
+            .scene_root();
+
+        app.world_mut()
+            .trigger(crate::commands::BrowserUsdDocumentReady { doc });
+        app.update();
+        app.update();
+        let state = app.world().resource::<UsdViewportState>();
+        assert_eq!(state.session_count(), 1);
+        assert_eq!(state.focused_doc(), Some(doc));
+        assert_eq!(
+            state.session(EDITOR_PREVIEW_ID).unwrap().scene_root(),
+            first_root
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn browser_file_action_admits_and_focuses_the_existing_preview_lease() {
+        let path = std::env::temp_dir().join("lunco_usd_browser_preview_test.usda");
+        std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<UsdStageAsset>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(UsdViewportPlugin);
+        app.init_resource::<BrowserActions>();
+        app.add_systems(
+            Update,
+            crate::ui::browser_dispatch::drain_browser_actions_for_usd,
+        );
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<BrowserActions>()
+            .push(BrowserAction::OpenFile {
+                relative_path: path.clone(),
+            });
+        for _ in 0..20 {
+            app.update();
+            if app.world().resource::<UsdViewportState>().session_count() == 1 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        let state = app.world().resource::<UsdViewportState>();
+        let doc = app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .doc_for_file(&path)
+            .expect("browser action admitted the USD document");
+        assert_eq!(state.session_count(), 1);
+        assert_eq!(state.focused_preview_id(), Some(EDITOR_PREVIEW_ID));
+        assert_eq!(state.focused_doc(), Some(doc));
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -60,6 +60,13 @@ added separately by app composition (not by `UsdPlugins`):
   and `CloseUsdPreview` own preview lifecycle; other leases remain projected
   while the dock displays one focus.
 
+Clicking a USD file in any open Twin's Files section resolves that Twin's
+absolute path, opens the file through `OpenFile` and the async document
+registry, then binds the admitted `DocumentId` to `EDITOR_PREVIEW_ID`. This is
+document inspection only; it never replaces the running scene. Repeated clicks
+reuse the existing file identity and preview lease, while pending reads owned
+by a closed Twin are cancelled.
+
 Native Assembly Editor panels key their derived state by `UsdPreviewId`. Each
 open lease retains its own prim tree, connection canvas, parameter/variant/
 mount view, joint and animation view, authored layer, and projection

@@ -844,7 +844,9 @@ newer than the document is rejected.
 
  Open one explicit USD document in an isolated Editor preview lease. The
  `preview` identity is caller-owned; opening another identity does not replace
- an existing lease. Opening the same identity replaces that lease.
+ an existing lease. Reopening the same identity for its current document
+ focuses and updates that lease in place; another document replaces only that
+ explicit lease.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 

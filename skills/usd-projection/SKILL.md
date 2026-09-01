@@ -83,6 +83,14 @@ per open lease; panels paint only the focused entry. The shared ECS selection
 is a focused-lease projection restored from editor-owned session selection,
 not a document identity. Panel writes use the lease's explicit `DocumentId`,
 `LayerId`, and projection generation.
+
+The Files section sends a USD click through the existing `BrowserAction::OpenFile`
+and async document pipeline. The emitting Twin's resolved absolute path is
+preserved, so an inactive Twin is not accidentally anchored on the active one.
+Once the document is admitted, the viewport binds it to `EDITOR_PREVIEW_ID`
+with `LayerId::root()` and focuses the USD panel. Pending browser reads are
+cancelled on `TwinClosed`, and repeated clicks coalesce/reuse the same document
+and preview lease.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.
