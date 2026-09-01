@@ -156,6 +156,7 @@ pub enum SceneTarget {
 #[derive(Resource, Default, Debug)]
 pub struct PanelRects {
     rects: HashMap<PanelId, PanelRect>,
+    instance_rects: HashMap<(PanelId, u64), PanelRect>,
 }
 
 /// Per-frame inputs and resolved output of the scene-vs-chrome pick gate.
@@ -260,6 +261,7 @@ impl PanelRects {
     /// the offscreen image to a panel that is no longer shown.
     pub fn clear(&mut self) {
         self.rects.clear();
+        self.instance_rects.clear();
     }
 
     /// Compute a [`PanelRect`] (physical pixels) from an egui `Ui`,
@@ -295,9 +297,21 @@ impl PanelRects {
         self.rects.insert(panel, rect);
     }
 
+    /// Record the rect of one multi-instance panel tab. Instance identity is
+    /// part of the key so two visible tabs backed by the same renderer cannot
+    /// resize or present one another's render target.
+    pub fn record_instance(&mut self, panel: PanelId, instance: u64, rect: PanelRect) {
+        self.instance_rects.insert((panel, instance), rect);
+    }
+
     /// Look up a panel's most-recently-recorded rect.
     pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
         self.rects.get(&panel).copied()
+    }
+
+    /// Look up one multi-instance panel tab's most-recently-recorded rect.
+    pub fn get_instance(&self, panel: PanelId, instance: u64) -> Option<PanelRect> {
+        self.instance_rects.get(&(panel, instance)).copied()
     }
 
     /// Look up a panel footprint directly in egui's logical point space.
@@ -1212,6 +1226,49 @@ mod tests {
     use egui::{pos2, Rect};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
+
+    #[test]
+    fn instance_panel_rects_are_isolated_from_singletons_and_each_other() {
+        let mut rects = PanelRects::default();
+        let singleton = PanelRect {
+            origin: UVec2::new(1, 2),
+            size: UVec2::new(3, 4),
+        };
+        let first = PanelRect {
+            origin: UVec2::new(5, 6),
+            size: UVec2::new(7, 8),
+        };
+        let second = PanelRect {
+            origin: UVec2::new(9, 10),
+            size: UVec2::new(11, 12),
+        };
+
+        rects.record(USD_PREVIEW, singleton);
+        rects.record_instance(USD_PREVIEW, 1, first);
+        rects.record_instance(USD_PREVIEW, 2, second);
+
+        assert_eq!(
+            rects.get(USD_PREVIEW).map(|rect| (rect.origin, rect.size)),
+            Some((singleton.origin, singleton.size))
+        );
+        assert_eq!(
+            rects
+                .get_instance(USD_PREVIEW, 1)
+                .map(|rect| (rect.origin, rect.size)),
+            Some((first.origin, first.size))
+        );
+        assert_eq!(
+            rects
+                .get_instance(USD_PREVIEW, 2)
+                .map(|rect| (rect.origin, rect.size)),
+            Some((second.origin, second.size))
+        );
+        assert!(rects.get_instance(USD_PREVIEW, 3).is_none());
+
+        rects.clear();
+        assert!(rects.get(USD_PREVIEW).is_none());
+        assert!(rects.get_instance(USD_PREVIEW, 1).is_none());
+    }
 
     fn rect(min: (f32, f32), max: (f32, f32)) -> Rect {
         Rect::from_min_max(pos2(min.0, min.1), pos2(max.0, max.1))

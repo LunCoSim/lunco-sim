@@ -93,10 +93,23 @@ the active simulation viewport.
    `OpenUsdPreview { preview, doc, edit_target }`; use
    `FocusUsdPreview { preview }` when changing the visible document. Every
    panel and selection must remain bound to that `UsdPreviewId`.
+5. For a second 3D view of the same assembly, use
+   `OpenUsdPreviewView { preview, view }`. It creates a new camera/render
+   target over the existing projected stage; it does not reload or duplicate
+   USD. Opened view tabs can be dragged to a dock edge to create a split.
+   Use `FocusUsdPreviewView` for the exact view and `CloseUsdPreviewView` when
+   finished. The runtime parks cameras for hidden tabs and only sizes visible
+   view targets from their measured dock rects. The USD viewport's
+   `UsdPreviewRenderBudget` caps each target at 2048 px per axis and 4,194,304
+   pixels, and caps visible views at 8,388,608 pixels per frame by default.
+   These are presentation budgets, not authored USD values; invalid zero limits
+   leave the target inactive.
 
 The built-in wrappers are in
 [`assembly_edit.rhai`](../../assets/scripting/tools/assembly_edit.rhai). The
-preview helpers are `preview_open`, `preview_focus`, and `preview_close`.
+preview helpers are `preview_open`, `preview_view_open`,
+`preview_view_focus`, `preview_view_close`, `preview_focus`, and
+`preview_close`.
 Discover reflected command shapes with `DiscoverSchema` rather than inventing
 JSON for a new command.
 
@@ -197,8 +210,9 @@ port are gone.
   physics facts; ECS is only its projection.
 - A hierarchy is not an attachment. A movable mounted rigid body needs its
   authored `UsdPhysics` joint and frames.
-- The focused `UsdPreviewId` owns transient view, selection, and panel state;
-  it is not authored into USD.
+- `UsdPreviewId` owns transient session selection and panel state while each
+  `UsdPreviewViewId` owns one presentation camera/render target; neither is
+  authored into USD.
 - Use standard USD schemas whenever they own the concept, and existing
   `lunco-usd-compose`, journal, mount, and transform-frame owners whenever they
   already implement it.

@@ -75,13 +75,17 @@ viewport-specific edit/reload path.
 The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
 Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
-lease and can later use `FocusUsdPreview` or `CloseUsdPreview`. The isolated
-preview, prim tree, connection canvas, Inspector, parameter/variant/mount,
-joint, and animation view-models consume that same lease binding. Native
-editor view-model resources are keyed by `UsdPreviewId` and derive one entry
-per open lease; panels paint only the focused entry. The shared ECS selection
-is a focused-lease projection restored from editor-owned session selection,
-not a document identity. Panel writes use the lease's explicit `DocumentId`,
+session and can later use `FocusUsdPreview` or `CloseUsdPreview`. A session
+owns one projected composed stage; `OpenUsdPreviewView { preview, view }`
+adds a camera/render target over that stage for another dock tab or split.
+`FocusUsdPreviewView` and `CloseUsdPreviewView` address the exact view.
+Native editor view-model resources are keyed by `UsdPreviewId` and derive one
+entry per open session; panels paint the focused view's session entry. Visible
+preview targets are bounded by `UsdPreviewRenderBudget` (2048 px per axis,
+4,194,304 pixels per view, and 8,388,608 visible pixels per frame by default),
+while hidden view cameras stay inactive. The shared ECS selection is a
+focused-session projection restored from editor-owned session selection, not a
+document identity. Panel writes use the session's explicit `DocumentId`,
 `LayerId`, and projection generation.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity

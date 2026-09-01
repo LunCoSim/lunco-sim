@@ -47,9 +47,10 @@ pub use scene_files::{
     SceneFilesSection,
 };
 pub use viewport::{
-    CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, UsdPreviewId, UsdPreviewSession,
-    UsdViewportPanel, UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID,
-    USD_VIEWPORT_PANEL_ID,
+    CloseUsdPreview, CloseUsdPreviewView, FocusUsdPreview, FocusUsdPreviewView, OpenUsdPreview,
+    OpenUsdPreviewView, UsdPreviewId, UsdPreviewRenderBudget, UsdPreviewSession, UsdPreviewView,
+    UsdPreviewViewId, UsdPreviewViewPanel, UsdViewportPanel, UsdViewportPlugin, UsdViewportState,
+    EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle

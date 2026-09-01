@@ -1029,6 +1029,28 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
         .unwrap_or_else(|| prim_path.trim_start_matches('/').to_string())
 }
 
+/// Select the identity scope for one projected USD prim.
+///
+/// Render-only previews and descendants of runtime-spawned instances are local
+/// entities. Authored live-scene prims derive deterministic content identity
+/// only when the asset server can provide their stable source path.
+fn usd_projection_provenance(
+    preview_only: bool,
+    inherited_member: bool,
+    source: Option<String>,
+    resolved_path: &str,
+) -> Option<lunco_core::Provenance> {
+    if preview_only || inherited_member {
+        Some(lunco_core::Provenance::Local)
+    } else {
+        source.map(|source| lunco_core::Provenance::Content {
+            namespace: "usd".into(),
+            source,
+            path: resolved_path.into(),
+        })
+    }
+}
+
 /// The **instance** an entity belongs to, named by its instance-root
 /// [`GlobalEntityId`](lunco_core::GlobalEntityId).
 ///
@@ -1243,8 +1265,12 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         project_usd_prim_kind(reader, &sdf_path, entity, commands);
         project_spawnable_selectable(reader, &sdf_path, entity, commands);
 
-        // M1 identity (Ph1). Two regimes:
+        // M1 identity (Ph1). Three projection scopes:
         //
+        //  * **Presentation preview** (`preview_only`): a render-only view may
+        //    project the same stage as the live scene, so it must never acquire
+        //    the authored scene's deterministic identity. Local provenance is
+        //    the core identity contract for non-networked presentation state.
         //  * **Descendant of a runtime-spawned instance** (`inherited_member`):
         //    a palette/API spawn of the same asset composes identical prim
         //    paths, so a `Content` id would collide across instances (gap
@@ -1261,21 +1287,19 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         //    D3b in DECISIONS.md), so the same prim derives the same
         //    `GlobalEntityId` on every peer. The instance root *also* takes a
         //    `Content` stamp here, but `assign_global_entity_ids` ignores it
-        //    (the root carries `SkipContentStamp` → authoritative id). Stages
-        //    not loaded from a path (`get_path` → None) get no stamp, so the
-        //    core assignment fallback allocates instead.
-        if inherited_member.is_some() {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::Provenance::Local);
-        } else if let Some(source) = asset_server.get_path(prim_path.stage_handle.id()) {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::Provenance::Content {
-                    namespace: "usd".into(),
-                    source: source.path().to_string_lossy().into_owned(),
-                    path: resolved_path.clone(),
-                });
+        //    (the root carries `SkipContentStamp` → authoritative id). A stage
+        //    with no stable source path receives no content provenance and
+        //    therefore no derived identity.
+        let source = asset_server
+            .get_path(prim_path.stage_handle.id())
+            .map(|source| source.path().to_string_lossy().into_owned());
+        if let Some(provenance) = usd_projection_provenance(
+            preview_only,
+            inherited_member.is_some(),
+            source,
+            &resolved_path,
+        ) {
+            commands.entity(entity).try_insert(provenance);
         }
 
         // Membership to hand down to children: inherited if we're mid-subtree,
@@ -7878,6 +7902,41 @@ mod instance_identity_tests {
     //! asset (identical composed prim paths) don't collide.
     use super::*;
     use lunco_core::{identity::derive_id, GlobalEntityId, Provenance};
+
+    #[test]
+    fn preview_projection_is_local_even_when_source_has_a_content_path() {
+        assert_eq!(
+            usd_projection_provenance(
+                true,
+                false,
+                Some("assets/scenes/parts.usda".into()),
+                "/Parts",
+            ),
+            Some(Provenance::Local)
+        );
+        assert_eq!(
+            usd_projection_provenance(
+                false,
+                true,
+                Some("assets/scenes/parts.usda".into()),
+                "/Parts/Wheel",
+            ),
+            Some(Provenance::Local)
+        );
+        assert_eq!(
+            usd_projection_provenance(
+                false,
+                false,
+                Some("assets/scenes/parts.usda".into()),
+                "/Parts/Wheel",
+            ),
+            Some(Provenance::Content {
+                namespace: "usd".into(),
+                source: "assets/scenes/parts.usda".into(),
+                path: "/Parts/Wheel".into(),
+            })
+        );
+    }
 
     #[test]
     fn role_is_path_relative_to_root() {

@@ -3261,7 +3261,12 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Instance { kind, .. } => kind,
         };
         if let Some(mut rects) = self.world.get_resource_mut::<viewport::PanelRects>() {
-            rects.record(panel_id, measured_panel_rect);
+            match *tab {
+                TabId::Singleton(_) => rects.record(panel_id, measured_panel_rect),
+                TabId::Instance { instance, .. } => {
+                    rects.record_instance(panel_id, instance, measured_panel_rect)
+                }
+            }
         }
 
         match *tab {
