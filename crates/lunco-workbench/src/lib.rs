@@ -4980,8 +4980,8 @@ fn render_layout(
 /// `SceneViewport::active_camera` is the selection binding, while
 /// `Camera::is_active` is the renderer's actual state. A perspective switch
 /// can publish a new visible layout before the camera reconciler has activated
-/// the bound camera; treating the binding alone as rendered exposes the prior
-/// framebuffer through egui's load-preserving host.
+/// the bound camera; treating the binding alone as rendered would expose an
+/// incomplete presentation during that transition.
 fn scene_camera_is_rendering(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_core::SceneViewport>()
