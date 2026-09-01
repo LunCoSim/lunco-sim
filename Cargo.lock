@@ -7618,6 +7618,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "tempfile",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
