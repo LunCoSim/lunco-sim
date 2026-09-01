@@ -100,17 +100,17 @@ pub fn produce_usd_prim_tree(
         view.clear();
         return;
     };
-    let Some(preview_root) = viewport.preview_scene_root() else {
+    let Some(preview_root) = viewport.focused_scene_root() else {
         view.clear();
         return;
     };
-    let Some(handle) = viewport.active_stage_handle().cloned() else {
+    let Some(handle) = viewport.focused_stage_handle().cloned() else {
         view.clear();
         return;
     };
     let stage_id = handle.id();
 
-    // The active document owns the preview stage. Restrict the entity mapping
+    // The focused preview owns the editor stage. Restrict the entity mapping
     // to that preview subtree: a Twin scene can share the same stage handle,
     // but its live entities are not Assembly-editor entities.
     let is_preview_entity = |entity: Entity| {

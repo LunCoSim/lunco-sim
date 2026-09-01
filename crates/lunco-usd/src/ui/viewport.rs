@@ -1,35 +1,23 @@
-//! `UsdViewportPanel` — 3D scene of the active USD document, rendered
+//! `UsdViewportPanel` — 3D scene of the focused USD preview lease, rendered
 //! to an offscreen [`Image`] and surfaced in egui as a regular
 //! [`bevy_egui::egui::Image`].
 //!
-//! Mirrors the canvas pattern in spirit: one workbench panel, content
-//! follows the active document. Different in execution because the
-//! body is a real Bevy 3D render — we hand the egui panel a
-//! `TextureId` whose underlying `Image` is what a [`Camera3d`] just
-//! drew into.
-//!
-//! ## Why a singleton viewport (for now)
-//!
-//! The editor uses **one shared viewport** that swaps which document
-//! it shows when the user clicks a stage in the browser. That's what
-//! the user-visible flow needs (one 3D scene at a time, just like
-//! Omniverse's stage view) and avoids the per-document camera /
-//! image / `BigSpace` triplication a multi-viewport implementation
-//! would require. Multi-document side-by-side viewports are a
-//! follow-up — the singleton seam is where they'll plug in.
+//! Mirrors the canvas pattern in spirit: one workbench panel paints the
+//! focused lease while other leases keep their own Bevy 3D render state.
+//! The body is a real Bevy 3D render — the egui panel receives a `TextureId`
+//! whose underlying `Image` is what that lease's [`Camera3d`] drew into.
 //!
 //! ## Pipeline
 //!
 //! ```text
 //! UsdDocument source text
 //!         │
-//!         ▼  (on SetActiveUsdViewport for an explicit doc)
+//!         ▼  (on OpenUsdPreview for an explicit doc and preview id)
 //! authored layer → canonical composition → UsdStageAsset
 //!         │
-//!         ▼  (Assets<UsdStageAsset>::get_mut, in-place swap)
+//!         ▼  (one session lease owns one stage handle)
 //! Handle<UsdStageAsset>
-//!         │
-//!         ▼  (UsdPrimPath { stage_handle, path: "" } on scene_root)
+//!         │  (UsdPrimPath { stage_handle, path: "" } on that session root)
 //! sync_usd_visuals  →  child entities with meshes / transforms
 //!         │
 //!         ▼  (Camera3d targets a render-to-texture Image)
@@ -41,24 +29,22 @@
 //!
 //! ## Lifecycle (observers)
 //!
-//! - [`SetActiveUsdViewport`] for an explicit document
-//!   → bootstrap render scaffolding, parse + install that document,
-//!   and mount it on `scene_root`.
+//! - [`OpenUsdPreview`] for an explicit document, edit layer, and preview id
+//!   → allocate one isolated render lease and mount that document on its root.
+//! - [`FocusUsdPreview`] changes which already-open lease the dock displays.
+//! - [`CloseUsdPreview`] releases the session root, camera, render target, and
+//!   synthetic Twin authority when it is no longer shared.
 //! - [`lunco_doc_bevy::DocumentChanged`] wakes the shared
 //!   `twin_projection` owner. It authors the typed edit to the live
 //!   canonical stage and the normal USD projection refreshes the preview;
 //!   this panel does not re-parse or mutate an asset in-place.
-//! - [`DocumentClosed`] → if it was
-//!   the active doc, drop the asset and clear `scene_root`'s
-//!   `UsdPrimPath`. Render scaffolding (image, camera, BigSpace) is
-//!   kept warm so the next open doesn't pay the bootstrap cost.
+//! - [`DocumentClosed`] → close every preview lease for that document and
+//!   release its render resources.
 //!
 //! ## What this plugin does *not* do
 //!
-//! - Camera orbit / pan / zoom controls. Camera transform is fixed
-//!   today; orbit lands as a follow-up that reads egui pointer
-//!   events.
-//! - Multiple simultaneous viewports / split views.
+//! - A split-view layout. The session registry supports multiple isolated
+//!   leases; the current dock surface paints one focused lease.
 //! - The viewport does not compose source text itself. The canonical stage
 //!   projection owns sublayers, references, payloads, and variants; this panel
 //!   only selects the document whose live stage is projected.
@@ -83,8 +69,10 @@ use lunco_workbench::{
 };
 use lunco_workspace::TwinClosed;
 
-use crate::document::UsdDocument;
+use crate::document::{LayerId, UsdDocument};
 use lunco_doc_bevy::DocumentRegistry;
+
+use std::collections::HashMap;
 
 /// Stable id of the workbench tab the viewport renders into.
 pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
@@ -113,7 +101,13 @@ const RESIZE_DELTA_PX: u32 = 4;
 /// the preview camera never sees the live scene. Layer 0 is Bevy's
 /// default; using layer 1 here keeps us clear of any third-party
 /// systems that might assume layer 0.
-const PREVIEW_RENDER_LAYER: usize = 1;
+const FIRST_PREVIEW_RENDER_LAYER: usize = 1;
+const LAST_PREVIEW_RENDER_LAYER: usize = 31;
+
+/// Stable preview identity used by the desktop Assembly editor. Agents and
+/// additional editor surfaces use their own explicit ids, so opening another
+/// document never retargets this lease or any other lease.
+pub const EDITOR_PREVIEW_ID: UsdPreviewId = UsdPreviewId(1);
 
 /// Plugin that wires the viewport pipeline. Must be added together
 /// with `DefaultPlugins` (or any plugin set that ships
@@ -215,26 +209,181 @@ impl OrbitCamera {
     }
 }
 
-/// Singleton state for the shared USD preview viewport. One render
-/// target, one camera, one scene_root; retargets to whichever doc is
-/// currently active. Built lazily on first preview request and kept
-/// warm afterwards.
+/// Stable identity of one isolated USD preview lease.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize,
+)]
+pub struct UsdPreviewId(pub u64);
+
+impl Default for UsdPreviewId {
+    fn default() -> Self {
+        EDITOR_PREVIEW_ID
+    }
+}
+
+/// One isolated USD preview lease. The document and edit layer are explicit;
+/// the render resources are owned by this lease and are never selected by
+/// entity count, path, or the mission viewport.
+pub struct UsdPreviewSession {
+    id: UsdPreviewId,
+    doc: DocumentId,
+    edit_target: LayerId,
+    image: Handle<Image>,
+    tex_id: Option<egui::TextureId>,
+    scene_root: Entity,
+    camera: Entity,
+    light: Entity,
+    stage_handle: Handle<UsdStageAsset>,
+    render_layer: usize,
+    projected_generation: u64,
+    /// Pointer-driven orbit pose for this preview lease.
+    pub orbit: OrbitCamera,
+}
+
+impl UsdPreviewSession {
+    pub fn id(&self) -> UsdPreviewId {
+        self.id
+    }
+
+    pub fn doc(&self) -> DocumentId {
+        self.doc
+    }
+
+    pub fn edit_target(&self) -> &LayerId {
+        &self.edit_target
+    }
+
+    pub fn stage_handle(&self) -> &Handle<UsdStageAsset> {
+        &self.stage_handle
+    }
+
+    pub fn scene_root(&self) -> Entity {
+        self.scene_root
+    }
+
+    pub fn camera(&self) -> Entity {
+        self.camera
+    }
+
+    pub fn light(&self) -> Entity {
+        self.light
+    }
+
+    pub fn render_layer(&self) -> usize {
+        self.render_layer
+    }
+
+    pub fn projected_generation(&self) -> u64 {
+        self.projected_generation
+    }
+
+    pub fn texture_id(&self) -> Option<egui::TextureId> {
+        self.tex_id
+    }
+}
+
+/// Session-scoped USD preview registry. Every session owns one render target,
+/// camera, light, scene root, and render layer. The dock only paints the
+/// focused session; all open sessions continue receiving canonical USD stage
+/// updates independently.
 #[derive(Resource, Default)]
 pub struct UsdViewportState {
-    bootstrapped: bool,
-    image: Option<Handle<Image>>,
-    tex_id: Option<egui::TextureId>,
-    scene_root: Option<Entity>,
-    camera: Option<Entity>,
-    light: Option<Entity>,
-    current_handle: Option<Handle<UsdStageAsset>>,
-    active_doc: Option<DocumentId>,
-    projection_name: Option<String>,
-    projection_is_session_owned: bool,
-    last_rebuilt_generation: Option<u64>,
-    /// Pointer-driven orbit pose. Pushed onto the camera each input
-    /// frame the panel receives drag / scroll input.
-    pub orbit: OrbitCamera,
+    sessions: HashMap<UsdPreviewId, UsdPreviewSession>,
+    focused: Option<UsdPreviewId>,
+}
+
+impl UsdViewportState {
+    pub fn focused_preview_id(&self) -> Option<UsdPreviewId> {
+        self.focused
+    }
+
+    pub fn focused_session(&self) -> Option<&UsdPreviewSession> {
+        self.focused.and_then(|id| self.sessions.get(&id))
+    }
+
+    pub fn session(&self, id: UsdPreviewId) -> Option<&UsdPreviewSession> {
+        self.sessions.get(&id)
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    pub fn has_preview_for(&self, doc: DocumentId) -> bool {
+        self.sessions.values().any(|session| session.doc == doc)
+    }
+
+    pub fn focused_doc(&self) -> Option<DocumentId> {
+        self.focused_session().map(UsdPreviewSession::doc)
+    }
+
+    pub fn focused_stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
+        self.focused_session().map(UsdPreviewSession::stage_handle)
+    }
+
+    pub fn focused_scene_root(&self) -> Option<Entity> {
+        self.focused_session().map(UsdPreviewSession::scene_root)
+    }
+
+    pub fn focused_edit_target(&self) -> Option<&LayerId> {
+        self.focused_session().map(UsdPreviewSession::edit_target)
+    }
+
+    pub(crate) fn session_ids_for_doc(&self, doc: DocumentId) -> Vec<UsdPreviewId> {
+        self.sessions
+            .values()
+            .filter(|session| session.doc == doc)
+            .map(UsdPreviewSession::id)
+            .collect()
+    }
+
+    pub(crate) fn preview_docs(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.sessions.values().map(UsdPreviewSession::doc)
+    }
+
+    fn render_layer_available_for(&self, replacing: Option<UsdPreviewId>) -> Option<usize> {
+        (FIRST_PREVIEW_RENDER_LAYER..=LAST_PREVIEW_RENDER_LAYER).find(|layer| {
+            self.sessions
+                .iter()
+                .all(|(id, session)| Some(*id) == replacing || session.render_layer != *layer)
+        })
+    }
+
+    fn insert(&mut self, session: UsdPreviewSession) {
+        self.focused = Some(session.id);
+        self.sessions.insert(session.id, session);
+    }
+
+    fn remove(&mut self, id: UsdPreviewId) -> Option<UsdPreviewSession> {
+        let session = self.sessions.remove(&id)?;
+        if self.focused == Some(id) {
+            self.focused = None;
+        }
+        Some(session)
+    }
+
+    fn focus(&mut self, id: UsdPreviewId) -> bool {
+        if self.sessions.contains_key(&id) {
+            self.focused = Some(id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn session_mut(&mut self, id: UsdPreviewId) -> Option<&mut UsdPreviewSession> {
+        self.sessions.get_mut(&id)
+    }
+
+    pub(crate) fn mark_projected_generation(&mut self, doc: DocumentId, generation: u64) {
+        for session in self
+            .sessions
+            .values_mut()
+            .filter(|session| session.doc == doc)
+        {
+            session.projected_generation = generation;
+        }
+    }
 }
 
 /// UI measurement emitted by the viewport panel after egui lays out its body.
@@ -275,84 +424,55 @@ fn on_viewport_orbit_input(
     if input.drag == egui::Vec2::ZERO && input.scroll_y == 0.0 {
         return;
     }
+    let Some(preview) = state.focused else {
+        return;
+    };
+    let Some(session) = state.session_mut(preview) else {
+        return;
+    };
     if input.drag != egui::Vec2::ZERO {
-        state.orbit.apply_drag(input.drag);
+        session.orbit.apply_drag(input.drag);
     }
     if input.scroll_y != 0.0 {
-        state.orbit.apply_zoom(input.scroll_y);
+        session.orbit.apply_zoom(input.scroll_y);
     }
-    let Some(camera) = state.camera else { return };
+    let camera = session.camera;
     if let Ok(mut transform) = transforms.get_mut(camera) {
-        *transform = state.orbit.transform();
-    }
-}
-
-impl UsdViewportState {
-    /// The doc currently surfaced in the viewport, if any.
-    pub fn active_doc(&self) -> Option<DocumentId> {
-        self.active_doc
-    }
-
-    /// The prepared stage handle currently mounted in the assembly preview.
-    /// Consumers must pair it with [`Self::active_doc`] instead of selecting a
-    /// live stage by entity count or insertion order.
-    pub fn active_stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
-        self.current_handle.as_ref()
-    }
-
-    /// The preview root that scopes the active assembly projection.
-    pub fn preview_scene_root(&self) -> Option<Entity> {
-        self.scene_root
+        *transform = session.orbit.transform();
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Bootstrap
+// Session render leases
 // ─────────────────────────────────────────────────────────────────────
 
-/// First-time setup of the shared render scaffolding. Idempotent;
-/// no-ops when `Assets<Image>` is absent (headless tests / server
-/// bins).
-///
-/// The preview camera is spawned with `Camera::order = 1` so it never
-/// collides with the main window camera (`order = 0`); they target
-/// different surfaces anyway (window vs. image), but explicit ordering
-/// silences Bevy's order-ambiguity warning that compares all active
-/// cameras regardless of target.
-fn bootstrap(world: &mut World) {
-    if world.resource::<UsdViewportState>().bootstrapped {
-        return;
-    }
+/// Allocate one isolated render lease. OpenUSD stage loading and composition
+/// remain in the existing asset/projection pipeline; this function owns only
+/// Bevy presentation resources and is called after the document coordinates
+/// have been admitted by `viewport_twin_coords`.
+fn create_preview_session(
+    world: &mut World,
+    id: UsdPreviewId,
+    doc: DocumentId,
+    edit_target: LayerId,
+    stage_handle: Handle<UsdStageAsset>,
+    render_layer: usize,
+    preview_illuminance: f32,
+) -> Option<UsdPreviewSession> {
     if !world.contains_resource::<Assets<Image>>() {
-        return;
+        return None;
     }
-    let preview_illuminance = match world
-        .resource::<RenderingQualitySettings>()
-        .validated_profile()
-    {
-        Ok(profile) => profile.distant_light_default_illuminance,
-        Err(reason) => {
-            error!("[UsdViewport] invalid Graphics quality; refusing preview light: {reason}");
-            return;
-        }
-    };
 
-    // Bootstrap with a tiny placeholder. `resize_viewport_image` will
-    // grow it to the actual `UsdViewportPanel` rect on the first
-    // Update tick after the panel records its rect into `PanelRects`.
-    // This keeps wgpu's initial alloc small (32×32×4 = 4KB instead of
-    // 1280×800×4 = ~4MB) while still presenting a valid texture for
-    // the camera and the egui `Image` widget on frame 1.
-    let image_handle = {
+    let image = {
         let image = make_target_image(PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
         world.resource_mut::<Assets<Image>>().add(image)
     };
 
     let tex_id = world
         .get_resource_mut::<EguiUserTextures>()
-        .map(|mut tex| tex.add_image(EguiTextureHandle::Strong(image_handle.clone())));
+        .map(|mut tex| tex.add_image(EguiTextureHandle::Strong(image.clone())));
 
-    let preview_layers = RenderLayers::layer(PREVIEW_RENDER_LAYER);
+    let preview_layers = RenderLayers::layer(render_layer);
 
     let mut commands = world.commands();
     let camera = commands
@@ -362,23 +482,24 @@ fn bootstrap(world: &mut World) {
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.10, 0.12)),
-                // Explicit non-zero order so Bevy's camera-order-
-                // ambiguity check ignores us. The main window camera
-                // ships at order 0; we sit at 1.
-                order: 1,
+                // The main window camera owns order 0. Each preview gets a
+                // stable non-zero order, even though its render target is
+                // isolated, so Bevy never has to resolve an ambiguous camera
+                // order while several leases are open.
+                order: render_layer as isize,
                 ..default()
             },
             // `RenderTarget::Image` keeps `sync_gizmo_camera` from
             // tagging this camera (it filters on `RenderTarget::Window`).
-            RenderTarget::Image(ImageRenderTarget::from(image_handle.clone())),
+            RenderTarget::Image(ImageRenderTarget::from(image.clone())),
             OrbitCamera::default().transform(),
             // Preview-only render layer: this camera will render
-            // *only* entities tagged with `PREVIEW_RENDER_LAYER`, so
+            // *only* entities tagged with this session's render layer, so
             // the live sim scene (default layer 0) stays invisible to
             // it. Propagated to every USD prim descendant of
-            // `scene_root` by `propagate_preview_render_layer`.
+            // the session root by `propagate_preview_render_layer`.
             preview_layers.clone(),
-            Name::new("UsdViewportCamera"),
+            Name::new(format!("UsdPreviewCamera-{}", id.0)),
         ))
         .id();
 
@@ -396,7 +517,7 @@ fn bootstrap(world: &mut World) {
             },
             Transform::from_xyz(5.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             preview_layers.clone(),
-            Name::new("UsdViewportSun"),
+            Name::new(format!("UsdPreviewSun-{}", id.0)),
         ))
         .id();
 
@@ -404,7 +525,7 @@ fn bootstrap(world: &mut World) {
         .spawn((
             Transform::default(),
             Visibility::default(),
-            Name::new("UsdViewportSceneRoot"),
+            Name::new(format!("UsdPreviewRoot-{}", id.0)),
             // Preview-only: usd-sim/usd-avian walk ChildOf up from each
             // candidate prim and bail when they reach this marker, so
             // the preview stage never spawns an Avatar Camera3d into
@@ -412,35 +533,39 @@ fn bootstrap(world: &mut World) {
             // ambiguity + gizmo warnings every frame) or activate
             // wheel physics / FSW.
             UsdPreviewOnly,
-            // Render-layer seed — `propagate_preview_render_layer`
-            // copies it down to every descendant each frame so newly
-            // spawned USD prims (meshes inherited from
-            // `sync_usd_visuals`) automatically join the preview-only
-            // render layer.
+            // Render-layer seed — `propagate_preview_render_layer` copies it
+            // down to every descendant so newly spawned USD prims join this
+            // lease and cannot leak into another preview or the mission.
             preview_layers,
         ))
         .id();
 
     world.flush();
 
-    let mut state = world.resource_mut::<UsdViewportState>();
-    state.bootstrapped = true;
-    state.image = Some(image_handle);
-    state.tex_id = tex_id;
-    state.camera = Some(camera);
-    state.light = Some(light);
-    state.scene_root = Some(scene_root);
+    Some(UsdPreviewSession {
+        id,
+        doc,
+        edit_target,
+        image,
+        tex_id,
+        scene_root,
+        camera,
+        light,
+        stage_handle,
+        render_layer,
+        projected_generation: 0,
+        orbit: OrbitCamera::default(),
+    })
 }
 
-/// Push `PREVIEW_RENDER_LAYER` onto every descendant of the preview
-/// `scene_root` that doesn't yet have a `RenderLayers` component.
+/// Push each session's render layer onto every descendant of its root that
+/// doesn't yet have a `RenderLayers` component.
 ///
 /// `sync_usd_visuals` (in `lunco-usd-bevy`) spawns child prim entities
 /// without `RenderLayers`, which means they default to layer 0 and
 /// would otherwise show up in the live workbench window. Walking from
-/// `scene_root` each frame and inserting the preview layer on
-/// missing-RenderLayers descendants gives us hierarchical scoping
-/// without modifying the USD layer.
+/// each root and inserting that lease's layer on missing-RenderLayers
+/// descendants gives us hierarchical scoping without modifying USD.
 ///
 /// Entities that already have a `RenderLayers` (e.g. the camera, the
 /// light, anything explicitly tagged elsewhere) are left alone — we
@@ -452,35 +577,32 @@ fn propagate_preview_render_layer(
     q_newly_parented: Query<(), Added<ChildOf>>,
     mut commands: Commands,
 ) {
-    let Some(root) = state.scene_root else { return };
-
     // Only re-walk the preview subtree when there's something new to seed:
-    // either the scene root was just (re)assigned (`state` changed this
-    // frame) or some entity was newly parented this frame (USD prims spawn
-    // incrementally as the stage loads). Once the scene is static this DFS
-    // would otherwise run every frame for no effect.
+    // either a lease was opened/closed/focused (`state` changed this frame) or
+    // some entity was newly parented (USD prims spawn incrementally as the
+    // stage loads). Once the scene is static this DFS does no work.
     if !state.is_changed() && q_newly_parented.is_empty() {
         return;
     }
 
-    let preview_layers = RenderLayers::layer(PREVIEW_RENDER_LAYER);
-
-    // Iterative DFS over the subtree rooted at scene_root. USD scenes
-    // are shallow (tens-hundreds of prims) so allocation-free
-    // traversal isn't worth the complexity.
-    let mut stack: Vec<Entity> = Vec::with_capacity(32);
-    if let Ok(children) = q_children.get(root) {
-        for child in children.iter() {
-            stack.push(child);
-        }
-    }
-    while let Some(entity) = stack.pop() {
-        if q_has_layers.get(entity).is_err() {
-            commands.entity(entity).try_insert(preview_layers.clone());
-        }
-        if let Ok(children) = q_children.get(entity) {
+    for session in state.sessions.values() {
+        let preview_layers = RenderLayers::layer(session.render_layer);
+        // Iterative DFS over one preview lease. USD scenes are shallow
+        // (tens-to-hundreds of prims), so a small local stack is sufficient.
+        let mut stack: Vec<Entity> = Vec::with_capacity(32);
+        if let Ok(children) = q_children.get(session.scene_root) {
             for child in children.iter() {
                 stack.push(child);
+            }
+        }
+        while let Some(entity) = stack.pop() {
+            if q_has_layers.get(entity).is_err() {
+                commands.entity(entity).try_insert(preview_layers.clone());
+            }
+            if let Ok(children) = q_children.get(entity) {
+                for child in children.iter() {
+                    stack.push(child);
+                }
             }
         }
     }
@@ -498,18 +620,17 @@ fn propagate_preview_render_layer(
 /// on the camera also stay valid — only the wgpu texture's pixel
 /// dimensions change.
 ///
-/// First-apply (`last_applied == 0`) fires unconditionally so the
-/// placeholder texture from `bootstrap` snaps to panel size on the
-/// first frame the panel is visible.
+/// First-apply fires unconditionally for each focused session so its
+/// placeholder texture snaps to panel size when that session is shown.
 fn resize_viewport_image(
     // `Option` so the system is headless-safe — `PanelRects` is owned by
     // the workbench UI plugin, absent in lifecycle / headless tests.
     rects: Option<Res<PanelRects>>,
     state: Res<UsdViewportState>,
     images: Option<ResMut<Assets<Image>>>,
-    mut last_applied: Local<UVec2>,
+    mut last_applied: Local<Option<(UsdPreviewId, UVec2)>>,
 ) {
-    let Some(handle) = state.image.as_ref() else {
+    let Some(session) = state.focused_session() else {
         return;
     };
     let (Some(rects), Some(mut images)) = (rects, images) else {
@@ -519,13 +640,17 @@ fn resize_viewport_image(
         return;
     };
     let target = rect.size;
-    let first_apply = last_applied.x == 0 || last_applied.y == 0;
-    let dx = target.x.abs_diff(last_applied.x);
-    let dy = target.y.abs_diff(last_applied.y);
+    let previous = last_applied
+        .filter(|(id, _)| *id == session.id)
+        .map(|(_, size)| size)
+        .unwrap_or(UVec2::ZERO);
+    let first_apply = previous.x == 0 || previous.y == 0;
+    let dx = target.x.abs_diff(previous.x);
+    let dy = target.y.abs_diff(previous.y);
     if !first_apply && dx < RESIZE_DELTA_PX && dy < RESIZE_DELTA_PX {
         return;
     }
-    let Some(mut image) = images.get_mut(handle) else {
+    let Some(mut image) = images.get_mut(&session.image) else {
         return;
     };
     image.resize(Extent3d {
@@ -533,12 +658,11 @@ fn resize_viewport_image(
         height: target.y.max(1),
         depth_or_array_layers: 1,
     });
-    *last_applied = target;
+    *last_applied = Some((session.id, target));
 }
 
 /// Construct a render-target image with sensible defaults
-/// (Bgra8UnormSrgb, RENDER_ATTACHMENT). Wrapped so the bootstrap
-/// reads cleanly.
+/// (Bgra8UnormSrgb, RENDER_ATTACHMENT).
 fn make_target_image(width: u32, height: u32) -> Image {
     // `Image::new_target_texture` sets all three usage flags (incl.
     // RENDER_ATTACHMENT) and fills with zeros in 0.18, using
@@ -548,129 +672,233 @@ fn make_target_image(width: u32, height: u32) -> Image {
     Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// SetActiveUsdViewport — typed command for "show this stage"
-// ─────────────────────────────────────────────────────────────────────
-
-/// Retarget the shared USD viewport at `doc`. Browser row clicks fire
-/// this; HTTP API / MCP / scripts can fire it directly. Idempotent —
-/// calling with the already-active doc is a no-op.
-#[Command(default)]
-pub struct SetActiveUsdViewport {
-    /// The USD document to surface in the viewport.
-    pub doc: DocumentId,
+fn validated_preview_illuminance(world: &World) -> Result<f32, String> {
+    if !world.contains_resource::<Assets<Image>>() {
+        return Err("USD preview rendering is unavailable in this host".to_string());
+    }
+    let settings = world
+        .get_resource::<RenderingQualitySettings>()
+        .ok_or_else(|| "Graphics quality settings are unavailable in this host".to_string())?;
+    settings
+        .validated_profile()
+        .map(|profile| profile.distant_light_default_illuminance)
+        .map_err(|reason| format!("invalid Graphics quality: {reason}"))
 }
 
-#[on_command(SetActiveUsdViewport)]
-fn on_set_active_usd_viewport(trigger: On<SetActiveUsdViewport>, mut commands: Commands) {
-    let doc = trigger.event().doc;
+// ─────────────────────────────────────────────────────────────────────
+// Preview lease commands
+// ─────────────────────────────────────────────────────────────────────
+
+/// Open one explicit document and authored edit target in an isolated preview
+/// session. Opening the same `preview` id replaces that lease; other sessions
+/// keep their roots, cameras, and stages untouched.
+#[Command(default)]
+pub struct OpenUsdPreview {
+    /// Stable caller-owned identity of the preview lease.
+    pub preview: UsdPreviewId,
+    /// The USD document to render.
+    pub doc: DocumentId,
+    /// The authored layer to use for editor mutations made from this preview.
+    pub edit_target: LayerId,
+}
+
+/// Focus an already-open preview lease in the USD dock.
+#[Command(default)]
+pub struct FocusUsdPreview {
+    pub preview: UsdPreviewId,
+}
+
+/// Close one preview lease and release all of its presentation resources.
+#[Command(default)]
+pub struct CloseUsdPreview {
+    pub preview: UsdPreviewId,
+}
+
+#[on_command(OpenUsdPreview)]
+fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
+    let command = trigger.event();
+    let preview = command.preview;
+    let doc = command.doc;
+    let edit_target = command.edit_target.clone();
     commands.queue(move |world: &mut World| {
         if !world
             .resource::<DocumentRegistry<UsdDocument>>()
             .contains(doc)
         {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                format!("document {doc} is not open"),
+            );
             return;
         }
-        if world.resource::<UsdViewportState>().active_doc == Some(doc) {
+        let target_valid = world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .and_then(|host| host.document().authored_prim_exists(&edit_target, "/").ok())
+            .is_some();
+        if !target_valid {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                format!(
+                    "unknown edit target `{}` for document {doc}",
+                    edit_target.as_str()
+                ),
+            );
             return;
         }
-        bootstrap(world);
-        // Detach the prior stage so its asset ref-count drops before
-        // we install the new one. `sync_usd_visuals` will respawn
-        // children once the new `UsdPrimPath` lands.
-        if let Some(scene_root) = world.resource::<UsdViewportState>().scene_root {
-            if let Ok(mut entity) = world.get_entity_mut(scene_root) {
-                entity.remove::<UsdPrimPath>();
-                entity.remove::<UsdVisualSynced>();
-                entity.despawn_related::<Children>();
+        let preview_illuminance = match validated_preview_illuminance(world) {
+            Ok(illuminance) => illuminance,
+            Err(detail) => {
+                report_preview_error(world, "usd-preview-open-failed", detail);
+                return;
             }
+        };
+        let Some(render_layer) = world
+            .resource::<UsdViewportState>()
+            .render_layer_available_for(Some(preview))
+        else {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                "all preview render layers are in use".to_string(),
+            );
+            return;
+        };
+        let Some((name, rel)) = viewport_twin_coords(world, doc) else {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                format!("document {doc} has no loadable composed USD source"),
+            );
+            return;
+        };
+        let stage_handle = world
+            .resource::<AssetServer>()
+            .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
+        if let Some(old_doc) = world
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .map(UsdPreviewSession::doc)
+        {
+            remove_preview_session(world, preview);
+            release_preview_projection(world, old_doc);
         }
-        install_active_doc(world, doc);
+        let Some(session) = create_preview_session(
+            world,
+            preview,
+            doc,
+            edit_target,
+            stage_handle,
+            render_layer,
+            preview_illuminance,
+        ) else {
+            report_preview_error(
+                world,
+                "usd-preview-open-failed",
+                "USD preview render resources could not be allocated".to_string(),
+            );
+            return;
+        };
+        world.resource_mut::<UsdViewportState>().insert(session);
+        world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .track_preview(doc, name, rel);
+        world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .acquire_preview(doc);
+        let claimed = world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .claim_user(doc);
+        if claimed {
+            world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+        }
+        mount_preview_session(world, preview);
     });
 }
 
-register_commands!(on_set_active_usd_viewport,);
+#[on_command(FocusUsdPreview)]
+fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
+    let preview = trigger.event().preview;
+    commands.queue(move |world: &mut World| {
+        if !world.resource_mut::<UsdViewportState>().focus(preview) {
+            report_preview_error(
+                world,
+                "usd-preview-focus-failed",
+                format!("preview {} is not open", preview.0),
+            );
+        }
+    });
+}
+
+#[on_command(CloseUsdPreview)]
+fn on_close_usd_preview(trigger: On<CloseUsdPreview>, mut commands: Commands) {
+    let preview = trigger.event().preview;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = remove_preview_session(world, preview) else {
+            report_preview_error(
+                world,
+                "usd-preview-close-failed",
+                format!("preview {} is not open", preview.0),
+            );
+            return;
+        };
+        release_preview_projection(world, doc);
+    });
+}
+
+register_commands!(
+    on_open_usd_preview,
+    on_focus_usd_preview,
+    on_close_usd_preview,
+);
 
 // ─────────────────────────────────────────────────────────────────────
 // Document lifecycle observers
 // ─────────────────────────────────────────────────────────────────────
 
-/// A user-owned preview may outlive the Twin that originally supplied its
-/// `twin://` authority. Reinstall it after the Twin-close observer retires that
-/// authority so the document is served from a session-owned source instead of
-/// retaining a stale asset coordinate.
+/// A preview may outlive the Twin that originally supplied its `twin://`
+/// authority. Reinstall every affected lease after the Twin-close observer
+/// retires that authority, preserving each session's independent root/camera.
 fn on_twin_closed_for_viewport(_trigger: On<TwinClosed>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
-        let Some(doc) = world.resource::<UsdViewportState>().active_doc else {
-            return;
-        };
-        if !world
-            .resource::<crate::twin_projection::DocBackedTwinScenes>()
-            .is_user_owned(doc)
-        {
-            return;
-        }
-        let Some((name, _)) = world
-            .resource::<crate::twin_projection::DocBackedTwinScenes>()
-            .coords_of(doc)
-        else {
-            install_active_doc(world, doc);
-            return;
-        };
-        match world.resource::<TwinRoots>().root_for(&name) {
-            Ok(Some(_)) => return,
-            Ok(None) => {}
-            Err(error) => {
-                error!("cannot inspect Twin authority `{name}` after close: {error}");
-                return;
+        let docs: Vec<_> = world
+            .resource::<UsdViewportState>()
+            .preview_docs()
+            .collect();
+        for doc in docs {
+            let needs_rehome = world
+                .resource::<crate::twin_projection::DocBackedTwinScenes>()
+                .coords_of(doc)
+                .map(|(name, _)| matches!(world.resource::<TwinRoots>().root_for(&name), Ok(None)))
+                .unwrap_or(true);
+            if !needs_rehome {
+                continue;
+            }
+            world
+                .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+                .detach_projection(doc);
+            let sessions = world
+                .resource::<UsdViewportState>()
+                .session_ids_for_doc(doc);
+            for preview in sessions {
+                mount_preview_session(world, preview);
             }
         }
-        world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-            .detach_projection(doc);
-        install_active_doc(world, doc);
     });
 }
 
 fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let (scene_root, session_projection) = {
-            let mut state = world.resource_mut::<UsdViewportState>();
-            if state.active_doc != Some(doc) {
-                return;
-            }
-            state.active_doc = None;
-            state.current_handle = None;
-            state.last_rebuilt_generation = None;
-            let projection_name = state.projection_name.take();
-            let projection_is_session_owned = state.projection_is_session_owned;
-            state.projection_is_session_owned = false;
-            (
-                state.scene_root,
-                projection_is_session_owned
-                    .then_some(projection_name)
-                    .flatten(),
-            )
-        };
-        if let Some(name) = session_projection {
-            if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
-                world.trigger(lunco_core::TelemetryEvent {
-                    name: "twin-asset-unmount-failed".into(),
-                    source: 0,
-                    severity: lunco_core::Severity::Error,
-                    data: lunco_core::TelemetryValue::String(error.to_string()),
-                    timestamp: 0.0,
-                });
-            }
+        let sessions = world
+            .resource::<UsdViewportState>()
+            .session_ids_for_doc(doc);
+        for preview in sessions {
+            let _ = remove_preview_session(world, preview);
         }
-        if let Some(root) = scene_root {
-            if let Ok(mut entity) = world.get_entity_mut(root) {
-                entity.remove::<UsdPrimPath>();
-                entity.remove::<UsdVisualSynced>();
-                entity.despawn_related::<Children>();
-            }
-        }
+        release_preview_projection(world, doc);
     });
 }
 
@@ -678,102 +906,108 @@ fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Command
 // Asset install / rebuild
 // ─────────────────────────────────────────────────────────────────────
 
-/// Install `doc` as the active stage on the shared scene_root. Composes the
-/// document through the **storage-based async twin loader** (no filesystem
-/// compose): the doc is served as a `twin://` byte-overlay and loaded via the
-/// async [`UsdLoader`], which resolves references relative to the doc's base dir
-/// through the twin source (web-ready). Later edits are re-projected by
-/// [`sync_twin_overlays`](crate::twin_projection::sync_twin_overlays). No-op
-/// when scaffolding hasn't been bootstrapped (headless).
-fn install_active_doc(world: &mut World, doc: DocumentId) {
-    let Some(scene_root) = world.resource::<UsdViewportState>().scene_root else {
+/// Mount the document selected by one existing preview session. This is the
+/// only viewport-side stage binding; all ordinary and structural edits are
+/// still consumed by `sync_twin_overlays` and the canonical stage sink.
+fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
+    let Some(doc) = world
+        .resource::<UsdViewportState>()
+        .session(preview)
+        .map(UsdPreviewSession::doc)
+    else {
         return;
     };
-    let previous_session = {
-        let state = world.resource::<UsdViewportState>();
-        if state.active_doc != Some(doc) && state.projection_is_session_owned {
-            state.projection_name.clone()
-        } else {
-            None
-        }
-    };
-    if let Some(name) = previous_session {
-        if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
-            world.trigger(lunco_core::TelemetryEvent {
-                name: "twin-asset-unmount-failed".into(),
-                source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(error.to_string()),
-                timestamp: 0.0,
-            });
-            return;
-        }
-    }
-    let doc_generation = world
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .host(doc)
-        .map(|h| h.document().generation());
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
-        bevy::log::warn!(
-            "[UsdViewport] no composed source for {} — not mounting",
-            doc
-        );
         return;
     };
-    let session_owned = world
-        .resource::<crate::twin_projection::DocBackedTwinScenes>()
-        .coords_of(doc)
-        .is_none();
     let handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
-    let projection_root = viewport_projection_root(world, doc);
-    // Track so `sync_twin_overlays` keeps the overlay + preview in step with the
-    // document generation (it owns rebuilds — the viewport no longer re-parses).
     world
         .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-        .track(doc, projection_root, name, rel);
+        .track_preview(doc, name, rel);
     world
         .resource_mut::<crate::twin_projection::TwinProjectionWake>()
         .wake();
-    let projection_name = world
-        .resource::<crate::twin_projection::DocBackedTwinScenes>()
-        .coords_of(doc)
-        .map(|(name, _)| name);
+    let Some(scene_root) = world
+        .resource::<UsdViewportState>()
+        .session(preview)
+        .map(UsdPreviewSession::scene_root)
+    else {
+        return;
+    };
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
         entity.remove::<UsdVisualSynced>();
         entity.despawn_related::<Children>();
         entity.insert(UsdPrimPath {
             stage_handle: handle.clone(),
-            // The empty path is the shared scene-root sentinel. The visual
-            // projector resolves it through the composed defaultPrim before
-            // walking the prepared hierarchy.
+            // The empty path is the scene-root sentinel. The visual projector
+            // resolves it through the composed defaultPrim.
             path: String::new(),
         });
     }
-    let mut state = world.resource_mut::<UsdViewportState>();
-    state.active_doc = Some(doc);
-    state.current_handle = Some(handle);
-    state.projection_name = projection_name;
-    state.projection_is_session_owned = session_owned;
-    state.last_rebuilt_generation = doc_generation;
+    let generation = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(doc)
+        .map(|h| h.document().generation())
+        .unwrap_or(0);
+    if let Some(session) = world
+        .resource_mut::<UsdViewportState>()
+        .session_mut(preview)
+    {
+        session.stage_handle = handle;
+        session.projected_generation = generation;
+    }
 }
 
-/// The directory containing a file-backed viewport document is the projection
-/// root used for lifetime retirement. In-memory documents use the synthetic
-/// viewport root selected by `viewport_twin_coords`.
-fn viewport_projection_root(world: &World, doc: DocumentId) -> std::path::PathBuf {
-    let Some(host) = world.resource::<DocumentRegistry<UsdDocument>>().host(doc) else {
-        return std::path::PathBuf::from(".");
+fn report_preview_error(world: &mut World, name: &str, detail: String) {
+    world.trigger(lunco_core::TelemetryEvent {
+        name: name.to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(detail),
+        timestamp: 0.0,
+    });
+}
+
+/// Remove the Bevy resources owned by one preview session. The document
+/// projection lease is released separately so shared coordinates survive until
+/// the final session closes.
+fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<DocumentId> {
+    let session = world.resource_mut::<UsdViewportState>().remove(preview)?;
+    let doc = session.doc;
+    if let Ok(mut entity) = world.get_entity_mut(session.scene_root) {
+        entity.despawn_related::<Children>();
+        entity.despawn();
+    }
+    if let Ok(entity) = world.get_entity_mut(session.camera) {
+        entity.despawn();
+    }
+    if let Ok(entity) = world.get_entity_mut(session.light) {
+        entity.despawn();
+    }
+    if let Some(mut textures) = world.get_resource_mut::<EguiUserTextures>() {
+        textures.remove_image(session.image.id());
+    }
+    if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
+        images.remove(session.image.id());
+    }
+    Some(doc)
+}
+
+fn release_preview_projection(world: &mut World, doc: DocumentId) {
+    let Some((name, _rel)) = world
+        .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .release_preview(doc)
+    else {
+        return;
     };
-    match host.document().origin() {
-        DocumentOrigin::File { path, .. } => path
-            .parent()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(".")),
-        DocumentOrigin::Untitled { .. } | DocumentOrigin::Bundled { .. } => {
-            std::path::PathBuf::from(".")
-        }
+    if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
+        report_preview_error(
+            world,
+            "twin-asset-unmount-failed",
+            format!("could not unregister preview Twin `{name}`: {error}"),
+        );
     }
 }
 
@@ -872,8 +1106,8 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
 // UsdViewportPanel
 // ─────────────────────────────────────────────────────────────────────
 
-/// Singleton workbench panel displaying the shared USD preview.
-/// Retargets on `SetActiveUsdViewport`; one camera, one scene_root.
+/// Workbench panel displaying the focused USD preview lease. Other open leases
+/// continue rendering to their own isolated targets and remain editable.
 pub struct UsdViewportPanel;
 
 impl Panel for UsdViewportPanel {
@@ -922,11 +1156,15 @@ impl Panel for UsdViewportPanel {
         // the panel has no domain-world access.
         let panel_rect = PanelRects::panel_rect_from_ui(ui);
 
-        let (tex_id, active_doc) = ctx
+        let (tex_id, focused_doc) = ctx
             .resource::<UsdViewportState>()
-            .map(|s| (s.tex_id, s.active_doc))
+            .and_then(|state| {
+                state
+                    .focused_session()
+                    .map(|session| (session.texture_id(), Some(session.doc())))
+            })
             .unwrap_or((None, None));
-        let name = active_doc
+        let name = focused_doc
             .and_then(|d| {
                 ctx.resource::<DocumentRegistry<UsdDocument>>()
                     .and_then(|r| r.host(d))
@@ -943,8 +1181,8 @@ impl Panel for UsdViewportPanel {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Click a stage in the USD section of the Twin browser \
-                         to preview it here.",
+                        "Open a USD preview from the Twin browser or the \
+                         OpenUsdPreview command.",
                     )
                     .weak()
                     .italics(),
@@ -992,9 +1230,8 @@ mod tests {
     use super::*;
     use crate::commands::UsdCommandsPlugin;
 
-    /// Without any rendering plugins (`Assets<Image>` absent) the
-    /// observers gracefully no-op — the state stays
-    /// non-bootstrapped, no panic.
+    /// Without any rendering plugins (`Assets<Image>` absent), opening a
+    /// document does not allocate a preview lease or panic.
     #[test]
     fn lifecycle_is_headless_safe() {
         let mut app = App::new();
@@ -1014,18 +1251,12 @@ mod tests {
         app.update();
 
         let state = app.world().resource::<UsdViewportState>();
-        // No render scaffolding in MinimalPlugins → bootstrap bails.
-        assert!(!state.bootstrapped);
-        assert!(state.image.is_none());
-        assert!(state.tex_id.is_none());
-        // active_doc gates on bootstrap so we don't half-attach.
-        assert!(state.active_doc.is_none());
+        assert_eq!(state.session_count(), 0);
+        assert_eq!(state.focused_doc(), None);
     }
 
-    /// Opening a USD document registers it for authoring, but does not choose
-    /// the shared preview target. Preview selection is an explicit document
-    /// action, so opening a second assembly cannot retarget an editor that is
-    /// already showing another file.
+    /// Opening a USD document registers it for authoring, but does not create
+    /// a preview lease until an explicit `OpenUsdPreview` command arrives.
     #[test]
     fn document_open_requires_explicit_preview_selection() {
         let mut app = App::new();
@@ -1047,8 +1278,8 @@ mod tests {
         app.update();
 
         let state = app.world().resource::<UsdViewportState>();
-        assert!(!state.bootstrapped);
-        assert_eq!(state.active_doc(), None);
+        assert_eq!(state.session_count(), 0);
+        assert_eq!(state.focused_doc(), None);
         assert!(app
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -1058,13 +1289,22 @@ mod tests {
     #[test]
     fn preview_light_uses_graphics_distant_light_default() {
         let mut app = App::new();
-        app.insert_resource(UsdViewportState::default());
         app.init_resource::<Assets<Image>>();
         let mut settings = RenderingQualitySettings::default();
         settings.distant_light_default_illuminance = 42_000.0;
         app.insert_resource(settings);
 
-        bootstrap(app.world_mut());
+        let illuminance = validated_preview_illuminance(app.world()).expect("quality is valid");
+        let session = create_preview_session(
+            app.world_mut(),
+            UsdPreviewId(1),
+            DocumentId::new(1),
+            LayerId::root(),
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            illuminance,
+        )
+        .expect("preview resources are available");
 
         let mut lights = app
             .world_mut()
@@ -1072,14 +1312,14 @@ mod tests {
         let (light, defaults) = lights
             .iter(app.world())
             .next()
-            .expect("preview bootstrap creates its Graphics-owned sun");
+            .expect("preview session creates its Graphics-owned sun");
         assert_eq!(light.illuminance, 42_000.0);
         assert!(defaults.intensity_uses_graphics_default);
         assert_eq!(defaults.intensity_scale, 1.0);
         let camera = app
             .world()
-            .get_entity(app.world().resource::<UsdViewportState>().camera.unwrap())
-            .expect("preview bootstrap creates its camera");
+            .get_entity(session.camera)
+            .expect("preview session creates its camera");
         assert!(camera.contains::<SceneCamera>());
         assert!(camera.contains::<GraphicsCameraDefaults>());
     }

@@ -17,6 +17,26 @@ fn open(path) {
     cmd("OpenFile", #{ path: path })
 }
 
+/// Open one explicit isolated Assembly preview. `preview` identifies the
+/// session lease, so another document can remain rendered independently.
+fn preview_open(preview, doc, edit_target) {
+    cmd("OpenUsdPreview", #{
+        preview: preview,
+        doc: doc,
+        edit_target: edit_target,
+    })
+}
+
+/// Focus an existing Assembly preview lease in the desktop USD dock.
+fn preview_focus(preview) {
+    cmd("FocusUsdPreview", #{ preview: preview })
+}
+
+/// Close one Assembly preview lease and release its presentation resources.
+fn preview_close(preview) {
+    cmd("CloseUsdPreview", #{ preview: preview })
+}
+
 /// Describe one explicit USD document, including layers, revisions,
 /// composition dependencies, diagnostics, and journal position.
 fn describe(doc) {

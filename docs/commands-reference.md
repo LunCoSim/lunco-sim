@@ -795,17 +795,43 @@ newer than the document is rejected.
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
-#### `SetActiveUsdViewport`
+#### `OpenUsdPreview`
 
- Retarget the shared USD viewport at `doc`. Browser row clicks fire
- this; HTTP API / MCP / scripts can fire it directly. Idempotent —
- calling with the already-active doc is a no-op.
+ Open one explicit USD document in an isolated Assembly preview lease. The
+ `preview` identity is caller-owned; opening another identity does not replace
+ an existing lease. Opening the same identity replaces that lease.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The USD document to surface in the viewport. |
+| `preview` | `UsdPreviewId` |  Stable identity of the preview lease. |
+| `doc` | `DocumentId` |  USD document to project. |
+| `edit_target` | `LayerId` |  Authored layer used by editor mutations. |
+
+#### `FocusUsdPreview`
+
+ Select an already-open preview lease for the USD dock and Assembly surfaces.
+ Focusing changes presentation only; every open lease continues to receive
+ canonical stage updates.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Existing preview lease to display. |
+
+#### `CloseUsdPreview`
+
+ Close one preview lease and release its camera, render target, scene root, and
+ projection lease. Shared document coordinates remain until the last preview
+ and workspace Twin lease are closed.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Existing preview lease to close. |
 
 #### `SetDomeLight`
 

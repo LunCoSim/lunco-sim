@@ -34,8 +34,10 @@ listed below; they do not introduce a second authoring model.
   inverse operations, save, undo, and live projection.
 - The editor operates on an explicitly opened USD document. The existing
   `OpenFile`/`NewDocument`/`SaveAsDocument` commands provide the file lifecycle;
-  the Assembly preview is activated with an explicit `DocumentId` and is
-  isolated from the simulation scene.
+  the Assembly preview is opened with `OpenUsdPreview`, which carries an
+  explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
+  the lease shown by the dock and `CloseUsdPreview` releases only that lease.
+  All preview leases are isolated from the simulation scene.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -54,9 +56,10 @@ The existing implementation provides the substrate the perspective composes:
 | Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
 
 The perspective must remain a composition of these surfaces. The Twin Browser
-selects which open document is edited; the USD preview, prim tree, Connections
-graph, Inspector, and command handlers consume that same explicit document
-binding. The Connections graph is empty until that preview document is selected;
+opens an explicit preview lease for the selected document; the USD preview, prim
+tree, Connections graph, Inspector, and command handlers consume that same
+explicit document binding. The Connections graph is empty until that preview
+document is focused;
 it never infers an editable stage from entity counts or the live simulation.
 Do not add a second graph library, a special rover assembly implementation, or
 direct ECS mutation for convenience.

@@ -73,8 +73,10 @@ viewport-specific edit/reload path.
 
 The Assembly editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
-Browser selects it through `SetActiveUsdViewport`, and the isolated preview,
-prim tree, Inspector, and USD commands consume that same document binding.
+Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
+lease and can later use `FocusUsdPreview` or `CloseUsdPreview`. The isolated
+preview, prim tree, Inspector, and USD commands consume that same document
+binding.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.

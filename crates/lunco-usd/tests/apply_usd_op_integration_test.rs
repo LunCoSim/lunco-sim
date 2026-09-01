@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::{
-    ui::{SetActiveUsdViewport, UsdViewportPlugin, UsdViewportState},
+    ui::{OpenUsdPreview, UsdPreviewId, UsdViewportPlugin, UsdViewportState},
     ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
 use lunco_usd_bevy::*;
@@ -86,10 +86,12 @@ def Xform "World"
         )
     };
 
-    // 5. Trigger SetActiveUsdViewport command to bootstrap the preview stage
-    // and install our newly allocated document into the active viewport
-    app.world_mut()
-        .trigger(SetActiveUsdViewport { doc: doc_id });
+    // 5. Open an explicit editor preview lease for the document.
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(1),
+        doc: doc_id,
+        edit_target: LayerId::root(),
+    });
 
     // Advance the production projection contract until the async twin asset is
     // loaded and its bounded visual queue has committed. A fixed frame count
@@ -226,5 +228,5 @@ def Xform "World"
 
     // 8. Confirm viewport state has been updated
     let state = app.world().resource::<UsdViewportState>();
-    assert_eq!(state.active_doc(), Some(doc_id));
+    assert_eq!(state.focused_doc(), Some(doc_id));
 }
