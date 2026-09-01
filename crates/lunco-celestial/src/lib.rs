@@ -455,7 +455,7 @@ impl Plugin for CelestialPlugin {
                 imagery::bind_dataset_body_imagery,
                 imagery::adopt_authored_body_albedo,
                 big_space_setup::adopt_authored_body_look,
-                globe_lod::update_globe_lod,
+                globe_lod::update_globe_lod.run_if(globe_lod::globe_lod_update_due),
             )
                 .chain(),
         );

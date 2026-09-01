@@ -384,6 +384,9 @@ pub struct GlobeTiles {
     /// `MissionSpawned` is (missions.rs): a `Local` outlives scene teardown and
     /// would keep stale keys for despawned bodies, while this dies with the body.
     pub last_solve_cam: Option<DVec3>,
+    /// Presentation camera that produced [`last_solve_cam`]. The camera entity
+    /// is part of the solve input even when two cameras currently share a pose.
+    last_solve_camera: Option<Entity>,
     /// The [`GlobeHandoff`] in force at that solve. The handoff is an INPUT to
     /// the desired set, so a site appearing/moving must re-open the gate even if
     /// the camera has not moved a millimetre.
@@ -406,6 +409,86 @@ struct CachedTileMesh {
     handle: Handle<Mesh>,
     bytes: usize,
     last_used: u64,
+}
+
+fn hierarchy_changed(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    changed_transforms: &Query<(), Changed<Transform>>,
+    changed_cells: &Query<(), Changed<CellCoord>>,
+    changed_parents: &Query<(), Changed<ChildOf>>,
+) -> bool {
+    let mut current = entity;
+    loop {
+        if changed_transforms.contains(current)
+            || changed_cells.contains(current)
+            || changed_parents.contains(current)
+        {
+            return true;
+        }
+        let Ok(parent) = parents.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+    }
+}
+
+/// Wake globe reconciliation only for an unresolved cover or a changed input.
+///
+/// The reconciler retains its authoritative state on [`GlobeTiles`], so the
+/// condition does not maintain a second cache. Walking the active camera's
+/// existing hierarchy catches movement from a parent grid without scanning all
+/// scene transforms; the body/grid queries cover authored LOD and handoff edits.
+pub(crate) fn globe_lod_update_due(
+    viewport: Res<SceneViewport>,
+    parents: Query<&ChildOf>,
+    changed_transforms: Query<(), Changed<Transform>>,
+    changed_cells: Query<(), Changed<CellCoord>>,
+    changed_parents: Query<(), Changed<ChildOf>>,
+    changed_grids: Query<(), Changed<Grid>>,
+    changed_lod: Query<(), Changed<GlobeLod>>,
+    changed_handoff: Query<(), Changed<GlobeHandoff>>,
+    lods: Query<&GlobeLod>,
+    tiles: Query<&GlobeTiles>,
+    ready: Query<(), Added<ShaderLookReady>>,
+    mut removed_ready: RemovedComponents<ShaderLookReady>,
+) -> bool {
+    // `SceneViewport` is mutably borrowed by the camera reconciler every frame,
+    // so its resource change tick is not an invalidation signal. The active
+    // camera value is compared with the camera entity recorded on each body's
+    // authoritative solve state below.
+    if !changed_lod.is_empty()
+        || !changed_handoff.is_empty()
+        || !ready.is_empty()
+        || removed_ready.read().next().is_some()
+    {
+        return true;
+    }
+
+    let Some(camera) = viewport.active_camera else {
+        return false;
+    };
+
+    if tiles.iter().any(|tiles| {
+        tiles.last_solve_cam.is_none()
+            || !tiles.retiring.is_empty()
+            || tiles.last_solve_camera != Some(camera)
+    }) {
+        return true;
+    }
+
+    if hierarchy_changed(
+        camera,
+        &parents,
+        &changed_transforms,
+        &changed_cells,
+        &changed_parents,
+    ) {
+        return true;
+    }
+
+    lods.iter()
+        .any(|lod| changed_grids.contains(lod.surface_grid))
 }
 
 /// Resource limits for live globe streaming.
@@ -775,6 +858,7 @@ pub(crate) fn update_globe_lod(
             let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
             let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
             if tiles.last_solve_handoff.as_ref() == handoff
+                && tiles.last_solve_camera == Some(camera_entity)
                 && all_resident_ready
                 && tiles.retiring.is_empty()
                 && (camera_body_local - prev_cam).length_squared() < slack * slack
@@ -1074,6 +1158,7 @@ pub(crate) fn update_globe_lod(
             && draw == desired
             && desired.iter().all(|coord| ready.contains(coord));
         tiles.last_solve_cam = settled.then_some(camera_body_local);
+        tiles.last_solve_camera = settled.then_some(camera_entity);
         tiles.last_solve_handoff = handoff.cloned();
 
         // `LUNCO_LOD_VALIDATE=1`: assert the resident set still covers the
