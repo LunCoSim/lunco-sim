@@ -69,6 +69,13 @@
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
         "status_color": { "source": "status_color" },
+        "gnc_label": { "source": "gnc_label" },
+        "gnc_readiness": { "source": "gnc_readiness" },
+        "gnc_readiness_color": { "source": "gnc_readiness_color" },
+        "gnc_authority": { "source": "gnc_authority" },
+        "gnc_mode": { "source": "gnc_mode" },
+        "gnc_handoff": { "source": "gnc_handoff" },
+        "gnc_error": { "source": "gnc_error" },
         "ground_speed": { "source": "ground_speed" },
         "lateral_speed": { "source": "lateral_speed" },
         "vertical_speed": { "source": "vertical_speed" },
@@ -89,7 +96,7 @@
         "anchor": "bottom_left",
         "offset": [16.0, -16.0],
         "width": 224.0,
-        "height": 118.0
+        "height": 154.0
       }
     },
     {
@@ -102,6 +109,13 @@
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
         "status_color": { "source": "status_color" },
+        "gnc_label": { "source": "gnc_label" },
+        "gnc_readiness": { "source": "gnc_readiness" },
+        "gnc_readiness_color": { "source": "gnc_readiness_color" },
+        "gnc_authority": { "source": "gnc_authority" },
+        "gnc_mode": { "source": "gnc_mode" },
+        "gnc_handoff": { "source": "gnc_handoff" },
+        "gnc_error": { "source": "gnc_error" },
         "ground_speed": { "source": "ground_speed" },
         "lateral_speed": { "source": "lateral_speed" },
         "vertical_speed": { "source": "vertical_speed" },
@@ -122,7 +136,7 @@
         "anchor": "bottom_right",
         "offset": [-16.0, -16.0],
         "width": 224.0,
-        "height": 118.0
+        "height": 154.0
       }
     },
     {

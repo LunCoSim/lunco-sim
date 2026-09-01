@@ -185,6 +185,17 @@ the authored display label and unit, so remaining fuel is shown in kg and
 unavailable channels remain explicit. No lander-specific fuel or thrust
 conversion lives in the runtime snapshot projector.
 
+The same profile projects the internal guidance computer from the authored USD
+`lunco:ui:schemaNode` in column zero. That boundary is resolved once through
+the composed stage and matched to its `SimComponent`/`ModelicaModel` entity;
+the generic external `Autopilot` actor is not used as a GNC signal. The card's
+GNC readiness, authority, mode, handoff, and failure properties therefore come
+from the existing Modelica lifecycle and authored input/output ports. GNC
+operator channels use `LunCoTelemetryAPI` on the guidance component, so the
+telemetry browser and compact card consume the same SignalRegistry samples.
+Missing, compiling, paused, and failed states remain visible on the authored
+surface instead of being hidden until an actuator sample exists.
+
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the
 bridge tries every exposure property against a template property with the same

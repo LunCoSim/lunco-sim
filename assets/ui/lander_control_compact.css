@@ -3,6 +3,7 @@
 
 :root {
   --ui-status-color: var(--accent-color);
+  --ui-gnc-readiness-color: var(--muted-color);
 }
 
 #compact-control-root {
@@ -65,6 +66,68 @@
 #compact-control-status {
   color: var(--ui-status-color);
   font-size: 10px;
+  font-weight: 700;
+}
+
+#compact-gnc-row,
+#compact-gnc-mode-row,
+#compact-gnc-failure {
+  display: flex;
+  align-items: center;
+  min-width: 0px;
+  column-gap: 6px;
+}
+
+#compact-gnc-row {
+  padding-top: 1px;
+}
+
+#compact-gnc-label,
+#compact-gnc-readiness,
+#compact-gnc-authority,
+#compact-gnc-mode,
+#compact-gnc-handoff,
+#compact-gnc-failure-value {
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+#compact-gnc-label {
+  color: var(--text-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#compact-gnc-readiness {
+  flex-grow: 1;
+  color: var(--ui-gnc-readiness-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#compact-gnc-authority,
+#compact-gnc-mode,
+#compact-gnc-handoff {
+  color: var(--accent-color);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+#compact-gnc-mode-row {
+  justify-content: space-between;
+  padding-bottom: 1px;
+  border-bottom-width: 1px;
+  border-bottom-color: rgba(169, 181, 205, 0.16);
+}
+
+#compact-gnc-failure {
+  min-height: 11px;
+}
+
+#compact-gnc-failure-value {
+  width: 100%;
+  color: var(--danger-color);
+  font-size: 9px;
   font-weight: 700;
 }
 

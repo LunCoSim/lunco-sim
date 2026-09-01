@@ -20,8 +20,9 @@ use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
 use lunco_core::{Avatar, CelestialBody, GlobalEntityId, LocalAvatar, TheLocalAvatar};
-use lunco_cosim::SimComponent;
+use lunco_cosim::{SimComponent, SimStatus};
 use lunco_mobility::WheelRaycast;
+use lunco_modelica::ModelicaModel;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::read::UsdReadObject;
@@ -96,6 +97,21 @@ struct PublicTelemetryValue {
     label: String,
     value: f64,
     unit: Option<String>,
+}
+
+/// The live GNC state projected from the authored guidance program boundary.
+///
+/// The GNC is an internal Modelica participant, not the generic external
+/// `Autopilot` actor. Its lifecycle and authority therefore come from the
+/// existing Modelica/SimComponent state and its authored causal ports.
+#[derive(Debug, Clone, PartialEq)]
+struct GncExposure {
+    readiness: &'static str,
+    readiness_color: &'static str,
+    authority: &'static str,
+    mode: &'static str,
+    handoff: &'static str,
+    error: String,
 }
 
 /// What the HUD needs about the driven vessel, resolved at the bounded exposure
@@ -704,6 +720,52 @@ mod exposure_tests {
     }
 
     #[test]
+    fn gnc_projection_uses_modelica_lifecycle_and_authored_authority_ports() {
+        let unavailable = project_gnc_state(None, None);
+        assert_eq!(unavailable.readiness, "UNAVAILABLE");
+        assert_eq!(unavailable.authority, "—");
+
+        let mut model = ModelicaModel::default();
+        let compiling = project_gnc_state(None, Some(&model));
+        assert_eq!(compiling.readiness, "COMPILING");
+
+        model.is_compiled = true;
+        let ready = project_gnc_state(None, Some(&model));
+        assert_eq!(ready.readiness, "READY");
+        assert_eq!(ready.mode, "READY");
+
+        model.current_time = 1.0;
+        model.inputs.insert("engage".into(), 1.0);
+        let mut sim = SimComponent {
+            inputs: model.inputs.clone(),
+            status: SimStatus::Running,
+            ..default()
+        };
+        let active = project_gnc_state(Some(&sim), Some(&model));
+        assert_eq!(active.readiness, "ACTIVE");
+        assert_eq!(active.authority, "GNC");
+        assert_eq!(active.mode, "GUIDANCE");
+
+        model.inputs.insert("piloted".into(), 1.0);
+        sim.outputs.insert("flight_authority_gate".into(), 0.0);
+        let piloted = project_gnc_state(Some(&sim), Some(&model));
+        assert_eq!(piloted.authority, "PILOT");
+        assert_eq!(piloted.mode, "PILOT OVERRIDE");
+
+        model.inputs.insert("piloted".into(), 0.0);
+        sim.outputs.insert("landing_handoff".into(), 1.0);
+        let landed = project_gnc_state(Some(&sim), Some(&model));
+        assert_eq!(landed.authority, "LANDING");
+        assert_eq!(landed.handoff, "LANDING HANDOFF");
+
+        model.last_error = Some("solver stopped".into());
+        let failed = project_gnc_state(Some(&sim), Some(&model));
+        assert_eq!(failed.readiness, "FAILED");
+        assert_eq!(failed.mode, "FAULT");
+        assert_eq!(failed.error, "FAILED: solver stopped");
+    }
+
+    #[test]
     fn camera_exposure_projects_authoritative_fact_and_compact_label() {
         let status = lunco_usd_bevy::camera_switch::CameraSelectionStatus {
             cameras: vec!["/World/Wide".into(), "/World/Close".into()],
@@ -875,6 +937,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    models: Query<'w, 's, (Entity, &'static ModelicaModel)>,
     channels: Query<
         'w,
         's,
@@ -953,6 +1016,7 @@ pub(crate) fn publish_exposure(
             &queries.callsign,
             &queries.catalog_id,
             &queries.sim,
+            &queries.models,
             &runtime.signals,
             &queries.channels,
             &queries.parents,
@@ -1059,6 +1123,7 @@ pub(crate) fn publish_exposure(
         &queries.callsign,
         &queries.catalog_id,
         &queries.sim,
+        &queries.models,
         &runtime.signals,
         &queries.channels,
         &queries.parents,
@@ -1265,6 +1330,7 @@ fn publish_control_exposures(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_models: &Query<(Entity, &ModelicaModel)>,
     signals: &SignalRegistry,
     q_channels: &Query<(
         Entity,
@@ -1298,6 +1364,7 @@ fn publish_control_exposures(
         q_callsign,
         q_catalog_id,
         q_sim,
+        q_models,
         q_parents,
         q_grids,
         q_vel,
@@ -1323,6 +1390,7 @@ fn publish_control_exposures(
         q_callsign,
         q_catalog_id,
         q_sim,
+        q_models,
         q_parents,
         q_grids,
         q_vel,
@@ -1384,36 +1452,12 @@ fn authored_target_positions(
     let stage_asset = stages.get(&root_path.stage_handle)?;
     let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
     let reader: &dyn UsdReadObject = &reader;
-    let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
-
     // The guidance boundary is selected by its authored schema column. Its
     // target is then read from the real USD connection, so neither a vehicle
     // path nor a target name is embedded in the producer.
-    let mut guidance_paths: Vec<_> = reader
-        .prim_paths()
-        .into_iter()
-        .filter(|path| {
-            let path_text = path.to_string();
-            path_text.starts_with(&root_prefix)
-                && reader.is_active(path)
-                && reader.boolean(path, "lunco:ui:schemaNode") == Some(true)
-                && reader.integer(path, "lunco:ui:schemaColumn") == Some(0)
-        })
-        .collect();
-    guidance_paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    let guidance = match guidance_paths.as_slice() {
-        [guidance] => guidance,
-        [] => return None,
-        _ => {
-            warn!(
-                "[control-hud] multiple schema column-0 guidance nodes under {}; target is ambiguous",
-                root_path.path
-            );
-            return None;
-        }
-    };
+    let guidance = authored_guidance_path(reader, root_path)?;
     let target_source = reader
-        .connections(guidance, "inputs:target_x")
+        .connections(&guidance, "inputs:target_x")
         .into_iter()
         .next()?;
     let (target_path, _) = target_source.rsplit_once('.')?;
@@ -1438,6 +1482,180 @@ fn authored_target_positions(
     Some((root_position, target_position))
 }
 
+/// Resolve the one authored guidance node used by the control profile.
+///
+/// `schemaNode` and `schemaColumn` are the existing USD presentation contract
+/// used by the schema canvas. Reusing that contract keeps target projection and
+/// GNC projection on one identity path without guessing from prim names.
+fn authored_guidance_path(
+    reader: &dyn UsdReadObject,
+    root_path: &lunco_usd::UsdPrimPath,
+) -> Option<SdfPath> {
+    let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
+    let mut guidance_paths: Vec<_> = reader
+        .prim_paths()
+        .into_iter()
+        .filter(|path| {
+            let path_text = path.to_string();
+            path_text.starts_with(&root_prefix)
+                && reader.is_active(path)
+                && reader.has_api_schema(path, "LunCoProgramAPI")
+                && reader.boolean(path, "lunco:ui:schemaNode") == Some(true)
+                && reader.integer(path, "lunco:ui:schemaColumn") == Some(0)
+        })
+        .collect();
+    guidance_paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    match guidance_paths.as_slice() {
+        [guidance] => Some(guidance.clone()),
+        [] => None,
+        _ => {
+            warn!(
+                "[control-hud] multiple schema column-0 guidance nodes under {}; boundary is ambiguous",
+                root_path.path
+            );
+            None
+        }
+    }
+}
+
+fn authored_guidance_entity(
+    root: Entity,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &CanonicalStages,
+) -> Option<Entity> {
+    let (_, root_path) = q_paths.get(root).ok()?;
+    let stage_asset = stages.get(&root_path.stage_handle)?;
+    let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
+    let reader: &dyn UsdReadObject = &reader;
+    let guidance = authored_guidance_path(reader, root_path)?;
+    let mut entities = q_paths.iter().filter_map(|(entity, prim_path)| {
+        (prim_path.stage_handle.id() == root_path.stage_handle.id()
+            && prim_path.path == guidance.as_str())
+        .then_some(entity)
+    });
+    let entity = entities.next()?;
+    if entities.next().is_some() {
+        warn!(
+            "[control-hud] multiple ECS entities represent guidance {}; boundary is ambiguous",
+            guidance
+        );
+        return None;
+    }
+    Some(entity)
+}
+
+fn project_gnc_state(sim: Option<&SimComponent>, model: Option<&ModelicaModel>) -> GncExposure {
+    let error = model
+        .and_then(|model| model.last_error.as_deref())
+        .or_else(|| {
+            sim.and_then(|sim| match &sim.status {
+                SimStatus::Error(error) => Some(error.as_str()),
+                _ => None,
+            })
+        })
+        .filter(|error| !error.is_empty())
+        .map(str::to_owned);
+
+    let readiness = if error.is_some() {
+        ("FAILED", "var(--danger-color)")
+    } else if let Some(model) = model {
+        if model.is_compiling || !model.is_compiled {
+            ("COMPILING", "var(--accent-color)")
+        } else if model.paused {
+            ("PAUSED", "var(--caution-color)")
+        } else if model.current_time > 0.0 {
+            ("ACTIVE", "var(--ok-color)")
+        } else {
+            ("READY", "var(--accent-color)")
+        }
+    } else {
+        match sim.map(|sim| &sim.status) {
+            Some(SimStatus::Compiling) => ("COMPILING", "var(--accent-color)"),
+            Some(SimStatus::Paused) => ("PAUSED", "var(--caution-color)"),
+            Some(SimStatus::Running) => ("ACTIVE", "var(--ok-color)"),
+            Some(SimStatus::Idle) => ("READY", "var(--accent-color)"),
+            Some(SimStatus::Error(_)) => ("FAILED", "var(--danger-color)"),
+            None => ("UNAVAILABLE", "var(--muted-color)"),
+        }
+    };
+
+    let inputs = model
+        .map(|model| &model.inputs)
+        .or_else(|| sim.map(|sim| &sim.inputs));
+    let outputs = sim
+        .map(|sim| &sim.outputs)
+        .or_else(|| model.map(|model| &model.variables));
+    let input = |name: &str| inputs.and_then(|values| values.get(name)).copied();
+    let output = |name: &str| outputs.and_then(|values| values.get(name)).copied();
+    let piloted = input("piloted");
+    let engage = input("engage");
+    let handoff = output("landing_handoff");
+    let cutoff = output("landing_engine_cutoff");
+    let handoff_request = output("landing_handoff_request");
+    let cutoff_request = output("landing_engine_cutoff_request");
+    let recovery = output("target_recovery_gate");
+    let authority_gate = output("flight_authority_gate");
+
+    let authority = if readiness.0 == "FAILED" {
+        "FAULT"
+    } else if cutoff.is_some_and(|value| value >= 0.5) || handoff.is_some_and(|value| value >= 0.5)
+    {
+        "LANDING"
+    } else if piloted.is_some_and(|value| value >= 0.5) {
+        "PILOT"
+    } else if engage.is_some_and(|value| value < 0.5) {
+        "STANDBY"
+    } else if authority_gate.is_some_and(|value| value < 0.5) && readiness.0 == "ACTIVE" {
+        "LIMITED"
+    } else if matches!(readiness.0, "READY" | "ACTIVE") {
+        "GNC"
+    } else {
+        "—"
+    };
+
+    let mode = if readiness.0 == "FAILED" {
+        "FAULT"
+    } else if cutoff.is_some_and(|value| value >= 0.5) {
+        "ENGINE CUTOFF"
+    } else if handoff.is_some_and(|value| value >= 0.5) {
+        "HANDOFF"
+    } else if piloted.is_some_and(|value| value >= 0.5) {
+        "PILOT OVERRIDE"
+    } else if engage.is_some_and(|value| value < 0.5) {
+        "STANDBY"
+    } else if recovery.is_some_and(|value| value >= 0.5) {
+        "GO-AROUND"
+    } else if readiness.0 == "ACTIVE" {
+        "GUIDANCE"
+    } else if readiness.0 == "READY" {
+        "READY"
+    } else {
+        "—"
+    };
+
+    let handoff_label = if cutoff.is_some_and(|value| value >= 0.5) {
+        "ENGINE CUTOFF"
+    } else if handoff.is_some_and(|value| value >= 0.5) {
+        "LANDING HANDOFF"
+    } else if cutoff_request.is_some_and(|value| value >= 0.5) {
+        "CUTOFF REQUEST"
+    } else if handoff_request.is_some_and(|value| value >= 0.5) {
+        "HANDOFF REQUEST"
+    } else {
+        "NONE"
+    };
+
+    GncExposure {
+        readiness: readiness.0,
+        readiness_color: readiness.1,
+        authority,
+        mode,
+        handoff: handoff_label,
+        error: error.map_or_else(|| "—".to_owned(), |error| format!("FAILED: {error}")),
+    }
+}
+
 fn publish_selected_control_exposure(
     exposures: &mut EngineExposures,
     namespace: &str,
@@ -1447,6 +1665,7 @@ fn publish_selected_control_exposure(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_models: &Query<(Entity, &ModelicaModel)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
@@ -1480,6 +1699,13 @@ fn publish_selected_control_exposure(
     ui.property("torque_x", "—");
     ui.property("torque_y", "—");
     ui.property("torque_z", "—");
+    ui.property("gnc_label", "GNC");
+    ui.property("gnc_readiness", "UNAVAILABLE");
+    ui.property("gnc_readiness_color", "var(--muted-color)");
+    ui.property("gnc_authority", "—");
+    ui.property("gnc_mode", "—");
+    ui.property("gnc_handoff", "NONE");
+    ui.property("gnc_error", "—");
 
     let Some(root) = root else {
         return;
@@ -1503,6 +1729,27 @@ fn publish_selected_control_exposure(
     ui.property("vehicle", vehicle.clone());
     ui.property("status", "INITIALIZING");
 
+    let guidance_entity = authored_guidance_entity(root, q_paths, stages, canonical);
+    let guidance_sim = guidance_entity.and_then(|guidance| {
+        q_sim
+            .iter()
+            .find(|(entity, _)| *entity == guidance)
+            .map(|(_, sim)| sim)
+    });
+    let guidance_model = guidance_entity.and_then(|guidance| {
+        q_models
+            .iter()
+            .find(|(entity, _)| *entity == guidance)
+            .map(|(_, model)| model)
+    });
+    let gnc = project_gnc_state(guidance_sim, guidance_model);
+    ui.property("gnc_readiness", gnc.readiness);
+    ui.property("gnc_readiness_color", gnc.readiness_color);
+    ui.property("gnc_authority", gnc.authority);
+    ui.property("gnc_mode", gnc.mode);
+    ui.property("gnc_handoff", gnc.handoff);
+    ui.property("gnc_error", gnc.error);
+
     let mut outputs = std::collections::HashMap::<String, f64>::new();
     let mut max_valve = 0.0_f64;
     let mut touchdown = 0.0_f64;
@@ -1512,9 +1759,10 @@ fn publish_selected_control_exposure(
         }
         let authored_outputs = authored_output_names(entity, q_paths, stages, canonical);
         for (name, &value) in &sim.outputs {
-            let is_public = authored_outputs
-                .as_ref()
-                .is_none_or(|authored| authored.contains(name));
+            let is_public = (guidance_entity == Some(entity))
+                || authored_outputs
+                    .as_ref()
+                    .is_none_or(|authored| authored.contains(name));
             if !is_public {
                 continue;
             }
@@ -1532,23 +1780,19 @@ fn publish_selected_control_exposure(
         }
     }
 
-    let has_control_outputs = outputs.contains_key("torque_x")
-        || outputs.contains_key("torque_y")
-        || outputs.contains_key("torque_z")
-        || !telemetry.is_empty()
-        || max_valve > 0.0;
-    if !has_control_outputs {
-        return;
-    }
     let landing_handoff = outputs.get("landing_handoff").copied();
     let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
     let flight_handoff = landing_handoff.is_some_and(|value| value >= 0.5);
-    let status = if touchdown >= 0.5 {
+    let status = if gnc.readiness == "FAILED" {
+        ("GNC FAILED", "var(--danger-color)")
+    } else if touchdown >= 0.5 {
         ("TOUCHDOWN", "var(--ok-color)")
     } else if flight_handoff {
         ("GEAR SETTLING", "var(--ok-color)")
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
+    } else if gnc.readiness != "ACTIVE" {
+        (gnc.readiness, gnc.readiness_color)
     } else {
         ("ATTITUDE HOLD", "var(--ok-color)")
     };

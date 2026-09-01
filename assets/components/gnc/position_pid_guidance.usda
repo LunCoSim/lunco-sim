@@ -172,5 +172,45 @@ def Xform "PositionPIDGuidance" (
         float inputs:landing_engine_cutoff_latched = 0.0 (
             customData = { double min = 0.0 double max = 1.0 string unit = "bool" }
         )
+
+        # Operator telemetry stays on the standard USD telemetry contract. The
+        # target is this GNC prim, so the sampler reads the Modelica-owned live
+        # output without creating a second presentation or signal store.
+        def Scope "AuthorityTelemetry" (
+            prepend apiSchemas = ["LunCoTelemetryAPI"]
+        )
+        {
+            bool lunco:telemetry = true
+            string ui:displayName = "GNC AUTHORITY"
+            token lunco:telemetry:port = "flight_authority_gate"
+            token lunco:telemetry:name = "gnc.flight_authority"
+            token lunco:telemetry:unit = "gate"
+            string lunco:telemetry:description = "Live authority gate from the guidance computer after pilot and landing handoff conditions."
+            rel lunco:telemetry:target = <..>
+        }
+        def Scope "TargetDistanceTelemetry" (
+            prepend apiSchemas = ["LunCoTelemetryAPI"]
+        )
+        {
+            bool lunco:telemetry = true
+            string ui:displayName = "GNC TARGET"
+            token lunco:telemetry:port = "target_distance_m"
+            token lunco:telemetry:name = "gnc.target_distance"
+            token lunco:telemetry:unit = "m"
+            string lunco:telemetry:description = "Live navigation distance to the authored landing target."
+            rel lunco:telemetry:target = <..>
+        }
+        def Scope "DescentRateTelemetry" (
+            prepend apiSchemas = ["LunCoTelemetryAPI"]
+        )
+        {
+            bool lunco:telemetry = true
+            string ui:displayName = "GNC DESCENT"
+            token lunco:telemetry:port = "descent_rate_command"
+            token lunco:telemetry:name = "gnc.descent_rate"
+            token lunco:telemetry:unit = "m/s"
+            string lunco:telemetry:description = "Sensor-driven descent-rate command from the guidance computer."
+            rel lunco:telemetry:target = <..>
+        }
     }
 }

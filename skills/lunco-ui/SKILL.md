@@ -122,6 +122,16 @@ HTML/CSS surfaces; do not create a hybrid shim for one widget. The
 scrim, focus, Esc dismissal, and typed `CloseModal` dispatch; HUI does not yet
 supply those dialog semantics or checkbox/input state events.
 
+For lander control cards, keep GNC identity and state on the existing authored
+USD boundary: resolve the column-zero `lunco:ui:schemaNode`, then read its
+`ModelicaModel`/`SimComponent` lifecycle and authored causal ports. Do not use
+the generic `Autopilot` actor as a lander GNC indicator, infer GNC from a prim
+name, or create a second status store. Add operator channels with
+`LunCoTelemetryAPI` on the guidance component so the compact card and the
+telemetry browser read the same SignalRegistry samples. The card must expose
+unavailable, compiling, ready, active, paused, handoff, and failure states;
+absence of an actuator sample is not permission to hide the authored surface.
+
 The Modelica diagram's `Show nets` toggle is a workbench/egui presentation
 setting stored on the per-tab `lunco-canvas::Canvas`. It hides rendered and
 interactive connection edges without changing authored topology. Keep this
