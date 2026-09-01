@@ -313,14 +313,12 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // which is also what initialises `Position` (avian's own spawn init
         // lived inside the disabled `transform_to_position`).
         app.register_required_components::<RigidBody, BridgeShadow>();
-        // Avian's interpolation plugin is a render-side Transform writer. The
-        // bridge deliberately writes the solved f64 Position/Rotation back to
-        // that same Transform, so allowing interpolation on the physics body
-        // would feed a presentation pose into the next READ pass as an
-        // external teleport. Keep the body pose authoritative; visual child
-        // presentation may still ease independently.
-        app.register_required_components::<RigidBody, NoTranslationEasing>();
-        app.register_required_components::<RigidBody, NoRotationEasing>();
+        // Avian's interpolation plugin owns the render-time Transform between
+        // fixed steps. Its FixedFirst completion restores the last solved
+        // endpoint before this bridge reads the pose, so interpolation remains
+        // presentation-only and cannot feed a render sample back into physics.
+        // Keep the default interpolation markers active; disabling them leaves
+        // every bridge-owned rigid body visibly stepped at the solver cadence.
         app.register_required_components::<Collider, BridgeShadow>();
         // Plain Grid/CellCoord chain nodes can carry physical descendants. Keep
         // the same exact previous-representation record on them so a BigSpace

@@ -2621,11 +2621,11 @@ pub struct SandboxCorePlugin {
 /// The luncosim's one physics configuration.
 ///
 /// A rigid body's `Position` is the collision pose and the bridge owns the
-/// `Position` ↔ USD `Transform` transfer. Avian's render interpolation is safe
-/// here because the bridge's READ pass runs after interpolation restores the
-/// authoritative stepped pose; the eased value is presentation-only between
-/// physics steps. The camera and billboard paths consume that same rendered
-/// pose, so omitting it makes a fast rover visibly staircase at display rate.
+/// `Position` ↔ USD `Transform` transfer. Avian's render interpolation runs
+/// after the fixed bridge writeback, while its FixedFirst completion restores
+/// the authoritative stepped pose before the next bridge READ. The eased value
+/// is presentation-only between physics steps, and camera/billboard paths
+/// consume that same rendered pose.
 fn sandbox_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
         .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
@@ -2635,10 +2635,13 @@ fn sandbox_physics_plugins() -> impl PluginGroup {
 #[cfg(test)]
 mod physics_configuration_tests {
     use super::*;
-    use avian3d::prelude::{RigidBody, RotationInterpolation, TranslationInterpolation};
+    use avian3d::prelude::{
+        NoRotationEasing, NoTranslationEasing, RigidBody, RotationInterpolation,
+        TranslationInterpolation,
+    };
 
     #[test]
-    fn physical_bodies_receive_bridge_safe_render_easing() {
+    fn physical_bodies_receive_render_interpolation() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(sandbox_physics_plugins());
@@ -2652,6 +2655,14 @@ mod physics_configuration_tests {
         assert!(
             app.world().get::<RotationInterpolation>(body).is_some(),
             "a physical body's rendered rotation must be eased between solved poses"
+        );
+        assert!(
+            app.world().get::<NoTranslationEasing>(body).is_none(),
+            "the bridge must not disable rendered translation easing"
+        );
+        assert!(
+            app.world().get::<NoRotationEasing>(body).is_none(),
+            "the bridge must not disable rendered rotation easing"
         );
     }
 }
