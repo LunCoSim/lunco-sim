@@ -12,9 +12,8 @@
 //! that wrote it. A committed PNG freezes every parameter at generation time,
 //! puts a second implementation of the sky outside the engine, and means every
 //! scene needs its own generated asset to tune the sky. The WGSL defaults are
-//! the single source of truth; a deliberate scene can still author `inputs:*`
-//! on its `Shader` prim, while the reusable sky and sandbox leave those inputs
-//! un-authored.
+//! the single source of truth; the reusable sky and sandbox leave all shader
+//! inputs un-authored.
 //!
 //! It also makes a whole class of artifact structurally impossible. The baked
 //! path had two: a longitude seam, because the generator's `fbm` was not periodic
