@@ -1029,7 +1029,7 @@ impl Plugin for WorkbenchPlugin {
         source_viewer::__register_on_open_twin_source(app);
         source_viewer::__register_on_save_source_text(app);
         app.register_instance_panel(source_viewer::SourceEditorPanel);
-        app.register_panel(twin_settings::TwinSettingsPanel);
+        app.register_panel(twin_settings::TwinSettingsPanel::default());
         app.add_systems(
             EguiPrimaryContextPass,
             render_workbench.in_set(WorkbenchRenderSet),

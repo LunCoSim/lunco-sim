@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**197 commands** across **27** crates. All documented.
+**204 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -28,7 +28,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (7 commands)
+- [`lunco-usd`](#lunco-usd) (12 commands)
 - [`lunco-usd-bevy`](#lunco-usd-bevy) (5 commands)
 - [`lunco-usd-sim`](#lunco-usd-sim) (3 commands)
 
@@ -64,7 +64,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Documents & twins**
 
-- [`lunco-doc-bevy`](#lunco-doc-bevy) (7 commands)
+- [`lunco-doc-bevy`](#lunco-doc-bevy) (9 commands)
 
 **Time & clock**
 
@@ -97,7 +97,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-luncosim`](#lunco-luncosim) (2 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workspace`](#lunco-workspace) (6 commands)
+- [`lunco-workspace`](#lunco-workspace) (7 commands)
 
 ---
 
@@ -651,16 +651,14 @@ actually call, with the fields the deserializer actually accepts. See the
  Same shape as `lunco-modelica`'s op-dispatch commands: UI clicks,
  HTTP API calls, and scripts all dispatch this; the observer
  routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
- change notification, and read-only enforcement stay in one place. Deferred
- API callers receive the generation/layer/path/journal acknowledgement after
- the mutation commits.
+ change notification, and read-only enforcement stay in one place.
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
-| `parent_gen` | `Option < u64 >` |  Optional generation the caller edited from; stale edits are rejected before authoring. |
+| `parent_gen` | `Option < u64 >` |  Generation the caller edited from. When present, the operation is  rejected if the document advanced before it arrived. |
 | `op` | `UsdOp` |  Operation to apply. |
 
 #### `ApplyUsdOps`
@@ -677,120 +675,9 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
-| `parent_gen` | `Option < u64 >` |  Optional generation the complete intent edited from; stale groups are rejected atomically. |
+| `parent_gen` | `Option < u64 >` |  Generation the caller edited from. When present, the complete compound  edit is rejected if the document advanced before it arrived. |
 | `label` | `String` |  Human-readable undo/journal label. |
 | `ops` | `Vec < UsdOp >` |  Ordered primitive USD operations comprising the one intent. |
-
-#### `ForkDocument`
-
-Create an independent untitled snapshot of an open USD document. The response
-contains the new `doc` id; the fork has no file identity until Save-As.
-
-| Field | Type | Description |
-|---|---|---|
-| `source` | `DocumentId` |  Existing USD document to snapshot. |
-| `name` | `String` |  Untitled document name shown until Save-As. |
-
-#### `CloseDocument`
-
-Remove an owned USD document and publish its close lifecycle event.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `DocumentId` |  USD document to close. |
-
-#### `DiscardDocument`
-
-Explicitly discard local USD edits. File-backed documents are read through the
-async storage path and reset only after the source is valid; untitled documents
-are closed because there is no file source to restore.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `DocumentId` |  USD document to reset or close. |
-
-#### `InspectUsdDocument` (query)
-
-Read one explicit USD document and optionally one composed local prim path.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `u64` |  Required open USD document id. |
-| `path` | `String` |  Optional absolute USD prim path. |
-
-#### `InspectUsdEditSession` (query)
-
-Inspect pending Assembly Editor proposals for one explicit USD document. The
-response includes typed operations, explicit scope, review state,
-generation/layer-origin preconditions, affected paths, diagnostics, and
-external-file staleness.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `u64` | Required open USD document id. |
-
-#### `CreateUsdProposal`
-
-Validate and queue a typed Assembly Editor plan without mutating authored USD.
-The plan is validated against a cloned document and remains outside the
-journal until committed.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `DocumentId` | Target USD document. |
-| `scope` | `UsdEditScope` | `SourceAsset`, `Assembly`, or `InstanceOverride`. |
-| `label` | `String` | Human-readable intent and eventual change-set label. |
-| `parent_gen` | `u64` | Required document generation inspected by the caller. |
-| `ops` | `Vec<UsdOp>` | Complete typed root-layer operation plan. |
-
-#### `ReviewUsdProposal`
-
-Change proposal review state without changing authored USD.
-
-| Field | Type | Description |
-|---|---|---|
-| `proposal` | `UsdProposalId` | Proposal returned by `CreateUsdProposal`. |
-| `action` | `UsdProposalReviewAction` | `Mute`, `Unmute`, or `Reject`. |
-
-#### `CommitUsdProposal`
-
-Revalidate and commit one pending proposal as one ordinary USD journal change
-set and document undo unit. Generation, layer revision, origin, file
-watermark, scope, and typed operations are checked again; a mismatch remains a
-visible conflict and is never rebased or overwritten.
-
-| Field | Type | Description |
-|---|---|---|
-| `proposal` | `UsdProposalId` | Proposal returned by `CreateUsdProposal`. |
-
-#### `ResolveUsdTarget` (query)
-
-Resolve one explicit prim path for an assembly edit. Local paths use the
-document's authored layers; referenced and payloaded paths use the already
-mounted OpenUSD canonical stage and return its composed prim stack. The query
-rejects an arc target when that stage is not mounted rather than inferring a
-target from flat layer data. The result includes an `edit_scope` so callers can
-distinguish authored-layer edits, local overrides, composed read-only paths,
-and missing paths; it does not grant namespace-edit permission implicitly.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `u64` | Required open USD document id. |
-| `path` | `String` | Required absolute USD prim path. |
-| `edit_target` | `String` | Required `@root@` or `@runtime@` document layer. |
-
-#### `SyncUsdDocument` (query)
-
-Synchronize an explicit USD document from a generation cursor. A covered cursor
-returns `{ kind: "delta", ops: [...] }` using the document's typed op ring. If
-the bounded ring no longer covers the cursor, the response is `{ kind:
-"snapshot", ... }` with complete serialized root/runtime layers. A cursor
-newer than the document is rejected.
-
-| Field | Type | Description |
-|---|---|---|
-| `doc` | `u64` | Required open USD document id. |
-| `since_generation` | `u64` | Optional cursor; omit it to request a full snapshot. |
 
 #### `AttachComponent`
 
@@ -827,6 +714,49 @@ newer than the document is rejected.
 | `doc` | `DocumentId` |  Target USD document. |
 | `spec` | `crate :: program :: ProgramAttachSpec` |  Complete program attachment intent. |
 
+#### `CloseUsdPreview`
+
+ Close one preview lease and release all of its presentation resources.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+
+#### `CommitUsdProposal`
+
+ Merge one accepted proposal through the ordinary grouped USD edit path.
+
+ This is the only operation that removes a proposal by applying its plan.
+ `apply_ops_as_change_set_result` performs the same atomic validation,
+ journal change-set, undo grouping, and live projection notification as all
+ direct Assembly Editor edits.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `proposal` | `UsdProposalId` |  Proposal to accept and merge into its explicit document target. |
+
+#### `CreateUsdProposal`
+
+ Prepare a typed USD edit plan for review without mutating the document.
+
+ `parent_gen` is required here even though direct edits may omit their
+ causal predecessor: a proposal is explicitly reviewable work and must
+ never be accepted against an unknown base.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  Document that owns the authored target. |
+| `scope` | `UsdEditScope` |  Explicit source-asset, assembly, or instance-override scope. |
+| `label` | `String` |  Human-readable intent and eventual journal change-set label. |
+| `parent_gen` | `u64` |  Generation read by the proposal author. |
+| `ops` | `Vec < UsdOp >` |  Complete typed plan, kept out of the document until commit. |
+
 #### `DetachComponent`
 
  Remove one attached component as one atomic authored intent. The caller
@@ -840,43 +770,40 @@ newer than the document is rejected.
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
-#### `OpenUsdPreview`
-
- Open one explicit USD document in an isolated Editor preview lease. The
- `preview` identity is caller-owned; opening another identity does not replace
- an existing lease. Opening the same identity replaces that lease.
-
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `preview` | `UsdPreviewId` |  Stable identity of the preview lease. |
-| `doc` | `DocumentId` |  USD document to project. |
-| `edit_target` | `LayerId` |  Authored layer used by editor mutations. |
-
 #### `FocusUsdPreview`
 
- Select an already-open preview lease for the USD dock and Editor surfaces.
- Focusing changes presentation only; every open lease continues to receive
- canonical stage updates.
+ Focus an already-open preview lease in the USD dock.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Existing preview lease to display. |
+| `preview` | `UsdPreviewId` |   |
 
-#### `CloseUsdPreview`
+#### `OpenUsdPreview`
 
- Close one preview lease and release its camera, render target, scene root, and
- projection lease. Shared document coordinates remain until the last preview
- and workspace Twin lease are closed.
+ Open one explicit document and authored edit target in an isolated preview
+ session. Opening the same `preview` id replaces that lease; other sessions
+ keep their roots, cameras, and stages untouched.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Existing preview lease to close. |
+| `preview` | `UsdPreviewId` |  Stable caller-owned identity of the preview lease. |
+| `doc` | `DocumentId` |  The USD document to render. |
+| `edit_target` | `LayerId` |  The authored layer to use for editor mutations made from this preview. |
+
+#### `ReviewUsdProposal`
+
+ Change review state without applying any USD operation.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `proposal` | `UsdProposalId` |  Proposal allocated by [`CreateUsdProposal`]. |
+| `action` | `UsdProposalReviewAction` |  Review decision. |
 
 #### `SetDomeLight`
 
@@ -2665,6 +2592,38 @@ newer than the document is rejected.
 |---|---|---|
 | `doc` | `DocumentId` |  The document to close. |
 
+#### `DiscardDocument`
+
+ Explicitly discard the current document state and restore its file source.
+
+ The owning domain performs the file read asynchronously, then resets the
+ document and its undo history through its registry. Untitled documents are
+ closed because they have no file source to restore; read-only origins are
+ rejected by the owner.
+
+- *defined in:* `crates/lunco-doc-bevy/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  The document whose local edits should be discarded. |
+
+#### `ForkDocument`
+
+ Fork an open file-backed document into an independently editable untitled
+ document.
+
+ The owning domain copies its typed authored state and history through its
+ [`lunco_doc::ForkableDocument`] implementation. The fork has no file
+ identity until [`SaveAsDocument`] assigns one, so two open documents cannot
+ save over the same path.
+
+- *defined in:* `crates/lunco-doc-bevy/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `DocumentId` |  Existing document to snapshot. |
+| `name` | `String` |  Untitled name shown until Save-As. |
+
 #### `NewDocument`
 
  Create a new untitled document of the given kind.
@@ -3428,8 +3387,7 @@ newer than the document is rejected.
 
 #### `ResetTwinSetting`
 
- Remove one generic project-owned setting from the active Twin. The omitted
- key then uses the owning setting's authored/default behavior.
+ Remove one generic project-owned setting from the active Twin.
 
 - *defined in:* `crates/lunco-workspace/src/open.rs`
 
@@ -3450,7 +3408,7 @@ newer than the document is rejected.
 
 ---
 
-<!-- 197 commands from the runtime schema; scanned 682 .rs files for docs (0 parse failure(s) skipped).
+<!-- 204 commands from the runtime schema; scanned 688 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

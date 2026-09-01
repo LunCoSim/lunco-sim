@@ -62,7 +62,11 @@ pub(crate) fn clear_on_twin_closed(trigger: On<TwinClosed>, mut view: ResMut<Twi
 
 /// Workbench panel for inspecting and editing all generic settings authored by
 /// the active Twin.
-pub(crate) struct TwinSettingsPanel;
+#[derive(Default)]
+pub(crate) struct TwinSettingsPanel {
+    active_twin: Option<TwinId>,
+    query: String,
+}
 
 impl Panel for TwinSettingsPanel {
     fn id(&self) -> PanelId {
@@ -83,6 +87,10 @@ impl Panel for TwinSettingsPanel {
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let view = ctx.resource_expect::<TwinSettingsView>().clone();
+        if self.active_twin != view.active_twin {
+            self.active_twin = view.active_twin;
+            self.query.clear();
+        }
         ctx.panel_content_frame().show(ui, |ui| {
             ui.heading("Twin settings");
             ui.label(
@@ -101,6 +109,20 @@ impl Panel for TwinSettingsPanel {
                     .weak()
                     .small(),
             );
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Find").strong());
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.query)
+                        .hint_text("key or namespace")
+                        .desired_width(150.0),
+                );
+                if !self.query.trim().is_empty()
+                    && crate::icon_button(ui, crate::UiIcon::Close, "Clear settings filter")
+                        .clicked()
+                {
+                    self.query.clear();
+                }
+            });
             ui.separator();
 
             if view.rows.is_empty() {
@@ -108,8 +130,13 @@ impl Panel for TwinSettingsPanel {
                 return;
             }
 
+            let query = self.query.clone();
             let mut group = None;
+            let mut shown = false;
             for row in &view.rows {
+                if !matches_query(&row.key, &query) {
+                    continue;
+                }
                 let next_group = row
                     .key
                     .split_once('.')
@@ -122,9 +149,18 @@ impl Panel for TwinSettingsPanel {
                     group = Some(next_group);
                 }
                 render_setting_row(ui, ctx, row);
+                shown = true;
+            }
+            if !shown {
+                ui.label("No settings match the current filter.");
             }
         });
     }
+}
+
+fn matches_query(key: &str, query: &str) -> bool {
+    let query = query.trim();
+    query.is_empty() || key.to_lowercase().contains(&query.to_lowercase())
 }
 
 fn render_setting_row(ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &TwinSettingRow) {
@@ -176,4 +212,17 @@ fn render_setting_row(ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &TwinSettingRo
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_query;
+
+    #[test]
+    fn settings_filter_matches_keys_and_namespaces_case_insensitively() {
+        assert!(matches_query("ui.camera_status", "CAMERA"));
+        assert!(matches_query("ui.camera_status", "ui."));
+        assert!(!matches_query("ui.camera_status", "modelica"));
+        assert!(matches_query("ui.camera_status", "  "));
+    }
 }
