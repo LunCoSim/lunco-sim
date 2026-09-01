@@ -441,7 +441,11 @@ Pass `()` for a missing causal predecessor. A generation from `InspectUsdDocumen
 operation or journal entry is applied. `transform` batches translation and
 rotation into one undo unit; `batch` accepts the existing reflected `UsdOp`
 variants. `attach_component` and `detach_component` use the existing mount,
-socket, joint, and topology validators. Use `undo`/`redo` on the same explicit
+socket, joint, and topology validators. `attach_program(doc, spec)` passes the
+complete source, port, connection, and realtime-safety contract to the typed
+`AttachProgram` command; build its port maps with the canonical
+`program_input_connection`, `program_input_default`, and `program_output`
+prelude helpers. Use `undo`/`redo` on the same explicit
 document. `keyframe` and `remove_keyframe` author or remove one USD time sample
 through the same journaled operations used by the Editor Inspector; `time` is
 a USD time code and `value` is the literal for its explicit `type_name`.

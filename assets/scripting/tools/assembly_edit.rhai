@@ -327,6 +327,14 @@ fn detach_component(doc, spec) {
     cmd("DetachComponent", #{ doc: doc, spec: spec })
 }
 
+/// Attach a source-backed program through the existing USD program contract.
+/// Build `spec` with the canonical `program_input_*` and `program_output`
+/// helpers from the Rhai prelude; this wrapper only supplies the explicit
+/// document identity and dispatches the typed command.
+fn attach_program(doc, spec) {
+    cmd("AttachProgram", #{ doc: doc, spec: spec })
+}
+
 /// Undo the latest history group on one explicit document.
 fn undo(doc) {
     cmd("UndoDocument", #{ doc: doc })

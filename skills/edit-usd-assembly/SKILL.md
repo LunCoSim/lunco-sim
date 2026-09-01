@@ -154,6 +154,11 @@ Use the smallest existing typed intent that expresses the change:
   joint, frame, ownership, and occupancy validators. Supply exact paths in the
   reflected `AttachSpec`/`DetachSpec`; never identify a part by a name prefix
   such as `Wheel_`.
+- `attach_program(doc, spec)` dispatches the existing typed `AttachProgram`
+  contract. Build its `inputs` and `outputs` with the canonical prelude
+  helpers `program_input_connection`, `program_input_default`, and
+  `program_output`; the source asset, host path, program name, edit target, and
+  port paths remain explicit in `spec`.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.

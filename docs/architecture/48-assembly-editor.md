@@ -155,7 +155,7 @@ The built-in `assembly_edit` Rhai tool library is the shared agent/editor
 policy surface for these APIs. It calls `OpenFile`, `NewDocument`,
 `ForkDocument`, the document save/close/discard lifecycle verbs, the four
 read-only USD queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`,
-`DetachComponent`, and the generic document undo/redo commands through
+`DetachComponent`, `AttachProgram`, and the generic document undo/redo commands through
 `cmd`/`query`; it adds no
 second registry, resolver, cache, parser, operation log, or persistence format.
 `open(path)`, `new_document()`, and `fork_document(source, name)` acknowledge
@@ -177,7 +177,9 @@ revision precondition. A supplied cursor makes stale edits fail atomically
 before authoring or journaling; `()` is reserved for an operation with no
 causal predecessor. `transform` uses one `ApplyUsdOps` change set for its
 translation/rotation pair. Attach and detach helpers pass the complete typed
-specification to the existing mount/socket/joint validators. The library is
+specification to the existing mount/socket/joint validators. `attach_program`
+passes the complete `ProgramAttachSpec` contract to the existing
+`AttachProgram` lowering. The library is
 listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
