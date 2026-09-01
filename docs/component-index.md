@@ -118,7 +118,8 @@ component. Its `Xform` owns the `ShaderLook` binding and the
 `lunco:surface:skybox` intent; USD projection stamps `ProceduralSkybox` and
 does not project geometry for that owner. The renderer draws it with a
 fullscreen pass, so it does not contain scene geometry or provide ambient
-lighting.
+lighting. Its shader inputs are intentionally un-authored: the WGSL defaults
+are the single presentation contract shared with `sandbox_scene.usda`.
 
 `power_bus.usda` is a passive USD bus/membership node; it is not a wrapper for
 `LunCo.Electrical.PDU`. `descent_guidance.usda` is the shipped powered-descent

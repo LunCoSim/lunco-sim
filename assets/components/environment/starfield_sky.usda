@@ -30,29 +30,8 @@ def Xform "StarfieldSky" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                color3f inputs:core_color = (1.0, 0.86, 0.62)
-                color3f inputs:arm_color = (0.84, 0.90, 1.0)
-                float inputs:star_density = 46.0
-                float inputs:limit_magnitude = 6.5
-                float inputs:magnitude_slope = 0.6
-                float inputs:color_spread = 0.55
-                # A tutorial capture is normally 640x360. The physical
-                # defaults are sub-pixel at that projection, so this reusable
-                # presentation profile gives the star points enough integrated
-                # flux to survive the display transform without turning the
-                # galaxy into a flat white backdrop.
-                float inputs:brightness = 5.0
-                float inputs:band_intensity = 0.35
-                float inputs:point_size = 3.00
-                float inputs:glow = 0.35
-                float inputs:seed = 37.0
-                float inputs:core_boost = 3.0
-                float inputs:band_width = 5.0
-                float inputs:dust_strength = 2.6
-                float inputs:dust_scale = 11.0
-                float inputs:pole_tilt = 62.0
-                float inputs:pole_azimuth = 20.0
-                float inputs:center_roll = 120.0
+                # The WGSL defaults are the single sky presentation contract.
+                # Hosts do not replace them with a resolution-dependent profile.
                 token outputs:surface
             }
         }

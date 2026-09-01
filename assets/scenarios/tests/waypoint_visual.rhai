@@ -1,5 +1,42 @@
 // Graphics acceptance for the reusable waypoint marker presentation.
 const TEST_KIND = "graphics";
+const SKY_SHADER = "/WaypointVisual/Sky/Looks/Starfield/Shader";
+const SKY_INPUTS = [
+    "inputs:core_color",
+    "inputs:arm_color",
+    "inputs:star_density",
+    "inputs:limit_magnitude",
+    "inputs:magnitude_slope",
+    "inputs:color_spread",
+    "inputs:point_size",
+    "inputs:glow",
+    "inputs:brightness",
+    "inputs:seed",
+    "inputs:band_intensity",
+    "inputs:core_boost",
+    "inputs:band_width",
+    "inputs:dust_strength",
+    "inputs:dust_scale",
+    "inputs:pole_tilt",
+    "inputs:pole_azimuth",
+    "inputs:center_roll",
+];
+
+fn sky_uses_shader_defaults() {
+    let record = query("QueryUsdPrim", #{
+        path: SKY_SHADER,
+        attrs: SKY_INPUTS,
+    });
+    if record == () || record.ok == false || record.attrs == () {
+        return false;
+    }
+    for attr in SKY_INPUTS {
+        if record.attrs[attr] != () {
+            return false;
+        }
+    }
+    true
+}
 
 fn on_start(me) {
     this.rover = find("/WaypointVisual/Rover");
@@ -18,5 +55,7 @@ fn on_tick(me) {
         "six-wheel rover is missing from the waypoint review scene"));
     checks.push(t_true(this.marker >= 0,
         "reusable waypoint marker is missing from the review scene"));
+    checks.push(t_true(sky_uses_shader_defaults(),
+        "waypoint review authors a redundant procedural-sky input override"));
     report_verdict(checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
 }
