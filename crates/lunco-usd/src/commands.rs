@@ -231,8 +231,13 @@ fn sync_workspace_on_doc_closed(
 fn forget_backed_document_on_closed(
     trigger: On<DocumentClosed>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    twins: Res<lunco_assets::twin_source::TwinRoots>,
 ) {
-    backed.forget_document(trigger.event().doc);
+    if let Some((name, _rel)) = backed.forget_document(trigger.event().doc) {
+        if let Err(error) = twins.unregister_name(&name) {
+            warn!("[usd] could not unregister closed preview Twin `{name}`: {error}");
+        }
+    }
 }
 
 /// Workspace replacement owns the scene boundary. Closing the old Twin must

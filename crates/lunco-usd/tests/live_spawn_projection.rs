@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::{
-    ui::{SetActiveUsdViewport, UsdViewportPlugin},
+    ui::{CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, UsdPreviewId, UsdViewportPlugin},
     ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
 use lunco_usd_bevy::*;
@@ -75,9 +75,13 @@ fn add_prim_projects_live_via_sink_no_reload() {
         )
     };
 
-    // Install it as the active viewport → doc-backed twin scene → async mount →
+    // Open its explicit preview lease → doc-backed Twin scene → async mount →
     // CanonicalStage built. Tick until the scene root projects.
-    app.world_mut().trigger(SetActiveUsdViewport { doc });
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(1),
+        doc,
+        edit_target: LayerId::root(),
+    });
     for _ in 0..40 {
         app.update();
         if has_prim_entity(&mut app, "/World") {
@@ -144,7 +148,11 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
         )
     };
 
-    app.world_mut().trigger(SetActiveUsdViewport { doc });
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(1),
+        doc,
+        edit_target: LayerId::root(),
+    });
     for _ in 0..40 {
         app.update();
         if has_prim_entity(&mut app, "/World") {
@@ -193,15 +201,15 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
     );
 }
 
-/// Two assembly documents may author the same prim paths. The explicit
-/// viewport document, rather than path or entity-count heuristics, determines
-/// which stage is projected and therefore which file receives edits.
+/// Two assembly documents may author the same prim paths. Each explicit
+/// preview lease retains its own stage root, camera, and render layer; focus
+/// changes only the dock surface and does not destroy the other document.
 #[test]
-fn switching_assembly_documents_keeps_identical_paths_isolated() {
+fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
     let mut app = boot_app();
     let first_source = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Cube \"First\" {}\n}\n";
     let second_source = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Cube \"Second\" {}\n}\n";
-    let (first, second) = {
+    let (first_doc, second_doc) = {
         let mut registry = app
             .world_mut()
             .resource_mut::<DocumentRegistry<UsdDocument>>();
@@ -217,26 +225,46 @@ fn switching_assembly_documents_keeps_identical_paths_isolated() {
         )
     };
 
-    app.world_mut().trigger(SetActiveUsdViewport { doc: first });
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(1),
+        doc: first_doc,
+        edit_target: LayerId::root(),
+    });
     support::settle_visual_projection(&mut app);
-    let first_handle = app
+    let first_stage = app
         .world()
         .resource::<lunco_usd::ui::UsdViewportState>()
-        .active_stage_handle()
-        .expect("first assembly has an active stage")
+        .session(UsdPreviewId(1))
+        .expect("first assembly has an open preview")
+        .stage_handle()
         .id();
+    let first_root = app
+        .world()
+        .resource::<lunco_usd::ui::UsdViewportState>()
+        .session(UsdPreviewId(1))
+        .unwrap()
+        .scene_root();
     assert!(has_prim_entity(&mut app, "/World/First"));
 
-    app.world_mut()
-        .trigger(SetActiveUsdViewport { doc: second });
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(2),
+        doc: second_doc,
+        edit_target: LayerId::runtime(),
+    });
     support::settle_visual_projection(&mut app);
     let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
-    let second_handle = state
-        .active_stage_handle()
-        .expect("second assembly has an active stage")
-        .id();
-    assert_ne!(first_handle, second_handle);
-    assert_eq!(state.active_doc(), Some(second));
+    let second_session = state
+        .session(UsdPreviewId(2))
+        .expect("second assembly has an open preview");
+    let second_handle = second_session.stage_handle().id();
+    let second_root = second_session.scene_root();
+    assert_ne!(first_stage, second_handle);
+    assert_ne!(first_root, second_root);
+    assert_ne!(
+        state.session(UsdPreviewId(1)).unwrap().render_layer(),
+        second_session.render_layer()
+    );
+    assert_eq!(state.focused_doc(), Some(second_doc));
 
     let mut prims = app.world_mut().query::<&UsdPrimPath>();
     let projected: Vec<_> = prims
@@ -244,9 +272,39 @@ fn switching_assembly_documents_keeps_identical_paths_isolated() {
         .filter(|prim| prim.path == "/World/First" || prim.path == "/World/Second")
         .map(|prim| (prim.stage_handle.id(), prim.path.clone()))
         .collect();
-    assert_eq!(
-        projected,
-        vec![(second_handle, "/World/Second".to_string())],
-        "the preview must contain only the explicitly selected document"
-    );
+    assert!(projected.contains(&(first_stage, "/World/First".to_string())));
+    assert!(projected.contains(&(second_handle, "/World/Second".to_string())));
+
+    // Focus is a presentation change only. The first lease keeps its own
+    // projected subtree while the second remains open.
+    app.world_mut().trigger(FocusUsdPreview {
+        preview: UsdPreviewId(1),
+    });
+    app.update();
+    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    assert_eq!(state.focused_doc(), Some(first_doc));
+    assert_eq!(state.session_count(), 2);
+    assert!(state.session(UsdPreviewId(2)).is_some());
+
+    // Closing one lease removes only its presentation entities and releases
+    // no shared document authority still owned by the other lease.
+    app.world_mut().trigger(CloseUsdPreview {
+        preview: UsdPreviewId(2),
+    });
+    app.update();
+    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    assert_eq!(state.session_count(), 1);
+    assert!(state.session(UsdPreviewId(1)).is_some());
+    assert!(state.session(UsdPreviewId(2)).is_none());
+    assert!(app.world().get_entity(second_root).is_err());
+    assert!(app
+        .world()
+        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .coords_of(second_doc)
+        .is_none());
+    assert!(app
+        .world()
+        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .coords_of(first_doc)
+        .is_some());
 }

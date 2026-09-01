@@ -161,11 +161,11 @@ fn clear_selection_on_assembly_document_switch(
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut last_doc: Local<Option<lunco_doc::DocumentId>>,
 ) {
-    let active_doc = viewport.and_then(|state| state.active_doc());
-    if *last_doc == active_doc {
+    let focused_doc = viewport.and_then(|state| state.focused_doc());
+    if *last_doc == focused_doc {
         return;
     }
-    *last_doc = active_doc;
+    *last_doc = focused_doc;
     selected.entities.clear();
     inspector_target.part = None;
 }

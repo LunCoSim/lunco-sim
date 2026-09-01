@@ -46,8 +46,10 @@ Behind the `ui` feature the `ui` module adds the egui browser/viewport panels,
 added separately by app composition (not by `UsdPlugins`):
 
 - **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
-- **`UsdViewportPlugin`** — `UsdViewportPanel`, the 3D scene of the active USD
-  document rendered into the dock.
+- **`UsdViewportPlugin`** — `UsdViewportPanel`, the focused isolated USD
+  preview lease rendered into the dock. `OpenUsdPreview`, `FocusUsdPreview`,
+  and `CloseUsdPreview` own preview lifecycle; other leases remain projected
+  while the dock displays one focus.
 
 ## Document model
 
