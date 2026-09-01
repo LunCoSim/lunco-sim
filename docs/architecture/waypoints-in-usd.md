@@ -76,12 +76,9 @@ The marker has one authored USD identity and one runtime arrival path:
   Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
   are separate authored geometry contracts because the dome is lifted for
   presentation while the trigger is anchored to the terrain.
-  The dome is softly translucent and emissive, so its authored green display
-  remains visible while a rover inside it stays readable and its appearance
-  remains independent of scene lighting. Its standard `primvars:displayOpacity`
-  is authored as an array (`float[]`, here `0.2` opacity), and the dome uses the
-  authored additive surface policy so it does not occlude the rover; the
-  separate Trigger remains invisible and fully independent. The standard
+  The dome is opaque and emissive, so its authored green display remains solid
+  and its appearance remains independent of scene lighting. The separate Trigger
+  remains invisible and fully independent. The standard
   `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
   without adding a marker renderer. This keeps the visible dome lifted above
   terrain while the overlap volume remains useful on slopes.

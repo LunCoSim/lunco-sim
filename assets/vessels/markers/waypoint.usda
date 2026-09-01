@@ -5,7 +5,7 @@
     metersPerUnit = 1
 )
 
-# Reusable mission waypoint marker — a softly translucent glowing DOME a vehicle is
+# Reusable mission waypoint marker — an opaque glowing DOME a vehicle is
 # meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
 # body. The physics Sensor is consumed by the shared route projection, which
 # emits the canonical `waypoint.reached` event with a typed {path,state,index} payload
@@ -63,11 +63,10 @@ def Xform "WaypointMarker" (
         }
     }
 
-    # Translucent emissive dome. It is visual-only; the trigger volume below is
+    # Opaque emissive dome. It is visual-only; the trigger volume below is
     # ground-anchored so a vehicle approaching a marker on a slope can enter the
     # waypoint without having to overlap the top of a dome floating one radius
-    # above the terrain. The standard displayOpacity keeps the rover readable
-    # through the annotation while the emissive-only material keeps its colour
+    # above the terrain. The opaque, emissive-only material keeps its colour
     # independent of scene lighting.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
@@ -82,12 +81,6 @@ def Xform "WaypointMarker" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
-        # Keep the annotation legible without washing the rover in green. The
-        # additive surface policy also prevents the dome from occluding the
-        # scene behind it while retaining its emissive navigation cue. The
-        # mission script changes this primvar in the runtime layer on arrival.
-        float[] primvars:displayOpacity = [0.2]
-        bool lunco:surface:additive = true
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow. The
         # emissive-only UsdPreviewSurface above also makes its appearance

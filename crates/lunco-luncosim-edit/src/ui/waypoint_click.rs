@@ -1832,6 +1832,7 @@ pub(crate) fn arm_route_projection_rebuild(
             Or<(
                 Changed<Transform>,
                 Changed<big_space::grid::cell::CellCoord>,
+                Changed<lunco_usd_bevy::UsdVisualSynced>,
             )>,
             Or<(
                 With<lunco_usd_sim::marker::WaypointMarker>,
@@ -1935,7 +1936,7 @@ pub(crate) fn project_waypoint_markers_to_surface(
     }
 }
 
-/// Build one atomic route view for marker tinting and mesh rendering.
+/// Build one atomic route view for route mesh rendering.
 /// Authored XML resolves exclusively through the exact `TargetBindings` map;
 /// coordinate strings are not a second authored contract. The view deliberately
 /// excludes the moving rover pose: route annotations connect authored waypoints,
@@ -1961,6 +1962,7 @@ pub(crate) fn rebuild_waypoint_route_projection(
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    q_visuals: Query<(), With<lunco_usd_bevy::UsdVisualSynced>>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     mut request: ResMut<RouteProjectionRebuildRequested>,
     mut projection: ResMut<RouteVisualProjection>,
@@ -2006,21 +2008,21 @@ pub(crate) fn rebuild_waypoint_route_projection(
             if targets.is_empty() {
                 continue;
             }
-            let Some(resolved) = targets
+            let Some(target_entities) = targets
                 .iter()
-                .map(|target| {
-                    let entity = *bindings.0.get(target)?;
-                    let (position, _) = lunco_core::coords::grid_relative_pose(
-                        entity,
-                        frame_entity,
-                        &q_parents,
-                        &q_grids,
-                        &q_spatial,
-                    )?;
-                    Some((position, entity))
-                })
+                .map(|target| bindings.0.get(target).copied())
                 .collect::<Option<Vec<_>>>()
             else {
+                continue;
+            };
+            let Some(resolved) = resolve_route_target_positions(
+                target_entities,
+                frame_entity,
+                &q_visuals,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
                 continue;
             };
             (
@@ -2046,28 +2048,26 @@ pub(crate) fn rebuild_waypoint_route_projection(
             else {
                 continue;
             };
-            let Some(points) = runtime_entities
-                .iter()
-                .map(|entity| {
-                    lunco_core::coords::grid_relative_pose(
-                        *entity,
-                        frame_entity,
-                        &q_parents,
-                        &q_grids,
-                        &q_spatial,
-                    )
-                    .map(|(position, _)| position)
-                })
-                .collect::<Option<Vec<_>>>()
-            else {
+            let Some(resolved) = resolve_route_target_positions(
+                runtime_entities,
+                frame_entity,
+                &q_visuals,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
                 continue;
             };
+            let points = resolved.iter().map(|(point, _)| *point).collect();
             (
                 (0..waypoints.len()).map(runtime_waypoint_key).collect(),
                 points,
                 false,
                 runtime_route_loops(spec),
-                runtime_entities.into_iter().map(Some).collect::<Vec<_>>(),
+                resolved
+                    .into_iter()
+                    .map(|(_, entity)| Some(entity))
+                    .collect::<Vec<_>>(),
             )
         } else {
             continue;
@@ -2112,6 +2112,34 @@ pub(crate) fn rebuild_waypoint_route_projection(
     projection.surface = surface_key;
     projection.routes = routes;
     projection.revision = projection.revision.wrapping_add(1);
+}
+
+/// Resolve route targets only after their USD visual projection has committed.
+/// A route target can have a binding and an ECS transform while its composed USD
+/// prim is still awaiting projection; using that provisional transform would
+/// publish a route mesh before the target has a valid scene pose.
+fn resolve_route_target_positions(
+    entities: impl IntoIterator<Item = Entity>,
+    frame_entity: Entity,
+    q_visuals: &Query<(), With<lunco_usd_bevy::UsdVisualSynced>>,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&big_space::prelude::Grid>,
+    q_spatial: &Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+) -> Option<Vec<(DVec3, Entity)>> {
+    entities
+        .into_iter()
+        .map(|entity| {
+            q_visuals.get(entity).ok()?;
+            let (position, _) = lunco_core::coords::grid_relative_pose(
+                entity,
+                frame_entity,
+                q_parents,
+                q_grids,
+                q_spatial,
+            )?;
+            Some((position, entity))
+        })
+        .collect()
 }
 
 fn route_mesh_signature(
@@ -2423,6 +2451,22 @@ mod tests {
             None,
             "a partial binding set must not produce mismatched route state"
         );
+    }
+
+    #[test]
+    fn waypoint_marker_authors_an_opaque_shadowless_dome() {
+        let asset = include_str!("../../../../assets/vessels/markers/waypoint.usda");
+        let dome = asset
+            .split("def Sphere \"Dome\"")
+            .nth(1)
+            .expect("waypoint marker must author a dome")
+            .split("def Sphere \"Trigger\"")
+            .next()
+            .expect("waypoint marker must author a trigger after the dome");
+
+        assert!(dome.contains("primvars:doNotCastShadows = true"));
+        assert!(!dome.contains("primvars:displayOpacity"));
+        assert!(!dome.contains("lunco:surface:additive"));
     }
 
     #[test]
