@@ -102,6 +102,14 @@ authored layers and revisions, local composed prim topology, dependency arcs
 from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
 active document or constructs another resolver/cache.
 
+`InspectUsdEditSession` is the read-only proposal review query. It requires an
+explicit `doc` and returns each typed proposal, its explicit scope, generation
+and layer-revision preconditions, affected paths, diagnostics, review state,
+and external-file staleness. `CreateUsdProposal`, `ReviewUsdProposal`, and
+`CommitUsdProposal` are the corresponding typed plan, review, and commit
+commands. The browser exposes the same review actions for humans; agents use
+the query and commands through the shared Rhai library.
+
 `ResolveUsdTarget` requires `doc`, a prim `path`, and an explicit `edit_target`
 (`@root@` or `@runtime@`). Local authored and runtime opinions are resolved by
 `UsdDocument`; referenced or payloaded paths are resolved by the already-mounted
@@ -122,10 +130,10 @@ referenced or variant-contained prim.
 ### Agent and automation surface
 
 The built-in `assembly_edit` Rhai tool library is the shared agent/editor
-policy surface for these APIs. It calls `OpenFile`, the three read-only USD
+policy surface for these APIs. It calls `OpenFile`, the four read-only USD
 queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`, `DetachComponent`, and
 the generic document undo/redo commands through `cmd`/`query`; it adds no
-second registry, session, resolver, cache, parser, or persistence format.
+second registry, resolver, cache, parser, operation log, or persistence format.
 `open(path)` acknowledges the existing asynchronous open lifecycle, so callers
 obtain the resulting `DocumentId` from `ListOpenDocuments` rather than guessing
 one. `describe`, `inspect`, `resolve_target`, and `sync_document` always receive an
@@ -133,7 +141,9 @@ explicit document. Every authored helper receives an explicit `@root@` or
 `@runtime@` target, and `batch` requires each reflected `UsdOp` to carry its
 own target.
 
-The optional `parent_gen` on `add_prim`, `transform`, `attribute`, `keyframe`,
+The proposal helpers are described in the proposal review contract below;
+they are the only review path exposed by this library. The optional
+`parent_gen` on `add_prim`, `transform`, `attribute`, `keyframe`,
 `remove_keyframe`, `relationship`, `connection`, `schema`, `variant`, and
 `batch` is the existing
 revision precondition. A supplied cursor makes stale edits fail atomically
@@ -143,8 +153,7 @@ translation/rotation pair. Attach and detach helpers pass the complete typed
 specification to the existing mount/socket/joint validators. The library is
 listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
-USDA writer, runtime-only setter, guessed target, or unowned preview/review
-operation.
+USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
 `keyframe` and `remove_keyframe` expose the existing reversible
 `SetTimeSample`/`RemoveTimeSample` primitives to agents. The Editor Inspector
@@ -153,6 +162,37 @@ Environment panel's existing `ControlAnimation` transport plays and scrubs the
 result. The document authoring owner adds a missing xform channel to
 `xformOpOrder` as part of the first keyframe, so a keyed pose is a valid USD
 transform rather than an unattached attribute.
+
+### Proposal review and conflict contract
+
+`CreateUsdProposal` is the safe plan boundary for human and agent tooling. It
+requires an explicit `UsdEditScope` (`SourceAsset`, `Assembly`, or
+`InstanceOverride`) and the document generation the author inspected. The USD
+owner validates every typed operation against a cloned `UsdDocument`, checks
+the scope against authored composition arcs, and stores only the typed plan in
+the session review resource. No authored layer, preview stage, journal entry,
+or undo group changes during proposal creation or review.
+
+`InspectUsdEditSession` exposes the proposal's typed operations, affected paths,
+layer revision, origin identity, validation diagnostics, and review state.
+`ReviewUsdProposal` mutates only that state: mute, unmute, or reject. Commit is
+the explicit merge boundary. `CommitUsdProposal` rechecks the parent
+generation, root-layer revision, document origin, external file watermark,
+scope, and typed validation, then calls the existing grouped USD operation
+path. The accepted plan therefore becomes one ordinary journal change set and
+one document undo unit. A mismatch leaves the plan in `Conflict`; there is no
+automatic rebase, source overwrite, or second history stream. Closing or
+discarding the document clears its pending review plans.
+
+The browser row reflects modified, review, muted, and conflict state from this
+document-scoped resource. `SaveDocument`/`SaveAsDocument` remain explicit
+persistence commands; proposal commit never writes a file implicitly.
+
+The production acceptance fixture is
+`assets/scenes/tests/assembly_editor_proposal.usda`; its Rhai observer drives
+the same proposal/query/commit surface and verifies non-mutating review,
+journal undo/redo, and stale-conflict rejection. The existing
+`assembly_workflow` fixture remains the catalog attach/save/reload regression.
 
 ## Mount and attach contract
 

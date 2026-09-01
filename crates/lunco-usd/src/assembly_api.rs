@@ -15,6 +15,7 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::Path as SdfPath;
 
 use crate::document::UsdDocument;
+use crate::edit_session::UsdEditSessions;
 
 fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
     world
@@ -206,6 +207,84 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         }
 
         ApiResponse::ok(response)
+    }
+}
+
+/// Read-only query for the Assembly Editor's pending review plans.
+///
+/// The response includes typed operations and their validation/conflict state,
+/// but inspecting it never changes authored USD. It is document-scoped and
+/// does not infer an active editor tab.
+pub struct InspectUsdEditSessionProvider;
+
+impl ApiQueryProvider for InspectUsdEditSessionProvider {
+    fn name(&self) -> &'static str {
+        "InspectUsdEditSession"
+    }
+
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+        let Some(raw_doc) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdEditSession requires an explicit numeric `doc`",
+            );
+        };
+        let doc = DocumentId::new(raw_doc);
+        let Some(document) = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .and_then(|registry| registry.host(doc))
+            .map(|host| host.document())
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("USD document {doc} is not open"),
+            );
+        };
+        let externally_stale = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .is_some_and(|registry| registry.stale_docs().contains(&doc));
+
+        let mut proposals: Vec<_> = world
+            .get_resource::<UsdEditSessions>()
+            .map(|sessions| {
+                sessions
+                    .for_document(doc)
+                    .map(|proposal| {
+                        serde_json::json!({
+                            "id": proposal.id,
+                            "scope": proposal.scope.as_str(),
+                            "label": proposal.label,
+                            "parent_generation": proposal.parent_generation,
+                            "base_revision": proposal.base_revision,
+                            "origin": proposal.origin,
+                            "state": proposal.state.as_str(),
+                            "ops": proposal.ops,
+                            "affected_paths": proposal.affected_paths,
+                            "diagnostics": proposal.diagnostics,
+                            "stale": proposal.parent_generation != document.generation()
+                                || proposal.base_revision != document.base_revision()
+                                || proposal.origin != document.origin().session_uri()
+                                || externally_stale,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        proposals.sort_by_key(|proposal| {
+            proposal
+                .get("id")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        });
+
+        ApiResponse::ok(serde_json::json!({
+            "doc": doc,
+            "generation": document.generation(),
+            "base_revision": document.base_revision(),
+            "dirty": document.is_dirty(),
+            "origin": document.origin(),
+            "proposals": proposals,
+        }))
     }
 }
 

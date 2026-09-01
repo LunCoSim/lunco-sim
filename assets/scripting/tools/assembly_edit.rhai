@@ -229,6 +229,38 @@ fn batch(doc, label, ops, parent_gen) {
     })
 }
 
+/// Validate and queue an explicit proposal without mutating the document.
+/// `scope` is one of `SourceAsset`, `Assembly`, or `InstanceOverride`; the
+/// proposal must carry the generation the caller inspected.
+fn propose(doc, scope, label, ops, parent_gen) {
+    cmd("CreateUsdProposal", #{
+        doc: doc,
+        scope: scope,
+        label: label,
+        parent_gen: parent_gen,
+        ops: ops,
+    })
+}
+
+/// Inspect pending proposals, their typed operations, diagnostics, and stale
+/// state for one explicit document.
+fn review_session(doc) {
+    query("InspectUsdEditSession", #{ doc: doc })
+}
+
+/// Mute, unmute, or reject one proposal. Use `#{ Mute: () }`,
+/// `#{ Unmute: () }`, or `#{ Reject: () }` for `action`.
+fn review_proposal(proposal, action) {
+    cmd("ReviewUsdProposal", #{ proposal: proposal, action: action })
+}
+
+/// Commit one still-pending proposal. The USD owner rechecks the generation,
+/// source identity, file watermark, and typed operation validation before it
+/// enters the ordinary journal/undo change-set path.
+fn commit_proposal(proposal) {
+    cmd("CommitUsdProposal", #{ proposal: proposal })
+}
+
 /// Attach a component through the existing mount/socket/joint validator and
 /// lowering path. `spec` is the reflected `AttachSpec` contract.
 fn attach_component(doc, spec) {

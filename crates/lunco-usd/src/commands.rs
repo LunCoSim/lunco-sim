@@ -54,6 +54,9 @@ use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
+use crate::edit_session::{
+    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
+};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
@@ -225,6 +228,22 @@ fn sync_workspace_on_doc_closed(
     workspace.close_document(trigger.event().doc);
 }
 
+/// Proposal plans are session state, so their lifetime ends with the document
+/// that owns their explicit target.  The authored document and its canonical
+/// journal remain responsible for all persisted history.
+fn clear_usd_edit_session_on_document_closed(
+    trigger: On<DocumentClosed>,
+    mut sessions: ResMut<UsdEditSessions>,
+) {
+    let removed = sessions.remove_document(trigger.event().doc);
+    if removed != 0 {
+        bevy::log::debug!(
+            "[usd-editor] removed {removed} review proposal(s) for closed document {}",
+            trigger.event().doc
+        );
+    }
+}
+
 /// Registry closure is the final lifetime edge for projection bookkeeping.
 /// Remove both scene coordinates and user claims so a closed document cannot
 /// be rediscovered by a later stage-path lookup.
@@ -268,11 +287,13 @@ impl Plugin for UsdCommandsPlugin {
         }
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
+        app.init_resource::<UsdEditSessions>();
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         let mut query_registry = app
             .world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
         query_registry.register(crate::assembly_api::InspectUsdDocumentProvider);
+        query_registry.register(crate::assembly_api::InspectUsdEditSessionProvider);
         query_registry.register(crate::assembly_api::ResolveUsdTargetProvider);
         query_registry.register(crate::assembly_api::SyncUsdDocumentProvider);
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
@@ -315,6 +336,9 @@ impl Plugin for UsdCommandsPlugin {
         );
         app.register_deferred_command::<ApplyUsdOp>()
             .register_deferred_command::<ApplyUsdOps>()
+            .register_deferred_command::<CreateUsdProposal>()
+            .register_deferred_command::<ReviewUsdProposal>()
+            .register_deferred_command::<CommitUsdProposal>()
             .register_deferred_command::<DiscardDocument>();
 
         app.add_systems(Update, drain_usd_pending_events);
@@ -322,6 +346,7 @@ impl Plugin for UsdCommandsPlugin {
         app.add_observer(sync_workspace_on_doc_changed);
         app.add_observer(sync_workspace_on_doc_saved);
         app.add_observer(sync_workspace_on_doc_closed);
+        app.add_observer(clear_usd_edit_session_on_document_closed);
         // A3 auto-bridge: when the journal appears, hand it to the registry
         // once (reactive — `resource_added`, not per-frame). Headless builds
         // without a journal never run it.
@@ -829,6 +854,9 @@ register_commands!(
     on_load_scene,
     on_apply_usd_op,
     on_apply_usd_ops,
+    on_create_usd_proposal,
+    on_review_usd_proposal,
+    on_commit_usd_proposal,
     // The USD half of the generic `UndoDocument`/`RedoDocument` verbs. Registering the
     // observers here (not in the editor) is what lets a headless binary undo.
     on_undo_usd_document,
@@ -1304,6 +1332,7 @@ fn on_discard_usd_document(
                         .host(doc)
                         .map(|host| host.generation())
                         .unwrap_or_default();
+                    world.resource_mut::<UsdEditSessions>().remove_document(doc);
                     world
                         .resource_mut::<DocumentRegistry<UsdDocument>>()
                         .remove(doc);
@@ -1339,6 +1368,10 @@ fn on_discard_usd_document(
                             "USD document {doc} already has a discard in progress"
                         ))
                     } else {
+                        // Discard is an explicit authored-state reset. Invalidate
+                        // review plans at admission so none can commit while the
+                        // asynchronous source read is in flight.
+                        world.resource_mut::<UsdEditSessions>().remove_document(doc);
                         let task_path = path.clone();
                         let task = AsyncComputeTaskPool::get().spawn(async move {
                             let storage = lunco_storage::FileStorage::new();
@@ -1420,6 +1453,7 @@ fn drain_pending_usd_discards(world: &mut World) {
                     } else {
                         match outcome {
                             lunco_doc::OpenOutcome::Refreshed => {
+                                world.resource_mut::<UsdEditSessions>().remove_document(doc);
                                 claim_user_document_if_projected(world, doc);
                                 let generation = world
                                     .resource::<DocumentRegistry<UsdDocument>>()
@@ -1657,6 +1691,360 @@ fn on_save_as_document(
         bevy::log::info!("[SaveAsUsd] {doc_id} saved to {}", path.display());
         commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Assembly Editor proposals — validate/review/commit at the USD owner
+// ─────────────────────────────────────────────────────────────────────
+
+/// Prepare a typed USD edit plan for review without mutating the document.
+///
+/// `parent_gen` is required here even though direct edits may omit their
+/// causal predecessor: a proposal is explicitly reviewable work and must
+/// never be accepted against an unknown base.
+#[Command]
+pub struct CreateUsdProposal {
+    /// Document that owns the authored target.
+    pub doc: DocumentId,
+    /// Explicit source-asset, assembly, or instance-override scope.
+    pub scope: UsdEditScope,
+    /// Human-readable intent and eventual journal change-set label.
+    pub label: String,
+    /// Generation read by the proposal author.
+    pub parent_gen: u64,
+    /// Complete typed plan, kept out of the document until commit.
+    pub ops: Vec<UsdOp>,
+}
+
+/// Review-only actions for a pending proposal. Accepting a proposal is the
+/// separate [`CommitUsdProposal`] operation because it is the exact boundary
+/// that enters the document's journal and undo history.
+#[derive(Debug, Clone, Copy, Reflect, serde::Serialize, serde::Deserialize)]
+pub enum UsdProposalReviewAction {
+    /// Keep the plan but remove it from the active review queue.
+    Mute,
+    /// Return a muted plan to active review. Conflicts must be rebuilt from a
+    /// fresh generation and cannot be unmuted into a silent overwrite.
+    Unmute,
+    /// Discard the plan without touching authored USD.
+    Reject,
+}
+
+/// Change review state without applying any USD operation.
+#[Command]
+pub struct ReviewUsdProposal {
+    /// Proposal allocated by [`CreateUsdProposal`].
+    pub proposal: UsdProposalId,
+    /// Review decision.
+    pub action: UsdProposalReviewAction,
+}
+
+/// Merge one accepted proposal through the ordinary grouped USD edit path.
+///
+/// This is the only operation that removes a proposal by applying its plan.
+/// `apply_ops_as_change_set_result` performs the same atomic validation,
+/// journal change-set, undo grouping, and live projection notification as all
+/// direct Assembly Editor edits.
+#[Command]
+pub struct CommitUsdProposal {
+    /// Proposal to accept and merge into its explicit document target.
+    pub proposal: UsdProposalId,
+}
+
+fn proposal_ack(
+    proposal: UsdProposalId,
+    doc: DocumentId,
+    action: &str,
+    generation: u64,
+    state: UsdProposalState,
+) -> Ack {
+    Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "proposal": proposal,
+            "doc": doc,
+            "action": action,
+            "generation": generation,
+            "state": state.as_str(),
+            "diagnostics": [],
+        }),
+    )
+}
+
+fn proposal_diagnostics(diagnostics: &[String]) -> String {
+    diagnostics.join("; ")
+}
+
+#[on_command(CreateUsdProposal)]
+fn on_create_usd_proposal(
+    trigger: On<CreateUsdProposal>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let outcome = match world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(command.doc)
+            .map(|host| host.document())
+        {
+            None => Err(format!("unknown USD document {}", command.doc)),
+            Some(document) => {
+                let validation =
+                    validate_proposal(document, command.scope, command.parent_gen, &command.ops);
+                if !validation.is_valid() {
+                    Err(format!(
+                        "USD proposal validation failed: {}",
+                        proposal_diagnostics(&validation.diagnostics)
+                    ))
+                } else {
+                    let id = world.resource_mut::<UsdEditSessions>().insert(
+                        command.doc,
+                        command.scope,
+                        command.label,
+                        command.parent_gen,
+                        validation,
+                        command.ops,
+                    );
+                    let generation = world
+                        .resource::<DocumentRegistry<UsdDocument>>()
+                        .host(command.doc)
+                        .map(|host| host.generation())
+                        .unwrap_or_default();
+                    Ok(proposal_ack(
+                        id,
+                        command.doc,
+                        "created",
+                        generation,
+                        UsdProposalState::Pending,
+                    ))
+                }
+            }
+        };
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
+#[on_command(ReviewUsdProposal)]
+fn on_review_usd_proposal(
+    trigger: On<ReviewUsdProposal>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let outcome = match world
+            .resource::<UsdEditSessions>()
+            .proposal(command.proposal)
+            .cloned()
+        {
+            None => Err(format!("unknown USD proposal {}", command.proposal.0)),
+            Some(proposal) => match command.action {
+                UsdProposalReviewAction::Reject => {
+                    let removed = world
+                        .resource_mut::<UsdEditSessions>()
+                        .remove(command.proposal);
+                    if removed.is_none() {
+                        Err(format!("unknown USD proposal {}", command.proposal.0))
+                    } else {
+                        Ok(proposal_ack(
+                            proposal.id,
+                            proposal.doc,
+                            "rejected",
+                            proposal.parent_generation,
+                            proposal.state,
+                        ))
+                    }
+                }
+                UsdProposalReviewAction::Mute => {
+                    world
+                        .resource_mut::<UsdEditSessions>()
+                        .set_state(command.proposal, UsdProposalState::Muted)
+                        .map(|_| {
+                            proposal_ack(
+                                proposal.id,
+                                proposal.doc,
+                                "muted",
+                                proposal.parent_generation,
+                                UsdProposalState::Muted,
+                            )
+                        })
+                }
+                UsdProposalReviewAction::Unmute => {
+                    if proposal.state == UsdProposalState::Conflict {
+                        Err(format!(
+                            "USD proposal {} is conflicted; create a new proposal from the current generation",
+                            proposal.id.0
+                        ))
+                    } else {
+                        world
+                            .resource_mut::<UsdEditSessions>()
+                            .set_state(command.proposal, UsdProposalState::Pending)
+                            .map(|_| {
+                                proposal_ack(
+                                    proposal.id,
+                                    proposal.doc,
+                                    "unmuted",
+                                    proposal.parent_generation,
+                                    UsdProposalState::Pending,
+                                )
+                            })
+                    }
+                }
+            },
+        };
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
+#[on_command(CommitUsdProposal)]
+fn on_commit_usd_proposal(
+    trigger: On<CommitUsdProposal>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let proposal_id = trigger.event().proposal;
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let outcome = match world
+            .resource::<UsdEditSessions>()
+            .proposal(proposal_id)
+            .cloned()
+        {
+            None => Err(format!("unknown USD proposal {}", proposal_id.0)),
+            Some(proposal) => {
+                let current = world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .host(proposal.doc)
+                    .map(|host| {
+                        (
+                            host.generation(),
+                            host.document().base_revision(),
+                            host.document().origin().session_uri(),
+                            validate_proposal(
+                                host.document(),
+                                proposal.scope,
+                                proposal.parent_generation,
+                                &proposal.ops,
+                            ),
+                        )
+                    });
+                let Some((generation, base_revision, origin, validation)) = current else {
+                    let error = format!("unknown USD document {}", proposal.doc);
+                    world.resource_mut::<UsdEditSessions>().remove(proposal.id);
+                    return finish_command_result(
+                        world,
+                        command_id,
+                        correlation_id,
+                        Err(error),
+                        ApiErrorCode::CommandRejected,
+                    );
+                };
+                let externally_stale = world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .stale_docs()
+                    .contains(&proposal.doc);
+                let conflict = if proposal.state != UsdProposalState::Pending {
+                    Some(format!(
+                        "proposal {} is not pending (state={})",
+                        proposal.id.0,
+                        proposal.state.as_str()
+                    ))
+                } else if generation != proposal.parent_generation {
+                    Some(format!(
+                        "stale document generation: proposal parent {}, current {}",
+                        proposal.parent_generation, generation
+                    ))
+                } else if base_revision != proposal.base_revision {
+                    Some(format!(
+                        "stale authored layer revision: proposal {}, current {}",
+                        proposal.base_revision, base_revision
+                    ))
+                } else if origin != proposal.origin {
+                    Some("document origin changed since proposal creation".to_owned())
+                } else if externally_stale {
+                    Some("backing USD file changed on disk since proposal creation".to_owned())
+                } else if !validation.is_valid() {
+                    Some(proposal_diagnostics(&validation.diagnostics))
+                } else {
+                    None
+                };
+                if let Some(conflict) = conflict {
+                    world
+                        .resource_mut::<UsdEditSessions>()
+                        .mark_conflict(proposal.id, conflict.clone());
+                    Err(format!(
+                        "USD proposal {} conflict: {conflict}",
+                        proposal.id.0
+                    ))
+                } else {
+                    match apply_ops_as_change_set_result(
+                        world,
+                        proposal.doc,
+                        proposal.label.clone(),
+                        proposal.ops.clone(),
+                        Some(proposal.parent_generation),
+                    ) {
+                        Ok((mut ack, _)) => {
+                            claim_user_document_if_projected(world, proposal.doc);
+                            let edit = ack.data.take().unwrap_or(serde_json::Value::Null);
+                            world.resource_mut::<UsdEditSessions>().remove(proposal.id);
+                            ack.data = Some(serde_json::json!({
+                                "proposal": proposal.id,
+                                "doc": proposal.doc,
+                                "action": "committed",
+                                "edit": edit,
+                                "diagnostics": [],
+                            }));
+                            Ok(ack)
+                        }
+                        Err(error) => {
+                            world
+                                .resource_mut::<UsdEditSessions>()
+                                .mark_conflict(proposal.id, error.clone());
+                            Err(format!(
+                                "USD proposal {} could not be committed: {error}",
+                                proposal.id.0
+                            ))
+                        }
+                    }
+                }
+            }
+        };
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3063,12 +3451,286 @@ mod tests {
             .world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
             .names()
+            .any(|name| name == "InspectUsdEditSession"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
             .any(|name| name == "ResolveUsdTarget"));
         assert!(app
             .world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
             .names()
             .any(|name| name == "SyncUsdDocument"));
+    }
+
+    fn proposal_test_op(name: &str) -> UsdOp {
+        UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/Assembly".to_owned(),
+            name: name.to_owned(),
+            type_name: Some("Xform".to_owned()),
+            reference: None,
+        }
+    }
+
+    fn proposal_test_app() -> (App, DocumentId) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        install_command_result_resources(&mut app);
+        app.update();
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .allocate(
+                "#usda 1.0\ndef Xform \"Assembly\" {}\n".to_owned(),
+                lunco_doc::PathlessOrigin::untitled("Proposal.usda"),
+            );
+        app.update();
+        (app, doc)
+    }
+
+    #[test]
+    fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
+        let (mut app, doc) = proposal_test_app();
+        let op = proposal_test_op("Chassis");
+        app.world_mut().trigger(CreateUsdProposal {
+            doc,
+            scope: UsdEditScope::Assembly,
+            label: "Add chassis".to_owned(),
+            parent_gen: 0,
+            ops: vec![op],
+        });
+        app.update();
+
+        let proposal = {
+            let sessions = app.world().resource::<UsdEditSessions>();
+            assert_eq!(sessions.for_document(doc).count(), 1);
+            let proposal = sessions.for_document(doc).next().expect("proposal");
+            assert_eq!(proposal.parent_generation, 0);
+            assert_eq!(proposal.ops.len(), 1);
+            proposal.id
+        };
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("document")
+            .document()
+            .source()
+            .contains("Chassis"));
+
+        app.world_mut().trigger(ReviewUsdProposal {
+            proposal,
+            action: UsdProposalReviewAction::Mute,
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .filter(|proposal| proposal.state == UsdProposalState::Muted)
+                .count(),
+            1
+        );
+        app.world_mut().trigger(ReviewUsdProposal {
+            proposal,
+            action: UsdProposalReviewAction::Unmute,
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .filter(|proposal| proposal.state == UsdProposalState::Pending)
+                .count(),
+            1
+        );
+
+        app.world_mut().trigger(CommitUsdProposal { proposal });
+        app.update();
+        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
+        let host = registry.host(doc).expect("committed document");
+        assert_eq!(host.generation(), 1);
+        assert!(host.document().source().contains("Chassis"));
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
+
+        app.world_mut().trigger(UndoDocument { doc });
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("undo document")
+            .document()
+            .source()
+            .contains("Chassis"));
+    }
+
+    #[test]
+    fn proposal_commit_marks_a_stale_plan_as_conflict_without_overwriting_edits() {
+        let (mut app, doc) = proposal_test_app();
+        app.world_mut().trigger(CreateUsdProposal {
+            doc,
+            scope: UsdEditScope::Assembly,
+            label: "Add stale chassis".to_owned(),
+            parent_gen: 0,
+            ops: vec![proposal_test_op("Chassis")],
+        });
+        app.update();
+        let proposal = app
+            .world()
+            .resource::<UsdEditSessions>()
+            .for_document(doc)
+            .next()
+            .expect("proposal")
+            .id;
+
+        app.world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .apply(doc, proposal_test_op("ExistingEdit"))
+            .expect("independent edit");
+        app.world_mut().trigger(CommitUsdProposal { proposal });
+        app.update();
+
+        let sessions = app.world().resource::<UsdEditSessions>();
+        let conflicted = sessions.proposal(proposal).expect("conflict retained");
+        assert_eq!(conflicted.state, UsdProposalState::Conflict);
+        assert!(conflicted
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("stale document generation")));
+        let source = app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("document")
+            .document()
+            .source();
+        assert!(source.contains("ExistingEdit"));
+        assert!(!source.contains("Chassis"));
+    }
+
+    #[test]
+    fn rejecting_a_proposal_removes_only_review_state() {
+        let (mut app, doc) = proposal_test_app();
+        app.world_mut().trigger(CreateUsdProposal {
+            doc,
+            scope: UsdEditScope::Assembly,
+            label: "Reject chassis".to_owned(),
+            parent_gen: 0,
+            ops: vec![proposal_test_op("Chassis")],
+        });
+        app.update();
+        let proposal = app
+            .world()
+            .resource::<UsdEditSessions>()
+            .for_document(doc)
+            .next()
+            .expect("proposal")
+            .id;
+
+        app.world_mut().trigger(ReviewUsdProposal {
+            proposal,
+            action: UsdProposalReviewAction::Reject,
+        });
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
+        assert_eq!(
+            app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document")
+                .generation(),
+            0
+        );
+    }
+
+    #[test]
+    fn closing_a_document_drops_its_review_session() {
+        let (mut app, doc) = proposal_test_app();
+        app.world_mut().trigger(CreateUsdProposal {
+            doc,
+            scope: UsdEditScope::Assembly,
+            label: "Close chassis review".to_owned(),
+            parent_gen: 0,
+            ops: vec![proposal_test_op("Chassis")],
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .count(),
+            1
+        );
+
+        app.world_mut()
+            .trigger(lunco_doc_bevy::DocumentClosed::local(doc));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn file_discard_invalidates_review_before_source_read_completes() {
+        let temp = tempfile::tempdir().expect("discard source directory");
+        let path = temp.path().join("Assembly.usda");
+        let source = "#usda 1.0\ndef Xform \"Assembly\" {}\n";
+        std::fs::write(&path, source).expect("discard source");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        install_command_result_resources(&mut app);
+        app.update();
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .open_file(path.display().to_string(), source.to_owned())
+            .0;
+        app.update();
+
+        app.world_mut().trigger(CreateUsdProposal {
+            doc,
+            scope: UsdEditScope::Assembly,
+            label: "Discard chassis review".to_owned(),
+            parent_gen: 0,
+            ops: vec![proposal_test_op("Chassis")],
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .count(),
+            1
+        );
+
+        app.world_mut().trigger(DiscardDocument { doc });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .for_document(doc)
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -3161,6 +3823,48 @@ mod tests {
         assert_eq!(data["doc"], serde_json::json!(doc));
         assert_eq!(data["prim"]["exists"], serde_json::json!(true));
         assert_eq!(data["prim"]["type"], serde_json::json!("Xform"));
+    }
+
+    #[test]
+    fn inspect_edit_session_query_returns_typed_review_state() {
+        let mut world = World::new();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let doc = registry.allocate(
+            "#usda 1.0\ndef Xform \"Assembly\" {}\n".to_owned(),
+            lunco_doc::PathlessOrigin::untitled("Session.usda"),
+        );
+        let operation = proposal_test_op("Chassis");
+        let document = registry.host(doc).expect("document").document();
+        let validation = crate::edit_session::validate_proposal(
+            document,
+            UsdEditScope::Assembly,
+            0,
+            std::slice::from_ref(&operation),
+        );
+        let mut sessions = UsdEditSessions::default();
+        let proposal = sessions.insert(
+            doc,
+            UsdEditScope::Assembly,
+            "Add chassis".to_owned(),
+            0,
+            validation,
+            vec![operation],
+        );
+        world.insert_resource(registry);
+        world.insert_resource(sessions);
+
+        let response = crate::assembly_api::InspectUsdEditSessionProvider
+            .execute(&world, &serde_json::json!({ "doc": doc.raw() }));
+        let lunco_api::schema::ApiResponse::Ok { data: Some(data) } = response else {
+            panic!("edit-session query must return structured data");
+        };
+        assert_eq!(data["doc"], serde_json::json!(doc));
+        assert_eq!(data["generation"], serde_json::json!(0));
+        assert_eq!(data["proposals"][0]["id"], serde_json::json!(proposal));
+        assert_eq!(data["proposals"][0]["scope"], serde_json::json!("assembly"));
+        assert_eq!(data["proposals"][0]["state"], serde_json::json!("pending"));
+        assert_eq!(data["proposals"][0]["stale"], serde_json::json!(false));
+        assert_eq!(data["proposals"][0]["ops"].as_array().unwrap().len(), 1);
     }
 
     #[test]

@@ -37,6 +37,7 @@ use lunco_usd_bevy::UsdData;
 use lunco_usd_compose::parse_usda;
 
 use crate::document::UsdDocument;
+use crate::edit_session::{UsdEditSessions, UsdProposalSummary};
 use lunco_doc_bevy::DocumentRegistry;
 
 /// A top-level USD stage loaded into the current session.
@@ -127,6 +128,10 @@ pub struct UsdStageRow {
     pub name: String,
     /// Writable badge driver.
     pub writable: bool,
+    /// Whether the authored document has unsaved changes.
+    pub dirty: bool,
+    /// Change-gated proposal summaries for this document's Assembly Editor session.
+    pub edit_proposals: Vec<UsdProposalSummary>,
     /// First-render expand state.
     pub default_open: bool,
     /// Parsed authored layer for the prim-tree walk. `None` on parse failure
@@ -141,7 +146,8 @@ pub struct UsdStageRow {
 
 /// Change-gated view-model the [`UsdSceneSection`](crate::ui::browser_section::UsdSceneSection)
 /// reads each frame. Rebuilt only when an entry is added/removed or a
-/// document's generation advances — see [`produce_usd_browser_view`].
+/// document's generation, dirty state, or review-session revision advances — see
+/// [`produce_usd_browser_view`].
 #[derive(Resource, Default)]
 pub struct UsdBrowserView {
     /// One row per loaded stage, in registration order.
@@ -150,28 +156,37 @@ pub struct UsdBrowserView {
 
 /// Producer for [`UsdBrowserView`]. Re-derives the row list (and each
 /// entry's parse cache, via [`LoadedStage::build_row`]) only when the
-/// `(stage id, document generation)` signature changes — so a static
-/// scene costs one cheap signature walk per frame, no parsing and no
-/// string churn (`AGENTS.md` §7.1 frame discipline).
+/// `(stage id, document generation, dirty state, review-session revision)` signature
+/// changes — so a static scene costs one cheap signature walk per frame, no
+/// parsing and no string churn (`AGENTS.md` §7.1 frame discipline).
 pub fn produce_usd_browser_view(
     mut loaded: ResMut<LoadedUsdStages>,
     registry: Res<DocumentRegistry<UsdDocument>>,
+    sessions: Res<UsdEditSessions>,
     mut view: ResMut<UsdBrowserView>,
-    mut last_sig: Local<Vec<(String, u64)>>,
+    mut last_sig: Local<Vec<(String, u64, bool, u64)>>,
 ) {
-    // Signature catches both structural changes (entries added/removed
-    // → ids differ) and edits (the doc generation bumps on every
-    // `ApplyUsdOp` / source change).
-    let sig: Vec<(String, u64)> = loaded
+    // Signature catches structural changes (entries added/removed → ids
+    // differ), authored edits (document generation), saved state (dirty), and
+    // review changes (session revision).
+    let sig: Vec<(String, u64, bool, u64)> = loaded
         .entries
         .iter()
         .map(|e| {
-            let generation = e
+            let document_state = e
                 .doc_id_for_viewport()
                 .and_then(|d| registry.host(d))
-                .map(|h| h.document().generation())
-                .unwrap_or(0);
-            (e.id().to_string(), generation)
+                .map(|h| {
+                    let document = h.document();
+                    (document.generation(), document.is_dirty())
+                })
+                .unwrap_or((0, false));
+            (
+                e.id().to_string(),
+                document_state.0,
+                document_state.1,
+                sessions.revision(),
+            )
         })
         .collect();
 
@@ -184,6 +199,16 @@ pub fn produce_usd_browser_view(
         .entries
         .iter_mut()
         .filter_map(|e| e.build_row(&registry))
+        .map(|mut row| {
+            if let Some(doc) = row.doc_id {
+                row.edit_proposals = sessions
+                    .for_document(doc)
+                    .map(|proposal| proposal.summary())
+                    .collect();
+                row.edit_proposals.sort_by_key(|proposal| proposal.id);
+            }
+            row
+        })
         .collect();
 }
 
@@ -299,6 +324,10 @@ impl LoadedStage for WorkspaceStage {
             doc_id: Some(self.doc_id),
             name,
             writable: true,
+            dirty: registry
+                .host(self.doc_id)
+                .is_some_and(|host| host.document().is_dirty()),
+            edit_proposals: Vec::new(),
             default_open: true,
             data: self.parsed.as_ref().map(|p| p.data.clone()),
             parse_error: self.parse_error.clone(),

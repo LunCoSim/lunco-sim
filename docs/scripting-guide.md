@@ -418,6 +418,13 @@ let plan = [#{ SetAttribute: #{
 assembly_edit::batch(doc, "Declare rover assembly", plan, changed.data.generation);
 ```
 
+`propose` submits a complete typed plan for review without changing the
+document. Use `review_session` to inspect its state, `review_proposal` to mute,
+unmute, or reject it, and `commit_proposal` to enter the accepted plan as one
+ordinary journal/undo change set. The commit rechecks the generation, layer
+revision, document origin, external-file watermark, scope, and typed
+operations; stale work is reported as a conflict and is not rebased.
+
 Pass `()` for a missing causal predecessor. A generation from `InspectUsdDocument`,
 `SyncUsdDocument`, or a command acknowledgement rejects stale writes before any
 operation or journal entry is applied. `transform` batches translation and

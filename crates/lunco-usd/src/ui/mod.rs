@@ -61,7 +61,8 @@ impl Plugin for UsdUiPlugin {
         app.init_resource::<LoadedUsdStages>();
         // Change-gated view-model the `UsdSceneSection` reads each frame.
         // The producer refreshes parse caches + flattens stages into it
-        // only when the (id, generation) signature changes.
+        // only when the (id, generation, dirty state, review revision)
+        // signature changes.
         app.init_resource::<UsdBrowserView>();
         app.add_systems(Update, produce_usd_browser_view);
 

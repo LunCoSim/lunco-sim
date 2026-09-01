@@ -33,12 +33,21 @@ existing subsystems:
   full USD document surface (egui-free).
 
 Assembly agents and editor view models use the registered read queries
-`InspectUsdDocument`, `ResolveUsdTarget`, and `SyncUsdDocument`. They operate on
-the same document registry, typed op ring, journal, and mounted canonical
-OpenUSD stage as the command path; they do not maintain a second resolver or
-history store.
+`InspectUsdDocument`, `InspectUsdEditSession`, `ResolveUsdTarget`, and
+`SyncUsdDocument`. They operate on the same document registry, typed op ring,
+journal, and mounted canonical OpenUSD stage as the command path; they do not
+maintain a second resolver, document store, or history log.
 
-> There is **no `UsdLunCoPlugin`** — that was an old doc artifact.
+`CreateUsdProposal` validates an explicit typed `UsdOp` plan against a cloned
+document and keeps it outside authored USD for review. Its
+`SourceAsset`/`Assembly`/`InstanceOverride` scope and required parent
+generation are part of the proposal contract. `ReviewUsdProposal` can mute,
+unmute, or reject the plan without changing the document. `CommitUsdProposal`
+rechecks the document generation, authored-layer revision, origin, file
+watermark, scope, and operation validation before entering the existing
+grouped journal/undo path. A stale plan becomes an explicit conflict; it is
+never rebased or silently overwritten. Save/Save-As remains a separate
+explicit document operation.
 
 ## UI plugins (`ui` feature only)
 
@@ -54,9 +63,8 @@ added separately by app composition (not by `UsdPlugins`):
 ## Document model
 
 The egui-free USD document model lives in `document` (`UsdDocument`, `UsdOp`,
-`UsdChange`, `LayerId`) + `registry` (`UsdDocumentRegistry`). Edits author
-through openusd's `Stage` by SDF path (`lunco_usd_bevy::author`) — the old
-byte-splicing text editor is gone.
+`UsdChange`, `LayerId`) + the shared `DocumentRegistry<UsdDocument>`. Edits
+author through OpenUSD's `Stage` by SDF path (`lunco_usd_bevy::author`).
 
 ## Engineering metadata
 
@@ -68,10 +76,9 @@ or physics schemas. Concrete `lunco:` attribute → Bevy component mappings:
 *   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
 *   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`
 
-(Display names use the standard USD prim `displayName` metadata, not a `lunco:`
-attr — the old `lunco:name` was migrated to `displayName`, the field usdview and
-Omniverse read for friendly prim labels. `doc` is for documentation prose, not
-short labels.)
+Display names use the standard USD prim `displayName` metadata, the field
+usdview and Omniverse read for friendly prim labels. `doc` is for documentation
+prose, not short labels.
 
 See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md)
 for the full architecture.

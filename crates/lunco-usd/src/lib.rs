@@ -23,14 +23,14 @@ use bevy::prelude::*;
 // twin-scene resolver) — egui-free, so server / sandbox / networking bins get
 // the full USD document surface. Only the empty-viewport placeholder inside it
 // is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
-// layer. `document`/`registry` are the egui-free USD doc model. Edits author
-// through openusd's Stage by SDF path (`lunco_usd_bevy::author`); the old
-// `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
-// Phase C2/C3 lands the real Stage-backed authoring.
+// layer. `document` is the egui-free USD document model and the shared
+// `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
+// OpenUSD's Stage by SDF path (`lunco_usd_bevy::author`).
 pub mod assembly_api;
 pub mod attach;
 pub mod commands;
 pub mod document;
+pub mod edit_session;
 pub mod live_consume;
 /// Lowering a material edit into a real UsdShade network (`Material` +
 /// `UsdPreviewSurface` + `material:binding`). Crate-agnostic op builder — the
@@ -46,8 +46,14 @@ pub mod twin_projection;
 #[cfg(feature = "ui")]
 pub mod ui;
 
-pub use commands::{ApplyUsdOp, ApplyUsdOps, AttachProgram, UsdCommandsPlugin, USD_DOCUMENT_KIND};
+pub use commands::{
+    ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
+    ReviewUsdProposal, UsdCommandsPlugin, UsdProposalReviewAction, USD_DOCUMENT_KIND,
+};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
+pub use edit_session::{
+    UsdEditScope, UsdEditSessions, UsdProposal, UsdProposalId, UsdProposalState, UsdProposalSummary,
+};
 pub use program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
 // Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
 pub use lunco_usd_avian::{
