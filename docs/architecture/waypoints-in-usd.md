@@ -76,8 +76,10 @@ The marker has one authored USD identity and one runtime arrival path:
   Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
   are separate authored geometry contracts because the dome is lifted for
   presentation while the trigger is anchored to the terrain.
-  The dome is opaque and emissive, so its authored green display remains solid
-  and its appearance remains independent of scene lighting. The separate Trigger
+  The dome is softly translucent and emissive, so its authored green display
+  remains visible while a rover inside it stays readable and its appearance
+  remains independent of scene lighting. Its standard `primvars:displayOpacity`
+  is authored as an array (`float[]`, here `0.15` opacity); the separate Trigger
   remains invisible and fully independent. The standard
   `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
   without adding a marker renderer. This keeps the visible dome lifted above
@@ -218,7 +220,7 @@ about waypoints:
 
 | Interaction | Mechanism |
 |---|---|
-| Move a pin | The ordinary transform gizmo — it's a selectable prim |
+| Move a pin | The ordinary transform gizmo — its authored `lunco:spawnable` root is projected to `SelectableRoot` |
 | Delete a pin | The ordinary Delete key → `RemovePrim` |
 | Undo | The document's typed inverse ops |
 | Inspect | Its attributes are ordinary prim parameters |

@@ -651,6 +651,9 @@ impl Plugin for SceneEditUiPlugin {
             .add_observer(waypoint_click::on_append_waypoint_placement_requested)
             // Consumes the ground click that follows a Move / Insert-after.
             .add_observer(waypoint_click::on_scene_click_place_waypoint)
+            // Keep the native picking backend synchronized with each USD-authored
+            // interaction policy, including live reauthoring and re-projection.
+            .add_observer(scene_context::apply_pointer_policy)
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
             // a context's begin/end pass here, so a widget built outside it never joins
             // egui's input pass: the context menu PAINTED but nothing in it could be
@@ -679,9 +682,6 @@ impl Plugin for SceneEditUiPlugin {
             .add_systems(
                 Update,
                 (
-                    // USD-authored marker policies are translated once into
-                    // native mesh-picking behavior.
-                    scene_context::apply_pointer_policies,
                     // Route interpretation and terrain projection are a
                     // change-driven producer. The mesh and marker consumers
                     // run only when this snapshot changes.

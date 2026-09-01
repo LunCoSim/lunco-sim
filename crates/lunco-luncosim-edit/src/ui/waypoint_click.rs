@@ -2454,7 +2454,7 @@ mod tests {
     }
 
     #[test]
-    fn waypoint_marker_authors_an_opaque_shadowless_dome() {
+    fn waypoint_marker_authors_a_translucent_shadowless_dome() {
         let asset = include_str!("../../../../assets/vessels/markers/waypoint.usda");
         let dome = asset
             .split("def Sphere \"Dome\"")
@@ -2465,7 +2465,7 @@ mod tests {
             .expect("waypoint marker must author a trigger after the dome");
 
         assert!(dome.contains("primvars:doNotCastShadows = true"));
-        assert!(!dome.contains("primvars:displayOpacity"));
+        assert!(dome.contains("float[] primvars:displayOpacity = [0.15]"));
         assert!(!dome.contains("lunco:surface:additive"));
     }
 

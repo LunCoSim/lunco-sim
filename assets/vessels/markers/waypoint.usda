@@ -5,7 +5,7 @@
     metersPerUnit = 1
 )
 
-# Reusable mission waypoint marker — an opaque glowing DOME a vehicle is
+# Reusable mission waypoint marker — a softly translucent glowing DOME a vehicle is
 # meant to drive to, plus a ground-anchored overlap volume. Neither is a solid
 # body. The physics Sensor is consumed by the shared route projection, which
 # emits the canonical `waypoint.reached` event with a typed {path,state,index} payload
@@ -45,11 +45,10 @@ def Xform "WaypointMarker" (
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                # HDR (>1) so the dome READS AS A LIGHT SOURCE against 128 klx
-                # lunar sun instead of a tinted bubble — the same trick the
-                # headlight lens uses. Below 1.0 the tonemapper has nothing to
-                # bloom and the marker sinks into the regolith at midday.
-                # This is an emissive annotation, not a reflective surface.
+                # A restrained emissive cue keeps the translucent annotation
+                # readable against the lunar sun without washing the vehicle
+                # beneath it in green. This is an emissive annotation, not a
+                # reflective surface.
                 # Keep the UsdPreviewSurface contract explicit; the runtime
                 # standard gprim cast flag below controls shadow-map participation
                 # on the actual mesh entity.
@@ -57,16 +56,17 @@ def Xform "WaypointMarker" (
                 color3f inputs:specularColor = (0, 0, 0)
                 float inputs:useSpecularWorkflow = 1
                 float inputs:roughness = 1.0
-                color3f inputs:emissiveColor = (0.35, 3.2, 1.4)
+                color3f inputs:emissiveColor = (0.12, 1.3, 0.45)
                 token outputs:surface
             }
         }
     }
 
-    # Opaque emissive dome. It is visual-only; the trigger volume below is
+    # Translucent emissive dome. It is visual-only; the trigger volume below is
     # ground-anchored so a vehicle approaching a marker on a slope can enter the
     # waypoint without having to overlap the top of a dome floating one radius
-    # above the terrain. The opaque, emissive-only material keeps its colour
+    # above the terrain. The standard displayOpacity keeps the rover readable
+    # through the annotation while the emissive-only material keeps its colour
     # independent of scene lighting.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
@@ -81,6 +81,7 @@ def Xform "WaypointMarker" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
+        float[] primvars:displayOpacity = [0.15]
         # Waypoints are navigational annotations, not scenery. Keep their glow
         # visible without making a floating dome cast a terrain shadow. The
         # emissive-only UsdPreviewSurface above also makes its appearance
