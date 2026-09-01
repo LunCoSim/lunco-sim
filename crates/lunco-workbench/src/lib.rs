@@ -74,6 +74,7 @@ mod perspective_help;
 mod render_robustness;
 mod session;
 mod source_viewer;
+mod twin_settings;
 mod viewport;
 
 pub mod control_status;
@@ -982,6 +983,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .init_resource::<BrowserQuery>()
+            .init_resource::<twin_settings::TwinSettingsView>()
             .init_resource::<UnsavedDocs>()
             .init_resource::<EditorTabs<source_viewer::SourceTabState>>()
             .init_resource::<source_viewer::PendingSourceRequests>()
@@ -997,6 +999,11 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
+            .add_observer(twin_settings::clear_on_twin_closed)
+            .add_systems(
+                Update,
+                twin_settings::refresh_view.run_if(resource_changed::<WorkspaceResource>),
+            )
             .add_systems(
                 Update,
                 // A navigation gesture may request both a perspective and a
@@ -1022,6 +1029,7 @@ impl Plugin for WorkbenchPlugin {
         source_viewer::__register_on_open_twin_source(app);
         source_viewer::__register_on_save_source_text(app);
         app.register_instance_panel(source_viewer::SourceEditorPanel);
+        app.register_panel(twin_settings::TwinSettingsPanel);
         app.add_systems(
             EguiPrimaryContextPass,
             render_workbench.in_set(WorkbenchRenderSet),
@@ -5473,12 +5481,8 @@ fn add_status_text_with_layout(
     layout: egui::Layout,
     label: egui::Label,
 ) -> egui::Response {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, 0.0),
-        layout,
-        |ui| ui.add(label),
-    )
-    .inner
+    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), layout, |ui| ui.add(label))
+        .inner
 }
 
 fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f32 {

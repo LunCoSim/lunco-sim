@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**196 commands** across **27** crates. All documented.
+**197 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -3426,6 +3426,17 @@ newer than the document is rejected.
 |---|---|---|
 | `path` | `String` |  Filesystem path of the Twin root (must contain `twin.toml`).  Empty asks a windowed host to show a folder picker. |
 
+#### `ResetTwinSetting`
+
+ Remove one generic project-owned setting from the active Twin. The omitted
+ key then uses the owning setting's authored/default behavior.
+
+- *defined in:* `crates/lunco-workspace/src/open.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | `String` |  Namespaced setting key to remove. |
+
 #### `SetTwinSetting`
 
  Persist one generic project-owned setting on the active Twin.
@@ -3439,7 +3450,7 @@ newer than the document is rejected.
 
 ---
 
-<!-- 196 commands from the runtime schema; scanned 682 .rs files for docs (0 parse failure(s) skipped).
+<!-- 197 commands from the runtime schema; scanned 682 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

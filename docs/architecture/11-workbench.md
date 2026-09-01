@@ -646,18 +646,21 @@ diagnostic preference. User-global settings remain in
 `~/.lunco/settings.json` for concerns such as perf HUDs, input visualisation,
 theme, and window geometry.
 
-#### 9b.4 Settings UI gap
+#### 9b.4 Twin settings view
 
-Today the only way to mutate `settings.json` is hand-editing the
-file or wiring a typed `#[Command]` per knob. Twin `[settings]` values are
-mutated through the generic `SetTwinSetting` command; no per-knob command is
-needed. Schema-driven panels
-(VS Code's "Settings" UI, Blender's Preferences window) are out of
-scope for Phase α but slot in cleanly: each `SettingsSection`
-implementation gains an optional `schema() -> SettingsSchema` method
-returning `Vec<FieldDescriptor>` (label, doc-comment, default,
-control kind), and a single panel walks all registered sections via
-`Settings::iter()`. Hand-editing remains the escape hatch.
+The workbench's **Twin settings** panel walks the active Twin's generic
+`[settings]` map as a change-driven view model. It groups keys by namespace
+and renders the stored scalar type directly: booleans, integers, numbers, and
+text. Edits dispatch the generic `SetTwinSetting` command;
+`ResetTwinSetting` removes a key so the owning authored surface's declared
+default applies. There is no per-setting Rust list or duplicate policy layer.
+
+The panel is Twin-scoped and is cleared on `TwinClosed`; workspace changes
+rebuild the snapshot, so setting edits, reload, Twin replacement, and reset
+use the same manifest/storage owner. The panel is intentionally limited to
+the generic scalar map. Structured manifest sections such as `[usd]`,
+`[downloads]`, and `[journal]` remain owned by their domain/workspace
+surfaces, and user-global preferences remain in `settings.json`.
 
 ## 10. Theming and input bindings
 

@@ -71,6 +71,13 @@ pub struct SetTwinSetting {
     pub value: TwinSettingInput,
 }
 
+/// Remove one generic project-owned setting from the active Twin.
+#[Command]
+pub struct ResetTwinSetting {
+    /// Namespaced setting key to remove.
+    pub key: String,
+}
+
 fn into_twin_setting(value: TwinSettingInput) -> TwinSettingValue {
     match value {
         TwinSettingInput::Bool(value) => TwinSettingValue::Bool(value),
@@ -134,6 +141,42 @@ fn on_set_twin_setting(trigger: On<SetTwinSetting>, mut workspace: ResMut<Worksp
             }
         }
         warn!("SetTwinSetting failed to persist `{}`: {error}", event.key);
+    }
+}
+
+#[on_command(ResetTwinSetting)]
+fn on_reset_twin_setting(trigger: On<ResetTwinSetting>, mut workspace: ResMut<WorkspaceResource>) {
+    let event = trigger.event();
+    if let Err(error) = TwinManifest::validate_setting_key(&event.key) {
+        warn!("ResetTwinSetting rejected: {error}");
+        return;
+    }
+    let Some(twin_id) = workspace.active_twin else {
+        warn!("ResetTwinSetting ignored: no active Twin");
+        return;
+    };
+    let Some(old) = workspace
+        .twin_mut(twin_id)
+        .and_then(|twin| twin.manifest.as_mut())
+        .and_then(|manifest| manifest.settings.remove(&event.key))
+    else {
+        return;
+    };
+
+    if let Err(error) = workspace
+        .twin(twin_id)
+        .expect("active Twin exists after setting removal")
+        .save_manifest()
+    {
+        if let Some(twin) = workspace.twin_mut(twin_id) {
+            if let Some(manifest) = twin.manifest.as_mut() {
+                manifest.settings.insert(event.key.clone(), old);
+            }
+        }
+        warn!(
+            "ResetTwinSetting failed to persist `{}`: {error}",
+            event.key
+        );
     }
 }
 
@@ -627,6 +670,7 @@ register_commands!(
     on_add_folder_to_workspace,
     on_add_twin,
     on_set_twin_setting,
+    on_reset_twin_setting,
 );
 
 #[cfg(test)]
@@ -730,6 +774,44 @@ mod tests {
             manifest.setting("ui.camera_status"),
             Some(&TwinSettingValue::Bool(false))
         );
+    }
+
+    #[test]
+    fn reset_twin_setting_command_removes_generic_value() {
+        let tmp = tempfile::tempdir().expect("Twin directory");
+        std::fs::write(
+            tmp.path().join(lunco_twin::MANIFEST_FILENAME),
+            "name = \"Settings Twin\"\nversion = \"0.1.0\"\n\n[settings]\n\"ui.camera_status\" = true\n",
+        )
+        .expect("manifest");
+        let twin = match TwinMode::open(tmp.path()).expect("open Twin") {
+            TwinMode::Twin(twin) => twin,
+            other => panic!("expected Twin, got {other:?}"),
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::session::WorkspacePlugin);
+        let twin_id = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+
+        app.world_mut().trigger(ResetTwinSetting {
+            key: "ui.camera_status".into(),
+        });
+
+        let workspace = app.world().resource::<WorkspaceResource>();
+        assert_eq!(
+            workspace
+                .twin(twin_id)
+                .and_then(|twin| twin.manifest.as_ref())
+                .and_then(|manifest| manifest.setting("ui.camera_status")),
+            None
+        );
+        let manifest = TwinManifest::read(&tmp.path().join(lunco_twin::MANIFEST_FILENAME))
+            .expect("persisted manifest");
+        assert_eq!(manifest.setting("ui.camera_status"), None);
     }
 
     #[test]

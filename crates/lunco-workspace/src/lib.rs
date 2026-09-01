@@ -49,7 +49,7 @@ pub mod open;
 pub mod recents;
 pub mod session;
 
-pub use open::{SetTwinSetting, TwinSettingInput};
+pub use open::{ResetTwinSetting, SetTwinSetting, TwinSettingInput};
 pub use recents::Recents;
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
