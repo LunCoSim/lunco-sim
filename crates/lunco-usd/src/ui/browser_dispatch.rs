@@ -1,11 +1,11 @@
 //! Routes [`lunco_workbench::BrowserAction::OpenFile`] events with USD
 //! extensions (`.usda`, `.usdc`) into the USD document open pipeline.
 //!
-//! A browser click means **open this source**, never **replace the running
-//! scene**.  A Twin contains reusable vehicle, material, and support layers as
-//! well as scene roots; treating every layer as a `LoadScene` tore down the
-//! current world when a user merely inspected a referenced rover.  Loading a
-//! world is an explicit Scenarios action.
+//! A browser click means **open and preview this source**, never **replace the
+//! running scene**. A Twin contains reusable vehicle, material, and support
+//! layers as well as scene roots; treating every layer as a `LoadScene` tore
+//! down the current world when a user merely inspected a referenced rover.
+//! Loading a world is an explicit Scenarios action.
 //!
 //! ## File partitioning
 //!
@@ -46,19 +46,20 @@ fn is_usd_open_file(action: &BrowserAction) -> bool {
     }
 }
 
-/// Resolve a browser file selection to an on-disk document under `root`.
+/// Resolve a browser file selection to an on-disk document.
 ///
-/// Browser sections may already know an absolute path, but a selection outside
-/// the active Twin is not a document the current Twin is allowed to open.
+/// Browser sections may already know an absolute path. That form is already
+/// resolved by the emitting section and must not be re-anchored on the active
+/// Twin; relative paths remain scoped to the active Twin.
 fn browser_document_path(
-    root: &std::path::Path,
+    root: Option<&std::path::Path>,
     selected: &std::path::Path,
 ) -> Option<std::path::PathBuf> {
-    let absolute = if selected.is_absolute() {
-        selected.to_path_buf()
-    } else {
-        root.join(selected)
-    };
+    if selected.is_absolute() {
+        return Some(selected.to_path_buf());
+    }
+    let root = root?;
+    let absolute = root.join(selected);
     if absolute.strip_prefix(root).is_ok() {
         Some(absolute)
     } else {
@@ -83,39 +84,36 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
         return;
     }
 
-    let active_twin = {
-        let ws = world.resource::<WorkspaceResource>();
-        ws.active_twin
-            .and_then(|id| ws.twin(id))
-            .map(|t| t.root.clone())
-    };
+    let (active_twin, twin_roots) = world
+        .get_resource::<WorkspaceResource>()
+        .map(|ws| {
+            (
+                ws.active_twin
+                    .and_then(|id| ws.twin(id))
+                    .map(|t| t.root.clone()),
+                ws.twins()
+                    .map(|(_, twin)| twin.root.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .unwrap_or_default();
     for action in actions {
         let BrowserAction::OpenFile { relative_path } = action else {
             continue;
         };
-        // A relative BrowserAction is anchored at the active Twin.  The raw
-        // Files section cannot emit an external relative path, so keep the
-        // document boundary within the user-opened Twin.
-        let Some(root) = active_twin.as_ref() else {
+        let Some(abs) = browser_document_path(active_twin.as_deref(), &relative_path) else {
             bevy::log::warn!(
-                "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
+                "BrowserAction::OpenFile (USD) needs an active Twin for relative path: {:?}",
                 relative_path
             );
             continue;
         };
-        let Some(abs) = browser_document_path(root, &relative_path) else {
-            let selected_display = if relative_path.is_absolute() {
-                relative_path
-            } else {
-                root.join(relative_path)
-            };
-            bevy::log::warn!(
-                "BrowserAction::OpenFile (USD) is outside the active Twin: {}",
-                selected_display.display()
-            );
-            continue;
-        };
-        crate::commands::spawn_usd_load(world, abs);
+        let owner_root = twin_roots
+            .iter()
+            .filter(|root| abs.strip_prefix(root).is_ok())
+            .max_by_key(|root| root.components().count())
+            .cloned();
+        crate::commands::spawn_usd_load(world, abs, true, owner_root);
     }
 }
 
@@ -136,10 +134,20 @@ mod tests {
             .join("solar_system.usda");
 
         assert_eq!(
-            browser_document_path(&root, std::path::Path::new("sim/rovers/lunokhod2.usda")),
+            browser_document_path(
+                Some(&root),
+                std::path::Path::new("sim/rovers/lunokhod2.usda"),
+            ),
             Some(rover)
         );
-        assert_eq!(browser_document_path(&root, &traverse), Some(traverse));
-        assert_eq!(browser_document_path(&root, &outside), None,);
+        assert_eq!(
+            browser_document_path(Some(&root), &traverse),
+            Some(traverse)
+        );
+        assert_eq!(
+            browser_document_path(Some(&root), &outside),
+            Some(outside),
+            "an already-resolved absolute browser path must not be re-anchored on the active Twin"
+        );
     }
 }

@@ -328,6 +328,7 @@ impl Plugin for UsdCommandsPlugin {
         // into calls on this pipeline.
         app.init_resource::<PendingUsdLoads>();
         app.init_resource::<PendingUsdDiscards>();
+        app.add_observer(cancel_pending_usd_loads_on_twin_closed);
         app.add_systems(
             Update,
             (drain_pending_usd_file_loads, drain_pending_usd_discards),
@@ -1087,10 +1088,18 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
 
 /// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
 /// [`drain_pending_usd_file_loads`] each frame until it completes; the
-/// resulting source is allocated as a USD document and the viewport
-/// picks it up via the standard `DocumentOpened` lifecycle observer.
+/// resulting source is allocated as a USD document. Browser-originated loads
+/// publish [`BrowserUsdDocumentReady`] after admission; ordinary typed
+/// `OpenFile` calls remain document-only.
 struct PendingUsdLoad {
     path: PathBuf,
+    /// Root of the Twin that emitted a browser request, if any. A closed Twin
+    /// cancels its pending reads before they can create a stale document or
+    /// focus a preview for a replaced workspace.
+    twin_root: Option<PathBuf>,
+    /// Browser-originated opens request the editor preview once admission
+    /// succeeds. Typed API/OpenFile callers retain document-only semantics.
+    open_preview: bool,
     task: Task<Result<String, String>>,
 }
 
@@ -1113,6 +1122,15 @@ struct PendingUsdDiscards {
     tasks: Vec<PendingUsdDiscard>,
 }
 
+/// Emitted after a browser-originated USD file has been admitted to the
+/// canonical document registry. The viewport owns the presentation response;
+/// the headless document pipeline only publishes this lifecycle fact.
+#[derive(Event, Clone, Copy, Debug)]
+pub(crate) struct BrowserUsdDocumentReady {
+    /// The admitted document to bind to the editor preview lease.
+    pub doc: DocumentId,
+}
+
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
 /// `.usd*` paths so HTTP API / MCP / `Open` URI dispatch all route into
 /// the same async-load pipeline the Twin browser uses. Modelica's
@@ -1132,7 +1150,7 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
         if !is_usd_path(stripped) {
             return;
         }
-        spawn_usd_load(world, PathBuf::from(stripped));
+        spawn_usd_load(world, PathBuf::from(stripped), false, None);
     });
 }
 
@@ -1140,7 +1158,24 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
 /// [`PendingUsdLoads`]. Callers should have already established that the
 /// path looks like a USD file. Shared by the [`OpenFile`] observer and
 /// the UI's `browser_dispatch::drain_browser_actions_for_usd`.
-pub(crate) fn spawn_usd_load(world: &mut World, abs_path: PathBuf) {
+pub(crate) fn spawn_usd_load(
+    world: &mut World,
+    abs_path: PathBuf,
+    open_preview: bool,
+    twin_root: Option<PathBuf>,
+) {
+    if let Some(existing) = world
+        .resource_mut::<PendingUsdLoads>()
+        .tasks
+        .iter_mut()
+        .find(|load| load.path == abs_path)
+    {
+        existing.open_preview |= open_preview;
+        if open_preview {
+            existing.twin_root = twin_root;
+        }
+        return;
+    }
     let pool = AsyncComputeTaskPool::get();
     let path_for_task = abs_path.clone();
     let task = pool.spawn(async move {
@@ -1161,8 +1196,34 @@ pub(crate) fn spawn_usd_load(world: &mut World, abs_path: PathBuf) {
         .tasks
         .push(PendingUsdLoad {
             path: abs_path,
+            twin_root,
+            open_preview,
             task,
         });
+}
+
+/// Cancel browser reads owned by a Twin that has just left the workspace.
+/// Dropping the task is the cancellation boundary; no later completion can
+/// allocate a document or focus the editor for the retired Twin.
+fn cancel_pending_usd_loads_on_twin_closed(
+    trigger: On<TwinClosed>,
+    mut pending: ResMut<PendingUsdLoads>,
+) {
+    let closed_root = &trigger.event().root;
+    pending.tasks.retain(|load| {
+        !pending_load_belongs_to_closed_twin(load.twin_root.as_deref(), &load.path, closed_root)
+    });
+}
+
+/// Whether a pending browser read belongs to the Twin being retired. The
+/// explicit owner is authoritative; the path check also covers requests
+/// emitted by a scene-closure section that already resolved an absolute path.
+fn pending_load_belongs_to_closed_twin(
+    owner_root: Option<&Path>,
+    path: &Path,
+    closed_root: &Path,
+) -> bool {
+    owner_root.is_some_and(|root| root == closed_root) || path.strip_prefix(closed_root).is_ok()
 }
 
 /// Poll outstanding [`PendingUsdLoads`] and finish the open once each
@@ -1236,6 +1297,9 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 }
                 #[cfg(not(feature = "ui"))]
                 let _ = user_notice;
+                if load.open_preview {
+                    world.trigger(BrowserUsdDocumentReady { doc });
+                }
             }
         }
     }
@@ -3420,6 +3484,56 @@ mod tests {
         assert!(!is_usd_path("/tmp/model.mo"));
         assert!(!is_usd_path("README.md"));
         assert!(!is_usd_path(""));
+    }
+
+    #[test]
+    fn pending_browser_load_is_cancelled_with_its_closed_twin() {
+        let root = Path::new("/twins/rover");
+        let path = root.join("scenes/rover.usda");
+        assert!(pending_load_belongs_to_closed_twin(Some(root), &path, root));
+        assert!(pending_load_belongs_to_closed_twin(None, &path, root));
+        assert!(!pending_load_belongs_to_closed_twin(
+            Some(Path::new("/twins/other")),
+            &path,
+            Path::new("/twins/new")
+        ));
+    }
+
+    #[test]
+    fn duplicate_browser_loads_share_one_pending_read_and_preview_request() {
+        let root = PathBuf::from("/twins/rover");
+        let path = root.join("scene.usda");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        spawn_usd_load(app.world_mut(), path.clone(), false, None);
+        spawn_usd_load(app.world_mut(), path, true, Some(root.clone()));
+
+        let pending = app.world().resource::<PendingUsdLoads>();
+        assert_eq!(pending.tasks.len(), 1);
+        assert!(pending.tasks[0].open_preview);
+        assert_eq!(pending.tasks[0].twin_root.as_deref(), Some(root.as_path()));
+    }
+
+    #[test]
+    fn closed_twin_drops_its_pending_browser_read() {
+        let root = PathBuf::from("/twins/rover");
+        let path = root.join("scene.usda");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+        spawn_usd_load(app.world_mut(), path, true, Some(root.clone()));
+        assert_eq!(app.world().resource::<PendingUsdLoads>().tasks.len(), 1);
+
+        app.world_mut().trigger(TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root,
+            was_active: false,
+        });
+        assert!(app.world().resource::<PendingUsdLoads>().tasks.is_empty());
     }
 
     /// Smoke-test: building the plugin into a minimal app inserts
