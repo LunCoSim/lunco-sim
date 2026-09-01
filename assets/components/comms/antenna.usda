@@ -219,6 +219,9 @@ def Xform "CommsAntenna" (
             # navigation/route colours and from the green/red link beams. This
             # is the physical "radio powered" LED at the feed assembly, so an
             # operator can identify the communications hardware at a glance.
+            # It sits just ahead of the phase centre along the feed's Y axis;
+            # keeping its transverse coordinates at zero preserves the dish
+            # bore-sight instead of introducing a lateral visual offset.
                     def Material "CommsIndicatorMaterial"
                     {
                 token outputs:surface.connect = <PreviewSurface.outputs:surface>
@@ -238,7 +241,7 @@ def Xform "CommsAntenna" (
                     )
                     {
                 double radius = 0.055
-                double3 xformOp:translate = (0.0, 0.085, 0.035)
+                double3 xformOp:translate = (0.0, 0.085, 0.0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
                 rel material:binding = <CommsIndicatorMaterial>
                 bool physics:collisionEnabled = false

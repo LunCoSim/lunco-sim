@@ -1,6 +1,7 @@
 // Graphics acceptance for the authored rocker-bogie antenna presentation.
 const TEST_KIND = "graphics";
 const ROOT = "/RockerBogieAntennaVisual/Rover";
+const FEED_ROOT = ROOT + "/Antenna/YawHead/DishGimbal/DishHead";
 const EPS = 0.001;
 
 fn close_vec(actual, expected) {
@@ -37,6 +38,23 @@ fn authored_translate_ok(path, expected) {
     close_vec(record.attrs["xformOp:translate"], expected)
 }
 
+fn authored_feed_pose_ok() {
+    let aperture = query("QueryUsdPrim", #{
+        path: FEED_ROOT + "/LinkAperture",
+        attrs: ["xformOp:translate"],
+    });
+    let indicator = query("QueryUsdPrim", #{
+        path: FEED_ROOT + "/LinkAperture/CommsIndicator",
+        attrs: ["xformOp:translate"],
+    });
+    if aperture == () || aperture.ok == false || aperture.attrs == ()
+        || indicator == () || indicator.ok == false || indicator.attrs == () {
+        return false;
+    }
+    close_vec(aperture.attrs["xformOp:translate"], [0.0, 0.36, 0.0])
+        && close_vec(indicator.attrs["xformOp:translate"], [0.0, 0.085, 0.0])
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -59,6 +77,9 @@ fn on_tick(me) {
     failures.push(t_true(
         authored_translate_ok(ROOT + "/WifiRadio", [0.0, 0.22, 0.35]),
         "the Wi-Fi radio is not authored on the rover roof"));
+    failures.push(t_true(
+        authored_feed_pose_ok(),
+        "the shared feed indicator is not centered on the LinkAperture bore axis"));
     // A positive X rotation puts a Z-axis cylinder's front endpoint above its
     // wheel. These authored negative angles are the geometry contract: they
     // bring each forward link's lower endpoint to the wheel hub. The rear links
