@@ -84,9 +84,11 @@ pub fn compute_local_earth(
     mut commands: Commands,
     dir: Option<Res<EarthDirectionWorld>>,
     active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
-    q_frames: Query<&GlobalTransform>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&big_space::prelude::Grid>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_targets: Query<
-        (Entity, Option<&LocalEarth>, Option<&GlobalTransform>),
+        (Entity, Option<&LocalEarth>),
         (
             With<crate::EnvironmentProbe>,
             With<crate::EarthDirectionRequired>,
@@ -136,7 +138,7 @@ pub fn compute_local_earth(
         // re-anchor waiting for its site frame). Do not leave the last valid
         // LocalEarth cached: the apply phase would otherwise publish that
         // stale vector and the tracker would keep commanding an old target.
-        for (entity, existing, _) in &q_targets {
+        for (entity, existing) in &q_targets {
             if existing.is_some() {
                 commands.entity(entity).remove::<LocalEarth>();
             }
@@ -180,7 +182,7 @@ pub fn compute_local_earth(
         info!("[environment] local Earth direction is available again");
     }
     let Some(active_frame) = active_frame else {
-        for (entity, existing, _) in &q_targets {
+        for (entity, existing) in &q_targets {
             if existing.is_some() {
                 commands.entity(entity).remove::<LocalEarth>();
             }
@@ -200,8 +202,10 @@ pub fn compute_local_earth(
         }
         return;
     };
-    let Some(frame_gt) = q_frames.get(active_frame.0).ok() else {
-        for (entity, existing, _) in &q_targets {
+    let Ok((_, frame_rotation)) =
+        lunco_core::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
+    else {
+        for (entity, existing) in &q_targets {
             if existing.is_some() {
                 commands.entity(entity).remove::<LocalEarth>();
             }
@@ -214,16 +218,17 @@ pub fn compute_local_earth(
                     severity: lunco_core::DiagnosticSeverity::Error,
                     producer: "environment-earth".to_string(),
                     subject: format!("frame:{:?}", active_frame.0),
-                    message: "the bound ActivePhysicsFrame has no live GlobalTransform".to_string(),
+                    message: "the bound ActivePhysicsFrame has no complete BigSpace pose"
+                        .to_string(),
                 }],
             );
         }
         return;
     };
-    let direction_to_earth_world = frame_gt.rotation().mul_vec3(dir.0);
+    let direction_to_earth_world = frame_rotation.0 * dir.0.as_dvec3();
     if !direction_to_earth_world.is_finite() || direction_to_earth_world.length_squared() <= 1.0e-12
     {
-        for (entity, existing, _) in &q_targets {
+        for (entity, existing) in &q_targets {
             if existing.is_some() {
                 commands.entity(entity).remove::<LocalEarth>();
             }
@@ -244,8 +249,10 @@ pub fn compute_local_earth(
         return;
     }
     let mut missing_mounts = 0;
-    for (entity, existing, gt) in &q_targets {
-        let Some(gt) = gt else {
+    for (entity, existing) in &q_targets {
+        let Ok((_, mount_rotation)) =
+            lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+        else {
             missing_mounts += 1;
             if existing.is_some() {
                 commands.entity(entity).remove::<LocalEarth>();
@@ -259,8 +266,10 @@ pub fn compute_local_earth(
         // then use the one shared ENU azimuth/elevation convention on that local
         // vector.  This makes the command invariant under arbitrary vehicle
         // attitude, not merely yaw.
-        let mount_direction =
-            crate::mount_frame::direction_in_mount_frame(direction_to_earth_world.normalize(), gt);
+        let mount_direction = crate::mount_frame::direction_in_mount_rotation(
+            direction_to_earth_world.normalize(),
+            mount_rotation.0,
+        );
         let next = LocalEarth {
             direction: mount_direction,
         };
@@ -281,7 +290,7 @@ pub fn compute_local_earth(
                     producer: "environment-earth".to_string(),
                     subject: "EnvironmentProbe".to_string(),
                     message: format!(
-                        "{missing_mounts} environment probe(s) have no GlobalTransform for Earth projection"
+                        "{missing_mounts} environment probe(s) have no complete BigSpace pose for Earth projection"
                     ),
                 }],
             );
@@ -343,7 +352,14 @@ mod tests {
     use super::*;
 
     fn bind_identity_active_frame(app: &mut App) {
-        let frame = app.world_mut().spawn(GlobalTransform::IDENTITY).id();
+        let frame = app
+            .world_mut()
+            .spawn((
+                big_space::prelude::Grid::default(),
+                Transform::default(),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
     }
 
@@ -435,6 +451,7 @@ mod tests {
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
+                Transform::default(),
                 GlobalTransform::IDENTITY,
             ))
             .id();
@@ -524,7 +541,8 @@ mod tests {
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
-                GlobalTransform::from(facing_east),
+                facing_east,
+                GlobalTransform::IDENTITY,
             ))
             .id();
         app.update();
@@ -558,9 +576,8 @@ mod tests {
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
                 lunco_cosim::SimComponent::default(),
-                GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_x(
-                    std::f32::consts::FRAC_PI_2,
-                ))),
+                Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                GlobalTransform::IDENTITY,
             ))
             .id();
         app.update();
@@ -582,9 +599,13 @@ mod tests {
         let site_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let frame = app
             .world_mut()
-            .spawn(GlobalTransform::from(Transform::from_rotation(
-                site_rotation,
-            )))
+            .spawn((
+                big_space::prelude::Grid::default(),
+                Transform::from_rotation(site_rotation),
+                // Deliberately stale: the production system must not use the
+                // render-relative value before BigSpace propagation.
+                GlobalTransform::IDENTITY,
+            ))
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         app.insert_resource(EarthDirectionWorld(Vec3::NEG_Z));
@@ -596,7 +617,9 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                GlobalTransform::from(Transform::from_rotation(mount_rotation)),
+                Transform::from_rotation(mount_rotation),
+                // Deliberately stale for the same reason as the frame above.
+                GlobalTransform::IDENTITY,
             ))
             .id();
         app.update();
