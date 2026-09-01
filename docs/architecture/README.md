@@ -113,6 +113,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | **Design.** Precomputed coarse tiles + monotone progressive refinement for the streamed surface. Its measurement steps are live tests in `lunco-terrain-surface/tests/precompute_*.rs` |
 | [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates, clock binding, retention, and the shared signal registry |
 | [**`lint-substrate.md`**](lint-substrate.md) | Authoring mistakes that have no runtime symptom. **Facts in Rust, rules in rhai policy** (`lint.<domain>`), one linter per domain, findings in one report. Nothing lints on load or on a physics cadence — `RunLint` is an explicit authoring/preflight verb |
+| [`temporary-diagnostic-visuals.md`](temporary-diagnostic-visuals.md) | Temporary camera/collider diagnostics use one Twin-scoped lease and the existing Gizmos path; Rhai chooses targets/policy, Rust owns runtime snapshots and lifecycle, and USD/physics remain untouched |
 | [`derive-substrate.md`](derive-substrate.md) | The unified derived-artifact substrate (async compute/bake patterns) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
 | [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | **The North Star + substrates B–E in full**: the one principle, the tier ladder, `lunco-precompute` (B), `Mobility` (C), ports resolve→handle (D), `lunco-hash` (E) |

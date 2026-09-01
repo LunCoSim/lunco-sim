@@ -4,8 +4,9 @@ description: >
   Extend or diagnose LunCoSim's USD-to-ECS projection: add a supported prim or
   attribute, trace an ignored field, or fix edits that fail to persist, undo,
   replicate, or render. Use for `lunco-usd*` machinery and document-owned ECS
-  state. Prefer this skill for projection internals; use build-usd-scene for
-  scene authoring and luncosim-architecture for cross-domain ownership.
+  state. Prefer this skill for projection internals; use edit-usd-assembly for
+  live headful assembly authoring, build-usd-scene for scene authoring, and
+  luncosim-architecture for cross-domain ownership.
 ---
 
 # USD → ECS projection
@@ -75,11 +76,23 @@ The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
 Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
 lease and can later use `FocusUsdPreview` or `CloseUsdPreview`. The isolated
-preview, prim tree, Inspector, and USD commands consume that same document
-binding.
+preview, prim tree, connection canvas, Inspector, parameter/variant/mount,
+joint, and animation view-models consume that same lease binding. Native
+editor view-model resources are keyed by `UsdPreviewId` and derive one entry
+per open lease; panels paint only the focused entry. The shared ECS selection
+is a focused-lease projection restored from editor-owned session selection,
+not a document identity. Panel writes use the lease's explicit `DocumentId`,
+`LayerId`, and projection generation.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.
+
+When an agent is creating or modifying a reusable assembly, use the dedicated
+[interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md). It
+requires a headful production window, explicit document/preview handles,
+typed USD edits, a screenshot after each coherent change, and a user-feedback
+checkpoint. This projection skill owns the implementation boundary behind that
+workflow; it does not authorize direct USDA or ECS edits.
 
 For agent or editor synchronization, call `SyncUsdDocument` with the explicit
 document generation. Use its typed delta while the cursor is covered; consume

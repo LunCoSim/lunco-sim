@@ -4,7 +4,7 @@
 //! diagram is the first). It reads the live composed USD stage and renders each
 //! wiring-relevant prim as a node and each co-sim connection / physics joint as
 //! an edge; dragging port-to-port authors a `SetConnection`, and Delete clears
-//! a wire or removes a prim — all through the journaled `ApplyUsdOp` path.
+//! a wire or removes a prim — all through the journaled USD command path.
 //!
 //! # Pipeline
 //!
@@ -18,7 +18,7 @@
 //!         ▼
 //!   lunco_canvas::Scene → Canvas → egui
 //!         ▲                 │
-//!         └── SceneEvent ───┘  → UsdOp (SetConnection / RemovePrim) → ApplyUsdOp
+//!         └── SceneEvent ───┘  → UsdOp (SetConnection / RemovePrim) → ApplyUsdOps
 //! ```
 //!
 //! The producer runs on the **main thread** (the stage is `!Send`) and rebuilds
@@ -40,9 +40,8 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_doc::DocumentId;
 use lunco_modelica::ui::commands::FocusDocumentByName;
-use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::ui::viewport::UsdViewportState;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
@@ -75,17 +74,20 @@ fn build_registry() -> VisualRegistry {
     reg
 }
 
-/// Panel state: the canvas plus the bindings the producer resolves so the
-/// write-back path knows which document to author into.
-#[derive(Resource)]
-pub struct UsdCanvasState {
+/// One preview lease's canvas plus the bindings the producer resolves so the
+/// write-back path knows which document and authored layer to use.
+pub struct UsdCanvasSessionState {
     canvas: Canvas,
     /// Stage currently projected — used to detect a scene swap.
     stage_id: Option<AssetId<UsdStageAsset>>,
-    /// Editable document backing `stage_id`, if resolvable. `None` for a
-    /// raw-file scene that has no `DocumentRegistry<UsdDocument>` entry — edits are
-    /// suppressed (they'd be silently dropped on reboot).
+    /// Editable document backing `stage_id`, if resolvable. A preview lease is
+    /// created only for an open document, so edits are never kept as a local
+    /// canvas-only mutation.
     doc: Option<DocumentId>,
+    /// Authored layer selected by this preview lease.
+    edit_target: Option<LayerId>,
+    /// Document generation captured with the preview projection.
+    generation: u64,
     /// Hash of the last projected topology; a rebuild is skipped while it holds
     /// so interaction (pan/zoom/drag/select) isn't stomped every frame.
     topo_hash: u64,
@@ -102,7 +104,7 @@ pub struct UsdCanvasState {
     active_schema_root: Option<String>,
 }
 
-impl Default for UsdCanvasState {
+impl Default for UsdCanvasSessionState {
     fn default() -> Self {
         let mut canvas = Canvas::new(build_registry());
         // USD scenes can contain many composed participants.  The generic
@@ -115,6 +117,8 @@ impl Default for UsdCanvasState {
             canvas,
             stage_id: None,
             doc: None,
+            edit_target: None,
+            generation: 0,
             topo_hash: 0,
             built: false,
             needs_fit: false,
@@ -126,12 +130,14 @@ impl Default for UsdCanvasState {
     }
 }
 
-impl UsdCanvasState {
+impl UsdCanvasSessionState {
     fn clear(&mut self) {
         self.canvas.scene = Scene::default();
         self.canvas.selection.clear();
         self.stage_id = None;
         self.doc = None;
+        self.edit_target = None;
+        self.generation = 0;
         self.topo_hash = 0;
         self.built = false;
         self.needs_fit = false;
@@ -140,6 +146,13 @@ impl UsdCanvasState {
         self.schema_roots.clear();
         self.active_schema_root = None;
     }
+}
+
+/// Session-keyed connection canvases. Canvas interaction state (pan, zoom,
+/// graph selection, and chosen schema root) belongs to its preview lease.
+#[derive(Resource, Default)]
+pub struct UsdCanvasState {
+    sessions: HashMap<UsdPreviewId, UsdCanvasSessionState>,
 }
 
 /// Order-stable hash of the projected topology (paths + connectors + wires).
@@ -173,57 +186,56 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
     h.finish()
 }
 
-/// View-model producer (WP-8): reads the live composed stage and rebuilds the
-/// canvas scene when the topology changes. Runs on the main thread because
-/// `StageView` is `!Send`.
+/// View-model producer (WP-8): reads each open preview's composed stage and
+/// rebuilds its canvas scene when the topology changes. Runs on the main thread
+/// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
     q: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     viewport_state: Option<Res<UsdViewportState>>,
-    mut state: ResMut<UsdCanvasState>,
+    mut views: ResMut<UsdCanvasState>,
 ) {
     let Some(viewport) = viewport_state.as_deref() else {
-        state.clear();
+        views.sessions.clear();
         return;
     };
-    let Some(doc) = viewport.focused_doc() else {
-        state.clear();
-        return;
-    };
-    let Some(handle) = viewport.focused_stage_handle().cloned() else {
-        state.clear();
-        return;
-    };
-    let Some(preview_root) = viewport.focused_scene_root() else {
-        state.clear();
-        return;
-    };
+    let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
+    views.sessions.retain(|preview, _| open.contains(preview));
+    for session in viewport.sessions() {
+        let state = views
+            .sessions
+            .entry(session.id())
+            .or_insert_with(UsdCanvasSessionState::default);
+        produce_usd_canvas_session(session, &q, &q_parents, &stages, &mut canonical, state);
+    }
+}
+
+fn produce_usd_canvas_session(
+    session: &UsdPreviewSession,
+    q: &Query<(Entity, &UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &mut CanonicalStages,
+    state: &mut UsdCanvasSessionState,
+) {
+    let doc = session.doc();
+    let handle = session.stage_handle().clone();
+    let preview_root = session.scene_root();
     let stage_id = handle.id();
 
-    // Retire the previous document's graph before waiting for the new preview
-    // stage to become available. A loading document must not leave an old
-    // document visible or editable through this panel.
+    // A lease replacement invalidates the complete interaction model before a
+    // new stage becomes available; a loading document cannot show or edit the
+    // previous document's graph.
     if state.doc != Some(doc) || state.stage_id != Some(stage_id) {
         state.clear();
     }
+    state.edit_target = Some(session.edit_target().clone());
+    state.generation = session.projected_generation();
 
-    // The Editor preview root is the document boundary. The live simulation
-    // can contain the same stage handle, but those entities are not editable
-    // through this file-scoped graph.
-    let is_preview_entity = |entity: Entity| {
-        let mut current = entity;
-        while let Ok(parent) = q_parents.get(current) {
-            current = parent.parent();
-            if current == preview_root {
-                return true;
-            }
-        }
-        false
-    };
-
-    // Ensure the canonical stage is built (mirrors rewire_usd_connections).
+    let is_preview_entity =
+        |entity: Entity| crate::ui::is_editor_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
         if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
             canonical.get_or_build(stage_id, &recipe);
@@ -232,9 +244,6 @@ pub fn produce_usd_canvas(
     let Some(cs) = canonical.get(stage_id) else {
         return;
     };
-    // Enumerate prims from the ECS entities on this stage (parity with the
-    // co-sim wiring derivation) rather than a live-stage traversal, which can
-    // miss composed children.
     let prim_paths: Vec<String> = q
         .iter()
         .filter(|(entity, p)| p.stage_handle.id() == stage_id && is_preview_entity(*entity))
@@ -248,9 +257,6 @@ pub fn produce_usd_canvas(
         .as_ref()
         .filter(|root| roots.contains(root))
         .cloned();
-    // The Connections view is an explicit authored boundary projection. The
-    // collector above remains complete so the same USD topology stays
-    // available to simulation, diagnostics, and future full-graph views.
     let (nodes, wires) = active_root
         .as_deref()
         .map(|root| project_schema(source_nodes.clone(), source_wires.clone(), root))
@@ -258,9 +264,6 @@ pub fn produce_usd_canvas(
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
-        // The selected projection is unchanged, but another authored schema
-        // root may have changed on this same stage revision. Retain the fresh
-        // complete topology so switching systems never reveals stale data.
         state.source_nodes = source_nodes;
         state.source_wires = source_wires;
         state.schema_roots = roots;
@@ -271,15 +274,13 @@ pub fn produce_usd_canvas(
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
     bevy::log::debug!(
-        "[usd-canvas] rebuilt: {} prim entities -> {} nodes, {} edges",
+        "[usd-canvas] preview {} rebuilt: {} prim entities -> {} nodes, {} edges",
+        session.id().0,
         prim_paths.len(),
         scene.node_count(),
         scene.edge_count()
     );
-
     state.canvas.scene = scene;
-    // Stale NodeId/EdgeId references would point at unrelated prims in the fresh
-    // scene (ids restart at 0), so drop the selection on a structural rebuild.
     state.canvas.selection.clear();
     state.source_nodes = source_nodes;
     state.source_wires = source_wires;
@@ -289,15 +290,6 @@ pub fn produce_usd_canvas(
     state.stage_id = Some(stage_id);
     state.built = true;
     state.doc = Some(doc);
-
-    // Request a frame-to-fit after every topology rebuild.  Composed scenes
-    // can acquire late Modelica participants while their programs compile;
-    // fitting only the first snapshot leaves the subsequently-added graph
-    // outside the viewport.  The actual fit runs in the panel's next render,
-    // which alone knows the real widget size (`F` re-fits precisely anytime
-    // thereafter).  Structural rebuilds are the one case where restoring the
-    // complete authored graph is more important than preserving a transient
-    // pan position.
     if bounds.is_some() {
         state.needs_fit = true;
     }
@@ -343,7 +335,7 @@ fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
 
 /// Classify an `EdgeCreated`'s two endpoints into (source-output, sink-input)
 /// by port kind, then author the sink's `inputs:<c>.connect`.
-fn connect_op(scene: &Scene, from: &PortRef, to: &PortRef) -> Option<UsdOp> {
+fn connect_op(scene: &Scene, from: &PortRef, to: &PortRef, edit_target: &LayerId) -> Option<UsdOp> {
     let kind = |pr: &PortRef| -> Option<&str> {
         scene
             .node(pr.node)?
@@ -363,7 +355,7 @@ fn connect_op(scene: &Scene, from: &PortRef, to: &PortRef) -> Option<UsdOp> {
     let sink_conn = sink.port.as_str();
     let source_conn = source.port.as_str();
     Some(UsdOp::SetConnection {
-        edit_target: LayerId::root(),
+        edit_target: edit_target.clone(),
         path: sink_prim,
         name: format!("inputs:{sink_conn}"),
         // Co-sim ports are authored `float` (the convention rewire reads).
@@ -381,19 +373,20 @@ fn build_ops(
     node_origin: &HashMap<NodeId, String>,
     edge_sinks: &HashMap<EdgeId, EdgeSink>,
     events: &[SceneEvent],
+    edit_target: &LayerId,
 ) -> Vec<UsdOp> {
     let mut ops = Vec::new();
     for ev in events {
         match ev {
             SceneEvent::EdgeCreated { from, to, .. } => {
-                if let Some(op) = connect_op(scene, from, to) {
+                if let Some(op) = connect_op(scene, from, to, edit_target) {
                     ops.push(op);
                 }
             }
             SceneEvent::EdgeDeleted { id } => {
                 if let Some(sink) = edge_sinks.get(id) {
                     ops.push(UsdOp::SetConnection {
-                        edit_target: LayerId::root(),
+                        edit_target: edit_target.clone(),
                         path: sink.prim.clone(),
                         name: format!("inputs:{}", sink.connector),
                         type_name: "float".to_string(),
@@ -406,7 +399,7 @@ fn build_ops(
                 for eid in orphaned_edges {
                     if let Some(sink) = edge_sinks.get(eid) {
                         ops.push(UsdOp::SetConnection {
-                            edit_target: LayerId::root(),
+                            edit_target: edit_target.clone(),
                             path: sink.prim.clone(),
                             name: format!("inputs:{}", sink.connector),
                             type_name: "float".to_string(),
@@ -416,7 +409,7 @@ fn build_ops(
                 }
                 if let Some(path) = node_origin.get(id) {
                     ops.push(UsdOp::RemovePrim {
-                        edit_target: LayerId::root(),
+                        edit_target: edit_target.clone(),
                         path: path.clone(),
                     });
                 }
@@ -449,7 +442,24 @@ impl Panel for UsdCanvasPanel {
         PanelScrollPolicy::SelfManaged
     }
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        ctx.resource_scope::<UsdCanvasState, ()>(|ctx, state| {
+        let focused_preview = ctx
+            .resource::<UsdViewportState>()
+            .and_then(|viewport| viewport.focused_preview_id());
+        ctx.resource_scope::<UsdCanvasState, ()>(|ctx, views| {
+            let Some(preview) = focused_preview else {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        "No Editor document selected — choose a USD document in the Twin Browser.",
+                    );
+                });
+                return;
+            };
+            let Some(state) = views.sessions.get_mut(&preview) else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("The selected USD preview is still being projected.");
+                });
+                return;
+            };
             if !state.built {
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -565,7 +575,12 @@ impl Panel for UsdCanvasPanel {
                 .edges()
                 .filter_map(|(id, _)| edge_sink(&state.canvas.scene, *id).map(|s| (*id, s)))
                 .collect();
-            let doc = state.doc;
+            let (Some(doc), Some(edit_target)) = (state.doc, state.edit_target.clone()) else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("The selected USD preview has no writable authoring target.");
+                });
+                return;
+            };
 
             // Consume a pending frame-to-fit now that the real widget size is
             // known (the producer can only guess it).
@@ -593,40 +608,22 @@ impl Panel for UsdCanvasPanel {
             if events.is_empty() {
                 return;
             }
-            let ops = build_ops(&state.canvas.scene, &node_origin, &edge_sinks, &events);
+            let ops = build_ops(
+                &state.canvas.scene,
+                &node_origin,
+                &edge_sinks,
+                &events,
+                &edit_target,
+            );
             if ops.is_empty() {
                 return;
             }
-            match doc {
-                Some(doc) => {
-                    for op in ops {
-                        ctx.trigger(ApplyUsdOp {
-                            doc,
-                            parent_gen: None,
-                            op,
-                        });
-                    }
-                }
-                None => {
-                    // Raw-file scene: authoring would be dropped on reboot. The
-                    // canvas already reflects the edit locally; the producer will
-                    // reconcile it away on its next pass.
-                    bevy::log::warn!(
-                        "[usd-canvas] {} edit(s) ignored — scene is not document-backed",
-                        ops.len()
-                    );
-                    ctx.trigger(lunco_core::TelemetryEvent {
-                        name: "usd-connection-edit-failed".to_string(),
-                        source: 0,
-                        severity: lunco_core::Severity::Error,
-                        data: lunco_core::TelemetryValue::String(
-                            "Connections cannot be edited because this scene has no authoring document"
-                                .to_string(),
-                        ),
-                        timestamp: 0.0,
-                    });
-                }
-            }
+            ctx.trigger(lunco_usd::commands::ApplyUsdOps {
+                doc,
+                parent_gen: Some(state.generation),
+                label: "Edit USD connections".to_string(),
+                ops,
+            });
         });
     }
 }

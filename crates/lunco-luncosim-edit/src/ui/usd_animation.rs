@@ -5,7 +5,7 @@
 //! by `SetTimeSample`/`RemoveTimeSample`, so playback, undo, save, and agent
 //! automation all observe the same USD data.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use bevy::math::EulerRot;
 use bevy::prelude::*;
@@ -13,7 +13,7 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_time::{AnimationPreview, Playback};
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::ui::viewport::UsdViewportState;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
     author::normalize_value_literal, CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset,
 };
@@ -34,8 +34,9 @@ pub struct AnimationChannel {
     keyable: Option<KeyableChannel>,
 }
 
-#[derive(Resource, Default, Clone)]
-pub struct UsdAnimationView {
+#[derive(Default, Clone)]
+pub struct UsdAnimationSessionView {
+    pub preview: UsdPreviewId,
     pub entity: Option<Entity>,
     pub doc: Option<DocumentId>,
     pub edit_target: Option<LayerId>,
@@ -46,9 +47,24 @@ pub struct UsdAnimationView {
     pub unsupported_channels: Vec<String>,
 }
 
-impl UsdAnimationView {
+impl UsdAnimationSessionView {
     fn clear(&mut self) {
         *self = Self::default();
+    }
+}
+
+/// Session-keyed animation views. Timeline transport stays global to its
+/// declared time domain; authored channel inspection is isolated per preview.
+#[derive(Resource, Default)]
+pub struct UsdAnimationView {
+    sessions: HashMap<UsdPreviewId, UsdAnimationSessionView>,
+}
+
+impl UsdAnimationView {
+    pub(crate) fn focused(&self, viewport: &UsdViewportState) -> Option<&UsdAnimationSessionView> {
+        viewport
+            .focused_preview_id()
+            .and_then(|preview| self.sessions.get(&preview))
     }
 }
 
@@ -81,7 +97,7 @@ fn type_for_channel<R: UsdRead>(stage: &R, path: &SdfPath, name: &str) -> Option
     })
 }
 
-/// Rebuild keyable channels for the selected prim in the focused Editor preview.
+/// Rebuild keyable channels for the selected prim in every open Editor preview.
 pub fn produce_usd_animation_view(
     selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
@@ -90,107 +106,105 @@ pub fn produce_usd_animation_view(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     viewport: Option<Res<UsdViewportState>>,
-    mut view: ResMut<UsdAnimationView>,
+    mut views: ResMut<UsdAnimationView>,
 ) {
-    view.clear();
-
     let Some(viewport) = viewport else {
+        views.sessions.clear();
         return;
     };
-    let Some(root) = viewport.focused_scene_root() else {
-        return;
-    };
-    let Some(doc) = viewport.focused_doc() else {
-        return;
-    };
-    let Some(edit_target) = viewport.focused_edit_target().cloned() else {
-        return;
-    };
-    let Some(entity) = target
-        .as_deref()
-        .and_then(|value| value.part)
-        .filter(|entity| q.get(*entity).is_ok())
-        .or_else(|| selected.as_deref().and_then(|value| value.primary()))
-    else {
-        return;
-    };
-    if !crate::ui::is_editor_preview_entity(entity, root, &q_parents) {
-        return;
-    }
-    let Ok(prim) = q.get(entity) else {
-        return;
-    };
-    let Some(handle) = viewport.focused_stage_handle() else {
-        return;
-    };
-    if prim.stage_handle.id() != handle.id() {
-        return;
-    }
-    let stage_id = handle.id();
-    if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(handle).and_then(|asset| asset.recipe.clone()) {
-            canonical.get_or_build(stage_id, &recipe);
-        }
-    }
-    let Some(stage) = canonical.get(stage_id).map(|value| value.view()) else {
-        return;
-    };
-    let Ok(path) = SdfPath::new(&prim.path) else {
-        return;
-    };
+    let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
+    views.sessions.retain(|preview, _| open.contains(preview));
 
-    // xformOpOrder is the authored transform contract. Include any xform
-    // properties as a structural observation as well, because a composed
-    // reference may expose a channel before its order is materialized locally.
-    let mut names = BTreeSet::new();
-    names.extend(
-        stage
-            .texts(&path, "xformOpOrder")
-            .into_iter()
-            .filter(|name| name.starts_with("xformOp:") && name != "xformOpOrder"),
-    );
-    names.extend(
-        stage
-            .attr_names(&path)
-            .into_iter()
-            .filter(|name| name.starts_with("xformOp:") && name != "xformOpOrder"),
-    );
-    // A prim with no authored transform stack can still receive a valid
-    // translation key. SetTimeSample owns adding that operation to the order.
-    if names.is_empty() {
-        names.insert("xformOp:translate".into());
-    }
+    for session in viewport.sessions() {
+        let view = views
+            .sessions
+            .entry(session.id())
+            .or_insert_with(|| UsdAnimationSessionView {
+                preview: session.id(),
+                doc: Some(session.doc()),
+                edit_target: Some(session.edit_target().clone()),
+                ..Default::default()
+            });
+        view.clear();
+        view.preview = session.id();
+        view.doc = Some(session.doc());
+        view.edit_target = Some(session.edit_target().clone());
+        view.generation = session.projected_generation();
 
-    let mut channels = Vec::new();
-    let mut unsupported_channels = Vec::new();
-    for name in names {
-        let Some(type_name) = type_for_channel(&stage, &path, &name) else {
-            unsupported_channels.push(name);
+        let Some(entity) = crate::ui::selected_entity_in_preview(
+            session,
+            selected.as_deref(),
+            target.as_deref(),
+            &q,
+            &q_parents,
+        ) else {
             continue;
         };
-        let keyable = keyable_channel(&name);
-        if keyable.is_none() {
-            unsupported_channels.push(name.clone());
+        let Ok(prim) = q.get(entity) else {
+            continue;
+        };
+        let handle = session.stage_handle();
+        if prim.stage_handle.id() != handle.id() {
+            continue;
         }
-        channels.push(AnimationChannel {
-            times: stage.time_sample_times(&path, &name),
-            name,
-            type_name,
-            keyable,
-        });
-    }
+        let stage_id = handle.id();
+        if canonical.get(stage_id).is_none() {
+            if let Some(recipe) = stages.get(handle).and_then(|asset| asset.recipe.clone()) {
+                canonical.get_or_build(stage_id, &recipe);
+            }
+        }
+        let Some(stage) = canonical.get(stage_id).map(|value| value.view()) else {
+            continue;
+        };
+        let Ok(path) = SdfPath::new(&prim.path) else {
+            continue;
+        };
 
-    view.entity = Some(entity);
-    view.doc = Some(doc);
-    view.edit_target = Some(edit_target);
-    view.generation = viewport
-        .focused_session()
-        .map(|session| session.projected_generation())
-        .unwrap_or_default();
-    view.path = prim.path.clone();
-    view.time_codes_per_second = stage.time_codes_per_second().max(f64::MIN_POSITIVE);
-    view.channels = channels;
-    view.unsupported_channels = unsupported_channels;
+        // xformOpOrder is the authored transform contract. Include xform
+        // properties as well because a composed reference can expose a
+        // channel before its order is materialized locally.
+        let mut names = BTreeSet::new();
+        names.extend(
+            stage
+                .texts(&path, "xformOpOrder")
+                .into_iter()
+                .filter(|name| name.starts_with("xformOp:") && name != "xformOpOrder"),
+        );
+        names.extend(
+            stage
+                .attr_names(&path)
+                .into_iter()
+                .filter(|name| name.starts_with("xformOp:") && name != "xformOpOrder"),
+        );
+        if names.is_empty() {
+            names.insert("xformOp:translate".into());
+        }
+
+        let mut channels = Vec::new();
+        let mut unsupported_channels = Vec::new();
+        for name in names {
+            let Some(type_name) = type_for_channel(&stage, &path, &name) else {
+                unsupported_channels.push(name);
+                continue;
+            };
+            let keyable = keyable_channel(&name);
+            if keyable.is_none() {
+                unsupported_channels.push(name.clone());
+            }
+            channels.push(AnimationChannel {
+                times: stage.time_sample_times(&path, &name),
+                name,
+                type_name,
+                keyable,
+            });
+        }
+
+        view.entity = Some(entity);
+        view.path = prim.path.clone();
+        view.time_codes_per_second = stage.time_codes_per_second().max(f64::MIN_POSITIVE);
+        view.channels = channels;
+        view.unsupported_channels = unsupported_channels;
+    }
 }
 
 fn current_time_code(ctx: &lunco_workbench::PanelCtx, time_codes_per_second: f64) -> f64 {
@@ -231,7 +245,7 @@ fn key_literal(channel: KeyableChannel, type_name: &str, transform: Transform) -
 
 fn apply_animation_ops(
     ctx: &mut lunco_workbench::PanelCtx,
-    view: &UsdAnimationView,
+    view: &UsdAnimationSessionView,
     label: &str,
     ops: Vec<UsdOp>,
 ) {
@@ -261,7 +275,11 @@ pub fn authored_animation_section(
     entity: Entity,
 ) {
     let Some(view) = ctx
-        .resource::<UsdAnimationView>()
+        .resource::<UsdViewportState>()
+        .and_then(|viewport| {
+            ctx.resource::<UsdAnimationView>()
+                .and_then(|views| views.focused(viewport))
+        })
         .filter(|view| view.entity == Some(entity))
         .cloned()
     else {

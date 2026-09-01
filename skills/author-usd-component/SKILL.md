@@ -30,6 +30,8 @@ cutover.
 Related skills: [`use-asset-library`](../use-asset-library/SKILL.md) (where the
 file goes, how it is discovered, the `lunco://` scheme),
 [`build-usd-scene`](../build-usd-scene/SKILL.md) (assemble),
+[`edit-usd-assembly`](../edit-usd-assembly/SKILL.md) (interactive headful
+assembly authoring with screenshot/user-feedback checkpoints),
 [`validate-assets`](../validate-assets/SKILL.md) (pre-flight it),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
 

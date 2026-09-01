@@ -2439,7 +2439,11 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             Some(sp) => (Vec::new(), sp, false),
             None => {
                 let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
-                match lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas) {
+                match lunco_usd::material::ensure_preview_surface_ops(
+                    LayerId::root(),
+                    &prim.path,
+                    &schemas,
+                ) {
                     Some((ops, shader)) => (ops, shader, true),
                     None => return,
                 }

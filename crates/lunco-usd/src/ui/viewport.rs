@@ -305,6 +305,13 @@ impl UsdViewportState {
         self.sessions.get(&id)
     }
 
+    /// All open preview leases. Native editor view-models use this iterator to
+    /// derive state for every document independently; the dock still paints
+    /// only [`Self::focused_session`].
+    pub fn sessions(&self) -> impl Iterator<Item = &UsdPreviewSession> {
+        self.sessions.values()
+    }
+
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }

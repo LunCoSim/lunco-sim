@@ -87,6 +87,23 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+### Temporary diagnostic visuals
+
+Temporary camera/collider/dynamics diagnostics are runtime presentation, not
+USD facts. Reuse the existing `Gizmos` systems and one Twin-scoped
+`DiagnosticVisualLease` store: Rhai/API/UI selects an explicit target and
+policy, while Rust resolves `SceneViewport`, `StageView`, Avian collider
+realization, BigSpace render poses, bounded snapshots, and lifecycle cleanup.
+Do not add a diagnostic USD schema, temporary physics entity, per-frame USD
+edit, second camera selector, or global name-only registry. Handles must carry
+the Twin/root/mount generation and become stale on `SceneTeardown`, reload,
+target deletion, or `TwinClosed`; missing targets and unsupported shapes are
+visible errors. The draw pass reads finalized render transforms and never writes
+physics or scene state. Existing separate debug toggles must converge on this
+lease boundary when the feature is implemented rather than gaining another
+toggle API. See
+[`docs/architecture/temporary-diagnostic-visuals.md`](../../docs/architecture/temporary-diagnostic-visuals.md).
+
 ### Assembly document snapshots
 
 Assembly editing starts from the existing document system. Use
@@ -99,6 +116,23 @@ Twin journal. Save-As is the first path binding. A derived cache must be
 document-owned and keyed by all authoritative layer revisions; full USD
 composition and dependency resolution stay with `lunco-usd-compose` and its
 existing resolver path.
+
+Native Assembly Editor view-models are keyed by the existing `UsdPreviewId`
+lease. Derive one prim tree, connection canvas, Inspector subview, and
+authored USD subview per open lease, then paint only the focused entry. The
+shared ECS selection is only the focused-lease projection; keep selection and
+drilled targets in editor-owned session state so focus changes cannot apply a
+command to a same-named prim in another document. Always carry the lease's
+explicit `DocumentId`, `LayerId`, and projection generation into a typed USD
+command.
+
+When the work is an agent-driven human asset edit, use the
+[interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md). The
+authoring session is headful and remains visible to the user; every coherent
+change is applied through the existing typed/journal path, inspected through
+the focused preview and a screenshot, and reviewed with the user before the
+next material change or save. This is an operating mode over the existing
+ownership model, not a new assembly API.
 
 The render-side camera binder also owns Bevy's clustered-light policy.
 Use Bevy's `ClusterConfig::Single` for automatic cameras while the ECS topology

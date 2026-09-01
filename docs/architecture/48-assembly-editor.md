@@ -38,6 +38,14 @@ listed below; they do not introduce a second authoring model.
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
   the lease shown by the dock and `CloseUsdPreview` releases only that lease.
   All preview leases are isolated from the simulation scene.
+- Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
+  connection canvas, parameter/variant/mount views, joint editor, and
+  animation editor derive one entry per open lease and paint only the focused
+  entry. Pan/zoom, graph selection, drilled Inspector target, authored layer,
+  document generation, and render resources therefore cannot leak between two
+  open documents with identical prim paths. The shared ECS selection is only
+  the focused-lease projection; the editor-owned session selection restores it
+  when focus changes.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -58,9 +66,9 @@ The existing implementation provides the substrate the perspective composes:
 The perspective must remain a composition of these surfaces. The Twin Browser
 opens an explicit preview lease for the selected document; the USD preview, prim
 tree, Connections graph, Inspector, and command handlers consume that same
-explicit document binding. The Connections graph is empty until that preview
-document is focused;
-it never infers an editable stage from entity counts or the live simulation.
+explicit document binding. The Connections graph and native USD panels are
+empty until their focused lease has a projected stage; they never infer an
+editable stage from entity counts or the live simulation.
 Do not add a second graph library, a special rover assembly implementation, or
 direct ECS mutation for convenience.
 
@@ -187,6 +195,26 @@ discarding the document clears its pending review plans.
 The browser row reflects modified, review, muted, and conflict state from this
 document-scoped resource. `SaveDocument`/`SaveAsDocument` remain explicit
 persistence commands; proposal commit never writes a file implicitly.
+
+### Interactive headful authoring
+
+The agent-and-human authoring workflow is defined by the
+[`edit-usd-assembly` skill](../../skills/edit-usd-assembly/SKILL.md). Assembly
+edits start in a windowed production `target/debug/luncosim --api PORT`
+session; `--offscreen` and `--no-ui` are not substitutes for this workflow.
+The user sees the focused `UsdPreviewId` while the agent uses the same typed
+commands or the built-in `assembly_edit` Rhai library. After each coherent
+change, the agent checks the command acknowledgement and generation, reads the
+affected composed prim, captures and inspects a screenshot, and presents the
+result for user feedback before another material edit or final save. A missing
+display is an explicit workflow blocker, not a reason to bypass the visible
+preview.
+
+Interactive authoring does not permit direct USDA writes, ECS mutation, guessed
+document/layer/prim identities, or an assembly-specific state path. The existing
+document registry, OpenUSD composition, typed `UsdOp` journal, preview lease,
+mount validators, and explicit `SaveDocument`/`SaveAsDocument` commands remain
+the only owners.
 
 The production acceptance fixture is
 `assets/scenes/tests/assembly_editor_proposal.usda`; its Rhai observer drives

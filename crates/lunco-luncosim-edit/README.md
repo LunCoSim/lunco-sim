@@ -10,6 +10,13 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 - **Inspector Panel** — EGUI sliders for transform, mass, damping, and wheel parameters
 - **Undo** — Ctrl+Z to revert spawns and transform changes
 
+The Assembly Editor is document-scoped. Its native USD tree, connection graph,
+parameter/variant/mount views, joint editor, and animation editor keep one
+derived view per `UsdPreviewId`; the dock paints the focused lease. Selection
+and drilled Inspector targets are restored per lease, and authored edits carry
+the lease's explicit document, layer, and projection generation through typed
+USD commands.
+
 ## Gizmo System
 
 The transform gizmo follows `lunco_celestial::OrbitalViewPin.active`, the

@@ -16,6 +16,7 @@ use bevy_egui::egui;
 use lunco_core::ports::PortRegistry;
 use lunco_core::OpId;
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_doc::Document;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
@@ -437,6 +438,55 @@ fn mount_attachment_edit_target(
         })
 }
 
+/// Resolve the explicit authoring lease for a preview entity. Native USD
+/// panels must write to the layer selected by the preview, not to a process
+/// default layer inferred from the entity or the document registry.
+fn preview_authoring_context(
+    world: &mut World,
+    entity: Entity,
+) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
+    let sessions: Vec<_> = world
+        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .sessions()
+        .map(|session| {
+            (
+                session.scene_root(),
+                session.doc(),
+                session.edit_target().clone(),
+                session.projected_generation(),
+            )
+        })
+        .collect();
+    let mut parents = world.query::<&ChildOf>();
+    sessions
+        .into_iter()
+        .find(|(root, _, _, _)| {
+            if entity == *root {
+                return true;
+            }
+            let mut current = entity;
+            while let Ok(parent) = parents.get(world, current) {
+                current = parent.parent();
+                if current == *root {
+                    return true;
+                }
+            }
+            false
+        })
+        .map(|(_, doc, target, generation)| (doc, target, generation))
+}
+
+/// All USD Inspector writes use the preview's explicit layer and generation.
+/// Entities in the live simulation retain their document-owned root layer
+/// contract; they are not mistaken for preview entities.
+fn authoring_context(
+    world: &mut World,
+    entity: Entity,
+) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
+    preview_authoring_context(world, entity)
+        .or_else(|| resolve_doc_for_entity(world, entity).map(|doc| (doc, LayerId::root(), 0)))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn on_attach_at_socket_requested(
     trigger: On<AttachAtSocketRequested>,
@@ -563,20 +613,26 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
             return;
         };
         let shader_path = bound_shader_prim(world, &prim);
+        let Some((doc, edit_target, generation)) = authoring_context(world, request.part) else {
+            report_inspector_error(world, "Selected material target is not document-backed");
+            return;
+        };
         let (mut ops, shader) = match &shader_path {
             Some(path) => (Vec::new(), path.clone()),
             None => {
                 let schemas = geom_api_schemas(world, &prim);
-                let Some((ops, shader)) =
-                    lunco_usd::material::ensure_preview_surface_ops(&prim.path, &schemas)
-                else {
+                let Some((ops, shader)) = lunco_usd::material::ensure_preview_surface_ops(
+                    edit_target.clone(),
+                    &prim.path,
+                    &schemas,
+                ) else {
                     return;
                 };
                 (ops, shader)
             }
         };
         let fresh = shader_path.is_none();
-        let root = LayerId::root();
+        let root = edit_target;
         let mut set = |name: &str, type_name: &str, value: String| {
             ops.push(UsdOp::SetAttribute {
                 edit_target: root.clone(),
@@ -623,9 +679,12 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
         if request.ior_changed || fresh {
             set("inputs:ior", "float", format!("{:.3}", request.ior));
         }
-        if let Some(doc) = resolve_doc_for_entity(world, request.part) {
-            lunco_usd::commands::apply_ops_as_change_set(world, doc, "Edit material", ops);
-        }
+        world.trigger(lunco_usd::commands::ApplyUsdOps {
+            doc,
+            parent_gen: (generation != 0).then_some(generation),
+            label: "Edit material".to_string(),
+            ops,
+        });
     });
 }
 
@@ -1184,11 +1243,89 @@ pub fn delete_selected_on_intent(
     }
 }
 
+/// Show the document lease that owns the focused Editor projection.
+///
+/// The Inspector is shared with the live simulation, so the document context
+/// must be visible before any selected-entity fields. This is a read-only
+/// projection of the existing viewport, document registry, and proposal
+/// review state; it does not infer a document from an ECS entity.
+fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    let Some((preview, doc, edit_target, projected_generation)) = ctx
+        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .and_then(|viewport| {
+            viewport.focused_session().map(|session| {
+                (
+                    session.id(),
+                    session.doc(),
+                    session.edit_target().clone(),
+                    session.projected_generation(),
+                )
+            })
+        })
+    else {
+        return;
+    };
+    let document_state = ctx
+        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .map(|host| {
+            let document = host.document();
+            (
+                document.generation(),
+                document.base_revision(),
+                document.is_dirty(),
+            )
+        });
+    let proposals = ctx
+        .resource::<lunco_usd::edit_session::UsdEditSessions>()
+        .map(|sessions| {
+            sessions
+                .for_document(doc)
+                .map(|proposal| proposal.summary())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("USD editor session").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.small(format!("preview {}", preview.0));
+            ui.small(format!("document {doc}"));
+            ui.small(format!("target {}", edit_target.as_str()));
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.small(format!("projected generation {projected_generation}"));
+            if let Some((generation, base_revision, dirty)) = document_state {
+                ui.small(format!("document generation {generation}"));
+                ui.small(format!("base revision {base_revision}"));
+                ui.small(if dirty { "modified" } else { "saved" });
+            } else {
+                ui.colored_label(ui.visuals().error_fg_color, "document is not open");
+            }
+        });
+        if proposals.is_empty() {
+            ui.small("proposal: none");
+        } else {
+            for proposal in proposals {
+                ui.small(format!(
+                    "proposal #{} · {} · {} · {} op(s)",
+                    proposal.id.0,
+                    proposal.scope.as_str(),
+                    proposal.state.as_str(),
+                    proposal.operation_count
+                ));
+            }
+        }
+    });
+    ui.separator();
+}
+
 fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
 
     ui.heading("Inspector");
+    usd_editor_session_context(ui, ctx);
 
     // Get current selection
     let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
@@ -1573,16 +1710,20 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     let part = ctx
         .resource::<crate::InspectorTarget>()
         .and_then(|t| t.part);
-    let (target, params): (Entity, Vec<crate::ui::usd_params::UsdParam>) =
-        match ctx.resource::<crate::ui::usd_params::UsdParamView>() {
-            Some(v)
-                if !v.params.is_empty()
-                    && (v.entity == Some(entity) || (v.entity.is_some() && v.entity == part)) =>
-            {
-                (v.entity.unwrap(), v.params.clone())
-            }
-            _ => return,
-        };
+    let (target, params): (Entity, Vec<crate::ui::usd_params::UsdParam>) = match ctx
+        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .and_then(|viewport| {
+            ctx.resource::<crate::ui::usd_params::UsdParamView>()
+                .and_then(|views| views.focused(viewport))
+        }) {
+        Some(v)
+            if !v.params.is_empty()
+                && (v.entity == Some(entity) || (v.entity.is_some() && v.entity == part)) =>
+        {
+            (v.entity.unwrap(), v.params.clone())
+        }
+        _ => return,
+    };
     egui::CollapsingHeader::new("Parameters")
         .default_open(true)
         .show(ui, |ui| {
@@ -1648,7 +1789,12 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// Selecting the option already composed is skipped: it would author an
 /// identical opinion, and each dispatch costs a whole-subtree rebuild.
 fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    let (prim_path, sets) = match ctx.resource::<crate::ui::usd_variants::UsdVariantView>() {
+    let (prim_path, sets) = match ctx
+        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .and_then(|viewport| {
+            ctx.resource::<crate::ui::usd_variants::UsdVariantView>()
+                .and_then(|views| views.focused(viewport))
+        }) {
         Some(v) if v.entity == Some(entity) && !v.sets.is_empty() => {
             (v.prim_path.clone(), v.sets.clone())
         }
@@ -1723,8 +1869,12 @@ fn attach_joint_from(joint: &str, axis: Option<&str>) -> Option<lunco_usd::attac
 /// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    let (host_path, items, diagnostics) = match ctx.resource::<crate::ui::usd_mount::UsdMountView>()
-    {
+    let (host_path, items, diagnostics) = match ctx
+        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .and_then(|viewport| {
+            ctx.resource::<crate::ui::usd_mount::UsdMountView>()
+                .and_then(|views| views.focused(viewport))
+        }) {
         Some(v)
             if v.entity == Some(entity) && (!v.items.is_empty() || !v.diagnostics.is_empty()) =>
         {
@@ -2706,7 +2856,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         );
         return;
     };
-    let Some(doc) = resolve_doc_for_entity(world, part) else {
+    let Some((doc, edit_target, generation)) = authoring_context(world, part) else {
         report_inspector_error(world, "Selected shader target is not document-backed");
         return;
     };
@@ -2733,9 +2883,9 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // `String` gets `None`.
     world.trigger(ApplyUsdOp {
         doc,
-        parent_gen: None,
+        parent_gen: (generation != 0).then_some(generation),
         op: UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
+            edit_target,
             path: shader_prim,
             name: "info:wgsl:sourceAsset".to_string(),
             type_name: "asset".to_string(),
@@ -3412,9 +3562,9 @@ fn apply_usd_path_attribute_change(
     type_name: &str,
     value: String,
 ) {
-    if let Some(doc) = resolve_doc_for_entity(world, entity) {
+    if let Some((doc, edit_target, generation)) = authoring_context(world, entity) {
         let op = UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
+            edit_target,
             path: prim_path,
             name: name.to_string(),
             type_name: type_name.to_string(),
@@ -3422,7 +3572,7 @@ fn apply_usd_path_attribute_change(
         };
         world.trigger(ApplyUsdOp {
             doc,
-            parent_gen: None,
+            parent_gen: (generation != 0).then_some(generation),
             op,
         });
     }
@@ -3444,16 +3594,16 @@ fn apply_usd_variant_selection(
     set: String,
     variant: String,
 ) {
-    if let Some(doc) = resolve_doc_for_entity(world, entity) {
+    if let Some((doc, edit_target, generation)) = authoring_context(world, entity) {
         let op = UsdOp::SetVariantSelection {
-            edit_target: LayerId::root(),
+            edit_target,
             path: prim_path,
             variant_set: set,
             variant,
         };
         world.trigger(ApplyUsdOp {
             doc,
-            parent_gen: None,
+            parent_gen: (generation != 0).then_some(generation),
             op,
         });
     }
