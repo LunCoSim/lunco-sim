@@ -14,7 +14,7 @@ Keep this page operational. The complete contract is in
 | f64 pose composition | `lunco-core` | `ActiveFramePoseQuery`, frame helpers |
 | Cell/local split | `big_space` | `Grid::translation_to_grid` |
 | Camera origin | `lunco-core` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |
-| Terrain blueprint coordinates | `lunco-render-bevy` | `blueprint_origin` plus the active-frame origin/inverse rotation restore authored flat-grid coordinates |
+| Terrain blueprint coordinates | `lunco-render-bevy` | `blueprint_origin` plus the active frame's finalized render origin/inverse rotation restore authored flat-grid coordinates; semantic pose remains f64 |
 | Physics pose bridge | `lunco-usd-avian` | explicitly bound `ActivePhysicsFrame` bridge |
 | Scene ownership | `lunco-core` / `lunco-usd` | `SceneMountState`, typed transitions |
 | Scene top-level precision boundary | `lunco-usd-sim` / `lunco-usd-bevy` | nested scene `Grid`; each top-level prim is a Grid-direct `CellCoord` child, with terrain and vehicles as siblings |

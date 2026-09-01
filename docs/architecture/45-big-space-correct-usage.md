@@ -135,15 +135,20 @@ not reparent first and repair the pose next frame.
 
 Rasterisation correctly consumes floating-origin `GlobalTransform` values, but
 periodic geometry that is authored in the terrain's Cartesian frame must restore
-the stable WorldGrid position and then map it into that authored frame.
+the stable authored frame before evaluating its coordinates.
 `lunco-render-bevy` owns this bridge through the `blueprint_origin`,
 `blueprint_frame_origin`, and `blueprint_frame_rotation` engine shader
 parameters. The blueprint shader performs that conversion before computing grid
-coordinates. The bridge is projected in `PostUpdate` after BigSpace's
-`PropagateLowPrecision` phase, so its frame parameters and mesh transforms use
-the same finalized floating-origin state. Do not use a render-relative global
-X/Z directly for an authored site grid, and do not move the terrain or physics
-frame to compensate for a visual pattern.
+coordinates. When a scene has an `ActivePhysicsFrame`, the bridge reads that
+frame's finalized render `GlobalTransform` for both origin and inverse rotation;
+it does not re-project the semantic f64 pose through `WorldGrid`, because that
+would round a nested hierarchy a second, different way. The bridge is projected
+in `PostUpdate` after BigSpace's `PropagateLowPrecision` phase, so its frame
+parameters and mesh transforms use the same finalized floating-origin state.
+Semantic pose and physics continue to use the f64 hierarchy; this is a render
+projection only. Do not use a render-relative global X/Z directly for an
+authored site grid, and do not move the terrain or physics frame to compensate
+for a visual pattern.
 
 ## Physics boundary
 
