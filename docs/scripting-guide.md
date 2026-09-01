@@ -386,7 +386,7 @@ A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -443,6 +443,20 @@ a USD time code and `value` is the literal for its explicit `type_name`.
 Playback and scrubbing remain the shared `ControlAnimation` transport in the
 Environment panel. There is no assembly-specific runtime setter or second
 animation clock.
+
+Use `assembly_ui` for the presentation step after the document and preview
+identities are known. `assembly_ui::panel_templates(preview, doc,
+edit_target)` returns the registered Editor surfaces and their explicit
+session handles. `assembly_ui::open_session(preview, doc, edit_target)`
+activates the existing `editor` perspective, admits/focuses the explicit USD
+preview, and focuses its viewport; `focus`, `open_structure`,
+`open_inspector`, `open_connections`, and `open_animation` foreground existing
+panels. These functions do not create a
+layout, duplicate view-model state, or infer a document from a name. Mount and
+review are sections of the existing Inspector, and animation is the existing
+Environment panel. The returned preview admission is not a substitute for
+`InspectUsdDocument` or a runtime screenshot; continue with the headful
+checkpoint in the assembly-editor runbook.
 
 ## F. Policy hooks (decision functions)
 

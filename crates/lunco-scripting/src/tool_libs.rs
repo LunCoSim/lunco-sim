@@ -367,6 +367,7 @@ mod tests {
         let names = lunco_tools::names();
         for expected in [
             "assembly_edit",
+            "assembly_ui",
             "formation",
             "survey",
             "debug_viz",

@@ -176,6 +176,75 @@ listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
+The companion `assembly_ui` tool library is presentation policy over the same
+typed boundary. Its panel templates use the registered `editor` perspective,
+Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and
+Environment panel ids. `open_session` takes an explicit
+`UsdPreviewId`/`DocumentId`/`LayerId`, then uses `ActivatePerspective`,
+`OpenUsdPreview`, and `FocusPanel`; opening the preview already selects its
+session lease. It does not create a
+second layout, document binding, selection store, or editor state. Inspector
+sections such as mount and review remain one existing panel, and the
+Environment panel remains the owner of animation transport. Agent workflows
+therefore use the same presentation and authoring surfaces as a human without
+introducing another UI runtime.
+
+For a lander edit, open the lunar-base Twin, take the USD `DocumentId` from
+`ListOpenDocuments`, inspect the composed lander and resolve its legal authored
+target, then open one explicit preview:
+
+```rhai
+let before = assembly_edit::describe(doc);
+let target = assembly_edit::resolve_target(doc, "/Lander", "@root@");
+let ui = assembly_ui::open_session(preview, doc, "@root@");
+let plan = assembly_edit::propose(
+    doc,
+    "Assembly",
+    "Adjust lander pose",
+    inspected_typed_ops,
+    before.generation,
+);
+```
+
+Here `inspected_typed_ops` is the exact `UsdOp` plan built from composed
+inspection. Review it in the Inspector, commit it only after the visible
+checkpoint, then inspect the affected composed paths using the returned
+generation. If the edit is a mount, submit the reflected `AttachSpec` to
+`assembly_edit::attach_component` instead; it must contain the inspected
+component, socket, plug, joint, frames, and explicit ownership paths. The
+preview handle and document handle stay explicit throughout; the example does
+not infer a lander from a name or entity count.
+
+For a multi-asset assembly, open each source document independently and use
+one preview lease per document. A single document change that moves several
+known prims is one typed change set with the generation read immediately
+before authoring:
+
+```rhai
+let first = assembly_edit::describe(lander_doc);
+let payload_before = assembly_edit::describe(payload_doc);
+assembly_ui::open_session(lander_preview, lander_doc, "@root@");
+assembly_ui::open_session(payload_preview, payload_doc, "@root@");
+let ack = assembly_edit::batch(
+    lander_doc,
+    "Place inspected payload components",
+    [
+        #{ SetTranslate: #{ edit_target: "@root@", path: lander_path, value: lander_translation } },
+        #{ SetTranslate: #{ edit_target: "@root@", path: second_lander_path, value: second_lander_translation } },
+    ],
+    first.generation,
+);
+let payload_unchanged = assembly_edit::sync_document(payload_doc, payload_before.generation);
+```
+
+The two translated paths are inspected paths owned by `lander_doc`;
+`payload_doc` remains an independent preview/document session and is not
+silently merged into the lander. For a real mount, use `AttachComponent` with
+the reflected explicit spec so USD authors the reference, placement, joint,
+frames, and occupancy as one validated operation. If either document changes
+between inspection and the edit, the generation precondition rejects the
+stale request and the workflow must inspect again.
+
 `keyframe` and `remove_keyframe` expose the existing reversible
 `SetTimeSample`/`RemoveTimeSample` primitives to agents. The Editor Inspector
 uses those same primitives for a selected prim's current pose, while the

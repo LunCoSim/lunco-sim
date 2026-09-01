@@ -110,6 +110,16 @@ The built-in wrappers are in
 preview helpers are `preview_open`, `preview_view_open`,
 `preview_view_focus`, `preview_view_close`, `preview_focus`, and
 `preview_close`.
+The presentation helpers are in
+[`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
+`panel_templates(preview, doc, edit_target)` to discover the existing Editor
+surfaces and `open_session(preview, doc, edit_target)` to activate the Editor,
+open/focus the explicit preview, and foreground its viewport. Use its
+`focus`, `open_structure`, `open_inspector`, `open_connections`,
+and `open_animation` helpers for registered panels. They only dispatch existing
+`ActivatePerspective`/`FocusPanel` commands; they do not own layout or create
+parallel document/view state. Mount and review are Inspector sections, and
+animation is the Environment panel.
 Discover reflected command shapes with `DiscoverSchema` rather than inventing
 JSON for a new command.
 
@@ -187,6 +197,56 @@ After each change, visually check the lander's geometry, material, pose, joint
 attachment, and collision relationship in the focused preview. A visually
 plausible result is not enough: query the composed paths and verify that the
 expected `UsdPhysics` bodies/joints and authored relationships exist.
+
+For a repeatable lander workflow, use the returned document identity and
+generation rather than a path-derived guess:
+
+```rhai
+let before = assembly_edit::describe(lander_doc);
+let target = assembly_edit::resolve_target(lander_doc, lander_path, "@root@");
+assembly_ui::open_session(lander_preview, lander_doc, "@root@");
+let proposal = assembly_edit::propose(
+    lander_doc,
+    "Assembly",
+    "Adjust lander pose",
+    inspected_typed_ops,
+    before.generation,
+);
+```
+
+Here `inspected_typed_ops` is the exact `UsdOp` plan built from composed
+inspection. Review the proposal in the existing Inspector, commit it after the
+visible checkpoint, then inspect the affected paths with the new generation.
+For a mount, submit the exact reflected `AttachSpec` obtained from
+`DiscoverSchema` to `assembly_edit::attach_component`; it must carry the
+component, socket, plug, joint, frame, and ownership paths from the composed
+inspection.
+
+For a multi-asset workflow, keep the documents and preview leases independent:
+
+```rhai
+let lander_before = assembly_edit::describe(lander_doc);
+let payload_before = assembly_edit::describe(payload_doc);
+assembly_ui::open_session(lander_preview, lander_doc, "@root@");
+assembly_ui::open_session(payload_preview, payload_doc, "@root@");
+let ack = assembly_edit::batch(
+    lander_doc,
+    "Place inspected payload components",
+    [
+        #{ SetTranslate: #{ edit_target: "@root@", path: lander_path, value: lander_translation } },
+        #{ SetTranslate: #{ edit_target: "@root@", path: second_lander_path, value: second_lander_translation } },
+    ],
+    lander_before.generation,
+);
+let payload_unchanged = assembly_edit::sync_document(payload_doc, payload_before.generation);
+```
+
+Use the reflected `AttachSpec` with `assembly_edit::attach_component` when the
+assets must become one mounted assembly; do not merge source documents by
+copying layers. The translated paths are inspected paths in `lander_doc`,
+while `payload_before` remains the payload document's independent revision
+cursor. A stale generation is a rejected edit and requires a fresh inspection
+before retrying.
 
 ## Save, verify, and close
 
