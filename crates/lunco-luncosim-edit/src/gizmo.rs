@@ -21,6 +21,7 @@ use avian3d::prelude::{
 use bevy::camera::RenderTarget;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
@@ -720,14 +721,16 @@ pub fn drive_gizmo_drag_no_shift(
     }
 }
 
-/// Keeps `GizmoCamera` on the **active** window camera only.
+/// Keeps `GizmoCamera` on the viewport-bound window camera only.
 ///
 /// The gizmo renders/interacts through whichever camera carries `GizmoCamera`.
 /// With multiple scene cameras present (USD `def Camera` prims spawn as extra
 /// window `Camera3d`s), tagging *every* window camera made the gizmo bind to
-/// the wrong one. So exactly the active window camera (`Camera::is_active`) is
-/// tagged; the rest are untagged as the active view switches.
+/// the wrong one. `SceneViewport::active_camera` is the presentation owner;
+/// `Camera::is_active` is only checked as the reconciler's actuated readiness
+/// state. The rest are untagged as the active view switches.
 pub(crate) fn sync_gizmo_camera(
+    viewport: Res<SceneViewport>,
     q_cameras: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
     q_tagged: Query<Entity, With<GizmoCamera>>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
@@ -745,10 +748,14 @@ pub(crate) fn sync_gizmo_camera(
         *options = saved_options;
     }
 
-    let active = q_cameras
-        .iter()
-        .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
-        .map(|(e, _, _)| e);
+    let active = viewport.active_camera.and_then(|requested| {
+        q_cameras
+            .get(requested)
+            .ok()
+            .and_then(|(entity, camera, target)| {
+                (camera.is_active && matches!(target, RenderTarget::Window(_))).then_some(entity)
+            })
+    });
 
     // Untag any camera that is no longer the active window view. FALLIBLE: a scene
     // clear (LoadScene) despawns the scene's cameras, and this system's queries were
@@ -773,6 +780,97 @@ pub(crate) fn sync_gizmo_camera(
 mod tests {
     use super::*;
     use lunco_controller::ControllerLink;
+
+    #[test]
+    fn proxy_reconciliation_presents_only_the_current_selection() {
+        let mut app = App::new();
+        let first = app
+            .world_mut()
+            .spawn((
+                GizmoSelected,
+                Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(4.0, 5.0, 6.0)),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        app.add_systems(
+            PostUpdate,
+            (spawn_gizmo_proxies, despawn_gizmo_proxies).chain(),
+        );
+
+        app.update();
+        let proxies = {
+            let world = app.world_mut();
+            let mut query = world.query::<&GizmoProxy>();
+            query
+                .iter(world)
+                .map(|proxy| proxy.target)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(proxies, vec![first]);
+
+        app.world_mut().entity_mut(first).remove::<GizmoSelected>();
+        app.world_mut().entity_mut(second).insert(GizmoSelected);
+        app.update();
+
+        let proxies = {
+            let world = app.world_mut();
+            let mut query = world.query::<&GizmoProxy>();
+            query
+                .iter(world)
+                .map(|proxy| proxy.target)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(proxies, vec![second]);
+    }
+
+    #[test]
+    fn gizmo_camera_follows_the_viewport_binding() {
+        let mut app = App::new();
+        app.init_resource::<SceneViewport>()
+            .init_resource::<GizmoOptions>()
+            .init_resource::<GizmoVisibilityState>();
+        let first = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                RenderTarget::Window(bevy::window::WindowRef::Primary),
+                SceneCamera::default(),
+                GizmoCamera,
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                RenderTarget::Window(bevy::window::WindowRef::Primary),
+                SceneCamera::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(second);
+        app.add_systems(Update, sync_gizmo_camera);
+
+        app.update();
+
+        assert!(app.world().get::<GizmoCamera>(second).is_some());
+        assert!(app.world().get::<GizmoCamera>(first).is_none());
+    }
 
     #[test]
     fn captures_final_proxy_pose_before_release_cleanup() {
