@@ -749,7 +749,7 @@ impl Plugin for ModelicaUiPlugin {
             // standalone `ast_refresh` system).
             .init_resource::<input_activity::InputActivity>()
             .add_systems(bevy::prelude::PreUpdate, input_activity::stamp_user_input)
-            .add_systems(Startup, register_settings_menu)
+            .add_systems(Startup, register_settings_submenu)
             .add_systems(Startup, register_edit_menu)
             .init_resource::<panels::code_editor::CodeEditorMenuRequest>()
             // Image-loader install is a first-frame one-shot — runs
@@ -863,12 +863,12 @@ impl Plugin for ModelicaUiPlugin {
 /// Settings menu. Lives in the workbench Settings dropdown rather
 /// than a per-panel gear button — keeps editor toolbar tidy and
 /// all prefs discoverable in one place.
-fn register_settings_menu(world: &mut World) {
+fn register_settings_submenu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Modelica", |ui, ctx| {
         ui.label(egui::RichText::new("Code Editor").weak().small());
         let Some((original_word_wrap, original_auto_indent)) = ctx
             .resource::<panels::code_editor::EditorBufferState>()

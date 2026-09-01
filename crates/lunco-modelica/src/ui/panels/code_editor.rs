@@ -596,7 +596,7 @@ impl Panel for CodeEditorPanel {
             //     the previous line's leading whitespace onto the new
             //     line. Every modern code editor does this.
             // Editor prefs (word wrap, auto indent) live in the app-wide
-            // Settings menu — see `register_settings_menu` in `ui/mod.rs`.
+            // Settings submenu — see `register_settings_submenu` in `ui/mod.rs`.
             // Here we just read the current values.
             let (word_wrap, auto_indent) = (buf.word_wrap, buf.auto_indent);
 

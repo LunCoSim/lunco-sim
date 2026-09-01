@@ -40,7 +40,7 @@ impl Plugin for LunCoNetworkingUiPlugin {
             );
 
         #[cfg(feature = "workbench")]
-        app.add_systems(Startup, register_settings_menu);
+        app.add_systems(Startup, register_settings_submenu);
     }
 }
 
@@ -124,11 +124,11 @@ fn draw_pending_connect_prompt(
 }
 
 #[cfg(feature = "workbench")]
-fn register_settings_menu(world: &mut World) {
+fn register_settings_submenu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Collaboration", |ui, ctx| {
         // Read/clone all needed resources up front to avoid borrow conflicts and keep
         // menu rendering from owning the domain world.
         let Some(mut settings) = ctx.resource::<crate::sync::CursorSettings>().cloned() else {

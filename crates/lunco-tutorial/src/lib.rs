@@ -1653,7 +1653,7 @@ fn register_tutorials_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Tutorials", |ui, ctx| {
         let Some(mut progress) = ctx.resource::<TutorialProgress>().cloned() else {
             return;
         };

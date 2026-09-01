@@ -657,14 +657,14 @@ impl Plugin for SceneEditUiPlugin {
         lunco_settings::AppSettingsExt::register_settings_section::<entity_list::EntityListSettings>(
             app,
         );
-        app.add_systems(Startup, entity_list::register_settings_menu);
+        app.add_systems(Startup, entity_list::register_settings_submenu);
 
         // Same shape for "show test scenes": a persisted pref in the Settings
         // menu, read by the browsers, off by default.
         lunco_settings::AppSettingsExt::register_settings_section::<
             asset_visibility::AssetVisibilitySettings,
         >(app);
-        app.add_systems(Startup, asset_visibility::register_settings_menu);
+        app.add_systems(Startup, asset_visibility::register_settings_submenu);
         app.init_resource::<entity_list::EntityTreeView>();
         app.add_observer(entity_list::on_twin_closed);
         app.add_view_model(
@@ -902,7 +902,7 @@ fn register_debug_viz_settings(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Debug visualization", |ui, ctx| {
         ui.label(egui::RichText::new("Debug Visualization").weak().small());
         let Some(mut settings) = ctx
             .resource::<crate::joint_viz::JointVizSettings>()

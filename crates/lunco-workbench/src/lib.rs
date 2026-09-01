@@ -1114,14 +1114,6 @@ pub struct WorkbenchLayout {
     pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 
-    /// App-wide Settings menu contributions. Domain plugins push a
-    /// closure via [`WorkbenchLayout::register_settings`] at Startup;
-    /// the closure is invoked each time the user opens the Settings
-    /// drop-down. Keeps editor prefs / theme toggles / etc. in one
-    /// discoverable place instead of scattered gear buttons.
-    pub(crate) settings_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-
     /// Named, scrollable groups within Settings.  Use this for a coherent
     /// feature area with enough rows that keeping it in the root menu would
     /// obscure unrelated preferences.
@@ -1130,9 +1122,8 @@ pub struct WorkbenchLayout {
         Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
     )>,
 
-    /// App-wide Edit menu contributions. Same pattern as
-    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
-    /// closure via [`WorkbenchLayout::register_edit_menu`] at Startup so
+    /// App-wide Edit menu contributions. Domain plugins push a closure via
+    /// [`WorkbenchLayout::register_edit_menu`] at Startup so
     /// the global Edit menu can host domain-specific verbs (e.g. the
     /// code editor's Cut/Copy/Paste) without each plugin scattering its
     /// own toolbar.
@@ -1149,23 +1140,20 @@ pub struct WorkbenchLayout {
     /// keeps working Undo/Redo entries.
     pub(crate) undo_probes: Vec<Box<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>>,
 
-    /// App-wide Help menu contributions. Same pattern as
-    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
-    /// closure via [`WorkbenchLayout::register_help_menu`] at Startup
+    /// App-wide Help menu contributions. Domain plugins push a closure via
+    /// [`WorkbenchLayout::register_help_menu`] at Startup
     /// so the Help drop-down can host tour / docs / about entries
     /// without each domain inventing its own help button.
     pub(crate) help_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
-    /// App-wide File menu contributions. Same pattern as
-    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
-    /// closure via [`WorkbenchLayout::register_file_menu`] at Startup so
+    /// App-wide File menu contributions. Domain plugins push a closure via
+    /// [`WorkbenchLayout::register_file_menu`] at Startup so
     /// the File menu can host domain-specific verbs (e.g. Load Example)
     /// without hardcoding them in `lunco-workbench`.
     pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
-    /// App-wide Time menu contributions. Same pattern as
-    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
-    /// closure via [`WorkbenchLayout::register_time_menu`] at Startup so
+    /// App-wide Time menu contributions. Domain plugins push a closure via
+    /// [`WorkbenchLayout::register_time_menu`] at Startup so
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
     /// live under ONE discoverable menu instead of on the toolbar and in
     /// floating overlays. The toolbar keeps pause/resume and nothing else.
@@ -1262,7 +1250,6 @@ impl Default for WorkbenchLayout {
             right_inspector: Vec::new(),
             right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
-            settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
             undo_probes: Vec::new(),
@@ -1695,22 +1682,6 @@ impl WorkbenchLayout {
     /// Register a perspective and store it in the switcher. If this is the
     /// first perspective added, it also becomes active and its `apply`
     /// runs immediately to seed the initial layout.
-    /// Register a closure that contributes rows to the app-wide
-    /// Settings drop-down in the menu bar. Called once per open of the
-    /// menu; the closure reads through [`MenuCtx`] and queues typed intent for
-    /// application after painting.
-    ///
-    /// Intended for domain plugins to expose editor / theme / pane
-    /// preferences without each plugin inventing its own gear button. Callbacks
-    /// may emit typed events or replace an existing resource through `MenuCtx`;
-    /// they cannot receive a raw `World` mutation closure.
-    pub fn register_settings<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.settings_menu.push(Box::new(callback));
-    }
-
     /// Register rows under one named, scrollable Settings submenu. Multiple
     /// plugins can contribute to the same submenu without coupling to one
     /// another; the label is the single grouping key.
@@ -1731,8 +1702,7 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Register a closure that contributes entries to the global Edit
-    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    /// Register a closure that contributes entries to the global Edit menu.
     pub fn register_edit_menu<F>(&mut self, callback: F)
     where
         F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
@@ -1754,8 +1724,7 @@ impl WorkbenchLayout {
         self.undo_probes.push(Box::new(probe));
     }
 
-    /// Register a closure that contributes entries to the global Help
-    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    /// Register a closure that contributes entries to the global Help menu.
     pub fn register_help_menu<F>(&mut self, callback: F)
     where
         F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
@@ -1763,8 +1732,7 @@ impl WorkbenchLayout {
         self.help_menu.push(Box::new(callback));
     }
 
-    /// Register a closure that contributes entries to the global File
-    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    /// Register a closure that contributes entries to the global File menu.
     pub fn register_file_menu<F>(&mut self, callback: F)
     where
         F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
@@ -1772,8 +1740,7 @@ impl WorkbenchLayout {
         self.file_menu.push(Box::new(callback));
     }
 
-    /// Register a closure that contributes entries to the global Time
-    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    /// Register a closure that contributes entries to the global Time menu.
     ///
     /// This is where a clock control belongs. The toolbar carries
     /// pause/resume alone, so anything that sets a rate, retargets a clock
@@ -4403,27 +4370,8 @@ fn render_layout(
                 }
                 ui.separator();
 
-                // Take the callbacks out while the layout is still extracted;
-                // each callback receives `MenuCtx` and is restored below.
-                let callbacks = std::mem::take(&mut layout.settings_menu);
-                if callbacks.is_empty() {
-                    ui.label(
-                        egui::RichText::new("(no settings registered)")
-                            .weak()
-                            .italics(),
-                    );
-                } else {
-                    for (i, cb) in callbacks.iter().enumerate() {
-                        if i > 0 {
-                            ui.separator();
-                        }
-                        run_menu_callback(ui, world, cb.as_ref());
-                    }
-                }
-                layout.settings_menu = callbacks;
-
-                // Feature areas with many rows stay discoverable without
-                // forcing the root Settings menu to fill the viewport.
+                // Feature areas stay discoverable without forcing the root
+                // Settings menu to contain every row or fill the viewport.
                 let submenus = std::mem::take(&mut layout.settings_submenus);
                 for (label, callbacks) in &submenus {
                     ui.menu_button(label, |ui| {

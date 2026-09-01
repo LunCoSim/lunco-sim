@@ -543,8 +543,8 @@ After registration the slice is a normal `Resource`. The crate:
   panics. Atomic writes (write + rename) keep partial files from
   corrupting on kill.
 
-UI surfaces the same resource three ways — a Settings-menu row
-(`WorkbenchLayout::register_settings`), a typed `#[Command]` for
+UI surfaces the same resource three ways — a named Settings submenu row
+(`WorkbenchLayout::register_settings_submenu`), a typed `#[Command]` for
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 

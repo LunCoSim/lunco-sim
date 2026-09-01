@@ -108,11 +108,11 @@ impl SettingsSection for EntityListSettings {
 /// Push the Entity-list filter into the workbench **Settings** menu — where every
 /// other persisted view pref lives (theme, perf HUD, terrain). The panel stays a
 /// pure view; it grows no toolbar of its own.
-pub(crate) fn register_settings_menu(world: &mut World) {
+pub(crate) fn register_settings_submenu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Entity list", |ui, ctx| {
         ui.label(egui::RichText::new("Entity list").weak().small());
         let current = ctx
             .resource::<EntityListSettings>()

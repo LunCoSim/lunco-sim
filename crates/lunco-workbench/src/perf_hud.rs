@@ -132,12 +132,12 @@ fn sample_frame_time(
 }
 
 /// Push the perf HUD's row into the workbench Settings menu.
-fn register_settings_menu(world: &mut World) {
+fn register_settings_submenu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, ctx| {
+    layout.register_settings_submenu("Performance", |ui, ctx| {
         ui.label(egui::RichText::new("Performance HUD").weak().small());
         let Some(mut settings) = ctx.resource::<PerfHudSettings>().copied() else {
             return;
@@ -179,7 +179,7 @@ impl Plugin for PerfHudPlugin {
             app.add_plugins(FrameTimeDiagnosticsPlugin::new(FRAME_HISTORY_LEN));
         }
         app.add_systems(Update, sample_frame_time);
-        app.add_systems(Startup, register_settings_menu);
+        app.add_systems(Startup, register_settings_submenu);
         register_all_commands(app);
     }
 }
