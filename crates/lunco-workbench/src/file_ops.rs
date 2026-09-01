@@ -185,12 +185,12 @@ fn on_new_document(
     if !kind.is_empty() {
         return;
     }
-    // Pick the first registered kind that opts into File→New. UI may
-    // surface a "last used" preference later; for now first-found is
-    // fine — only Modelica registers today.
+    // Use the same deterministic order as File → New so the default
+    // command and the visible menu always target the same kind.
     let default_kind: Option<DocumentKindId> = registry
-        .iter()
-        .find(|(_, m)| m.can_create_new)
+        .creatable()
+        .into_iter()
+        .next()
         .map(|(id, _)| id.clone());
     let Some(id) = default_kind else {
         warn!("[NewDocument] no document kinds registered with can_create_new=true");

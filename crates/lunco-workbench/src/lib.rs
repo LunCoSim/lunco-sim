@@ -3470,6 +3470,14 @@ fn menu_item(
         .on_disabled_hover_text(disabled_hint)
 }
 
+fn new_document_menu_label(index: usize, display: &str) -> String {
+    if index == 0 {
+        format!("{display}\tCtrl+N")
+    } else {
+        display.to_owned()
+    }
+}
+
 /// Run one contributed menu callback behind the capability-limited
 /// [`MenuCtx`], then apply its typed intent while the workbench layout is
 /// still temporarily removed from the world.
@@ -3904,23 +3912,28 @@ fn render_layout(
                 // entry fires `NewDocument { kind }`; the matching
                 // domain observer creates the doc. Ctrl+N fires the
                 // default-resolution path through `EditorIntent`.
-                if ui.button("New Twin…").clicked() {
-                    world.trigger(lunco_workspace::open::CreateTwin {
-                        path: String::new(),
-                        name: String::new(),
-                        default_scene: String::new(),
-                    });
-                    ui.close();
-                }
                 ui.menu_button("New", |ui| {
+                    if ui.button("Twin…").clicked() {
+                        world.trigger(lunco_workspace::open::CreateTwin {
+                            path: String::new(),
+                            name: String::new(),
+                            default_scene: String::new(),
+                        });
+                        ui.close();
+                    }
                     let registry = world
                         .resource::<lunco_twin::DocumentKindRegistry>();
-                    let mut entries: Vec<(String, String)> = registry
-                        .iter()
-                        .filter(|(_, m)| m.can_create_new)
-                        .map(|(id, m)| (id.as_str().to_string(), m.display_name.clone()))
+                    let entries: Vec<(String, String, Option<&'static str>)> = registry
+                        .creatable()
+                        .into_iter()
+                        .map(|(id, m)| {
+                            (
+                                id.as_str().to_string(),
+                                m.display_name.clone(),
+                                m.default_filename,
+                            )
+                        })
                         .collect();
-                    entries.sort_by(|a, b| a.1.cmp(&b.1));
                     if entries.is_empty() {
                         ui.label(
                             egui::RichText::new("(no document kinds registered)")
@@ -3928,12 +3941,22 @@ fn render_layout(
                                 .italics(),
                         );
                     } else {
-                        for (kind, display) in entries {
-                            // Ctrl+N hint shown only on the first
-                            // entry — that's the keybind's default
-                            // target. egui menus right-align after \t.
-                            let label = format!("{display}\tCtrl+N");
-                            if ui.button(label).clicked() {
+                        ui.separator();
+                        for (index, (kind, display, default_filename)) in
+                            entries.into_iter().enumerate()
+                        {
+                            // Ctrl+N resolves to the first registered
+                            // creatable kind, which is the first entry after
+                            // deterministic display-name sorting.
+                            let label = new_document_menu_label(index, &display);
+                            let response = ui.button(label);
+                            let response = match default_filename {
+                                Some(filename) => response.on_hover_text(format!(
+                                    "Create {display} with default filename {filename}"
+                                )),
+                                None => response,
+                            };
+                            if response.clicked() {
                                 world.trigger(lunco_doc_bevy::NewDocument { kind });
                                 ui.close();
                             }
@@ -6420,6 +6443,15 @@ mod tests {
             identity.source_url().as_deref(),
             Some("https://github.com/LunCoSim/lunco-sim/commit/abc12345")
         );
+    }
+
+    #[test]
+    fn new_document_shortcut_only_labels_the_default_entry() {
+        assert_eq!(
+            new_document_menu_label(0, "Modelica Model"),
+            "Modelica Model\tCtrl+N"
+        );
+        assert_eq!(new_document_menu_label(1, "USD Stage"), "USD Stage");
     }
 
     /// `FocusPanel` can arrive from another UI/domain plugin before (or without)

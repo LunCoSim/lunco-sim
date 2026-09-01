@@ -188,6 +188,16 @@ domain (USD, SysML, Julia, ...) is one new crate registering itself
 other domain crate. Matches AGENTS.md §4 "Hotswappable Plugins"
 mandate.
 
+The registry is also the creation inventory. `DocumentKindRegistry::creatable`
+filters `can_create_new` kinds and orders them by display name, so File → New
+and the default `Ctrl+N` command share one source of truth. In the current
+production composition, USD Stage and Modelica Model are the registered
+authorable document kinds. Rhai, BTXML, and WGSL remain source assets handled
+by the shared source viewer; they do not have a standalone document-creation
+owner or lifecycle, so they are not fabricated as New entries. Generated
+libraries and composed outputs are likewise read-only/non-creatable until an
+owning domain registers a complete creation and save contract.
+
 ## 2. Structure inside a Twin — flexible
 
 There is **no required folder structure** inside a Twin. Documents can
@@ -1008,13 +1018,16 @@ Twins or scenes and opened through the normal document/load commands.
 
 ### Per-app: "New file" menu entries
 
-Each app exposes relevant `File → New →` items based on what it can edit:
+Each app exposes the registered authorable document kinds through one
+`File → New →` submenu. Twin creation is a separate workspace action within
+that submenu; source assets and generated/composed outputs stay out of the
+creation list because they have no standalone creation owner.
 
 | App | New menu items |
 |-----|---------------|
-| `lunica` | New Modelica Model, New Modelica Package |
-| `lunco-luncosim` | New Scene (USD), New Twin, New Modelica Model |
-| `luncosim` | New Scene, New Modelica Model, New Mission, New SysML Block, New Twin |
+| `lunica` | New Modelica Model |
+| `lunco-luncosim` | New → Twin, USD Stage, Modelica Model |
+| `luncosim` | New → Twin, USD Stage, Modelica Model |
 
 Across all three, the Command Palette can find any action — even if a
 menu item isn't exposed. Power users get uniform access.

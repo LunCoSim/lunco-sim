@@ -162,6 +162,21 @@ impl DocumentKindRegistry {
         self.kinds.iter()
     }
 
+    /// Return creatable kinds in the order shared by File → New and the
+    /// default NewDocument command.
+    pub fn creatable(&self) -> Vec<(&DocumentKindId, &DocumentKindMeta)> {
+        let mut kinds: Vec<_> = self
+            .iter()
+            .filter(|(_, meta)| meta.can_create_new)
+            .collect();
+        kinds.sort_by(|(left_id, left), (right_id, right)| {
+            left.display_name
+                .cmp(&right.display_name)
+                .then_with(|| left_id.as_str().cmp(right_id.as_str()))
+        });
+        kinds
+    }
+
     /// Number of registered kinds.
     pub fn len(&self) -> usize {
         self.kinds.len()
@@ -263,6 +278,34 @@ mod tests {
                 .display_name,
             "Modelica Model (override)"
         );
+    }
+
+    #[test]
+    fn creatable_kinds_have_deterministic_display_order() {
+        let mut r = registry_with_modelica();
+        r.register(
+            DocumentKindId::new("usd"),
+            DocumentKindMeta {
+                display_name: "USD Stage".into(),
+                can_create_new: true,
+                ..Default::default()
+            },
+        );
+        r.register(
+            DocumentKindId::new("generated"),
+            DocumentKindMeta {
+                display_name: "Generated Output".into(),
+                can_create_new: false,
+                ..Default::default()
+            },
+        );
+
+        let names: Vec<_> = r
+            .creatable()
+            .into_iter()
+            .map(|(_, meta)| meta.display_name.as_str())
+            .collect();
+        assert_eq!(names, ["Modelica Model", "USD Stage"]);
     }
 
     #[test]
