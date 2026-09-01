@@ -118,7 +118,7 @@ and network replication**. Route every editor and runtime mutation through the
 same projection boundary.
 
 ```rust
-commands.trigger(ApplyUsdOp { doc, op });                        // one op
+commands.trigger(ApplyUsdOp { doc, parent_gen: None, op });      // one op
 apply_ops_as_change_set(world, doc, "Edit material", ops);       // N ops, ONE undo unit
 ```
 

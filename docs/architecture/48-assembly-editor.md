@@ -76,6 +76,29 @@ journalled under the new document id, while the existing Twin journal remains
 the one cross-document history stream. Per-document undo/redo remains on that
 document's `DocumentHost`.
 
+### Command and inspection contract
+
+`ForkDocument`, `CloseDocument`, and `DiscardDocument` are the lifecycle
+verbs for an Assembly document. Forking returns the new `DocumentId`; closing
+removes it from the registry; discarding an untitled document closes it and
+discarding a writable file document reads the file through storage off-thread,
+then resets the resident document and its undo history. A file identity or
+document revision change during the read is rejected rather than applied to a
+different document.
+
+`ApplyUsdOp` and `ApplyUsdOps` accept an optional `parent_gen`. When supplied,
+the registry rejects a stale request before authoring or journaling. Successful
+acks identify the document, target layer, affected paths, new generation,
+canonical journal cursor, and change-set id for compound edits; the API response
+is sent after the document mutation has committed. Callers that do not have a
+causal predecessor pass `null`; they do not use a second edit path.
+
+`InspectUsdDocument` is the read-only agent/human inspection query. It requires
+an explicit `doc` and can accept a USD `path`; it reports the document's
+authored layers and revisions, local composed prim topology, dependency arcs
+from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
+active document or constructs another resolver/cache.
+
 ## Mount and attach contract
 
 A reusable component declares a plug frame. A host applies

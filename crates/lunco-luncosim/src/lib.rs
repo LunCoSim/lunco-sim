@@ -2352,7 +2352,11 @@ fn on_set_rhai_policy(
         },
     ];
     for op in ops {
-        commands.trigger(ApplyUsdOp { doc, op });
+        commands.trigger(ApplyUsdOp {
+            doc,
+            parent_gen: None,
+            op,
+        });
     }
     info!(
         "[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects",
@@ -2451,6 +2455,7 @@ fn on_save_scenario(
     };
     commands.trigger(lunco_usd::ApplyUsdOps {
         doc: scene_doc,
+        parent_gen: None,
         label: "Save scenario source".into(),
         ops: lunco_usd::program::inline_program_source_ops(
             lunco_usd::LayerId::root(),
@@ -3791,7 +3796,11 @@ mod terrain_status_tests {
                 .active_progress()
                 .filter(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
                 .collect();
-            assert_eq!(progress.len(), 1, "stream ticks must replace one live status");
+            assert_eq!(
+                progress.len(),
+                1,
+                "stream ticks must replace one live status"
+            );
             assert_eq!(progress[0].message, "Streaming terrain tiles 1/2");
             assert!(bus.history().next().is_none());
         }

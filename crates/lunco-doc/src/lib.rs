@@ -874,6 +874,29 @@ impl<D: Document> DocumentHost<D> {
         D: Clone,
         I: IntoIterator<Item = D::Op>,
     {
+        self.apply_group_against(None, ops)
+    }
+
+    /// Apply several local ops as one undo/redo group, optionally requiring a
+    /// specific parent generation.
+    ///
+    /// The generation check happens before the private candidate is built, so
+    /// a stale compound edit cannot spend work or partially affect history.
+    /// This is the group counterpart to [`Mutation::local_against`] and keeps
+    /// optimistic UI/API edits on the same causal contract as single ops.
+    pub fn apply_group_against<I>(&mut self, parent_gen: Option<u64>, ops: I) -> Result<Ack, Reject>
+    where
+        D: Clone,
+        I: IntoIterator<Item = D::Op>,
+    {
+        if let Some(parent) = parent_gen {
+            let current = self.document.generation();
+            if parent != current {
+                return Err(Reject::StaleParent {
+                    current_gen: current,
+                });
+            }
+        }
         let ops: Vec<D::Op> = ops.into_iter().collect();
         if ops.is_empty() {
             let mut ack = Ack::new(OpId::new());
@@ -1145,6 +1168,36 @@ mod tests {
         assert_eq!(host.document().text, "Hello World!");
         assert_eq!(host.undo_depth(), 1);
         assert_eq!(host.redo_depth(), 0);
+    }
+
+    #[test]
+    fn stale_compound_parent_is_rejected_before_mutation() {
+        let mut host = DocumentHost::new(TextDocument {
+            id: DocumentId::new(3),
+            text: "Hello".to_string(),
+            generation: 0,
+        });
+        host.apply(TextOp::Insert {
+            pos: 5,
+            text: "!".to_string(),
+        })
+        .unwrap();
+
+        let result = host.apply_group_against(
+            Some(0),
+            [TextOp::Insert {
+                pos: 0,
+                text: "stale ".to_string(),
+            }],
+        );
+
+        assert!(matches!(
+            result,
+            Err(Reject::StaleParent { current_gen: 1 })
+        ));
+        assert_eq!(host.document().text, "Hello!");
+        assert_eq!(host.generation(), 1);
+        assert_eq!(host.undo_depth(), 1);
     }
 
     /// A3 auto-bridge: an installed [`OpRecorder`] captures the

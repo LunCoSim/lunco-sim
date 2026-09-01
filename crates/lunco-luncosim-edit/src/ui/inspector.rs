@@ -2727,6 +2727,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // `String` gets `None`.
     world.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetAttribute {
             edit_target: LayerId::root(),
             path: shader_prim,
@@ -3413,7 +3414,11 @@ fn apply_usd_path_attribute_change(
             type_name: type_name.to_string(),
             value,
         };
-        world.trigger(ApplyUsdOp { doc, op });
+        world.trigger(ApplyUsdOp {
+            doc,
+            parent_gen: None,
+            op,
+        });
     }
 }
 
@@ -3440,7 +3445,11 @@ fn apply_usd_variant_selection(
             variant_set: set,
             variant,
         };
-        world.trigger(ApplyUsdOp { doc, op });
+        world.trigger(ApplyUsdOp {
+            doc,
+            parent_gen: None,
+            op,
+        });
     }
 }
 

@@ -326,6 +326,7 @@ fn on_add_camera_here(
 
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::root(),
             parent_path: root,
@@ -339,6 +340,7 @@ fn on_add_camera_here(
     // right without hand-authoring the token array.
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetTranslate {
             edit_target: LayerId::root(),
             path: path.clone(),
@@ -348,6 +350,7 @@ fn on_add_camera_here(
     let (rx, ry, rz) = euler_degrees(rot);
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetRotate {
             edit_target: LayerId::root(),
             path: path.clone(),

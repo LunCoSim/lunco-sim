@@ -588,6 +588,7 @@ pub fn on_scene_click_waypoint(
     );
     commands.trigger(ApplyUsdOps {
         doc,
+        parent_gen: None,
         label: "Create waypoint mission edit".to_string(),
         ops,
     });
@@ -711,6 +712,7 @@ pub fn on_scene_click_place_waypoint(
         info!("[waypoint] Move → {} to {:?}", coord_key, world);
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
                 path: coord_key,
@@ -766,6 +768,7 @@ pub fn on_scene_click_place_waypoint(
             });
             commands.trigger(ApplyUsdOps {
                 doc,
+                parent_gen: None,
                 label: "Insert waypoint".to_string(),
                 ops,
             });
@@ -958,6 +961,7 @@ pub fn draw_waypoint_context_menu(
     if let Some(value) = edited {
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::root(),
                 path: join_prim(&vessel_prim.path, WAYPOINT_MISSION_PROGRAM),
@@ -985,6 +989,7 @@ pub fn draw_waypoint_context_menu(
         info!("[waypoint] deactivating marker prim {marker_path}");
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::SetActive {
                 edit_target: LayerId::root(),
                 path: marker_path,

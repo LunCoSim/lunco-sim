@@ -53,6 +53,8 @@ fn boot_app() -> App {
     app.init_asset::<Image>();
     app.add_plugins(UsdBevyPlugin);
     app.add_plugins(UsdCommandsPlugin);
+    app.init_resource::<lunco_core::CommandResults>()
+        .init_resource::<lunco_core::ActiveCommandId>();
     app.add_plugins(UsdViewportPlugin);
     app
 }
@@ -96,6 +98,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // stage's sink → `project_stage_changes`, spawning the entity in place.
     app.world_mut().trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
             parent_path: "/World".into(),
@@ -158,6 +161,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
     // resolves regardless of the viewport twin or the cargo-test manifest dir.
     app.world_mut().trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
             parent_path: "/World".into(),
@@ -213,8 +217,7 @@ fn switching_assembly_documents_keeps_identical_paths_isolated() {
         )
     };
 
-    app.world_mut()
-        .trigger(SetActiveUsdViewport { doc: first });
+    app.world_mut().trigger(SetActiveUsdViewport { doc: first });
     support::settle_visual_projection(&mut app);
     let first_handle = app
         .world()

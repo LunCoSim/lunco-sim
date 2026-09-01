@@ -8063,6 +8063,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
+ "lunco-api",
  "lunco-assets",
  "lunco-autopilot",
  "lunco-celestial",
