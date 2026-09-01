@@ -96,6 +96,13 @@ scene child or `position_in_grid_to_parent_local` for an existing entity; both
 perform the complete parent-pose inverse and split a `CellCoord` only for a
 Grid parent.
 
+Environment projections follow the same boundary: Sun/Earth directions are
+composed from `ActivePhysicsFrame` and mount poses through
+`lunco_core::coords::world_pose`, then reduced to render or mechanism vectors.
+They do not read `GlobalTransform` during `Update`, because BigSpace finalizes
+that camera-relative projection in `PostUpdate` and a rotating high-rate frame
+would otherwise be sampled one frame late.
+
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
 the input to BigSpace's dirty-subtree pruning; assigning an equal value still
