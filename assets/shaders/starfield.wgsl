@@ -10,10 +10,11 @@
 //!
 //! This replaces `textures/starfield_4k.png` and the offline Python generator
 //! that wrote it. A committed PNG freezes every parameter at generation time,
-//! puts a second implementation of the sky outside the engine, and means the sky
-//! cannot be tuned from the scene. Here the `.usda` authors the numbers and the
-//! WGSL is the single source of truth — edit `inputs:*` on the `Shader` prim (or
-//! this file, which hot-reloads) and the sky changes.
+//! puts a second implementation of the sky outside the engine, and means every
+//! scene needs its own generated asset to tune the sky. The WGSL defaults are
+//! the single source of truth; a deliberate scene can still author `inputs:*`
+//! on its `Shader` prim, while the reusable sky and sandbox leave those inputs
+//! un-authored.
 //!
 //! It also makes a whole class of artifact structurally impossible. The baked
 //! path had two: a longitude seam, because the generator's `fbm` was not periodic
@@ -93,8 +94,8 @@
 //! how the eye judges it, and what a clipped one-pixel core cannot convey.
 //!
 //! Every dramatic choice is a dial (`brightness`, `band_intensity`, `core_boost`,
-//! `dust_strength`, `star_density`), and the scene `.usda` records a
-//! physically-honest set of values alongside the shipped ones.
+//! `dust_strength`, `star_density`), with the shipped defaults kept in this
+//! shader so reusable scene hosts share one stable presentation contract.
 //!
 //! # Cost
 //!

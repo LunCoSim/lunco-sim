@@ -1241,6 +1241,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             return;
         };
         project_usd_prim_kind(reader, &sdf_path, entity, commands);
+        project_spawnable_selectable(reader, &sdf_path, entity, commands);
 
         // M1 identity (Ph1). Two regimes:
         //
@@ -2032,6 +2033,24 @@ fn project_usd_prim_kind<R: UsdRead>(
     }
 }
 
+/// Project the authored spawnable marker onto the prim's selectable root.
+///
+/// `lunco:spawnable` is the authored identity boundary for selectable asset
+/// roots.  It applies equally to a stage root and to a nested child, so both
+/// projection paths use this helper rather than maintaining separate policy.
+fn project_spawnable_selectable(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    entity: Entity,
+    commands: &mut Commands,
+) {
+    if reader.boolean(path, "lunco:spawnable").unwrap_or(false) {
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::SelectableRoot);
+    }
+}
+
 /// Record the direct USD children from an owned read source.
 ///
 /// Initial loads pass the worker-produced [`UsdStageProjectionPlan`], so this
@@ -2133,14 +2152,7 @@ fn commit_usd_children<R: UsdRead>(
             ),
         };
 
-        if reader
-            .boolean(&child_path, "lunco:spawnable")
-            .unwrap_or(false)
-        {
-            commands
-                .entity(child_entity)
-                .try_insert(lunco_core::SelectableRoot);
-        }
+        project_spawnable_selectable(reader, &child_path, child_entity, commands);
         project_catalog_entry_id(reader, &child_path, child_entity, commands);
     }
 }

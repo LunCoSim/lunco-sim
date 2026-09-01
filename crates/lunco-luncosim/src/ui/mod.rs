@@ -13,7 +13,7 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy::camera_switch::{
@@ -1237,17 +1237,53 @@ fn register_graphics_settings(world: &mut World) {
 const SCENARIO_MENU_MIN_WIDTH: f32 = 300.0;
 const SCENARIO_MENU_MAX_WIDTH: f32 = 420.0;
 const SCENARIO_MENU_HEIGHT: f32 = 360.0;
+const SCENARIO_REGISTRY_ERROR_EVENT: &str = "scenario-registry-unavailable";
+const SCENARIO_REGISTRY_ERROR_LABEL: &str = "Scenarios unavailable";
+
+fn scenario_registry_diagnostic(detail: impl Into<String>) -> String {
+    format!("Twin registry unavailable: {}", detail.into())
+}
+
+fn scenario_registry_status_message(detail: &str) -> String {
+    format!("{SCENARIO_REGISTRY_ERROR_EVENT} [source=0]: {detail}")
+}
+
+fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) {
+    let detail = scenario_registry_diagnostic(detail);
+    let status_message = scenario_registry_status_message(&detail);
+    let already_reported = ctx
+        .resource::<lunco_workbench::status_bus::StatusBus>()
+        .and_then(|bus| bus.history().next_back())
+        .is_some_and(|event| {
+            event.source == lunco_workbench::status_bus::TELEMETRY_SOURCE
+                && event.level == lunco_workbench::status_bus::StatusLevel::Error
+                && event.message == status_message
+        });
+    if !already_reported {
+        ctx.trigger(lunco_core::TelemetryEvent {
+            name: SCENARIO_REGISTRY_ERROR_EVENT.to_owned(),
+            source: 0,
+            severity: lunco_core::Severity::Error,
+            data: lunco_core::TelemetryValue::String(detail),
+            timestamp: 0.0,
+        });
+    }
+}
+
+fn render_scenario_registry_unavailable(ui: &mut bevy_egui::egui::Ui) {
+    ui.label(SCENARIO_REGISTRY_ERROR_LABEL);
+    ui.label(
+        bevy_egui::egui::RichText::new("See Recent status for diagnostic details.")
+            .weak()
+            .small(),
+    );
+}
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, ctx| {
-        let Some(theme) = ctx.resource::<lunco_theme::Theme>() else {
-            ui.label("(theme unavailable)");
-            return;
-        };
-        let error_color = theme.tokens.error;
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(
@@ -1370,15 +1406,13 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .resource::<lunco_assets::twin_source::TwinRoots>()
             .cloned()
         else {
-            ui.label(
-                bevy_egui::egui::RichText::new("(no TwinRoots resource)")
-                    .weak()
-                    .italics(),
-            );
+            report_scenario_registry_error(ctx, "the Twin registry resource is unavailable");
+            render_scenario_registry_unavailable(ui);
             return;
         };
 
         let Some(manifest) = ctx.resource::<lunco_assets::discovery::AssetManifest>() else {
+            render_scenario_registry_unavailable(ui);
             return;
         };
         // On the web the listing arrives by fetch. "Not loaded yet" is not "no
@@ -1392,19 +1426,15 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        // Every loadable scene in the project. WHICH files those are is the
+        // Every loadable scene in the project. Which files those are is the
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
         let mut assets = match lunco_assets::discovery::list_scene_assets(manifest, &roots) {
             Ok(assets) => assets,
             Err(error) => {
-                ui.label(
-                    bevy_egui::egui::RichText::new(format!(
-                        "(Twin registry unavailable: {error})"
-                    ))
-                    .color(error_color),
-                );
+                report_scenario_registry_error(ctx, error.to_string());
+                render_scenario_registry_unavailable(ui);
                 return;
             }
         };
@@ -1412,12 +1442,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         let twin_names = match roots.names() {
             Ok(names) => names,
             Err(error) => {
-                ui.label(
-                    bevy_egui::egui::RichText::new(format!(
-                        "(Twin registry unavailable: {error})"
-                    ))
-                    .color(error_color),
-                );
+                report_scenario_registry_error(ctx, error.to_string());
+                render_scenario_registry_unavailable(ui);
                 return;
             }
         };
@@ -1633,6 +1659,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::camera_picker_content_max_width;
+    use super::scenario_registry_diagnostic;
+    use super::scenario_registry_status_message;
     use super::CameraPickerState;
     use lunco_usd_bevy::camera_switch::camera_display_labels;
 
@@ -1685,5 +1713,19 @@ mod tests {
 
         picker.toggle();
         assert_eq!(picker, CameraPickerState::default());
+    }
+
+    #[test]
+    fn scenario_registry_diagnostics_stay_out_of_the_menu_label() {
+        let detail = scenario_registry_diagnostic("missing twin.toml");
+        assert_eq!(
+            super::SCENARIO_REGISTRY_ERROR_LABEL,
+            "Scenarios unavailable"
+        );
+        assert_eq!(
+            scenario_registry_status_message(&detail),
+            "scenario-registry-unavailable [source=0]: Twin registry unavailable: missing twin.toml"
+        );
+        assert!(!super::SCENARIO_REGISTRY_ERROR_LABEL.contains("missing twin.toml"));
     }
 }

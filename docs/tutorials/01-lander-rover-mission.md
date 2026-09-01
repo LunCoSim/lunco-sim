@@ -839,6 +839,7 @@ def Xform "WaypointMarker" (
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.95, 0.5)]
+        float[] primvars:displayOpacity = [0.15]
     }
     def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {

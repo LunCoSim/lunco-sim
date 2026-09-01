@@ -7,8 +7,8 @@
 
 # Graphics companion for the reusable waypoint marker. Reuse the six-wheel
 # production test's rover and lunar surface, then place the marker at the same
-# terrain anchor so the capture proves the opaque dome remains readable beside
-# the rover that it annotates.
+# terrain anchor so the capture proves the translucent dome leaves the rover
+# readable inside the annotation.
 def Xform "WaypointVisual" (
     prepend references = @lunco://scenes/tests/six_wheel.usda@</SixWheelTest>
     kind = "assembly"
