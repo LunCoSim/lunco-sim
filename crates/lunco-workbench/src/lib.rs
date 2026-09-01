@@ -5554,12 +5554,7 @@ fn status_message_summary(message: &str) -> &str {
 }
 
 fn status_popup_width(content_width: f32) -> f32 {
-    let available = (content_width - 24.0).max(0.0);
-    if available < 240.0 {
-        available
-    } else {
-        available.min(560.0)
-    }
+    (content_width - 24.0).max(0.0)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6508,10 +6503,11 @@ mod tests {
     }
 
     #[test]
-    fn status_popup_width_preserves_compact_popup_with_viewport_margin() {
+    fn status_popup_width_uses_the_parent_viewport_with_margin() {
         assert_eq!(status_popup_width(200.0), 176.0);
         assert_eq!(status_popup_width(320.0), 296.0);
-        assert_eq!(status_popup_width(1024.0), 560.0);
+        assert_eq!(status_popup_width(1024.0), 1000.0);
+        assert_eq!(status_popup_width(1920.0), 1896.0);
     }
 
     #[test]

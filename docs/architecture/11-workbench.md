@@ -132,7 +132,8 @@ the side panels for tabbed dock trees.
    celestial body, FPS, and the latest status event. Warnings and errors
    identify their level and source in the strip; the history popup keeps
    events ordered and distinct in one responsive level/source/message/
-   progress row; diagnostic rows expand or collapse their complete diagnostics
+   progress row and uses the available parent-window width for its message
+   column; diagnostic rows expand or collapse their complete diagnostics
    when the row is clicked and expose that affordance through the row cursor and
    tooltip, while attention rows retain their typed action control. Active
    progress entries are included from the same StatusBus reader. Warning and
