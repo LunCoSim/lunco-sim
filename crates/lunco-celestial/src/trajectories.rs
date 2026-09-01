@@ -78,8 +78,8 @@ pub struct TrajectoryPath {
 ///
 /// A body's orbit is a quasi-static ellipse — over one WALL second it is
 /// imperceptibly different at realtime rates, because what actually moves is the body
-/// *along* the curve, not the curve itself. So 1 Hz is plenty while realtime runs,
-/// and high-rate Celestial transport holds the existing sample entirely. Each
+/// *along* the curve, not the curve itself. So 1 Hz is plenty at ordinary rates,
+/// and a high presentation rate holds the existing sample entirely. Each
 /// rebuild re-samples 800–1500 ephemeris points and re-splines the mesh on the
 /// compute task before the main schedule commits the prepared asset data.
 const MIN_REBUILD_INTERVAL_SECS: f64 = 1.0;
@@ -355,13 +355,8 @@ fn alpha_update_is_needed(
 }
 
 #[inline]
-fn celestial_clock_is_high_rate(
-    regime: lunco_time::TimeRegime,
-    domain_scale: Option<f64>,
-    effective_rate: Option<f64>,
-) -> bool {
-    matches!(regime, lunco_time::TimeRegime::KinematicWarp)
-        || domain_scale.is_some_and(|scale| scale.abs() > lunco_time::MAX_REALTIME_RATE)
+fn celestial_clock_is_high_rate(domain_scale: Option<f64>, effective_rate: Option<f64>) -> bool {
+    domain_scale.is_some_and(|scale| scale.abs() > lunco_time::MAX_REALTIME_RATE)
         || effective_rate.is_some_and(|rate| rate.abs() > lunco_time::MAX_REALTIME_RATE)
 }
 
@@ -607,7 +602,7 @@ fn spawn_trajectory_update_task(
                 let real_dt = real.delta_secs_f64();
                 (real_dt > 0.0).then(|| resolved.delta(clocks.celestial) / real_dt)
             });
-    let hold_curve = celestial_clock_is_high_rate(world.regime, domain_scale, effective_rate);
+    let hold_curve = celestial_clock_is_high_rate(domain_scale, effective_rate);
     presentation.hold_curve = hold_curve;
     let provider_revision = ephemeris_revision(ephemeris.as_deref());
     let now_real = real.elapsed_secs_f64();
@@ -1361,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn kinematic_warp_holds_an_existing_trajectory_sample() {
+    fn large_epoch_delta_holds_an_existing_trajectory_sample() {
         let view = TrajectoryView::default();
         let path = TrajectoryPath {
             points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
@@ -1501,21 +1496,9 @@ mod tests {
 
     #[test]
     fn independently_scaled_celestial_clock_is_high_rate() {
-        assert!(celestial_clock_is_high_rate(
-            lunco_time::TimeRegime::RealtimePhysics,
-            Some(100_000.0),
-            None
-        ));
-        assert!(celestial_clock_is_high_rate(
-            lunco_time::TimeRegime::RealtimePhysics,
-            Some(1.0),
-            Some(100_000.0)
-        ));
-        assert!(!celestial_clock_is_high_rate(
-            lunco_time::TimeRegime::RealtimePhysics,
-            Some(1.0),
-            Some(1.0)
-        ));
+        assert!(celestial_clock_is_high_rate(Some(100_000.0), None));
+        assert!(celestial_clock_is_high_rate(Some(1.0), Some(100_000.0)));
+        assert!(!celestial_clock_is_high_rate(Some(1.0), Some(1.0)));
     }
 }
 

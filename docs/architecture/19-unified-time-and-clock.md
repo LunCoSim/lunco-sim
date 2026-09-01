@@ -13,24 +13,17 @@ is the single internal authority for play/pause and rate; UI, API, and input
 surfaces dispatch its typed command rather than maintaining another pause or rate
 state.
 
-The live transport exposes one bounded user ladder: `1x, 2x, 4x, 8x, 16x` run
-the causal fixed-step world, while `32x, 64x, 100x` select the explicit
-`KinematicWarp` regime. In that regime the deterministic tick, Avian, and
-Modelica are frozen and only pure epoch consumers advance. `100x` is the live
-transport ceiling; higher values are rejected. A presentation-only celestial
-clock can use its own `SetClock` scale when a larger rate is useful.
+The live transport exposes one bounded causal ladder: `1x, 2x, 4x, 8x, 16x,
+32x, 64x`. Every accepted rate advances the deterministic fixed-step world;
+higher rates are rejected. The fixed timestep remains unchanged, so 32x and 64x
+perform more solver iterations per render frame rather than switching to a
+second time meaning. A presentation-only celestial clock can use its own
+`SetClock` scale when a larger rate is useful.
 
 `WorldTime` is a derived view. Calendar and Julian-date values are computed from
 the transport anchor and tick; they are not independently accumulated by a
 consumer. A re-anchor is an explicit transport event and must remain
 host-authoritative in a networked run.
-
-The live-world regimes are:
-
-- `RealtimePhysics`: the tick, Avian, Modelica, and other causal participants
-  advance together within the fixed-step budget;
-- `KinematicWarp`: the deterministic tick is held while pure functions of the
-  epoch, such as ephemeris and lighting, may continue to advance.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.

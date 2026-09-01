@@ -3,25 +3,18 @@
 //! One stored master — the [`SimTick`](lunco_core::SimTick) in `lunco-core` (the
 //! netcode/integrator substrate) — and **everything calendar/celestial is
 //! *derived*, never accumulated**. This crate owns the layer *above* the tick:
-//! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
-//! live-world regime, and the derived [`WorldTime`] view that consumers read.
+//! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), and
+//! the derived [`WorldTime`] view that consumers read.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The old
 //! `epoch += Δt` (`lunco-celestial/src/clock.rs`) drifted, was frame-rate
 //! dependent and could not seek; here `epoch = epoch0 + (tick − tick0)/86400` is
 //! an exact pure function of the integer tick.
 //!
-//! Two clocks deliberately diverge:
-//! * **`sim_secs` / MET base** — pinned at mission start (`mission_tick0`), the
-//!   integrator clock. Frozen while warping (the tick is frozen).
-//! * **calendar `anchor`** — the epoch↔tick mapping, which *re-anchors* on warp
-//!   exit / fast-forward so the calendar stays continuous across the seam. Its
-//!   `tick0` moves; the mission base does **not**, so warp can never corrupt
-//!   `sim_secs`.
-//!
-//! All real logic is the pure [`advance_clock`] function (unit-tested headless,
-//! no Bevy `Time`). [`advance_world_clock`] is the thin Bevy adapter that feeds
-//! it the tick + wall clock and writes the derived views.
+//! `sim_secs` / MET and the calendar epoch are both derived from the same fixed
+//! tick and mission origin. All real logic is the pure [`advance_clock`] function
+//! (unit-tested headless, no Bevy `Time`). [`advance_world_clock`] is the thin
+//! Bevy adapter that projects its result onto Bevy's virtual clock.
 
 use bevy::prelude::*;
 use std::time::Duration;
@@ -45,35 +38,24 @@ pub use scales::{
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;
 
-/// The highest transport rate that still runs the fixed-step integrators.
+/// The highest live transport rate that runs the fixed-step integrators.
 ///
-/// Above this boundary the clock intentionally enters [`TimeRegime::KinematicWarp`]
-/// and freezes the deterministic tick. Keep this value in the time crate so the
-/// transport regime and the application-level fixed-step budget cannot drift apart.
-pub const MAX_REALTIME_RATE: f64 = 16.0;
+/// This is a measured safety boundary for the fixed-step budget. Requests above
+/// it are rejected by [`SetTimeTransport`](crate::SetTimeTransport), so every
+/// accepted live rate advances the causal simulation.
+pub const MAX_REALTIME_RATE: f64 = 64.0;
 
-/// User-selectable rates in the realtime-physics band.
+/// User-selectable rates for the causal fixed-step transport.
 ///
-/// The transport regime and every UI that offers simulation rates must use this
-/// list. Keeping the list beside [`MAX_REALTIME_RATE`] prevents a control surface
-/// from advertising a rate that the clock would interpret differently.
-pub const REALTIME_RATE_OPTIONS: &[f64] = &[1.0, 2.0, 4.0, 8.0, 16.0];
-
-/// Highest supported rate for the live-world transport. Higher rates are not
-/// exposed or accepted here: use an explicitly re-parented celestial clock
-/// (`SetClock`) when only a pure presentation clock needs to run faster.
-pub const MAX_TRANSPORT_RATE: f64 = 100.0;
-
-/// User-selectable kinematic-warp rates. These advance pure epoch consumers
-/// while the deterministic physics tick remains frozen. The live transport is
-/// deliberately bounded at [`MAX_TRANSPORT_RATE`]; this is not an uncapped
-/// fast-forward mode.
-pub const KINEMATIC_WARP_RATE_OPTIONS: &[f64] = &[32.0, 64.0, 100.0];
+/// Every UI that offers simulation rates must use this list. Keeping it beside
+/// [`MAX_REALTIME_RATE`] prevents a control surface from advertising a rate that
+/// the clock would interpret differently.
+pub const REALTIME_RATE_OPTIONS: &[f64] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
 
 /// Maximum number of fixed simulation steps a rendered frame may drain while
 /// running a realtime transport rate. This is a catch-up guard, not a rate cap:
 /// frames that arrive on time still receive their complete requested rate.
-pub const MAX_FIXED_STEPS_PER_FRAME: u32 = 16;
+pub const MAX_FIXED_STEPS_PER_FRAME: u32 = 64;
 
 /// Raw wall-clock delta cap used by the fixed-step budget.
 pub const BASE_VIRTUAL_MAX_DELTA: Duration = Duration::from_millis(33);
@@ -82,7 +64,12 @@ pub const BASE_VIRTUAL_MAX_DELTA: Duration = Duration::from_millis(33);
 /// step budget. Bevy applies `Time<Virtual>::max_delta` before its relative
 /// speed, so the cap must be divided by the requested rate.
 pub fn fixed_step_raw_delta_limit(rate: f64, fixed_timestep: Duration) -> Duration {
-    if !(rate > 0.0 && rate <= MAX_REALTIME_RATE) {
+    let rate = if rate.is_finite() {
+        rate.clamp(0.0, MAX_REALTIME_RATE)
+    } else {
+        0.0
+    };
+    if rate == 0.0 {
         return BASE_VIRTUAL_MAX_DELTA;
     }
     let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
@@ -127,11 +114,6 @@ fn apply_fixed_step_budget(
 /// J2000.0 epoch as a Julian Date (TDB). Default mission epoch.
 pub const J2000_JD: f64 = 2_451_545.0;
 
-/// Above [`MAX_REALTIME_RATE`] the realtime integrators (avian, Modelica) cannot
-/// keep up, so the world clock switches to [`TimeRegime::KinematicWarp`]: the
-/// tick freezes (physics pauses) and only **pure** consumers (ephemeris,
-/// lighting, sidereal) advance, as a pure function of `epoch`.
-///
 /// Transport play state. Replaces the scattered `paused` booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
 pub enum TransportMode {
@@ -140,20 +122,6 @@ pub enum TransportMode {
     Playing,
     /// Time is held; tick frozen, epoch frozen.
     Paused,
-}
-
-/// Which integration regime the *live world clock* is in (doc §5). Distinct from
-/// offline run execution (which bakes to `timeSamples`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
-pub enum TimeRegime {
-    /// Tick advances; `epoch` slaved to tick; `rate` scales the fixed-step
-    /// cadence uniformly (physics + Modelica + epoch move together). Bounded by
-    /// solver stability ([`MAX_REALTIME_RATE`]).
-    #[default]
-    RealtimePhysics,
-    /// Tick **frozen** (physics/Modelica paused); only pure consumers advance,
-    /// `epoch` derived from a wall-clock preview at `rate`.
-    KinematicWarp,
 }
 
 /// The transport authority: the single internal source of truth for play state
@@ -187,9 +155,7 @@ impl TimeTransport {
 
 /// The calendar conversion mapping — the bridge between the discrete `tick` and
 /// the continuous `epoch` (Julian Date). `epoch0_jd` is the calendar instant at
-/// `tick0`. Piecewise-constant: it changes only on an explicit **re-anchor**
-/// (warp exit / fast-forward), the host-authoritative, replicable event the
-/// networking design calls for.
+/// `tick0`. It changes only when an authoritative mission epoch is authored.
 #[derive(Debug, Clone, Copy, Reflect)]
 pub struct TimeAnchor {
     /// Julian Date (TDB) at `tick0`.
@@ -224,45 +190,18 @@ impl TimeAnchor {
     }
 }
 
-/// A non-deterministic wall-clock preview used **only** in
-/// [`TimeRegime::KinematicWarp`] to advance the epoch while the tick is frozen.
-/// `epoch = epoch0 + (real − real0)·rate/86400` — still derivation (recomputed
-/// each frame), the only place wall time touches the epoch (display/environment
-/// only, never sim logic — invariants 1/4).
-#[derive(Debug, Clone, Copy, Reflect)]
-pub struct WarpPreview {
-    /// Epoch at warp entry / last re-seed.
-    pub epoch0_jd: f64,
-    /// `Time::<Real>` elapsed seconds at warp entry / last re-seed.
-    pub real0_secs: f64,
-    /// Warp rate captured at re-seed.
-    pub rate: f64,
-}
-
-impl WarpPreview {
-    #[inline]
-    fn epoch_at(&self, real_secs: f64) -> f64 {
-        self.epoch0_jd + (real_secs - self.real0_secs) * self.rate / SECS_PER_DAY
-    }
-}
-
 /// The mission clock: the fixed mission origin (for the integrator `sim_secs` /
-/// MET), the re-anchorable calendar mapping, the current regime, and the optional
-/// warp preview. Thin state; all behavior is in [`advance_clock`].
+/// MET) and the re-anchorable calendar mapping.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct MissionClock {
     /// Fixed mission-start tick — defines the integrator clock (`sim_secs`/MET
-    /// base). **Never** moved by warp; only an explicit mission reset.
+    /// base). It moves only on an explicit mission reset.
     pub mission_tick0: u64,
     /// Epoch at `mission_tick0` — the MET calendar origin.
     pub mission_epoch0_jd: f64,
-    /// Epoch↔tick calendar mapping (re-anchors on warp exit / fast-forward).
+    /// Epoch↔tick calendar mapping.
     pub anchor: TimeAnchor,
-    /// Current live-world regime.
-    pub regime: TimeRegime,
-    /// Active only in [`TimeRegime::KinematicWarp`].
-    pub warp: Option<WarpPreview>,
 }
 
 impl Default for MissionClock {
@@ -271,8 +210,6 @@ impl Default for MissionClock {
             mission_tick0: 0,
             mission_epoch0_jd: J2000_JD,
             anchor: TimeAnchor::default(),
-            regime: TimeRegime::default(),
-            warp: None,
         }
     }
 }
@@ -285,134 +222,55 @@ impl MissionClock {
             mission_tick0: tick0,
             mission_epoch0_jd: epoch0_jd,
             anchor: TimeAnchor { epoch0_jd, tick0 },
-            regime: TimeRegime::default(),
-            warp: None,
         }
     }
 
     /// The integrator clock: continuous sim seconds since mission start.
-    /// `(tick − mission_tick0)·SECS_PER_TICK`. Frozen while warping (tick frozen).
-    /// This is the time the USD animation sampler keys on.
+    /// `(tick − mission_tick0)·SECS_PER_TICK`. This is the time the USD
+    /// animation sampler keys on.
     #[inline]
     pub fn sim_secs(&self, tick: u64) -> f64 {
         (tick.wrapping_sub(self.mission_tick0) as i64) as f64 * SECS_PER_TICK
     }
 
-    /// The current derived epoch given `tick` and (for warp) `real_secs`.
+    /// The current derived epoch for the authoritative simulation tick.
     #[inline]
-    pub fn epoch_jd(&self, tick: u64, real_secs: f64) -> f64 {
-        match self.regime {
-            TimeRegime::RealtimePhysics => self.anchor.epoch_jd(tick),
-            TimeRegime::KinematicWarp => self
-                .warp
-                .map_or_else(|| self.anchor.epoch_jd(tick), |w| w.epoch_at(real_secs)),
-        }
+    pub fn epoch_jd(&self, tick: u64) -> f64 {
+        self.anchor.epoch_jd(tick)
     }
 
     /// Mission Elapsed Time, in seconds: calendar elapsed since mission start
-    /// (`(epoch − mission_epoch0)·86400`). **Advances during warp** (the epoch
-    /// advanced even though the integrator did not) — the honest answer.
+    /// (`(epoch − mission_epoch0)·86400`).
     #[inline]
-    pub fn met_secs(&self, tick: u64, real_secs: f64) -> f64 {
-        (self.epoch_jd(tick, real_secs) - self.mission_epoch0_jd) * SECS_PER_DAY
+    pub fn met_secs(&self, tick: u64) -> f64 {
+        (self.epoch_jd(tick) - self.mission_epoch0_jd) * SECS_PER_DAY
     }
 
-    /// Restore the calendar mapping to the mission origin and leave any fast
-    /// preview regime. The authored mission origin itself is preserved so a
-    /// scene reload can reset the old scene first and then apply the new scene's
-    /// `SetMissionEpoch` without a stale warp carrying across the boundary.
+    /// Restore the calendar mapping to the mission origin. The authored mission
+    /// origin itself is preserved so a scene reload can apply a new
+    /// `SetMissionEpoch` without stale calendar state.
     pub fn reset_calendar(&mut self) {
         self.anchor = TimeAnchor {
             epoch0_jd: self.mission_epoch0_jd,
             tick0: self.mission_tick0,
         };
-        self.regime = TimeRegime::RealtimePhysics;
-        self.warp = None;
     }
 }
 
-/// The single pure step of the time spine. Resolves the regime (re-anchoring the
-/// *calendar* mapping on transitions, leaving the mission origin fixed) and
-/// returns the **one** control output — the `Time::<Virtual>.relative_speed` to
-/// apply (`> 0` ⇒ running; `0` ⇒ frozen). Everything else the caller needs
-/// (epoch, regime) is read back from the now-updated `clock`, so there is no
-/// return struct duplicating clock state.
+/// Return the virtual-clock rate for the transport.
 ///
-/// * `tick` — current [`SimTick`].
-/// * `rate` — transport rate (clamped to the supported live range).
-/// * `paused` — transport pause.
-/// * `real_secs` — `Time::<Real>` elapsed seconds (only consulted in warp).
-///
-/// Mutates `clock.regime`/`clock.warp`/`clock.anchor` (calendar re-anchor on warp
-/// exit). Never touches `mission_tick0`/`mission_epoch0_jd`.
-pub fn advance_clock(
-    clock: &mut MissionClock,
-    tick: u64,
-    rate: f64,
-    paused: bool,
-    real_secs: f64,
-) -> f64 {
+/// The command owner rejects rates above the fixed-step safety boundary. The
+/// pure helper also clamps direct resource construction so the Bevy projection
+/// cannot create an unbounded fixed-step burst.
+pub fn advance_clock(rate: f64, paused: bool) -> f64 {
     // The command boundary rejects out-of-range values. Keep this pure owner
     // defensive for callers that construct the transport resource directly.
     let rate = if rate.is_finite() {
-        rate.clamp(0.0, MAX_TRANSPORT_RATE)
+        rate.clamp(0.0, MAX_REALTIME_RATE)
     } else {
         0.0
     };
-    let running = !paused && rate > 0.0;
-    let desired = if running && rate > MAX_REALTIME_RATE {
-        TimeRegime::KinematicWarp
-    } else {
-        TimeRegime::RealtimePhysics
-    };
-
-    // Regime transitions re-anchor the calendar mapping so the epoch is
-    // continuous across the seam (the mission origin is untouched).
-    match (clock.regime, desired) {
-        (TimeRegime::RealtimePhysics, TimeRegime::KinematicWarp) => {
-            // Entering warp: seed the wall preview from the current realtime epoch.
-            let cur = clock.anchor.epoch_jd(tick);
-            clock.warp = Some(WarpPreview {
-                epoch0_jd: cur,
-                real0_secs: real_secs,
-                rate,
-            });
-        }
-        (TimeRegime::KinematicWarp, TimeRegime::KinematicWarp) => {
-            // Still warping but `rate` may have changed: re-seed at the current
-            // epoch so the new rate takes effect without a jump.
-            if let Some(w) = clock.warp {
-                clock.warp = Some(WarpPreview {
-                    epoch0_jd: w.epoch_at(real_secs),
-                    real0_secs: real_secs,
-                    rate,
-                });
-            }
-        }
-        (TimeRegime::KinematicWarp, TimeRegime::RealtimePhysics) => {
-            // Leaving warp: re-anchor tick→epoch so realtime resumes from the
-            // warped epoch (the piecewise-constant calendar re-anchor event).
-            let cur = clock
-                .warp
-                .map_or_else(|| clock.anchor.epoch_jd(tick), |w| w.epoch_at(real_secs));
-            clock.anchor = TimeAnchor {
-                epoch0_jd: cur,
-                tick0: tick,
-            };
-            clock.warp = None;
-        }
-        (TimeRegime::RealtimePhysics, TimeRegime::RealtimePhysics) => {}
-    }
-    clock.regime = desired;
-
-    // The single control output: what to set `Time::<Virtual>.relative_speed` to.
-    // Everything else the caller needs (epoch, regime) is read back from the
-    // now-updated `clock` — no redundant return struct. `> 0` is "running".
-    match (running, desired) {
-        (false, _) => 0.0,                           // paused → freeze tick + physics
-        (true, TimeRegime::RealtimePhysics) => rate, // physics keeps up; epoch ← tick
-        (true, TimeRegime::KinematicWarp) => 0.0,    // tick frozen; epoch ← wall preview
-    }
+    if paused || rate == 0.0 { 0.0 } else { rate }
 }
 
 /// The derived, read-only time view every consumer reads. Written each frame by
@@ -425,10 +283,8 @@ pub struct WorldTime {
     pub epoch_jd: f64,
     /// Integrator clock seconds since mission start — the animation sampler key.
     pub sim_secs: f64,
-    /// Mission Elapsed Time, seconds (calendar elapsed; advances in warp).
+    /// Mission Elapsed Time, seconds.
     pub met_secs: f64,
-    /// Current live-world regime.
-    pub regime: TimeRegime,
 }
 
 impl WorldTime {
@@ -451,24 +307,18 @@ impl WorldTime {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeSpineSet;
 
-/// The Bevy adapter: feed [`advance_clock`] the tick + wall clock, write the
-/// derived `WorldTime` (per frame — the clock is moving), and project the rate
-/// onto `Time<Virtual>` (the **single** control state). A running clock sets
-/// `relative_speed = rate`; a frozen one (paused, or a tick-stopping warp regime)
-/// raises Bevy's `paused` flag and leaves `relative_speed` a positive rate — so
-/// the tick/physics gate is `effective_speed > 0` ⇒ running. Runs in
-/// `PreUpdate` (before `FixedUpdate` physics/tick) so the regime gate and the
-/// unified rate take effect this frame.
+/// The Bevy adapter: feed [`advance_clock`] the transport, write the derived
+/// `WorldTime`, and project the rate onto `Time<Virtual>` (the single control
+/// state). Runs in `PreUpdate` before `FixedUpdate` so the unified rate takes
+/// effect on the same frame.
 pub fn advance_world_clock(
     tick: Res<SimTick>,
     transport: Res<TimeTransport>,
-    real: Res<Time<Real>>,
-    mut clock: ResMut<MissionClock>,
+    clock: Res<MissionClock>,
     mut world: ResMut<WorldTime>,
     mut virtual_time: ResMut<Time<Virtual>>,
     coupling: Option<Res<lunco_core::SimulationBarrier>>,
 ) {
-    let real_secs = real.elapsed_secs_f64();
     // A Modelica result that feeds an Avian force/torque port is a barrier for
     // the whole deterministic simulation, not just for Avian. If only the
     // physics clock stopped, SimTick, Rhai, controllers, and co-simulation
@@ -478,23 +328,16 @@ pub fn advance_world_clock(
     // remains usable in small/headless apps that do not install co-simulation.
     let coupling_held = coupling.is_some_and(|state| state.held);
     let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held;
-    let relative_speed = advance_clock(&mut clock, tick.0, transport.rate, paused, real_secs);
+    let relative_speed = advance_clock(transport.rate, paused);
 
-    // Epoch/regime are read back from the now-updated `clock` (no return struct
-    // duplicating them). The epoch genuinely advances every frame (the tick — or,
-    // in warp, the wall preview — moved), so this write is a *sample of a moving
-    // clock*, not a redundant projection.
-    world.epoch_jd = clock.epoch_jd(tick.0, real_secs);
+    world.epoch_jd = clock.epoch_jd(tick.0);
     world.sim_secs = clock.sim_secs(tick.0);
-    world.met_secs = clock.met_secs(tick.0, real_secs);
-    world.regime = clock.regime;
+    world.met_secs = clock.met_secs(tick.0);
 
-    // Frozen (paused, or a warp regime where the tick stops) is projected onto
-    // Bevy's `paused` FLAG, never onto `relative_speed = 0`. `relative_speed` is a
-    // *rate*, and consumers divide by it — lightyear's interpolation timeline does
-    // `delta.div_f32(time.relative_speed())`, so a zero there yields `inf` and
-    // panics `Duration::from_secs_f32`. Pausing instead zeroes `effective_speed`
-    // (and `delta`), which is what every "is it running?" gate reads.
+    // Frozen transport is projected onto Bevy's `paused` flag, never onto
+    // `relative_speed = 0`. Consumers treat relative speed as a divisor, so a
+    // positive configured rate is retained while Bevy's pause state supplies
+    // the zero effective speed.
     let frozen = relative_speed <= 0.0;
     let configured = if frozen { 1.0 } else { relative_speed };
 
@@ -619,22 +462,19 @@ mod tests {
 
     #[test]
     fn paused_freezes_tick_and_physics() {
-        let mut c = MissionClock::default();
         // `relative_speed == 0` is the whole "paused" story — frozen tick + physics.
-        assert_eq!(advance_clock(&mut c, 500, 1.0, true, 10.0), 0.0);
+        assert_eq!(advance_clock(1.0, true), 0.0);
     }
 
     #[test]
     fn realtime_rate_unifies_the_knob() {
-        let mut c = MissionClock::default();
-        // Any rate at or below the solver ceiling stays in realtime physics.
-        let rs = advance_clock(&mut c, 0, MAX_REALTIME_RATE, false, 0.0);
-        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
+        // Every accepted rate stays on the causal fixed-step path.
+        let rs = advance_clock(MAX_REALTIME_RATE, false);
         assert_eq!(rs, MAX_REALTIME_RATE); // one rate → relative_speed (> 0 ⇒ running)
     }
 
     #[test]
-    fn realtime_rate_options_stay_inside_the_physics_band() {
+    fn realtime_rate_options_stay_inside_the_causal_transport() {
         assert!(!REALTIME_RATE_OPTIONS.is_empty());
         assert!(REALTIME_RATE_OPTIONS
             .windows(2)
@@ -643,23 +483,9 @@ mod tests {
             REALTIME_RATE_OPTIONS.last().copied(),
             Some(MAX_REALTIME_RATE)
         );
-        assert!(REALTIME_RATE_OPTIONS.iter().all(|&rate| advance_clock(
-            &mut MissionClock::default(),
-            0,
-            rate,
-            false,
-            0.0
-        ) > 0.0));
-        assert!(KINEMATIC_WARP_RATE_OPTIONS
+        assert!(REALTIME_RATE_OPTIONS
             .iter()
-            .all(|&rate| rate > MAX_REALTIME_RATE));
-        assert!(KINEMATIC_WARP_RATE_OPTIONS
-            .windows(2)
-            .all(|rates| rates[0] < rates[1]));
-        assert_eq!(
-            KINEMATIC_WARP_RATE_OPTIONS.last().copied(),
-            Some(MAX_TRANSPORT_RATE)
-        );
+            .all(|&rate| advance_clock(rate, false) > 0.0));
     }
 
     #[derive(Resource, Default)]
@@ -693,7 +519,8 @@ mod tests {
     fn realtime_transport_rate_scales_the_real_fixed_schedule() {
         let one_x = fixed_runs_after_manual_frames(1.0);
         let eight_x = fixed_runs_after_manual_frames(8.0);
-        let sixteen_x = fixed_runs_after_manual_frames(MAX_REALTIME_RATE);
+        let thirty_two_x = fixed_runs_after_manual_frames(32.0);
+        let sixty_four_x = fixed_runs_after_manual_frames(64.0);
 
         assert!(one_x > 0, "1x never entered FixedUpdate");
         assert!(
@@ -701,8 +528,12 @@ mod tests {
             "8x fixed schedule ran {eight_x} ticks versus {one_x} at 1x"
         );
         assert!(
-            sixteen_x >= one_x * 14,
-            "16x fixed schedule ran {sixteen_x} ticks versus {one_x} at 1x"
+            thirty_two_x >= one_x * 28,
+            "32x fixed schedule ran {thirty_two_x} ticks versus {one_x} at 1x"
+        );
+        assert!(
+            sixty_four_x >= one_x * 56,
+            "64x fixed schedule ran {sixty_four_x} ticks versus {one_x} at 1x"
         );
     }
 
@@ -720,13 +551,11 @@ mod tests {
             "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one capped frame demand \
              {steps_per_hitched_frame:.0} fixed steps — above the central fixed-step budget"
         );
-        // The first bounded warp choice must escape to the kinematic
-        // (tick-frozen) regime; the live transport never accepts an unbounded
-        // rate beyond MAX_TRANSPORT_RATE.
-        let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, KINEMATIC_WARP_RATE_OPTIONS[0], false, 0.0);
-        assert_eq!(c.regime, TimeRegime::KinematicWarp);
-        assert_eq!(rs, 0.0);
+        assert_eq!(advance_clock(MAX_REALTIME_RATE, false), MAX_REALTIME_RATE);
+        assert_eq!(
+            advance_clock(MAX_REALTIME_RATE + 1.0, false),
+            MAX_REALTIME_RATE
+        );
     }
 
     #[test]
@@ -742,76 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn high_warp_switches_to_kinematic_and_freezes_tick() {
-        let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 0.0);
-        assert_eq!(c.regime, TimeRegime::KinematicWarp);
-        assert_eq!(rs, 0.0); // tick frozen (not running)
-        assert!(c.warp.is_some());
-    }
-
-    #[test]
-    fn kinematic_warp_advances_epoch_from_wall_clock() {
-        let mut c = MissionClock::anchored(J2000_JD, 0);
-        // Enter warp at real_secs = 0.
-        advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 0.0);
-        assert_eq!(c.epoch_jd(0, 0.0), J2000_JD);
-        // 2 wall seconds later at 100× = 200 sim seconds advanced, tick unchanged.
-        advance_clock(&mut c, 0, MAX_TRANSPORT_RATE, false, 2.0);
-        assert!((c.epoch_jd(0, 2.0) - (J2000_JD + 200.0 / SECS_PER_DAY)).abs() < EPS);
-        // MET advances during warp even though sim_secs (tick-locked) does not.
-        // Tolerance is loose because MET = (epoch − mission_epoch0)·86400 cancels a
-        // ~2.45e6-magnitude single-`f64` JD; sub-ms MET precision needs the
-        // two-part JulianDate (T3). ~4e-5 s error here, well inside this bound.
-        assert!((c.met_secs(0, 2.0) - 200.0).abs() < 1e-3);
-        assert!(c.sim_secs(0).abs() < EPS);
-    }
-
-    #[test]
-    fn leaving_warp_reanchors_epoch_continuously_but_not_sim_secs() {
-        let mut c = MissionClock::anchored(J2000_JD, 0);
-        advance_clock(&mut c, 0, 1000.0, false, 0.0); // enter warp
-        advance_clock(&mut c, 0, 1000.0, false, 5.0); // advance
-        let warped = c.epoch_jd(0, 5.0);
-        // Drop back to realtime at tick 0: epoch must continue from `warped`,
-        // not snap back to the tick-derived J2000.
-        advance_clock(&mut c, 0, 1.0, false, 5.0);
-        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
-        assert!((c.epoch_jd(0, 5.0) - warped).abs() < EPS);
-        assert!(c.warp.is_none());
-        // sim_secs is unaffected by the calendar re-anchor (mission origin fixed).
-        assert!(c.sim_secs(0).abs() < EPS);
-        // And the epoch now derives forward from the new calendar anchor.
-        advance_clock(&mut c, 60, 1.0, false, 6.0);
-        assert!((c.epoch_jd(60, 6.0) - (warped + 1.0 / SECS_PER_DAY)).abs() < EPS);
-        // While sim_secs advances from the *mission* origin, not the re-anchor.
-        assert!((c.sim_secs(60) - 1.0).abs() < EPS);
-    }
-
-    #[test]
-    fn reset_calendar_returns_warp_to_the_authored_mission_origin() {
-        let mut c = MissionClock::anchored(2_461_283.667_46, 12);
-        let origin = c.epoch_jd(12, 0.0);
-
-        advance_clock(&mut c, 12, MAX_TRANSPORT_RATE, false, 0.0);
-        assert_eq!(c.regime, TimeRegime::KinematicWarp);
-        assert!(c.epoch_jd(12, 1.0) > origin + 50.0 / SECS_PER_DAY);
-
-        c.reset_calendar();
-
-        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
-        assert!(c.warp.is_none());
-        assert_eq!(c.anchor.epoch0_jd, c.mission_epoch0_jd);
-        assert_eq!(c.anchor.tick0, c.mission_tick0);
-        assert_eq!(c.epoch_jd(12, 1.0), origin);
-    }
-
-    #[test]
-    fn paused_does_not_enter_warp_even_at_high_rate() {
-        let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, 5000.0, true, 0.0);
-        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
-        assert_eq!(rs, 0.0);
+    fn rates_above_the_safe_ceiling_are_clamped() {
+        assert_eq!(advance_clock(128.0, false), MAX_REALTIME_RATE);
+        assert_eq!(advance_clock(5000.0, true), 0.0);
     }
 
     /// A frozen spine must raise Bevy's `paused` flag and keep `relative_speed`
@@ -831,12 +593,10 @@ mod tests {
         for (mode, rate) in [
             (TransportMode::Paused, 1.0),  // explicit user pause
             (TransportMode::Playing, 0.0), // rate 0 is also "frozen"
-            (TransportMode::Playing, 5e4), // warp regime: tick frozen
         ] {
             let mut world = bevy::prelude::World::new();
             world.insert_resource(lunco_core::SimTick(0));
             world.insert_resource(TimeTransport { mode, rate });
-            world.insert_resource(Time::<bevy::time::Real>::default());
             world.insert_resource(MissionClock::default());
             world.insert_resource(WorldTime::default());
             world.insert_resource(Time::<Virtual>::default());
@@ -867,7 +627,6 @@ mod tests {
             mode: TransportMode::Playing,
             rate: 2.0,
         });
-        world.insert_resource(Time::<bevy::time::Real>::default());
         world.insert_resource(MissionClock::default());
         world.insert_resource(WorldTime::default());
         let mut vt = Time::<Virtual>::default();
@@ -888,7 +647,6 @@ mod tests {
         let mut world = bevy::prelude::World::new();
         world.insert_resource(lunco_core::SimTick(0));
         world.insert_resource(TimeTransport::default());
-        world.insert_resource(Time::<bevy::time::Real>::default());
         world.insert_resource(MissionClock::default());
         world.insert_resource(WorldTime::default());
         world.insert_resource(Time::<Virtual>::default());

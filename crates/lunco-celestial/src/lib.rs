@@ -366,11 +366,12 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<lunco_controller::InputBindingsSettings>();
 
         // Celestial cadence: the tree is re-solved on an ANGULAR ERROR BUDGET,
-        // not at a fixed wall-clock Hz (sim time warps, so a rate is wrong at
-        // every other warp factor — see `cadence`). At extreme warp the budget
-        // intentionally opens every render frame so the visible celestial pose
-        // remains continuous. Expensive orbit-mesh rebuilding has its own
-        // presentation policy and is not part of this pose transaction.
+        // not at a fixed wall-clock Hz (the transport rate changes the epoch
+        // step, so a fixed rate is wrong at different settings — see `cadence`).
+        // When the geometric budget is exceeded, it opens every render frame so
+        // the visible celestial pose remains continuous. Expensive orbit-mesh
+        // rebuilding has its own presentation policy and is not part of this
+        // pose transaction.
         //
         // The cadence gate belongs on the systems that solve celestial state.
         // BigSpace propagation is driven by actual CellCoord/Transform and

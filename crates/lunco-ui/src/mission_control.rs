@@ -9,8 +9,7 @@ use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
 use lunco_controller::{resolved_input_label, InputBindingsSettings};
 use lunco_core::{Avatar, ControlBinding, Spacecraft, UserIntent};
 use lunco_time::{
-    SetTimeTransport, TimeTransport, TransportMode, WorldTime, KINEMATIC_WARP_RATE_OPTIONS,
-    REALTIME_RATE_OPTIONS,
+    SetTimeTransport, TimeTransport, TransportMode, WorldTime, REALTIME_RATE_OPTIONS,
 };
 
 /// Change the host's possession arbitration policy from Mission Control.
@@ -192,9 +191,8 @@ impl Panel for MissionControl {
                         toggle_pause = true;
                     }
                 });
-                // Keep the two physically different transport bands visible. The
-                // shared option lists are owned by lunco-time, and both bands still
-                // dispatch the single SetTimeTransport command.
+                // The shared option list is owned by lunco-time and dispatches
+                // the single causal SetTimeTransport command.
                 ui.label(egui::RichText::new("Physics realtime").weak().small());
                 egui::Grid::new("time_multipliers")
                     .num_columns(4)
@@ -204,31 +202,6 @@ impl Panel for MissionControl {
                             if ui
                                 .selectable_label(speed == m, format!("{}x", m))
                                 .on_hover_text("Physics runs at this rate")
-                                .clicked()
-                            {
-                                set_speed = Some(m);
-                            }
-                            if (i + 1) % 4 == 0 {
-                                ui.end_row();
-                            }
-                        }
-                    });
-                ui.label(
-                    egui::RichText::new("Kinematic warp — physics frozen")
-                        .weak()
-                        .size(10.0),
-                );
-                egui::Grid::new("time_multipliers_warp")
-                    .num_columns(4)
-                    .spacing([4.0, 4.0])
-                    .show(ui, |ui| {
-                        for (i, &m) in KINEMATIC_WARP_RATE_OPTIONS.iter().enumerate() {
-                            if ui
-                                .selectable_label(speed == m, format!("{}x", m))
-                                .on_hover_text(
-                                    "Kinematic warp: the sim tick freezes. \
-                                     Bodies do not move; only the epoch advances.",
-                                )
                                 .clicked()
                             {
                                 set_speed = Some(m);

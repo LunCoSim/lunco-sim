@@ -2478,8 +2478,7 @@ actually call, with the fields the deserializer actually accepts. See the
  The result arrives on the next `Update`: rhai needs full `World` access,
  which an observer cannot hold, so the handler enqueues the snippet and the
  exclusive `drain_world_scripts` system runs it before answering the
- deferred API request with the real stdout. `Update` is intentional because
- kinematic celestial warp freezes `FixedUpdate`.
+ deferred API request with the real stdout.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 
@@ -2782,20 +2781,15 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Reset the **entire clock tree** to defaults — fired on every scene load.
 
- This is the architecture that keeps time correct across scene reloads: a scene may
- have detached the celestial clock, run it at 100 000×, scrubbed the animation
- preview or paused the transport, and none of that may bleed into the next scene.
- Rather than have each subsystem remember to undo its own edits, one command
- restores the standing shape (doc 19 §11b):
+ This command restores the standing clock shape across scene reloads (doc 19
+ §11b):
 
- * **celestial** → back on the `Epoch` root, affine identity (re-coupled to the sim,
-   so a sky left running at 100 000× stops the instant the scene reloads);
+ * **celestial** → back on the `Epoch` root, affine identity;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
  * **transport** → Playing at 1×;
- * **mission calendar** → the authored mission origin, with any kinematic warp
-   preview cleared. The mission origin itself is preserved so a scene load can
-   apply its `SetMissionEpoch` afterward.
+ * **mission calendar** → the authored mission origin. The mission origin itself
+   is preserved so a scene load can apply its `SetMissionEpoch` afterward.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
@@ -2847,10 +2841,9 @@ actually call, with the fields the deserializer actually accepts. See the
  [`ControlAnimation`] which drives the keyframe preview. Each field optional so
  one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
- `{"rate":4.0}` runs it 4× realtime, and the bounded live ladder ends at
- 100×. Rates 32×–100× enter the explicit kinematic-warp regime: the physics
- tick freezes while pure epoch consumers advance. Use `SetClock` for a
- presentation-only celestial rate above 100×. This is THE pause command:
+ `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
+ 64×. Higher rates are rejected. Use `SetClock` for a presentation-only
+ celestial rate when a detached celestial clock needs a different scale. This is THE pause command:
  exposed on the API/MCP and wrapped by the rhai prelude verbs
  `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
  one-liner can freeze the world.
