@@ -181,27 +181,35 @@ pub(crate) fn render_diagram_canvas(
             })
             .unwrap_or(false);
         let msl_state = ctx.resource::<lunco_assets::msl::MslLoadState>();
+        let msl_resident = crate::msl_remote::global_parsed_msl().is_some()
+            || ctx
+                .resource::<crate::engine_resource::ModelicaEngineHandle>()
+                .and_then(|handle| handle.try_lock())
+                .is_some_and(|engine| engine.source_set_installed("msl"));
         // Live load detail (phase + %) while the bundle is still arriving,
         // so the diagram shows *why* the icons are gray and how far along
         // the download/parse is — not just a static "loading" string.
-        let (msl_message, msl_is_loading) = match msl_state {
-            Some(lunco_assets::msl::MslLoadState::Loading {
-                phase,
-                bytes_done,
-                bytes_total,
-            }) => (
+        let (msl_message, msl_is_loading) = match (msl_state, msl_resident) {
+            (
+                Some(lunco_assets::msl::MslLoadState::Loading {
+                    phase,
+                    bytes_done,
+                    bytes_total,
+                }),
+                false,
+            ) => (
                 Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
                 true,
             ),
-            Some(lunco_assets::msl::MslLoadState::Failed(msg)) => (
-                Some(format!("Modelica Standard Library unavailable: {msg}")),
+            (Some(lunco_assets::msl::MslLoadState::Failed(msg)), false) => (
+                Some(format!("Modelica Standard Library error: {msg}")),
                 false,
             ),
-            Some(lunco_assets::msl::MslLoadState::NotStarted) | None => (
+            (Some(lunco_assets::msl::MslLoadState::NotStarted), false) => (
                 Some("Modelica Standard Library unavailable".to_string()),
                 false,
             ),
-            Some(lunco_assets::msl::MslLoadState::Ready { .. }) => (None, false),
+            _ => (None, false),
         };
         let has_content = {
             let docstate = state.get_for_render(render_tab_id, active_doc);
