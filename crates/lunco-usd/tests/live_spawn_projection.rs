@@ -10,7 +10,10 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::{
-    ui::{CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, UsdPreviewId, UsdViewportPlugin},
+    ui::{
+        CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, OpenUsdPreviewView, UsdPreviewId,
+        UsdPreviewViewId, UsdViewportPlugin,
+    },
     ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
 use lunco_usd_bevy::*;
@@ -245,6 +248,27 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         .unwrap()
         .scene_root();
     assert!(has_prim_entity(&mut app, "/World/First"));
+
+    app.world_mut().trigger(OpenUsdPreviewView {
+        preview: UsdPreviewId(1),
+        view: UsdPreviewViewId(2),
+    });
+    app.update();
+    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let primary = state
+        .focused_view_id()
+        .expect("opening a preview creates a primary view");
+    let secondary = state
+        .view(UsdPreviewViewId(2))
+        .expect("additional view is registered");
+    assert_eq!(secondary.preview(), UsdPreviewId(1));
+    assert_eq!(
+        state.session(UsdPreviewId(1)).unwrap().scene_root(),
+        first_root
+    );
+    assert_ne!(state.view(primary).unwrap().camera(), secondary.camera());
+    assert_ne!(primary, UsdPreviewViewId(2));
+    assert_eq!(state.view_count(), 2);
 
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(2),

@@ -163,6 +163,15 @@ cheap single-valued surface.
 | **geometry** | insert discrete 3D gprims + their own colliders | placed on `composed.height_at`, streamed as assets | rock, habitat, **cave interior**, arch |
 
 - A **crater** is pure *height*.
+
+The `rocks` geometry layer uses the composed terrain footprint as its default
+scope: its optional `lunco:layer:regionM` is a half-extent, and zero (the USD
+schema default) means the whole composed terrain. A positive value is an
+explicit near-field scope. Density is expressed per hectare, then the
+authoritative rendering-quality profile applies the total instance cap. The
+sampler is one deterministic field for the layer, so coverage does not restart
+at tile boundaries or duplicate when the camera moves; shared meshes and
+visibility ranges provide the bounded presentation cost.
 - A **rock** is pure *geometry* (a mesh + sphere collider sitting on the surface).
 - A **cave** is *carve* (punch the mouth) **+** *geometry* (insert the tube) **+**
   optionally a little *height* (a raised collapse rim). Nothing in the pipeline is

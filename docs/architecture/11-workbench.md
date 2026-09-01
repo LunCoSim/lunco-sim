@@ -150,33 +150,24 @@ The window is drawn by **two layered cameras**, not by tiling:
 | Order | Camera | Role |
 |-------|--------|------|
 | 0 | scene `Camera3d` (`lunco_render::SceneCamera` intent) | renders the 3D **full-window**; **clears** the target |
-| 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints the chrome on top with `ClearColorConfig::None` so it does not wipe the 3D |
+| 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | renders a transparent intermediate and explicitly alpha-blends chrome over the scene |
 
 The host is a separate camera because scene cameras are transient (USD spawns
 them, `camera_switch` swaps them) while the egui context must be stable.
 
-**Invariant: both cameras must share one main render texture.** Bevy keys a
-target's main textures by `(target, usages, format, msaa)`. If the host's key
-diverges, Bevy hands it a *private* texture that — because its clear config is
-`None` — is **never cleared**, and it silently becomes an accumulation buffer:
-chrome that stops being drawn (panels dropped by a perspective switch, a status
-bar orphaned by a resize) stays baked in and keeps compositing over the live 3D,
-frozen. Only a window resize clears it.
-
-This shipped as a real bug: `SceneCamera` defaults to MSAA ×2 while a bare
-`Camera2d` defaults to ×4, so Build's panels ghosted on top of the View
-perspective. `sync_egui_host_msaa` (`lunco-workbench/src/viewport.rs`) copies the
-scene camera's MSAA onto the host — change-driven, so it only runs when a scene
-camera's MSAA actually moves or a camera is newly tagged. **Never give the egui
-host its own MSAA / format / HDR setting** — for that camera these are not look
-choices, they are the texture-sharing key.
+The host uses Bevy's explicit `CameraOutputMode::Write` contract with
+`BlendState::ALPHA_BLENDING`, `clear_color: Custom(Color::NONE)`, and no world
+render layers. Its intermediate target is independent from the scene camera's
+target, so camera replacement, MSAA/HDR changes, and window resizing cannot
+carry stale chrome across a perspective switch. The output blend state is
+explicit rather than inferred from camera order.
 
 When no window `Camera3d` is active at all (Design perspective, the Modelica
 workbench, or the short handoff while a selected camera is being activated),
-nothing clears the target — `render_layout` handles that case by painting a
-full-window backdrop on egui's background layer. It checks the selected
-camera's actual `Camera::is_active` state, not only the selection binding, so
-direct perspective switches cannot expose the previous framebuffer.
+the workbench paints a full-window themed backdrop on egui's background layer.
+It checks the selected camera's actual `Camera::is_active` state, not only the
+selection binding, so direct perspective switches show an intentional loading
+surface until the scene camera is ready.
 
 Domain-owned diagram overlays remain leaf-local. A direct painter uses the
 owning leaf's clip rectangle, and a separate egui `Area` constrains itself to

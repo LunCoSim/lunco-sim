@@ -36,16 +36,26 @@ listed below; they do not introduce a second authoring model.
   `OpenFile`/`NewDocument`/`SaveAsDocument` commands provide the file lifecycle;
   the Editor preview is opened with `OpenUsdPreview`, which carries an
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
-  the lease shown by the dock and `CloseUsdPreview` releases only that lease.
-  All preview leases are isolated from the simulation scene.
+  the session shown by the dock and `CloseUsdPreview` releases only that session.
+  All preview sessions are isolated from the simulation scene.
+- A `UsdPreviewSession` owns one projected composed stage, scene root, and
+  render layer. A `UsdPreviewView` owns only one camera, light, render target,
+  and orbit pose over that session. `OpenUsdPreviewView` therefore provides
+  split or tabbed 3D inspection without duplicate USD projection work.
+  Hidden view tabs have inactive cameras; visible tabs publish their own dock
+  geometry and are resized independently. `UsdPreviewRenderBudget` bounds each
+  target to 2048 px per axis and 4,194,304 pixels, with an 8,388,608-pixel
+  frame-wide cap by default. A view is activated only after its panel publishes
+  geometry inside that budget; zero-valued limits are invalid and produce no
+  render target rather than an unbounded allocation.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
-  animation editor derive one entry per open lease and paint only the focused
-  entry. Pan/zoom, graph selection, drilled Inspector target, authored layer,
-  document generation, and render resources therefore cannot leak between two
-  open documents with identical prim paths. The shared ECS selection is only
-  the focused-lease projection; the editor-owned session selection restores it
-  when focus changes.
+  animation editor derive one entry per open session and paint the session
+  selected by the focused view. View cameras and render targets are separate
+  presentation state, so pan/zoom and image resources cannot leak between
+  views or between documents with identical prim paths. The shared ECS
+  selection is only the focused-session projection; the editor-owned session
+  selection restores it when focus changes.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -64,10 +74,10 @@ The existing implementation provides the substrate the perspective composes:
 | Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
 
 The perspective must remain a composition of these surfaces. The Twin Browser
-opens an explicit preview lease for the selected document; the USD preview, prim
+opens an explicit preview session for the selected document; the USD preview, prim
 tree, Connections graph, Inspector, and command handlers consume that same
 explicit document binding. The Connections graph and native USD panels are
-empty until their focused lease has a projected stage; they never infer an
+empty until their focused session has a projected stage; they never infer an
 editable stage from entity counts or the live simulation.
 Do not add a second graph library, a special rover assembly implementation, or
 direct ECS mutation for convenience.
@@ -202,7 +212,8 @@ The agent-and-human authoring workflow is defined by the
 [`edit-usd-assembly` skill](../../skills/edit-usd-assembly/SKILL.md). Assembly
 edits start in a windowed production `target/debug/luncosim --api PORT`
 session; `--offscreen` and `--no-ui` are not substitutes for this workflow.
-The user sees the focused `UsdPreviewId` while the agent uses the same typed
+The user sees the focused `UsdPreviewViewId` and its parent `UsdPreviewId`
+while the agent uses the same typed
 commands or the built-in `assembly_edit` Rhai library. After each coherent
 change, the agent checks the command acknowledgement and generation, reads the
 affected composed prim, captures and inspects a screenshot, and presents the
@@ -212,7 +223,7 @@ preview.
 
 Interactive authoring does not permit direct USDA writes, ECS mutation, guessed
 document/layer/prim identities, or an assembly-specific state path. The existing
-document registry, OpenUSD composition, typed `UsdOp` journal, preview lease,
+document registry, OpenUSD composition, typed `UsdOp` journal, preview session,
 mount validators, and explicit `SaveDocument`/`SaveAsDocument` commands remain
 the only owners.
 

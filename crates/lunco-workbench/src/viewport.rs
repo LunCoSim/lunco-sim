@@ -2,8 +2,8 @@
 //!
 //! ## Architecture (read this if anything here looks weird)
 //!
-//! Two cameras share the window, and they are **layered**, with the scene camera
-//! rendering the full window behind the active workbench layout:
+//! Two cameras render the window as an explicit Bevy composition, with the scene
+//! camera rendering the full window behind the active workbench layout:
 //!
 //! 1. The scene `Camera3d` (order 0), declared by the canonical
 //!    [`lunco_render::SceneCamera`] intent. It renders the 3D **full-window** in
@@ -11,11 +11,10 @@
 //!    main texture each frame. The dock leaf rect is still measured separately
 //!    for egui occlusion and scene-picking geometry; it is not a camera crop.
 //! 2. The egui host `Camera2d` (order 1) — [`WorkbenchEguiHost`], carrying
-//!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. bevy_egui
-//!    paints the chrome into *this camera's* `ViewTarget`, on top, with
-//!    `ClearColorConfig::None` so it does not wipe the 3D the `Camera3d` just
-//!    wrote. Chrome is opaque where panels are; everywhere else the 3D shows
-//!    through.
+//!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. Bevy renders
+//!    it into an independent transparent intermediate target and alpha-blends
+//!    that target over the scene output. Chrome is opaque where panels are;
+//!    everywhere else the 3D shows through.
 //!
 //! The host exists as its own camera because scene cameras are transient — USD
 //! scenes spawn them, `camera_switch` swaps them, avatars despawn them — while
@@ -23,31 +22,18 @@
 //!
 //! ## The framebuffer contract (the load-bearing invariant)
 //!
-//! **The two cameras must share ONE main texture.** Bevy keys a target's main
-//! textures by `(target, usages, format, msaa)` — `MainTextureKey` in
-//! `bevy_render::view::prepare_view_targets`. Same key ⇒ one shared texture:
-//! the `Camera3d` clears it, egui paints over it, correct. Different key ⇒ the
-//! host silently gets a *private* texture out of the `TextureCache`, and
-//! because its clear config is `None` (`LoadOp::Load` forever — see
-//! `ColorAttachment::get_attachment`) **nothing ever clears it**. It degenerates
-//! into an accumulation buffer: chrome that stops being drawn (a panel dropped
-//! by a perspective switch, a status bar orphaned by a resize) stays baked in
-//! and keeps compositing over the live 3D, frozen at the frame it was painted.
-//! Only a window resize clears it, by changing the texture descriptor.
+//! The host uses Bevy's explicit `CameraOutputMode::Write` contract with
+//! `BlendState::ALPHA_BLENDING`, `clear_color: Custom(Color::NONE)`, and no
+//! render layers. The host intermediate is transparent and is composited over
+//! the scene camera's output; it does not load or reuse a scene camera's
+//! intermediate texture. Consequently, a scene camera may be replaced,
+//! resized, or rendered with a different MSAA/HDR configuration without
+//! changing the UI camera's render target or leaving old chrome in it.
 //!
-//! That is a real bug this crate shipped: `SceneCamera` defaults to MSAA ×2
-//! while a bare `Camera2d` defaults to ×4, so the keys diverged and Build's
-//! panels ghosted over the View perspective. [`sync_egui_host_msaa`] is what
-//! holds the invariant — it is correctness plumbing, not image quality (egui
-//! gains nothing from MSAA). If you ever give the host its own MSAA, format, or
-//! HDR setting, you break this and the ghosts come back.
-//!
-//! The alternative architecture — an independent, alpha-composited egui layer
-//! (`clear_color: Custom(NONE)` + `CameraOutputMode::Write { blend_state:
-//! Some(PREMULTIPLIED_ALPHA_BLENDING), .. }`) — would decouple the two cameras
-//! at the cost of an extra full-window texture and blend blit per frame. We
-//! deliberately keep the shared-texture model: it is what `bevy_ui` itself does
-//! for UI-over-3D, and it is cheaper.
+//! The two cameras still have a deterministic order: the scene camera is order
+//! 0 and the host is order 1. The output blend state is explicit rather than
+//! inferred from camera order, so the composition remains correct when camera
+//! activation changes during a perspective switch or Twin replacement.
 //!
 //! ## Why this is robust *by design*
 //!
@@ -63,10 +49,9 @@
 //! - **Sentinels catch regressions.** [`check_camera_invariants`] warns when a
 //!   new window-targeting `Camera3d` has no `SceneCamera` intent. Such a camera
 //!   has no owner and must be fixed at its spawn/binding site, not adopted here.
-//! - **The texture-sharing key is synced, not assumed.**
-//!   [`sync_egui_host_msaa`] re-establishes it whenever a scene camera's MSAA
-//!   moves or a camera intent is newly bound, so a change to the setting (it is
-//!   user-facing, and `Off` on wasm) cannot quietly split the textures again.
+//! - **The render targets are independent by contract.** Scene camera
+//!   replacement, MSAA/HDR changes, and window resizes do not require a
+//!   workbench-side texture-key repair system.
 //!
 //! ## When NO 3D camera renders the window
 //!
@@ -79,7 +64,6 @@
 //! ## What goes where
 //!
 //! - `ensure_egui_host` (Startup) — auto-spawn the egui host.
-//! - `sync_egui_host_msaa` (Update) — hold the shared-main-texture invariant.
 //! - `apply_workbench_viewport` (PostUpdate, before `CameraUpdateSystems`)
 //!   — publish scene visibility into `SceneViewport`; the camera remains
 //!   full-window while the dock leaf rect stays in `PanelRects`/`ScenePickGate`.
@@ -96,11 +80,11 @@ use bevy::prelude::*;
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
+use bevy::camera::{CameraOutputMode, ClearColorConfig, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
+use wgpu::BlendState;
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
-use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -110,12 +94,8 @@ pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
 /// Marker component on the egui-owning camera for one window.
 ///
 /// Auto-inserted by [`ensure_egui_host`] alongside `Camera2d` and
-/// `PrimaryEguiContext`. We can't use Bevy's required-components
-/// feature here because `bevy_egui::PrimaryEguiContext` (0.39.1)
-/// doesn't impl `Default`, so a `#[require(PrimaryEguiContext)]`
-/// would fail to compile. The host spawn is a single-site concern
-/// anyway — `ensure_egui_host` is the only legitimate place — so a
-/// plain marker is sufficient.
+/// `PrimaryEguiContext`. The host spawn is a single-site concern, so a plain
+/// marker keeps the ownership boundary explicit.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct WorkbenchEguiHost;
 
@@ -156,6 +136,7 @@ pub enum SceneTarget {
 #[derive(Resource, Default, Debug)]
 pub struct PanelRects {
     rects: HashMap<PanelId, PanelRect>,
+    instance_rects: HashMap<(PanelId, u64), PanelRect>,
 }
 
 /// Per-frame inputs and resolved output of the scene-vs-chrome pick gate.
@@ -260,6 +241,7 @@ impl PanelRects {
     /// the offscreen image to a panel that is no longer shown.
     pub fn clear(&mut self) {
         self.rects.clear();
+        self.instance_rects.clear();
     }
 
     /// Compute a [`PanelRect`] (physical pixels) from an egui `Ui`,
@@ -295,9 +277,21 @@ impl PanelRects {
         self.rects.insert(panel, rect);
     }
 
+    /// Record the rect of one multi-instance panel tab. Instance identity is
+    /// part of the key so two visible tabs backed by the same renderer cannot
+    /// resize or present one another's render target.
+    pub fn record_instance(&mut self, panel: PanelId, instance: u64, rect: PanelRect) {
+        self.instance_rects.insert((panel, instance), rect);
+    }
+
     /// Look up a panel's most-recently-recorded rect.
     pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
         self.rects.get(&panel).copied()
+    }
+
+    /// Look up one multi-instance panel tab's most-recently-recorded rect.
+    pub fn get_instance(&self, panel: PanelId, instance: u64) -> Option<PanelRect> {
+        self.instance_rects.get(&(panel, instance)).copied()
     }
 
     /// Look up a panel footprint directly in egui's logical point space.
@@ -605,14 +599,11 @@ impl Panel for ViewportPanel {
     fn transparent_background(&self) -> bool {
         // TRANSPARENT — required by the current render order
         // (`WorkbenchEguiHost` Camera2d order=1, Camera3d order=0).
-        // Camera3d paints 3D into its viewport rect FIRST; egui paints
-        // chrome on top with `ClearColorConfig::None`. If this panel
-        // painted an opaque backdrop, egui would overpaint the 3D
-        // pixels Camera3d just wrote and the centre area would be
-        // solid theme dark. Bleed safety isn't lost — `apply_workbench
-        // _viewport` sets `Camera::is_active = false` when ViewportPanel
-        // isn't in the active layout, so no 3D ever reaches the
-        // framebuffer to leak.
+        // Camera3d paints 3D first; the host then alpha-composites egui chrome.
+        // If this panel painted an opaque backdrop, egui would overpaint the
+        // 3D pixels in the centre. Bleed safety isn't lost — the camera
+        // reconciler makes the scene camera inactive when ViewportPanel isn't
+        // in the active layout, so no 3D reaches the presentation target then.
         true
     }
 
@@ -640,118 +631,20 @@ impl Panel for ViewportPanel {
     }
 }
 
-/// Keep the egui host's MSAA equal to the scene camera's.
+/// Construct the Bevy camera used by the persistent egui host.
 ///
-/// **This is what makes `ClearColorConfig::None` on the host sound**, and it is
-/// load-bearing for correctness, not image quality — egui gains nothing from
-/// MSAA.
-///
-/// Bevy keys a render target's main textures by
-/// `(target, usages, format, msaa)` (`bevy_render::view::prepare_view_targets`,
-/// `MainTextureKey`). Two window cameras with the SAME key share one main
-/// texture; with different keys they each get their own out of the
-/// `TextureCache`. bevy_egui draws the chrome into the *egui host camera's*
-/// `ViewTarget` (`EguiViewTarget`), so:
-///
-/// - Same MSAA → host shares the 3D camera's texture. `Camera3d` (order 0)
-///   clears it every frame, egui paints chrome on top: correct.
-/// - Different MSAA → the host gets a PRIVATE texture that nothing clears,
-///   because its own clear config is `None` (= `LoadOp::Load` forever, see
-///   `ColorAttachment::get_attachment`). It silently becomes an accumulation
-///   buffer: chrome that stops being drawn — panels dropped by a perspective
-///   switch, a status bar left behind by a window resize — stays baked in it
-///   and keeps compositing over the live 3D, frozen at the frame it was
-///   painted. Only a resize clears it, by changing the texture descriptor.
-///
-/// That is exactly the bug this system prevents: the scene camera defaults to
-/// MSAA ×2 (`SceneCamera`, and `Off` on wasm) while a bare `Camera2d` defaults
-/// to ×4, so the keys diverged and the chrome ghosted.
-///
-/// **Change-driven.** MSAA practically never moves on its own, so the system
-/// early-outs on quiet frames. The trigger set must cover EVERY way the pairing
-/// (active window scene-camera → host) can change — the earlier set missed two, which
-/// is how the ghost came back:
-/// - `Changed<Msaa>` — the user flipped the setting (insertion counts as a change);
-/// - `Added<SceneCamera>` — a camera intent was added and the render binder will
-///   attach or refresh its concrete pipeline;
-/// - `Changed<Camera>` — a DIFFERENT camera became active (`is_active` lives on
-///   `Camera`), AND a window **resize** (bevy's camera driver rewrites `Camera.computed`
-///   with the new target size). Both must re-pick/re-sync;
-/// - **removal** (`RemovedComponents`) — a scene swap (Open-Twin) DESPAWNS the old
-///   active camera and spawns the twin's. Without watching removal, the host stayed
-///   synced to the despawned camera's MSAA; the new active camera then rendered into a
-///   host texture keyed to the WRONG MSAA (a private, never-cleared one), and stale
-///   chrome accumulated over the live 3D. This is the regression.
-///
-/// It is still change-driven: on a frame where none of these fired it does two empty
-/// archetype checks and returns.
-pub(crate) fn sync_egui_host_msaa(
-    // `Without<WorkbenchEguiHost>` on the scene-camera queries, and
-    // `Without<SceneCamera>` on the host's `&mut Msaa`, keep the read and
-    // write sets disjoint — Bevy rejects the system otherwise (B0001), because a
-    // `Changed<T>` filter is an access to `T` just like reading it.
-    dirty: Query<
-        (),
-        (
-            With<SceneCamera>,
-            Without<WorkbenchEguiHost>,
-            Or<(Changed<Msaa>, Changed<Camera>, Added<SceneCamera>)>,
-        ),
-    >,
-    mut removed: RemovedComponents<SceneCamera>,
-    host_added: Query<(), Added<WorkbenchEguiHost>>,
-    scene_cams: Query<
-        (Entity, &Camera, &Msaa, &RenderTarget, Has<Hdr>),
-        (With<SceneCamera>, Without<WorkbenchEguiHost>),
-    >,
-    viewport: Option<Res<SceneViewport>>,
-    // The host must match the scene camera's `Hdr` too, not just MSAA. Both feed bevy's
-    // main-texture key `(target, usages, format, msaa)` — the `Hdr` marker selects the
-    // `Rgba16Float` format. A scene camera with bloom/AgX is HDR, so a non-HDR egui host
-    // gets a DIFFERENT-format private texture that never shares the (cleared) 3D texture,
-    // and stale chrome bakes into it — the ghost that returns on a perspective switch,
-    // where only panels change and no camera event fires.
-    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<SceneCamera>)>,
-    mut commands: Commands,
-) {
-    // A removed scene camera (scene swap) must re-run the sync even though no live
-    // entity carries the change flag — drain the reader so it doesn't re-fire forever.
-    let had_removal = removed.read().count() > 0;
-    if dirty.is_empty() && host_added.is_empty() && !had_removal {
-        return;
-    }
-    // The viewport owns presentation selection. There is no valid substitute:
-    // before a camera is resolved, no scene camera is rendering the window and
-    // the egui host must not inherit an arbitrary camera's texture format.
-    let is_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(_));
-    let Some(active_camera) = viewport.as_deref().and_then(|vp| vp.active_camera) else {
-        return;
-    };
-    let want = scene_cams
-        .get(active_camera)
-        .ok()
-        .filter(|(_, camera, _, target, _)| camera.is_active && is_window(target))
-        .map(|(_, _, msaa, _, hdr)| (*msaa, hdr));
-    let Some((want_msaa, want_hdr)) = want else {
-        // No 3D camera on the window (Design mode, the Modelica workbench).
-        // Nothing renders the scene, so nothing clears the target — but
-        // `render_layout` paints a full-window backdrop in exactly that case,
-        // which covers the framebuffer. Leave the host's MSAA alone.
-        return;
-    };
-    for (entity, mut msaa, host_hdr) in &mut host {
-        // Guarded writes: only touch state (and trip change-detection) when it actually
-        // differs, so the host doesn't churn every frame.
-        if *msaa != want_msaa {
-            *msaa = want_msaa;
-        }
-        if want_hdr != host_hdr {
-            if want_hdr {
-                commands.entity(entity).try_insert(Hdr);
-            } else {
-                commands.entity(entity).remove::<Hdr>();
-            }
-        }
+/// The intermediate target is transparent and the final write is explicitly
+/// alpha-blended. This is the standard Bevy composition contract for a UI
+/// layer over a separately rendered scene.
+fn egui_host_camera() -> Camera {
+    Camera {
+        order: 1,
+        output_mode: CameraOutputMode::Write {
+            blend_state: Some(BlendState::ALPHA_BLENDING),
+            clear_color: ClearColorConfig::None,
+        },
+        clear_color: ClearColorConfig::Custom(Color::NONE),
+        ..default()
     }
 }
 
@@ -770,40 +663,17 @@ pub(crate) fn ensure_egui_host(
     if existing.iter().next().is_none() {
         commands.spawn((
             Camera2d,
-            // `order = 1` puts egui's Camera2d strictly AFTER the
-            // default-order (0) `Camera3d`, regardless of which entity
-            // spawned first. Without this, the render order ties on
-            // `order` and falls back to entity-creation order — and
-            // 3D cameras that arrive late from USD projection end up painting
-            // OVER the chrome,
-            // bleeding 3D through the top-right of the menu bar.
-            //
-            // `ClearColorConfig::None` keeps the 3D scene the Camera3d
-            // wrote to the framebuffer instead of wiping it before
-            // egui paints. egui's chrome paints opaque panel frames
-            // on top; the central viewport's framebuffer pixels stay
-            // visible where no chrome covers them.
-            //
-            // This is only sound while this camera SHARES the window's main
-            // texture with the scene `Camera3d` — see [`sync_egui_host_msaa`],
-            // which is what keeps that true.
-            Camera {
-                order: 1,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            // MSAA is not spelled out here on purpose: it is not a look choice
-            // for this camera, it is the texture-sharing key.
-            // [`sync_egui_host_msaa`] copies the scene camera's live value onto
-            // this entity every frame — including when the user changes the MSAA
-            // setting, which a spawn-time constant could not follow.
+            // `order = 1` places egui strictly after the scene Camera3d.
+            // `egui_host_camera` gives this persistent UI layer its own
+            // transparent intermediate target and an explicit alpha-blended
+            // final write. Scene-camera replacement and render-quality changes
+            // therefore cannot affect UI compositing state.
+            egui_host_camera(),
             //
             // Render NO world layers. This camera exists ONLY to paint egui chrome
             // (a render pass that ignores `RenderLayers`); it must not also run the
-            // gizmo pass. A default (layer-0) Camera2d re-projects every 3D world
-            // gizmo — sensor beams, physics arrows — through its 2D orthographic view
-            // onto a target it never clears (`ClearColorConfig::None`), so the lines
-            // land at garbage positions and TRAIL across frames as a ghost overlay.
+            // gizmo pass. A default (layer-0) Camera2d would re-project every 3D
+            // world gizmo through its 2D orthographic view onto the UI target.
             // Excluding the world layers keeps gizmos on the scene `Camera3d` only.
             RenderLayers::none(),
             PrimaryEguiContext,
@@ -1161,17 +1031,7 @@ impl Plugin for WorkbenchViewportPlugin {
             // `Update`, before the egui pass writes it. It is cleared at the top of
             // `render_workbench` instead.)
             .add_systems(First, reset_scene_pick_gate)
-            .add_systems(
-                Update,
-                (
-                    check_camera_invariants,
-                    check_host_invariant_once,
-                    // Load-bearing for the no-ghost-chrome invariant — see
-                    // `sync_egui_host_msaa`. Change-driven: early-outs unless a
-                    // scene camera's MSAA moved or a camera/host was just added.
-                    sync_egui_host_msaa,
-                ),
-            )
+            .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
             // Keep bevy_egui's blanket pointer-capture OFF; we provide our own
             // viewport-aware backend instead (so the egui-dock ViewportPanel leaf
             // doesn't suppress 3D picking over the scene).
@@ -1212,6 +1072,67 @@ mod tests {
     use egui::{pos2, Rect};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
+
+    #[test]
+    fn egui_host_camera_uses_explicit_alpha_compositing() {
+        let camera = egui_host_camera();
+
+        assert_eq!(camera.order, 1);
+        assert!(matches!(
+            camera.clear_color,
+            ClearColorConfig::Custom(color) if color.to_linear() == Color::NONE.to_linear()
+        ));
+        assert!(matches!(
+            camera.output_mode,
+            CameraOutputMode::Write {
+                blend_state: Some(blend_state),
+                clear_color: ClearColorConfig::None,
+            } if blend_state == BlendState::ALPHA_BLENDING
+        ));
+    }
+
+    #[test]
+    fn instance_panel_rects_are_isolated_from_singletons_and_each_other() {
+        let mut rects = PanelRects::default();
+        let singleton = PanelRect {
+            origin: UVec2::new(1, 2),
+            size: UVec2::new(3, 4),
+        };
+        let first = PanelRect {
+            origin: UVec2::new(5, 6),
+            size: UVec2::new(7, 8),
+        };
+        let second = PanelRect {
+            origin: UVec2::new(9, 10),
+            size: UVec2::new(11, 12),
+        };
+
+        rects.record(USD_PREVIEW, singleton);
+        rects.record_instance(USD_PREVIEW, 1, first);
+        rects.record_instance(USD_PREVIEW, 2, second);
+
+        assert_eq!(
+            rects.get(USD_PREVIEW).map(|rect| (rect.origin, rect.size)),
+            Some((singleton.origin, singleton.size))
+        );
+        assert_eq!(
+            rects
+                .get_instance(USD_PREVIEW, 1)
+                .map(|rect| (rect.origin, rect.size)),
+            Some((first.origin, first.size))
+        );
+        assert_eq!(
+            rects
+                .get_instance(USD_PREVIEW, 2)
+                .map(|rect| (rect.origin, rect.size)),
+            Some((second.origin, second.size))
+        );
+        assert!(rects.get_instance(USD_PREVIEW, 3).is_none());
+
+        rects.clear();
+        assert!(rects.get(USD_PREVIEW).is_none());
+        assert!(rects.get_instance(USD_PREVIEW, 1).is_none());
+    }
 
     fn rect(min: (f32, f32), max: (f32, f32)) -> Rect {
         Rect::from_min_max(pos2(min.0, min.1), pos2(max.0, max.1))

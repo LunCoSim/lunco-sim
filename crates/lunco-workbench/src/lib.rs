@@ -3236,7 +3236,12 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Instance { kind, .. } => kind,
         };
         if let Some(mut rects) = self.world.get_resource_mut::<viewport::PanelRects>() {
-            rects.record(panel_id, measured_panel_rect);
+            match *tab {
+                TabId::Singleton(_) => rects.record(panel_id, measured_panel_rect),
+                TabId::Instance { instance, .. } => {
+                    rects.record_instance(panel_id, instance, measured_panel_rect)
+                }
+            }
         }
 
         match *tab {
@@ -4949,8 +4954,8 @@ fn render_layout(
 /// `SceneViewport::active_camera` is the selection binding, while
 /// `Camera::is_active` is the renderer's actual state. A perspective switch
 /// can publish a new visible layout before the camera reconciler has activated
-/// the bound camera; treating the binding alone as rendered exposes the prior
-/// framebuffer through egui's load-preserving host.
+/// the bound camera; treating the binding alone as rendered would expose an
+/// incomplete presentation during that transition.
 fn scene_camera_is_rendering(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_core::SceneViewport>()

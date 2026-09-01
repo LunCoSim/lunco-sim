@@ -126,13 +126,17 @@ composition and dependency resolution stay with `lunco-usd-compose` and its
 existing resolver path.
 
 Native Assembly Editor view-models are keyed by the existing `UsdPreviewId`
-lease. Derive one prim tree, connection canvas, Inspector subview, and
-authored USD subview per open lease, then paint only the focused entry. The
-shared ECS selection is only the focused-lease projection; keep selection and
-drilled targets in editor-owned session state so focus changes cannot apply a
-command to a same-named prim in another document. Always carry the lease's
-explicit `DocumentId`, `LayerId`, and projection generation into a typed USD
-command.
+session. Derive one prim tree, connection canvas, Inspector subview, and
+authored USD subview per open session, then paint the session selected by the
+focused `UsdPreviewViewId`. Views share the projected stage but own their
+camera/render target and never become document identity. Hidden view cameras
+remain inactive, and visible targets are bounded by `UsdPreviewRenderBudget`
+(2048 px per axis, 4,194,304 pixels per view, and 8,388,608 visible pixels per
+frame by default). The shared ECS
+selection is only the focused-session projection; keep selection and drilled
+targets in editor-owned session state so focus changes cannot apply a command
+to a same-named prim in another document. Always carry the session's explicit
+`DocumentId`, `LayerId`, and projection generation into a typed USD command.
 
 When the work is an agent-driven human asset edit, use the
 [interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md). The
