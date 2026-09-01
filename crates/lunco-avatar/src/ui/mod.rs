@@ -16,6 +16,78 @@ use lunco_core::{
 
 use crate::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
+/// Register the avatar's Twin-scoped safety policy in the existing Settings
+/// menu. The movement system and this row call the same policy reader, so the
+/// UI never maintains a second setting cache or infers state from a camera.
+pub fn register_avatar_settings(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings_submenu("Avatar", |ui, ctx| {
+        ui.label(egui::RichText::new("Avatar collision").weak().small());
+        let policy = crate::avatar_soil_collision_policy(
+            ctx.resource::<lunco_workspace::WorkspaceResource>(),
+        );
+        match &policy {
+            Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed) => {
+                ui.label(
+                    egui::RichText::new(
+                        "The avatar bypasses projected colliders in the active Twin.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            }
+            Ok(crate::AvatarSoilCollisionPolicy::CollisionEnabled) => {
+                ui.label(
+                    egui::RichText::new("Projected colliders block avatar movement by default.")
+                        .weak()
+                        .small(),
+                );
+            }
+            Ok(crate::AvatarSoilCollisionPolicy::Unavailable) => {
+                ui.label(
+                    egui::RichText::new(
+                        "No active Twin settings manifest; avatar collision remains enabled.",
+                    )
+                    .weak()
+                    .italics(),
+                );
+            }
+            Err(error) => {
+                ui.colored_label(
+                    egui::Color32::LIGHT_RED,
+                    format!("Avatar collision setting error: {error}"),
+                );
+                ui.label(
+                    egui::RichText::new("Collision remains enabled until the value is repaired.")
+                        .weak()
+                        .small(),
+                );
+            }
+        }
+        if matches!(
+            &policy,
+            Ok(crate::AvatarSoilCollisionPolicy::CollisionEnabled)
+                | Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+        ) {
+            let mut allowed = matches!(
+                &policy,
+                Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+            );
+            if ui
+                .checkbox(&mut allowed, "Allow avatar through soil (unsafe)")
+                .changed()
+            {
+                ctx.trigger(lunco_workspace::SetTwinSetting {
+                    key: crate::AVATAR_ALLOW_THROUGH_SOIL_SETTING.to_string(),
+                    value: lunco_workspace::TwinSettingInput::Bool(allowed),
+                });
+            }
+        }
+    });
+}
+
 /// Semantic colour bucket for the camera-mode label.
 ///
 /// The view-model can't carry an `egui::Color32` derived from the theme

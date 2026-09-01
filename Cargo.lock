@@ -7187,8 +7187,11 @@ dependencies = [
  "lunco-settings",
  "lunco-theme",
  "lunco-time",
+ "lunco-twin",
  "lunco-workbench",
+ "lunco-workspace",
  "serde",
+ "tempfile",
 ]
 
 [[package]]

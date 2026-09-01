@@ -174,6 +174,26 @@ mounting, bodies below it are reseeded from their new site-local hierarchy;
 only their velocity vectors are rotated into the new axes. A normal active-frame
 switch without frame reparenting transports the complete existing physics pose.
 
+The local avatar is a kinematic camera embodiment, not an authored rigid body.
+Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
+shape against the standard colliders projected from the composed USD stage.
+The controller converts the avatar pose and requested displacement from its
+source Grid into `ActivePhysicsFrame` with
+`grid_transform_between_grids`, performs the shape move there, then converts
+the solved position back through `Grid::translation_to_grid`. This keeps camera
+movement on the same f64 frame and collision ownership as the physics scene;
+it does not change Avian's fixed-tick or substep configuration. The existing
+physical collision-layer contract excludes only authored non-physical layers
+such as triggers and celestial helpers.
+
+Collision is enabled by default. The only opt-out is the explicit Twin-scoped
+boolean setting `avatar.allow_through_soil`, read directly from the active
+Twin manifest through the existing generic `SetTwinSetting` path. No active
+Twin or a malformed value remains visible and fail-closed. Because the policy
+is not cached, closing or replacing a Twin cannot carry its opt-out into the
+next scene. A plain avatar USD prim therefore needs no custom collider schema;
+the runtime controller reuses standard `UsdPhysics` collider facts.
+
 ## Placement and view rules
 
 - A scene author supplies a geodetic/body anchor or another physical placement

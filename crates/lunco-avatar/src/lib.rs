@@ -18,6 +18,9 @@
 //! mode and its frame. Every active mode writes the BigSpace `(CellCoord,
 //! Transform)` representation only when its solved value changes.
 
+use avian3d::prelude::{
+    Collider, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse, SpatialQueryFilter,
+};
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::math::{DQuat, DVec3, StableInterpolate};
@@ -65,6 +68,177 @@ mod intents;
 /// malformed/cyclic hierarchy — it does not encode a real structural depth.
 /// (Unifies the former ad-hoc `0..10` / `MAX_DEPTH = 8` bounds.)
 const MAX_HIERARCHY_WALK_DEPTH: usize = 16;
+
+/// Twin-scoped policy key for intentionally allowing the local avatar to pass
+/// through colliders. The safe behavior is the omitted-value default.
+pub const AVATAR_ALLOW_THROUGH_SOIL_SETTING: &str = "avatar.allow_through_soil";
+
+/// Runtime interpretation of the active Twin's avatar collision policy.
+///
+/// `Unavailable` is distinct from `CollisionEnabled`: a plain folder or a
+/// host without a workspace has no Twin settings contract, but it still gets
+/// the safe collision behavior. The value is read directly from the active
+/// Twin, so no policy survives `TwinClosed` or a scene replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvatarSoilCollisionPolicy {
+    /// The setting is absent or explicitly false; colliders are enforced.
+    CollisionEnabled,
+    /// The active Twin explicitly opted into unsafe traversal.
+    ThroughSoilAllowed,
+    /// No active Twin manifest is available; collision remains enforced.
+    Unavailable,
+}
+
+/// Physical shape used by the kinematic avatar controller.
+///
+/// This is engine geometry, not a user preference and not a USD fact: the
+/// avatar is a runtime camera embodiment rather than an authored rigid body.
+/// Keeping the dimensions in one resource gives the controller one owner for
+/// its measured shape without duplicating a collider in every scene.
+#[derive(Resource, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Resource)]
+pub struct AvatarCollisionSettings {
+    /// Capsule radius in stage metres.
+    pub radius_m: f64,
+    /// Length of the capsule's central segment in stage metres.
+    pub capsule_length_m: f64,
+}
+
+impl Default for AvatarCollisionSettings {
+    fn default() -> Self {
+        Self {
+            radius_m: 0.35,
+            capsule_length_m: 1.1,
+        }
+    }
+}
+
+#[cfg(test)]
+mod avatar_collision_policy_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_policy_is_safe_and_missing_session_is_visible() {
+        assert_eq!(
+            avatar_soil_collision_policy_from_setting(None),
+            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
+        );
+        assert_eq!(
+            avatar_soil_collision_policy(None),
+            Ok(AvatarSoilCollisionPolicy::Unavailable)
+        );
+    }
+
+    #[test]
+    fn only_an_explicit_boolean_true_enables_traversal() {
+        assert_eq!(
+            avatar_soil_collision_policy_from_setting(Some(
+                &lunco_workspace::TwinSettingValue::Bool(false),
+            )),
+            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
+        );
+        assert_eq!(
+            avatar_soil_collision_policy_from_setting(Some(
+                &lunco_workspace::TwinSettingValue::Bool(true),
+            )),
+            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+        );
+    }
+
+    #[test]
+    fn invalid_policy_type_is_an_explicit_error() {
+        let error = avatar_soil_collision_policy_from_setting(Some(
+            &lunco_workspace::TwinSettingValue::Text("true".into()),
+        ))
+        .expect_err("text must not be coerced into an unsafe opt-out");
+        assert!(error.contains(AVATAR_ALLOW_THROUGH_SOIL_SETTING));
+    }
+
+    #[test]
+    fn policy_is_read_from_active_twin_and_disappears_on_close() {
+        let temp = tempfile::tempdir().expect("Twin directory");
+        std::fs::write(
+            temp.path().join(lunco_twin::MANIFEST_FILENAME),
+            "name = \"Avatar Twin\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("Twin manifest");
+        let twin = match lunco_workspace::TwinMode::open(temp.path()).expect("open Twin") {
+            lunco_workspace::TwinMode::Twin(twin) => twin,
+            other => panic!("expected Twin, got {other:?}"),
+        };
+
+        let mut workspace = lunco_workspace::WorkspaceResource::new();
+        let twin_id = workspace.add_twin(twin);
+        workspace
+            .twin_mut(twin_id)
+            .expect("registered Twin")
+            .manifest
+            .as_mut()
+            .expect("Twin manifest")
+            .set_setting(
+                AVATAR_ALLOW_THROUGH_SOIL_SETTING,
+                lunco_workspace::TwinSettingValue::Bool(true),
+            )
+            .expect("valid policy setting");
+
+        assert_eq!(
+            avatar_soil_collision_policy(Some(&workspace)),
+            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+        );
+
+        workspace.close_twin(twin_id);
+        assert_eq!(
+            avatar_soil_collision_policy(Some(&workspace)),
+            Ok(AvatarSoilCollisionPolicy::Unavailable)
+        );
+    }
+}
+
+/// Interpret one generic Twin setting without coercing unrelated scalar types.
+pub fn avatar_soil_collision_policy_from_setting(
+    setting: Option<&lunco_workspace::TwinSettingValue>,
+) -> Result<AvatarSoilCollisionPolicy, String> {
+    match setting {
+        None => Ok(AvatarSoilCollisionPolicy::CollisionEnabled),
+        Some(lunco_workspace::TwinSettingValue::Bool(true)) => {
+            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+        }
+        Some(lunco_workspace::TwinSettingValue::Bool(false)) => {
+            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
+        }
+        Some(value) => Err(format!(
+            "Twin setting `{AVATAR_ALLOW_THROUGH_SOIL_SETTING}` must be boolean, got {value:?}"
+        )),
+    }
+}
+
+/// Read the avatar traversal policy from the active Twin's existing settings
+/// boundary. Missing workspace/session state is visible to the UI through
+/// `Unavailable` and remains fail-closed in the movement owner.
+pub fn avatar_soil_collision_policy(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Result<AvatarSoilCollisionPolicy, String> {
+    let Some(workspace) = workspace else {
+        return Ok(AvatarSoilCollisionPolicy::Unavailable);
+    };
+    let Some(twin_id) = workspace.active_twin else {
+        return Ok(AvatarSoilCollisionPolicy::Unavailable);
+    };
+    let Some(twin) = workspace.twin(twin_id) else {
+        return Err(format!("active Twin {twin_id:?} is no longer present"));
+    };
+    let Some(manifest) = twin.manifest.as_ref() else {
+        return Ok(AvatarSoilCollisionPolicy::Unavailable);
+    };
+    avatar_soil_collision_policy_from_setting(manifest.setting(AVATAR_ALLOW_THROUGH_SOIL_SETTING))
+}
+
+fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
+    if last_error.as_deref() != Some(error) {
+        warn!("[avatar] collision policy unavailable: {error}");
+        *last_error = Some(error.to_string());
+    }
+}
 
 /// UI panels for avatar status, camera mode, and surface coordinates.
 #[cfg(feature = "ui")]
@@ -779,6 +953,7 @@ impl Plugin for LunCoAvatarPlugin {
         register_camera_mode_hooks(app);
         app.init_resource::<InputBindingsSettings>()
             .init_resource::<CameraDefaults>()
+            .init_resource::<AvatarCollisionSettings>()
             .init_resource::<SurfaceModeThreshold>();
         app.configure_sets(Update, AvatarSceneHandoffSet);
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
@@ -843,7 +1018,11 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<SurfaceRelativeMode>()
             .register_type::<SurfaceCamera>()
             .register_type::<SurfaceModeThreshold>()
-            .register_type::<CameraInputSettings>();
+            .register_type::<CameraInputSettings>()
+            .register_type::<AvatarCollisionSettings>();
+
+        #[cfg(feature = "ui")]
+        app.add_systems(Startup, crate::ui::register_avatar_settings);
 
         app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
@@ -2696,6 +2875,11 @@ fn freeflight_scroll_transit_system(
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    move_and_slide: Option<MoveAndSlide<'_, '_>>,
+    collision_settings: Res<AvatarCollisionSettings>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut policy_error: Local<Option<String>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
@@ -2703,6 +2887,16 @@ fn freeflight_scroll_transit_system(
     // Only meaningful on a site-anchored scene whose solar hierarchy is up.
     let Some((body_ent, radius_m)) = site_body(&q_site, &q_bodies) else {
         return;
+    };
+    let policy = match avatar_soil_collision_policy(workspace.as_deref()) {
+        Ok(policy) => policy,
+        Err(error) => {
+            report_avatar_policy_error(&error, &mut policy_error);
+            for (_, _, _, _, mut zoom, _, _, _, _, _, _) in q_avatar.iter_mut() {
+                zoom.delta = 0.0;
+            }
+            return;
+        }
     };
     for (
         avatar_ent,
@@ -2756,16 +2950,43 @@ fn freeflight_scroll_transit_system(
         let scroll_out = zoom.delta < 0.0;
         zoom.delta = 0.0;
         // Signed dolly step: negative (forward) on scroll-in. The 50 m floor
-        // keeps ground-level scrolling responsive; free flight is a ghost
-        // camera, so overshooting into terrain is no worse than flying there.
+        // keeps ground-level scrolling responsive. The same avatar collision
+        // owner handles this path, so a wheel gesture cannot tunnel through
+        // the terrain while keyboard movement is protected.
         let step = alt.abs().max(50.0) * (factor - 1.0);
         let fwd = (tf.rotation * Vec3::NEG_Z).as_dvec3();
-        let next = pos - fwd * step;
-        let (new_cell, new_tf) = grid.translation_to_grid(next);
-        cell.set_if_neq(new_cell);
-        if tf.translation != new_tf {
-            tf.translation = new_tf;
-        }
+        let desired_next = pos - fwd * step;
+        let next = if policy == AvatarSoilCollisionPolicy::ThroughSoilAllowed {
+            desired_next
+        } else {
+            let up_direction = if surface_relative {
+                (pos - center).normalize_or(DVec3::Y).as_vec3()
+            } else {
+                Vec3::Y
+            };
+            let Some(next) = move_avatar_with_collision(
+                avatar_ent,
+                child_of.parent(),
+                &cell,
+                &tf,
+                desired_next - pos,
+                up_direction,
+                std::time::Duration::from_secs(1),
+                active_frame.as_deref().map(|frame| frame.0),
+                move_and_slide.as_ref(),
+                &collision_settings,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                warn_once!(
+                    "[avatar] safe collision movement unavailable for scroll transit; movement held"
+                );
+                continue;
+            };
+            next
+        };
+        write_avatar_grid_position(&grid, &mut cell, &mut tf, next);
 
         // Past the orbital floor going OUT → hand over to the celestial
         // OrbitCamera. Same mode swap as `on_focus_command`, with ONE
@@ -2875,16 +3096,131 @@ fn surface_camera_system(
 
 // ─── Locomotion ──────────────────────────────────────────────────────────────
 
+/// Move the avatar's capsule in the active Avian frame, then return the
+/// resulting position to the avatar's source Grid.
+///
+/// The avatar itself is not a dynamic rigid body: it is a client-local camera
+/// embodiment. `MoveAndSlide` is therefore the correct kinematic boundary. It
+/// uses the same projected USD colliders as the physics solver, while the
+/// canonical BigSpace transform helpers keep both the query origin and the
+/// result in `ActivePhysicsFrame` even when the camera Grid is nested or
+/// rotated. This path does not alter Avian's fixed-tick substep count.
+fn move_avatar_with_collision(
+    avatar: Entity,
+    source_grid: Entity,
+    cell: &CellCoord,
+    transform: &Transform,
+    desired_delta: DVec3,
+    up_direction: Vec3,
+    delta_time: std::time::Duration,
+    active_frame: Option<Entity>,
+    move_and_slide: Option<&MoveAndSlide<'_, '_>>,
+    collision_settings: &AvatarCollisionSettings,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+) -> Option<DVec3> {
+    let move_and_slide = move_and_slide?;
+    let active_frame = active_frame?;
+    let delta_secs = delta_time.as_secs_f64();
+    if !delta_secs.is_finite() || delta_secs <= 0.0 {
+        return None;
+    }
+    if !collision_settings.radius_m.is_finite()
+        || !collision_settings.capsule_length_m.is_finite()
+        || collision_settings.radius_m <= 0.0
+        || collision_settings.capsule_length_m < 0.0
+    {
+        return None;
+    }
+
+    let source_grid_ref = q_grids.get(source_grid).ok()?;
+    let source_position = source_grid_ref.grid_position_double(cell, transform);
+    if !source_position.is_finite() || !desired_delta.is_finite() || !up_direction.is_finite() {
+        return None;
+    }
+    let source_to_physics = lunco_core::coords::grid_transform_between_grids(
+        source_grid,
+        active_frame,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let physics_to_source = lunco_core::coords::grid_transform_between_grids(
+        active_frame,
+        source_grid,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let physics_position = source_to_physics.transform_position(source_position);
+    let physics_delta = source_to_physics.transform_vector(desired_delta);
+    let physics_up = source_to_physics
+        .transform_vector(up_direction.as_dvec3())
+        .normalize_or(DVec3::Y);
+    if !physics_position.is_finite()
+        || !physics_delta.is_finite()
+        || !physics_up.is_finite()
+        || physics_up.length_squared() <= f64::EPSILON
+    {
+        return None;
+    }
+
+    // The camera may pitch, but the avatar's body stays upright in the local
+    // surface/world-up direction. A capsule has no meaningful yaw, so this
+    // shortest-arc rotation is the complete shape orientation contract.
+    let shape_rotation = DQuat::from_rotation_arc(DVec3::Y, physics_up);
+    let velocity = physics_delta / delta_secs;
+    let shape = Collider::capsule(
+        collision_settings.radius_m,
+        collision_settings.capsule_length_m,
+    );
+    let mut filter = SpatialQueryFilter::from_excluded_entities([avatar]);
+    filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
+    let output = move_and_slide.move_and_slide(
+        &shape,
+        physics_position,
+        shape_rotation,
+        velocity,
+        delta_time,
+        &MoveAndSlideConfig::default(),
+        &filter,
+        |_| MoveAndSlideHitResponse::Accept,
+    );
+    if !output.position.is_finite() {
+        return None;
+    }
+    let result = physics_to_source.transform_position(output.position);
+    result.is_finite().then_some(result)
+}
+
+/// Apply one complete Grid-absolute position without duplicating the
+/// `CellCoord`/local-Transform split at each avatar movement entry point.
+fn write_avatar_grid_position(
+    grid: &Grid,
+    cell: &mut CellCoord,
+    transform: &mut Transform,
+    position: DVec3,
+) {
+    let (new_cell, new_transform) = grid.translation_to_grid(position);
+    if *cell != new_cell {
+        *cell = new_cell;
+    }
+    if transform.translation != new_transform {
+        transform.translation = new_transform;
+    }
+}
+
 /// Kinematic actuator for the avatar — the port-driven analog of a rover's
 /// `apply_drive_mix`. Reads the avatar's FSW input ports (`forward`/`side`/`up`,
 /// written through the shared `SetPorts` path by `drive_from_bindings`) and
-/// translates the avatar entity in absolute coordinates. No forces (a free-fly
-/// observer has no physics) — this is the whole "mechanism" for the avatar.
+/// translates the avatar entity through Avian's kinematic move-and-slide
+/// controller unless the active Twin explicitly opts into traversal.
 ///
 /// Only active with a `FreeFlightCamera`/`SurfaceCamera`, or when CTRL is held while
 /// possessing a vessel (a momentary free-flight overlay). `Shift` boosts speed ×10.
 /// Q/E elevation follows world up in free flight and gravity up in surface mode.
-/// Runs in PostUpdate at render rate on wall-clock time, so the ghost camera
+/// Runs in the interaction cadence at wall-clock time, so the local camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
 fn free_flight_speed_multiplier(
     entity: Entity,
@@ -2931,14 +3267,25 @@ fn apply_fly(
     keys: Res<ButtonInput<KeyCode>>,
     simulated_intents: Option<Res<SimulatedIntents>>,
     // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
-    // paused, because pausing the simulation is not supposed to paralyse the user. Runs
-    // at render rate in `PostUpdate` — no lockstep needed, free-flight follows nothing.
+    // paused, because pausing the simulation is not supposed to paralyse the user.
     time: Res<Time>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    move_and_slide: Option<MoveAndSlide<'_, '_>>,
+    collision_settings: Res<AvatarCollisionSettings>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut policy_error: Local<Option<String>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
     }
+    let policy = match avatar_soil_collision_policy(workspace.as_deref()) {
+        Ok(policy) => policy,
+        Err(error) => {
+            report_avatar_policy_error(&error, &mut policy_error);
+            return;
+        }
+    };
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for (
         entity,
@@ -2988,12 +3335,31 @@ fn apply_fly(
         // 23.1 m/s base fly speed × the real frame delta.
         // Normalize the combined direction BEFORE applying the speed. Scaling
         // the inputs first would make the unit-vector cap erase the boost.
-        let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * boost * time.delta_secs_f64();
-        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
-        cell.set_if_neq(new_cell);
-        if tf.translation != new_tf {
-            tf.translation = new_tf;
-        }
+        let desired_delta = move_vec.as_dvec3() * 23.1 * boost * time.delta_secs_f64();
+        let next_pos = if policy == AvatarSoilCollisionPolicy::ThroughSoilAllowed {
+            current_pos + desired_delta
+        } else {
+            let Some(next_pos) = move_avatar_with_collision(
+                entity,
+                child_of.parent(),
+                &cell,
+                &tf,
+                desired_delta,
+                up_dir,
+                time.delta(),
+                active_frame.as_deref().map(|frame| frame.0),
+                move_and_slide.as_ref(),
+                &collision_settings,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                warn_once!("[avatar] safe collision movement unavailable; movement held");
+                continue;
+            };
+            next_pos
+        };
+        write_avatar_grid_position(&grid, &mut cell, &mut tf, next_pos);
     }
 }
 

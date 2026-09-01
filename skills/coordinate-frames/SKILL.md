@@ -77,6 +77,13 @@ alignment; do not rebuild thousands of points on a wall-clock cadence. Trajector
 workers are polled without waiting from the main schedule, and their visualization
 must not become a UI-cycle dependency.
 
+For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
+`ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector
+with `grid_transform_between_grids`, perform one shape move, and convert the
+solved pose back before `Grid::translation_to_grid`. The avatar is a camera
+embodiment, so do not invent a USD body schema or read `GlobalTransform` as its
+collision authority. This path preserves the fixed solver/substep contract.
+
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep
 the proposed pose in the explicit `ActivePhysicsFrame`, convert the complete

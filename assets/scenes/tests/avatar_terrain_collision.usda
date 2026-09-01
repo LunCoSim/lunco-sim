@@ -1,0 +1,55 @@
+#usda 1.0
+(
+    defaultPrim = "AvatarTerrainCollision"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production regression for the default avatar collision contract. The avatar
+# starts above a standard USD physics collider and is driven down through the
+# public semantic intent path. With the Twin setting omitted, the kinematic
+# capsule must stop at the collider instead of entering the soil.
+def Xform "AvatarTerrainCollision" (
+    kind = "assembly"
+)
+{
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (20.0, 1.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (0.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "avatar-terrain-collision"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/avatar_terrain_collision.rhai@
+        }
+    }
+}

@@ -432,6 +432,13 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.
 
+The local avatar remains a runtime camera embodiment rather than a USD rigid
+body. Its movement controller consumes the standard `UsdPhysics` colliders
+projected by `UsdAvianPlugin` through Avian `MoveAndSlide`; no avatar-specific
+collider schema duplicates those authored facts. The BigSpace frame conversion
+and Twin-scoped traversal policy are defined in
+[`45-big-space-correct-usage.md`](45-big-space-correct-usage.md#physics-boundary).
+
 ### glTF Payloads & Placeholders
 
 For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco://` payload with a **`def Cube` placeholder**. 

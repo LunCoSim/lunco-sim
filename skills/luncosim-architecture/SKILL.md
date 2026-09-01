@@ -41,6 +41,14 @@ settings boundary. A domain may define one namespaced scalar key and expose it
 through the existing `SetTwinSetting` path; it must not add a global settings
 section or a second cache reader/writer for the same artifact.
 
+The local avatar is a runtime kinematic camera embodiment. Its collision
+movement uses Avian's existing `MoveAndSlide` query against standard
+`UsdPhysics` colliders in `ActivePhysicsFrame`; it does not need a second USD
+body schema or a separate collision representation. An explicit Twin setting
+may select a documented unsafe policy, but the movement owner reads that
+setting directly and remains safe when the setting is omitted, malformed, or
+the Twin closes.
+
 ## Source-backed program attachment
 
 `AttachProgram` is the one authoring boundary for binding a `.mo`, `.py`,
