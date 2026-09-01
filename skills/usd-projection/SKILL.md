@@ -79,6 +79,17 @@ Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.
 
+For agent or editor synchronization, call `SyncUsdDocument` with the explicit
+document generation. Use its typed delta while the cursor is covered; consume
+the returned base/runtime layer snapshot when it reports an expired history
+window. Reject future cursors. To edit a composed path, call
+`ResolveUsdTarget` with the explicit document, prim path, and `@root@` or
+`@runtime@` target. Referenced and payloaded paths are valid only when the
+existing `CanonicalStage` is mounted; use its `edit_scope` and typed-operation
+validation rather than treating a composed read as permission to move or
+remove a referenced/variant prim. Do not inspect flat layer data as a
+replacement for OpenUSD PCP resolution.
+
 A scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
 window. The queue marker is the projection ownership fence: one prepared

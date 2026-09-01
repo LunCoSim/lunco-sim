@@ -789,6 +789,36 @@ impl UsdDocument {
         &self.runtime
     }
 
+    /// Whether `path` has a prim opinion in the requested document layer.
+    ///
+    /// The check includes prims authored inside a variant selection, matching
+    /// the addressing rules used by the document mutation validator. Callers
+    /// that need the composed path of a referenced prim must use the live
+    /// [`lunco_usd_bevy::CanonicalStage`] instead; this method intentionally
+    /// does not reimplement USD stage composition.
+    pub fn authored_prim_exists(
+        &self,
+        edit_target: &LayerId,
+        path: &str,
+    ) -> Result<bool, DocumentError> {
+        let target = TargetLayer::from_id(edit_target).ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "unknown USD edit target `{}`",
+                edit_target.as_str()
+            ))
+        })?;
+        let path = parse_prim_path(path)?;
+        Ok(prim_in(self.layer(target), &path))
+    }
+
+    /// Whether `path` lies below a references or payload arc authored in this
+    /// document. The result only identifies the authored arc; the composed
+    /// target itself is resolved by OpenUSD through the live canonical stage.
+    pub fn path_is_under_composed_arc(&self, path: &str) -> Result<bool, DocumentError> {
+        let path = parse_prim_path(path)?;
+        Ok(self.path_is_under_composed_arc_path(&path))
+    }
+
     /// Revision of the persisted authored layer.
     pub fn base_revision(&self) -> u64 {
         self.base_revision
@@ -1161,7 +1191,7 @@ impl UsdDocument {
     /// deliberately absent from this document's authored `sdf::Data`. A runtime
     /// attribute override on such a path is valid USD: the edit layer first
     /// defines a local over opinion, then authors the attribute on it.
-    fn path_is_under_composed_arc(&self, path: &SdfPath) -> bool {
+    fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> bool {
         let mut ancestor = Some(path.clone());
         while let Some(path) = ancestor {
             if self.base.spec(&path).is_some_and(|spec| {
@@ -1616,7 +1646,7 @@ impl Document for UsdDocument {
                     Ok(prim) => (prim, false),
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc(&prim) {
+                        if !self.path_is_under_composed_arc_path(&prim) {
                             return Err(error);
                         }
                         (prim, true)
@@ -2091,7 +2121,7 @@ impl Document for UsdDocument {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc(&prim) {
+                        if !self.path_is_under_composed_arc_path(&prim) {
                             return Err(error);
                         }
                         prim
