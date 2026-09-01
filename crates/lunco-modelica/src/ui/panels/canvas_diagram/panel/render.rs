@@ -39,12 +39,6 @@ pub(crate) fn render_diagram_canvas(
     stash_snapshots(ui.ctx(), ctx, doc_id, target_unit_instance.as_deref());
     mark("snapshots+sigreg", &mut phase_t, &mut state.phase_log);
 
-    {
-        let docstate = state.get_mut_for_render(render_tab_id, active_doc);
-        ui.checkbox(&mut docstate.canvas.show_edges, "Show nets")
-            .on_hover_text("Show or hide connection nets without changing the authored diagram");
-    }
-
     let (response, events) = {
         let docstate = state.get_mut_for_render(render_tab_id, active_doc);
         docstate.canvas.read_only = tab_read_only;
@@ -58,14 +52,16 @@ pub(crate) fn render_diagram_canvas(
     );
 
     // The legend is derived from the same typed edge payloads that the canvas
-    // just rendered. It is non-interactive and therefore leaves all canvas
-    // navigation, selection, and wire-hover input on the underlying widget.
-    let scene = &state.get_for_render(render_tab_id, active_doc).canvas.scene;
-    let show_edges = state
-        .get_for_render(render_tab_id, active_doc)
-        .canvas
-        .show_edges;
-    super::super::legend::render(ui, response.rect, scene, show_edges);
+    // just rendered and owns the canonical per-tab net visibility state.
+    {
+        let docstate = state.get_mut_for_render(render_tab_id, active_doc);
+        super::super::legend::render(
+            ui,
+            response.rect,
+            &docstate.canvas.scene,
+            &mut docstate.canvas.show_edges,
+        );
+    }
 
     // Fit only after Canvas::ui has allocated its real response rectangle.
     // This is shared by initial projection, explicit FitCanvas, and
@@ -173,17 +169,9 @@ pub(crate) fn render_diagram_canvas(
     // `MslBecameReady` reprojects every open tab with the authored
     // Modelica annotation graphics once the standard library is ready.
     //
-    // Visible until icons actually resolve, not just until MSL bytes
-    // land: `MslLoadState` flips to `Ready` a step *before* the
-    // reproject that swaps the gray boxes for icons. `MslBecameReady`
-    // then sets each tab's `force_reproject`; we keep the hint while
-    // that one-shot flag is still pending so there's no bare
-    // gray-boxes-with-no-text frame between Ready and reproject. Once
-    // the reproject spawns, `force_reproject` clears and the canvas
-    // enters its `Loading` lifecycle (the centred spinner), so the
-    // window is fully covered. `force_reproject` is set *only* by
-    // `request_reproject_all` (the MSL-ready handler), so it stays
-    // MSL-specific.
+    // Show a library status only for an actual loading, unavailable, or
+    // failed library. A terminal Ready state is silent: it must not leave a
+    // stale "icons will update" message after the source set is usable.
     {
         let generated_document = active_doc
             .and_then(|doc| {
@@ -193,27 +181,34 @@ pub(crate) fn render_diagram_canvas(
             })
             .unwrap_or(false);
         let msl_state = ctx.resource::<lunco_assets::msl::MslLoadState>();
-        let msl_pending = msl_state.map(|s| s.is_pending()).unwrap_or(true);
         // Live load detail (phase + %) while the bundle is still arriving,
         // so the diagram shows *why* the icons are gray and how far along
         // the download/parse is — not just a static "loading" string.
-        let msl_detail = msl_state.and_then(|s| match s {
-            lunco_assets::msl::MslLoadState::Loading {
+        let (msl_message, msl_is_loading) = match msl_state {
+            Some(lunco_assets::msl::MslLoadState::Loading {
                 phase,
                 bytes_done,
                 bytes_total,
-            } => Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
-            _ => None,
-        });
-        let (has_content, reproject_pending) = {
-            let docstate = state.get_for_render(render_tab_id, active_doc);
-            (
-                docstate.canvas.scene.node_count() > 0,
-                docstate.force_reproject,
-            )
+            }) => (
+                Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
+                true,
+            ),
+            Some(lunco_assets::msl::MslLoadState::Failed(msg)) => (
+                Some(format!("Modelica Standard Library unavailable: {msg}")),
+                false,
+            ),
+            Some(lunco_assets::msl::MslLoadState::NotStarted) | None => (
+                Some("Modelica Standard Library unavailable".to_string()),
+                false,
+            ),
+            Some(lunco_assets::msl::MslLoadState::Ready { .. }) => (None, false),
         };
-        if !generated_document && (msl_pending || reproject_pending) && has_content {
-            // A compile or run dispatched while MSL is still loading can't
+        let has_content = {
+            let docstate = state.get_for_render(render_tab_id, active_doc);
+            docstate.canvas.scene.node_count() > 0
+        };
+        if !generated_document && msl_message.is_some() && has_content {
+            // A compile or run dispatched while MSL is loading can't
             // finish until the standard library installs (the worker parse
             // path needs MSL resident — but the worker queues it and runs it
             // on its `MslReady`, see worker_transport.rs). When one is
@@ -235,17 +230,28 @@ pub(crate) fn render_diagram_canvas(
                 .resource::<crate::ModelicaRunnerResource>()
                 .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
-            let color = ctx.resource_expect::<lunco_theme::Theme>().tokens.warning;
+            let tokens = &ctx.resource_expect::<lunco_theme::Theme>().tokens;
+            let color = if msl_is_loading {
+                tokens.warning
+            } else {
+                tokens.error
+            };
             let painter = ui
                 .painter()
                 .clone()
                 .with_clip_rect(ui.clip_rect().intersect(response.rect));
             let font = egui::FontId::proportional(11.0);
             let mut y = response.rect.bottom() - 8.0;
-            // First line: icons-pending + live load progress when available.
-            let first_line = match &msl_detail {
-                Some(d) => format!("{d} · icons update when ready"),
-                None => "Icons will be updated when MSL loaded".to_string(),
+            let first_line = if msl_is_loading {
+                format!(
+                    "{} · icons update when ready",
+                    msl_message.as_deref().unwrap_or("Loading MSL")
+                )
+            } else {
+                msl_message
+                    .as_deref()
+                    .unwrap_or("Modelica Standard Library unavailable")
+                    .to_string()
             };
             painter.text(
                 egui::pos2(response.rect.left() + 10.0, y),
@@ -256,7 +262,9 @@ pub(crate) fn render_diagram_canvas(
             );
             // Second line: deferred-action notice (compile takes priority
             // over run since it's doc-scoped and more specific).
-            let deferred = if compile_pending {
+            let deferred = if !msl_is_loading {
+                None
+            } else if compile_pending {
                 Some("Compilation will run when MSL is ready")
             } else if run_pending {
                 Some("Simulation will start when MSL is ready")

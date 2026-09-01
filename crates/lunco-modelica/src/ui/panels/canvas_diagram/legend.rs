@@ -3,8 +3,9 @@
 //! The legend is derived from the rendered scene's typed edge payloads. It
 //! therefore documents only connector types that are actually present and
 //! uses the same colour mapping as [`super::edge::OrthogonalEdgeVisual`].
-//! It is a non-interactive foreground overlay, so it cannot steal canvas
-//! navigation or selection input.
+//! The legend owns the one presentation control for connection nets. It stays
+//! visible while nets are hidden so the user can restore them without hunting
+//! through a separate toolbar control.
 
 use std::collections::BTreeMap;
 
@@ -23,10 +24,7 @@ struct LegendEntry {
 }
 
 /// Paint a legend for the connection styles used by `scene`.
-pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges: bool) {
-    if !show_edges {
-        return;
-    }
+pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges: &mut bool) {
     let mut entries = BTreeMap::<String, LegendEntry>::new();
     for (_, edge) in scene.edges() {
         if edge.kind != "modelica.connection" {
@@ -44,10 +42,6 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
         });
     }
 
-    if entries.is_empty() {
-        return;
-    }
-
     let ctx = ui.ctx().clone();
     let theme = lunco_theme::active(&ctx);
     let palette = modelica_icon_palette_from_ctx(&ctx);
@@ -55,7 +49,6 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
     let left = (rect.right() - width - 12.0).max(rect.left() + 12.0);
     egui::Area::new(egui::Id::new("lunco_modelica_connection_legend"))
         .order(egui::Order::Foreground)
-        .interactable(false)
         // The legend is painted in its own egui layer, so the canvas Ui's
         // normal clip would otherwise be lost. Keep the generated surface
         // inside the dock leaf that owns the diagram; the workbench menu,
@@ -70,7 +63,12 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                 .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {
                     ui.set_min_width(width - 20.0);
-                    ui.label(egui::RichText::new("Connections").strong());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Connections").strong());
+                        ui.checkbox(show_edges, "Show nets").on_hover_text(
+                            "Show or hide connection nets without changing the authored diagram",
+                        );
+                    });
                     ui.label(
                         egui::RichText::new("Colors follow authored connector Icons")
                             .color(theme.tokens.text_subdued)
@@ -83,27 +81,37 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                     );
                     ui.add_space(4.0);
 
-                    for (connector, entry) in entries {
-                        let leaf = connector
-                            .rsplit('.')
-                            .next()
-                            .filter(|leaf| !leaf.is_empty())
-                            .unwrap_or("Unresolved connector");
-                        let label =
-                            format!("{leaf} · {} · {}", entry.domain, kind_label(entry.kind));
-                        ui.horizontal(|ui| {
-                            let (swatch, _) = ui
-                                .allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
-                            let color = palette.remap(entry.color);
-                            ui.painter().line_segment(
-                                [
-                                    egui::pos2(swatch.left(), swatch.center().y),
-                                    egui::pos2(swatch.right(), swatch.center().y),
-                                ],
-                                egui::Stroke::new(2.0, color),
-                            );
-                            ui.label(label);
-                        });
+                    if entries.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No typed connections in this diagram")
+                                .color(theme.tokens.text_subdued)
+                                .small(),
+                        );
+                    } else {
+                        for (connector, entry) in entries {
+                            let leaf = connector
+                                .rsplit('.')
+                                .next()
+                                .filter(|leaf| !leaf.is_empty())
+                                .unwrap_or("Unresolved connector");
+                            let label =
+                                format!("{leaf} · {} · {}", entry.domain, kind_label(entry.kind));
+                            ui.horizontal(|ui| {
+                                let (swatch, _) = ui.allocate_exact_size(
+                                    egui::vec2(28.0, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                let color = palette.remap(entry.color);
+                                ui.painter().line_segment(
+                                    [
+                                        egui::pos2(swatch.left(), swatch.center().y),
+                                        egui::pos2(swatch.right(), swatch.center().y),
+                                    ],
+                                    egui::Stroke::new(2.0, color),
+                                );
+                                ui.label(label);
+                            });
+                        }
                     }
                 });
         });

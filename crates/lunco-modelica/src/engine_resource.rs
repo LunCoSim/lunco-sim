@@ -939,33 +939,48 @@ pub struct ModelicaLibraryBecameReady {
 /// so main-thread hover/diagnostics/resolution see all of MSL at once. Runs at
 /// most once per session — flips [`MslBootstrapState`] to `Done` and idles.
 ///
-/// **One predicate, both targets.** Eager install fires iff
+/// **The parsed source slot is the readiness predicate.** Install fires iff
 /// `msl_remote::global_parsed_msl()` is populated (the in-process slot holds the
-/// parsed `Vec<(uri, StoredDefinition)>`); install is a clone +
-/// [`rumoca_compile::Session::replace_parsed_source_set`], no re-parsing. The
+/// parsed `Vec<(uri, StoredDefinition)>`); install is a clone plus the engine's
+/// source-set boundary, with no re-parsing. `MslLoadState::Ready` only means
+/// that the source tree/index is available; native fills the parsed slot lazily
+/// after a class is first opened, so using that UI state as the bootstrap gate
+/// would strand the shared engine before the actual AST source set exists. The
 /// system itself is target-agnostic — the native/web difference is **upstream**,
 /// in *who fills that slot*:
 ///
 /// - **Web:** the worker-decoded bundle is installed into the slot during boot,
 ///   so this runs the bulk install → instant full-MSL resolution.
 /// - **Native:** the slot is filled **lazily** (first `parsed_msl_bundle()` disk
-///   read), so at boot it's empty and we deliberately fall through to the lazy
-///   path — `class_cache::peek_or_load_class_blocking` installs classes into
-///   the session on demand (`add_parsed_batch`). This is intentional, not an
-///   oversight: native sets `MslLoadState::Ready` at boot whenever the MSL tree
-///   is on disk (even for users who never open a model), so eager-installing
-///   here would force a ~316 MB disk read + ~173 MB clone + ~600 ms
-///   `replace_parsed_source_set` onto *every* native launch. Lazy defers that
-///   cost to first actual use. (To make native eager too, populate the slot at
-///   boot — but gate it on an opt-in so non-Modelica launches don't pay it.)
+///   read), so at boot it is empty and this system waits without reading the
+///   bundle. The first class lookup seats the complete bundle through the same
+///   engine source-set boundary; this system then publishes the common ready
+///   notification for documents that were projected before that lookup.
 fn drive_msl_bootstrap(
     handle: Res<ModelicaEngineHandle>,
-    msl_state: Option<Res<lunco_assets::msl::MslLoadState>>,
     mut bootstrap: ResMut<MslBootstrapState>,
     mut task: ResMut<MslBootstrapTask>,
     mut commands: Commands,
 ) {
     if matches!(*bootstrap, MslBootstrapState::Done) {
+        return;
+    }
+
+    // A first class lookup can install the complete source set before this
+    // system observes the resident bundle. That lookup must publish the same
+    // lifecycle event so diagrams projected before it are reprojected.
+    // Checking this boundary before polling or spawning also prevents a race
+    // from installing the immutable source set twice.
+    if handle
+        .try_lock()
+        .is_some_and(|engine| engine.source_set_installed("msl"))
+    {
+        task.0 = None;
+        *bootstrap = MslBootstrapState::Done;
+        bevy::log::info!("[EngineBootstrap] MSL source set already installed by class lookup");
+        commands.trigger(MslBecameReady);
+        #[cfg(target_arch = "wasm32")]
+        crate::worker_transport::prewarm_pool_on_msl_ready();
         return;
     }
 
@@ -989,11 +1004,6 @@ fn drive_msl_bootstrap(
         return;
     }
 
-    let Some(state) = msl_state else { return };
-    if !matches!(*state, lunco_assets::msl::MslLoadState::Ready { .. }) {
-        return;
-    }
-
     // A resident bundle is an immutable input snapshot. Clone only its Arc on
     // the update thread; copying the definitions and building the source index
     // happen on the worker. The install still uses the one shared Modelica
@@ -1009,11 +1019,10 @@ fn drive_msl_bootstrap(
             .collect();
         let count = defs.len();
         let mut engine = handle.lock();
-        engine.session_mut().replace_parsed_source_set(
+        engine.replace_parsed_source_set(
             "msl",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
-            None,
         );
         count
     }));

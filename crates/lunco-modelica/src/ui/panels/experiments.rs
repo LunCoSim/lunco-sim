@@ -2078,17 +2078,10 @@ fn render_experiments_plot_inner(
             .resource::<ExperimentsViewModel>()
             .map(|vm| vm.all_vars.clone())
             .unwrap_or_default();
-        // Variable picker — Dymola / OMEdit-style component tree.
-        // Variables group by their first dotted segment (the component
-        // name). Each group is a CollapsingHeader; leaves are
-        // checkboxes labelled with the leaf name. The whole tree sits
-        // in a small horizontal scroll-row above the plot so the
-        // common case (handful of components) reads at a glance and
-        // scrolls horizontally on long models.
-        // Picker tree + plot controls on a single line. Picker on the
-        // left (component groups, expandable); reset / fit / mixed-units
-        // chips right-aligned. Saves a row of vertical chrome above the
-        // plot.
+        // Variable picker — a compact Dymola / OMEdit-style component tree
+        // in a persistent popup. Variables group by their first dotted
+        // segment; stable group IDs preserve expansion while selecting
+        // several leaves.
         let mut toggle_var: Option<String> = None;
         let mut reset_clicked = false;
         // Deferred run-comparison actions, applied after the header (the
@@ -2149,18 +2142,15 @@ fn render_experiments_plot_inner(
                 .color(col_muted)
                 .small(),
             );
-            // Variable picker — a compact menu button that opens the
-            // component tree as a FLOATING popup over the plot. Replaces
-            // the old inline CollapsingHeader strip, which unfolded
-            // downward and (on a 59-variable model) filled the whole dock,
-            // pushing the chart off the bottom. The plot now keeps the
-            // panel's full height in every state; variables are one click
-            // away in the dropdown instead of dumped inline.
+            // The component tree stays open while groups unfold and leaves
+            // are selected; only a click outside or Escape closes it.
             if !groups.is_empty() {
                 let total_vars = all_vars.len();
-                ui.menu_button(
-                    format!("▾ Variables {}/{}", picked_vars.len(), total_vars),
-                    |ui| {
+                let variable_button =
+                    ui.button(format!("▾ Variables {}/{}", picked_vars.len(), total_vars));
+                egui::Popup::menu(&variable_button)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
                         ui.set_min_width(240.0);
                         ui.horizontal(|ui| {
                             ui.label("Search");
@@ -2255,8 +2245,7 @@ fn render_experiments_plot_inner(
                                     });
                                 }
                             });
-                    },
-                );
+                    });
             }
             // Runs picker — pick which completed runs overlay, right on
             // the graph. Each row: visibility checkbox + colour swatch +

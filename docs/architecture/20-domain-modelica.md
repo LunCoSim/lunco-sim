@@ -839,14 +839,15 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
   connection legend) are owned by the canvas leaf. Direct painting uses its
   clip rectangle and an `egui::Area` overlay uses `constrain_to` with that same
   measured rectangle; no diagram surface may escape into workbench menus,
-  status, inspectors, or neighbouring leaves. Non-interactive overlays do not
-  claim pointer input, while intentional Modelica dialogs remain in the shared
-  modal host.
-- The diagram toolbar's per-tab `Show nets` toggle is presentation state on
-  that canvas. Hiding it suppresses connection rendering, the legend, and
-  edge hit-testing while retaining the authored scene topology unchanged;
-  it is workbench/egui state because runtime HUI/Rhai has no dynamic diagram
-  graph control contract.
+  status, inspectors, or neighbouring leaves. The legend intentionally claims
+  input only for its own checkbox; other overlays do not claim pointer input,
+  while intentional Modelica dialogs remain in the shared modal host.
+- The diagram's `Connections` legend is the sole owner-facing control for the
+  per-tab `Show nets` presentation state on that canvas. The legend remains
+  visible while nets are hidden, and the same state controls connection
+  rendering and edge hit-testing while retaining authored scene topology
+  unchanged; it is workbench/egui state because runtime HUI/Rhai has no
+  dynamic diagram graph control contract.
 
 ### 9.3 Why our own canvas
 
