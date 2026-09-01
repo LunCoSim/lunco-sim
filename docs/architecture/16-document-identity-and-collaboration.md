@@ -267,7 +267,8 @@ Required surfaces:
   nothing.
 - **The edit target is visible** — which layer am I authoring to? This is what
   *prevents* conflicts (§5); users cannot reason about a conflict they cannot see
-  the shape of. `ApplyUsdOp` already carries `edit_target`; nothing surfaces it.
+  the shape of. `ApplyUsdOp` carries `edit_target` through its typed `UsdOp`, and
+  its acknowledgement exposes the selected layer and affected paths.
 - **Permissions** — USD has `SetPermissionToEdit` / `SetPermissionToSave`; Maya
   exposes them as three states (Unlocked / Locked / System-Locked). Our
   `DocumentOrigin.writable` and `accepts_mutations()` are reinventions of these.

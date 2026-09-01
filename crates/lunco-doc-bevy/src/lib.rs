@@ -69,8 +69,8 @@ use bevy::prelude::*;
 use lunco_core::Command;
 use lunco_doc::DocumentId;
 use lunco_twin_journal::{
-    AuthorId, AuthorTag, Journal as CanonicalJournal, JournalEntry, JournalSink, LifecycleKind,
-    TwinId,
+    AuthorId, AuthorTag, ChangeSetId, Journal as CanonicalJournal, JournalEntry, JournalSink,
+    LifecycleKind, TwinId,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +302,33 @@ pub struct SaveAsDocument {
 #[Command(default)]
 pub struct CloseDocument {
     /// The document to close.
+    pub doc: DocumentId,
+}
+
+/// Fork an open file-backed document into an independently editable untitled
+/// document.
+///
+/// The owning domain copies its typed authored state and history through its
+/// [`lunco_doc::ForkableDocument`] implementation. The fork has no file
+/// identity until [`SaveAsDocument`] assigns one, so two open documents cannot
+/// save over the same path.
+#[Command(default)]
+pub struct ForkDocument {
+    /// Existing document to snapshot.
+    pub source: DocumentId,
+    /// Untitled name shown until Save-As.
+    pub name: String,
+}
+
+/// Explicitly discard the current document state and restore its file source.
+///
+/// The owning domain performs the file read asynchronously, then resets the
+/// document and its undo history through its registry. Untitled documents are
+/// closed because they have no file source to restore; read-only origins are
+/// rejected by the owner.
+#[Command(default)]
+pub struct DiscardDocument {
+    /// The document whose local edits should be discarded.
     pub doc: DocumentId,
 }
 
@@ -766,11 +793,22 @@ impl JournalResource {
     /// open set cannot corrupt later entries beyond over-grouping one command.
     /// Do not nest (see [`Journal::begin_change_set`]).
     pub fn change_set<R>(&self, label: impl Into<String>, f: impl FnOnce() -> R) -> R {
+        self.change_set_with_id(label, f).1
+    }
+
+    /// Run a closure inside one canonical journal change set and return its id
+    /// together with the closure result. The id is the journal's own identity
+    /// for the transaction; callers must not mint a second change-set token.
+    pub fn change_set_with_id<R>(
+        &self,
+        label: impl Into<String>,
+        f: impl FnOnce() -> R,
+    ) -> (ChangeSetId, R) {
         let author = AuthorTag::local_user();
-        self.with_write(|j| j.begin_change_set(label.into(), author));
+        let id = self.with_write(|j| j.begin_change_set(label.into(), author));
         let out = f();
         self.with_write(|j| j.end_change_set());
-        out
+        (id, out)
     }
 
     /// Build a [`JournalSink`] handle that records into this resource.
@@ -1063,11 +1101,23 @@ where
         doc: DocumentId,
         op: D::Op,
     ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
+        self.apply_mutation(doc, lunco_doc::Mutation::local(op))
+    }
+
+    /// Apply a mutation envelope through the owning host and queue one
+    /// changed notification. The envelope carries the caller's causal
+    /// generation and provenance; the registry remains the only mutation
+    /// funnel for domain documents.
+    pub fn apply_mutation(
+        &mut self,
+        doc: DocumentId,
+        mutation: lunco_doc::Mutation<D::Op>,
+    ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
         let host = self
             .hosts
             .get_mut(&doc)
             .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
-        let ack = host.apply(lunco_doc::Mutation::local(op))?;
+        let ack = host.apply(mutation)?;
         self.pending_changes.push(doc);
         Ok(ack)
     }
@@ -1083,11 +1133,26 @@ where
     where
         D: Clone,
     {
+        self.apply_group_against(doc, None, ops)
+    }
+
+    /// Apply one compound edit with an optional causal generation
+    /// precondition. The complete group is validated and committed atomically
+    /// by the host before the registry publishes its single Changed event.
+    pub fn apply_group_against(
+        &mut self,
+        doc: DocumentId,
+        parent_gen: Option<u64>,
+        ops: Vec<D::Op>,
+    ) -> Result<lunco_doc::Ack, lunco_doc::Reject>
+    where
+        D: Clone,
+    {
         let host = self
             .hosts
             .get_mut(&doc)
             .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
-        let ack = host.apply_group(ops)?;
+        let ack = host.apply_group_against(parent_gen, ops)?;
         self.pending_changes.push(doc);
         Ok(ack)
     }

@@ -651,13 +651,16 @@ actually call, with the fields the deserializer actually accepts. See the
  Same shape as `lunco-modelica`'s op-dispatch commands: UI clicks,
  HTTP API calls, and scripts all dispatch this; the observer
  routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
- change notification, and read-only enforcement stay in one place.
+ change notification, and read-only enforcement stay in one place. Deferred
+ API callers receive the generation/layer/path/journal acknowledgement after
+ the mutation commits.
 
 - *defined in:* `crates/lunco-usd/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
+| `parent_gen` | `Option < u64 >` |  Optional generation the caller edited from; stale edits are rejected before authoring. |
 | `op` | `UsdOp` |  Operation to apply. |
 
 #### `ApplyUsdOps`
@@ -674,8 +677,46 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
+| `parent_gen` | `Option < u64 >` |  Optional generation the complete intent edited from; stale groups are rejected atomically. |
 | `label` | `String` |  Human-readable undo/journal label. |
 | `ops` | `Vec < UsdOp >` |  Ordered primitive USD operations comprising the one intent. |
+
+#### `ForkDocument`
+
+Create an independent untitled snapshot of an open USD document. The response
+contains the new `doc` id; the fork has no file identity until Save-As.
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `DocumentId` |  Existing USD document to snapshot. |
+| `name` | `String` |  Untitled document name shown until Save-As. |
+
+#### `CloseDocument`
+
+Remove an owned USD document and publish its close lifecycle event.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  USD document to close. |
+
+#### `DiscardDocument`
+
+Explicitly discard local USD edits. File-backed documents are read through the
+async storage path and reset only after the source is valid; untitled documents
+are closed because there is no file source to restore.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  USD document to reset or close. |
+
+#### `InspectUsdDocument` (query)
+
+Read one explicit USD document and optionally one composed local prim path.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `u64` |  Required open USD document id. |
+| `path` | `String` |  Optional absolute USD prim path. |
 
 #### `AttachComponent`
 

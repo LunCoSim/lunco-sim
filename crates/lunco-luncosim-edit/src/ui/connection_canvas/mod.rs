@@ -600,7 +600,11 @@ impl Panel for UsdCanvasPanel {
             match doc {
                 Some(doc) => {
                     for op in ops {
-                        ctx.trigger(ApplyUsdOp { doc, op });
+                        ctx.trigger(ApplyUsdOp {
+                            doc,
+                            parent_gen: None,
+                            op,
+                        });
                     }
                 }
                 None => {

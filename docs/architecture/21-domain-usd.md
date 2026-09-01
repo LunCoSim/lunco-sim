@@ -58,7 +58,7 @@ enum UsdOp {
 
 `AddReference`/`AddPayload` are folded into `AddPrim { reference }` +
 `author_reference`. Programmatic and UI edits go through the
-**`ApplyUsdOp { doc, op }`** or **`ApplyUsdOps { doc, label, ops }`** command
+**`ApplyUsdOp { doc, parent_gen, op }`** or **`ApplyUsdOps { doc, parent_gen, label, ops }`** command
 (`commands.rs`), which returns a generation-ack; direct source mutation is out.
 Multi-op intents use one change set. `AttachProgram` is the typed source-backed
 program authoring intent and lowers its complete source/port/wire contract to
@@ -214,9 +214,9 @@ published as the twin byte-overlay — and only then does `LoadScene` fire, so t
 **single** projection already carries restored runtime spawns/moves (see the E1b flow in
 [18-unified-journal-and-history](18-unified-journal-and-history.md)). The
 Twin's other `.usda` files are *indexed* and shown in the browser but **not**
-mounted — a referenceable asset library, composed into the active stage on
-demand via `AddReference` (see Verbs). Switching scenes re-points the single
-active stage; it never stacks.
+mounted — a referenceable asset library, composed into the active document on
+demand by an `ApplyUsdOp` carrying `UsdOp::AddPrim { reference: Some(...) }`.
+Switching scenes re-points the single active stage; it never stacks.
 
 ### `default_scene` is a path, the scene owns composition
 
@@ -234,7 +234,7 @@ section.
 | **Open a Twin** | Open a folder → designated stage becomes active → Grid renders it | existing `OpenFolder`/`OpenTwin` + folder picker |
 | **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
-| **Add object / import** | author into the current stage: `ApplyUsdOp { active_stage, AddReference{…} }` (primitives: `AddPrim`); recompose into Grid; saved into the Twin by `SaveDocument` | existing `ApplyUsdOp` + one new `UsdOp` |
+| **Add object / import** | author into the explicit document: `ApplyUsdOp { doc, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
 | **Attach a simulation program** | `AttachProgram { doc, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd::program` + normal USD projection |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |
 | **Run / server** | `TwinCommand`s | existing `--api` surface (spec 14 "Headless + remote") |
@@ -488,7 +488,7 @@ author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` s
 
 ### Scene Editing Tools (UX Bridge)
 The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, inspector).
-- **Spawning**: `SpawnEntity` command is wired to `UsdOp::AddReference` against the active stage.
+- **Spawning**: `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path.
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
   prim path. USD stays the source of truth for the root prim; the loader resolves

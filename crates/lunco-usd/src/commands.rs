@@ -31,13 +31,15 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
+use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
     on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
-    DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
-    SaveAsDocument, SaveDocument, UndoDocument,
+    CloseDocument, DiscardDocument, DocumentChanged, DocumentClosed, DocumentOpened, ForkDocument,
+    NewDocument, OpenFile, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument,
 };
 use lunco_settings::AppSettingsExt;
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
@@ -261,6 +263,10 @@ impl Plugin for UsdCommandsPlugin {
         }
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(crate::assembly_api::InspectUsdDocumentProvider);
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.add_observer(clear_scene_on_twin_closed);
         app.add_systems(
@@ -294,7 +300,14 @@ impl Plugin for UsdCommandsPlugin {
         // UI's `browser_dispatch` only translates browser-panel clicks
         // into calls on this pipeline.
         app.init_resource::<PendingUsdLoads>();
-        app.add_systems(Update, drain_pending_usd_file_loads);
+        app.init_resource::<PendingUsdDiscards>();
+        app.add_systems(
+            Update,
+            (drain_pending_usd_file_loads, drain_pending_usd_discards),
+        );
+        app.register_deferred_command::<ApplyUsdOp>()
+            .register_deferred_command::<ApplyUsdOps>()
+            .register_deferred_command::<DiscardDocument>();
 
         app.add_systems(Update, drain_usd_pending_events);
         app.add_observer(sync_workspace_on_doc_opened);
@@ -812,6 +825,9 @@ register_commands!(
     // observers here (not in the editor) is what lets a headless binary undo.
     on_undo_usd_document,
     on_redo_usd_document,
+    on_fork_usd_document,
+    on_close_usd_document,
+    on_discard_usd_document,
     on_attach_component,
     on_detach_component,
     on_attach_program,
@@ -1049,6 +1065,20 @@ pub(crate) struct PendingUsdLoads {
     tasks: Vec<PendingUsdLoad>,
 }
 
+/// A confirmed file reset whose source is being read off the ECS thread.
+struct PendingUsdDiscard {
+    doc: DocumentId,
+    path: PathBuf,
+    task: Task<Result<String, String>>,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+}
+
+#[derive(Resource, Default)]
+struct PendingUsdDiscards {
+    tasks: Vec<PendingUsdDiscard>,
+}
+
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
 /// `.usd*` paths so HTTP API / MCP / `Open` URI dispatch all route into
 /// the same async-load pipeline the Twin browser uses. Modelica's
@@ -1177,6 +1207,250 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
     }
 
     world.resource_mut::<PendingUsdLoads>().tasks = still_pending;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Fork / close / discard — document lifecycle
+// ─────────────────────────────────────────────────────────────────────
+
+/// Fork a USD document through the registry's typed document snapshot seam.
+///
+/// The returned document is untitled and has an independent id, cache, undo
+/// host, and recorder. Lifecycle observers publish the opened/changed events
+/// after the command returns, so the normal workspace and journal consumers
+/// see the fork without a second editor registry.
+#[on_command(ForkDocument)]
+fn on_fork_usd_document(
+    trigger: On<ForkDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+) -> Result<Ack, String> {
+    let command = trigger.event();
+    let doc = registry
+        .fork(command.source, command.name.clone())
+        .map_err(|reject| reject.to_string())?;
+    let generation = registry
+        .host(doc)
+        .map(|host| host.generation())
+        .ok_or_else(|| format!("forked document {doc} was not installed"))?;
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "source_doc": command.source,
+            "doc": doc,
+            "name": command.name,
+            "generation": generation,
+            "target_layer": LayerId::root().as_str(),
+            "diagnostics": [],
+        }),
+    ))
+}
+
+/// Close a USD document owned by this registry. Foreign document ids are a
+/// no-op by the shared generic-command ownership contract.
+#[on_command(CloseDocument)]
+fn on_close_usd_document(
+    trigger: On<CloseDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+) {
+    let doc = trigger.event().doc;
+    if registry.remove(doc).is_some() {
+        bevy::log::info!("[CloseUsd] closed {doc}");
+    }
+}
+
+/// Begin an explicit discard/revert operation. File bytes are read through
+/// the storage abstraction on the async task pool; the registry reset and its
+/// history invalidation happen only after the read succeeds on the ECS owner.
+#[on_command(DiscardDocument)]
+fn on_discard_usd_document(
+    trigger: On<DiscardDocument>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let doc = trigger.event().doc;
+    let command_id = active_id.get();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let outcome = {
+            let origin = world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .map(|host| host.document().origin().clone());
+            let Some(origin) = origin else {
+                finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(format!("unknown USD document {doc}")),
+                    ApiErrorCode::CommandRejected,
+                );
+                return;
+            };
+            match origin {
+                DocumentOrigin::Untitled { .. } => {
+                    let generation = world
+                        .resource::<DocumentRegistry<UsdDocument>>()
+                        .host(doc)
+                        .map(|host| host.generation())
+                        .unwrap_or_default();
+                    world
+                        .resource_mut::<DocumentRegistry<UsdDocument>>()
+                        .remove(doc);
+                    Ok(Ack::with_data(
+                        OpId::new(),
+                        serde_json::json!({
+                            "doc": doc,
+                            "action": "closed",
+                            "generation": generation,
+                            "diagnostics": [],
+                        }),
+                    ))
+                }
+                DocumentOrigin::Bundled { .. } => Err(format!(
+                    "USD document {doc} is bundled and cannot be discarded"
+                )),
+                DocumentOrigin::File {
+                    writable: false, ..
+                } => Err(format!(
+                    "USD document {doc} is read-only and cannot be discarded"
+                )),
+                DocumentOrigin::File {
+                    path,
+                    writable: true,
+                } => {
+                    if world
+                        .resource::<PendingUsdDiscards>()
+                        .tasks
+                        .iter()
+                        .any(|pending| pending.doc == doc)
+                    {
+                        Err(format!(
+                            "USD document {doc} already has a discard in progress"
+                        ))
+                    } else {
+                        let task_path = path.clone();
+                        let task = AsyncComputeTaskPool::get().spawn(async move {
+                            let storage = lunco_storage::FileStorage::new();
+                            let handle = lunco_storage::StorageHandle::File(task_path.clone());
+                            match storage.read(&handle).await {
+                                Ok(bytes) => String::from_utf8(bytes).map_err(|error| {
+                                    format!("invalid UTF-8 in {}: {error}", task_path.display())
+                                }),
+                                Err(error) => Err(format!(
+                                    "failed to read {}: {error:?}",
+                                    task_path.display()
+                                )),
+                            }
+                        });
+                        world
+                            .resource_mut::<PendingUsdDiscards>()
+                            .tasks
+                            .push(PendingUsdDiscard {
+                                doc,
+                                path,
+                                task,
+                                command_id,
+                                correlation_id,
+                            });
+                        return;
+                    }
+                }
+            }
+        };
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
+/// Poll explicit discard reads and commit only against the same resident file
+/// document that requested them. A closed or Save-As-rebound document is
+/// rejected rather than applying bytes to a different document identity.
+fn drain_pending_usd_discards(world: &mut World) {
+    if world.resource::<PendingUsdDiscards>().tasks.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut world.resource_mut::<PendingUsdDiscards>().tasks);
+    let mut still_pending = Vec::new();
+    for mut discard in pending {
+        let result = match block_on(future::poll_once(&mut discard.task)) {
+            None => {
+                still_pending.push(discard);
+                continue;
+            }
+            Some(result) => result,
+        };
+        let outcome = match result {
+            Err(error) => Err(error),
+            Ok(source) => {
+                let current_path = world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .host(discard.doc)
+                    .and_then(|host| host.document().origin().canonical_path())
+                    .map(Path::to_path_buf);
+                if current_path.as_deref() != Some(discard.path.as_path()) {
+                    Err(format!(
+                        "USD document {} changed identity while discard was reading",
+                        discard.doc
+                    ))
+                } else {
+                    let (doc, outcome) = world
+                        .resource_mut::<DocumentRegistry<UsdDocument>>()
+                        .reset_file(discard.path.clone(), source);
+                    if doc != discard.doc {
+                        Err(format!(
+                            "discard source resolved to document {doc}, expected {}",
+                            discard.doc
+                        ))
+                    } else {
+                        match outcome {
+                            lunco_doc::OpenOutcome::Refreshed => {
+                                claim_user_document_if_projected(world, doc);
+                                let generation = world
+                                    .resource::<DocumentRegistry<UsdDocument>>()
+                                    .host(doc)
+                                    .map(|host| host.generation())
+                                    .unwrap_or_default();
+                                Ok(Ack::with_data(
+                                    OpId::new(),
+                                    serde_json::json!({
+                                        "doc": doc,
+                                        "action": "discarded",
+                                        "generation": generation,
+                                        "target_layer": LayerId::root().as_str(),
+                                        "diagnostics": [],
+                                    }),
+                                ))
+                            }
+                            lunco_doc::OpenOutcome::KeptUnparsable => Err(format!(
+                                "discard source for {} is not valid USDA",
+                                discard.doc
+                            )),
+                            other => Err(format!(
+                                "discard of {} did not reset the resident file ({other:?})",
+                                discard.doc
+                            )),
+                        }
+                    }
+                }
+            }
+        };
+        finish_command_result(
+            world,
+            discard.command_id,
+            discard.correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    }
+    world.resource_mut::<PendingUsdDiscards>().tasks = still_pending;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1391,6 +1665,9 @@ fn on_save_as_document(
 pub struct ApplyUsdOp {
     /// Target document.
     pub doc: DocumentId,
+    /// Generation the caller edited from. When present, the operation is
+    /// rejected if the document advanced before it arrived.
+    pub parent_gen: Option<u64>,
     /// Operation to apply.
     pub op: UsdOp,
 }
@@ -1405,6 +1682,9 @@ pub struct ApplyUsdOp {
 pub struct ApplyUsdOps {
     /// Target document.
     pub doc: DocumentId,
+    /// Generation the caller edited from. When present, the complete compound
+    /// edit is rejected if the document advanced before it arrived.
+    pub parent_gen: Option<u64>,
     /// Human-readable undo/journal label.
     pub label: String,
     /// Ordered primitive USD operations comprising the one intent.
@@ -1412,42 +1692,107 @@ pub struct ApplyUsdOps {
 }
 
 #[on_command(ApplyUsdOps)]
-fn on_apply_usd_ops(trigger: On<ApplyUsdOps>, mut commands: Commands) {
+fn on_apply_usd_ops(
+    trigger: On<ApplyUsdOps>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
     let command = trigger.event().clone();
+    let command_id = active_id.get();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let (applied, total) =
-            apply_ops_as_change_set(world, command.doc, command.label, command.ops);
-        if applied != total {
-            bevy::log::warn!(
-                "[ApplyUsdOps] {} applied {applied}/{total} operations",
+        let total = command.ops.len();
+        let outcome = match apply_ops_as_change_set_result(
+            world,
+            command.doc,
+            command.label,
+            command.ops,
+            command.parent_gen,
+        ) {
+            Ok((ack, applied)) if applied == total => {
+                claim_user_document_if_projected(world, command.doc);
+                Ok(ack)
+            }
+            Ok((_, applied)) => Err(format!(
+                "USD document {} applied {applied}/{total} operations",
                 command.doc
-            );
+            )),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = &outcome {
+            bevy::log::warn!("[ApplyUsdOps] {} rejected: {error}", command.doc);
         }
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
     });
 }
 
 #[on_command(ApplyUsdOp)]
-fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
+fn on_apply_usd_op(
+    trigger: On<ApplyUsdOp>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
     let doc = trigger.event().doc;
+    let parent_gen = trigger.event().parent_gen;
     let op = trigger.event().op.clone();
+    let target = op.edit_target().clone();
+    let target_layers = vec![target.as_str().to_owned()];
+    let paths = op.affected_paths();
+    let command_id = active_id.get();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        // Apply through the registry funnel. Journaling is automatic (A3):
-        // the host carries a `JournalOpRecorder` installed by
-        // `wire_usd_journal_recorders`, so a successful `apply` records the
-        // lossless (forward, inverse) pair — no per-op recording code here,
-        // and the same seam journals undo/redo too.
+        let paths_for_error = paths.clone();
         let result = world
             .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .apply(doc, op);
-        match result {
-            Ok(ack) => {
+            .apply_mutation(
+                doc,
+                match parent_gen {
+                    Some(parent) => lunco_doc::Mutation::local_against(parent, op),
+                    None => lunco_doc::Mutation::local(op),
+                },
+            );
+        let outcome = result
+            .map(|mut ack| {
                 claim_user_document_if_projected(world, doc);
+                ack.data = Some(usd_ack_data(
+                    doc,
+                    &target_layers,
+                    &paths,
+                    ack.new_gen.unwrap_or_default(),
+                    None,
+                    world.get_resource::<lunco_doc_bevy::JournalResource>(),
+                ));
                 bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
-            }
-            Err(reject) => {
-                bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
-            }
+                ack
+            })
+            .map_err(|reject| {
+                format!(
+                    "USD document {doc} edit at {:?} rejected: {reject}",
+                    paths_for_error
+                )
+            });
+        if let Err(error) = &outcome {
+            bevy::log::warn!("[ApplyUsdOp] {error}");
         }
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
     });
 }
 
@@ -1574,6 +1919,82 @@ pub fn on_redo_usd_document(
 /// a valid intent is committed as one history group even without a journal.
 ///
 /// Returns `(applied, total)`.
+fn usd_ack_data(
+    doc: DocumentId,
+    target_layers: &[String],
+    paths: &[String],
+    generation: u64,
+    change_set_id: Option<lunco_twin_journal::ChangeSetId>,
+    journal: Option<&lunco_doc_bevy::JournalResource>,
+) -> serde_json::Value {
+    let journal_cursor = journal.and_then(|journal| {
+        journal.with_read(|journal| {
+            journal
+                .entries_for_doc(doc)
+                .last()
+                .map(|entry| entry.id.clone())
+        })
+    });
+    serde_json::json!({
+        "doc": doc,
+        "target_layer": target_layers.first(),
+        "target_layers": target_layers,
+        "paths": paths,
+        "generation": generation,
+        "change_set_id": change_set_id,
+        "journal_cursor": journal_cursor,
+        "diagnostics": [],
+    })
+}
+
+fn apply_ops_as_change_set_result(
+    world: &mut World,
+    doc: DocumentId,
+    label: impl Into<String>,
+    ops: Vec<UsdOp>,
+    parent_gen: Option<u64>,
+) -> Result<(Ack, usize), String> {
+    let total = ops.len();
+    let paths: Vec<String> = ops.iter().flat_map(UsdOp::affected_paths).collect();
+    let mut target_layers = Vec::new();
+    for target in ops.iter().map(UsdOp::edit_target) {
+        if !target_layers.iter().any(|known| known == target.as_str()) {
+            target_layers.push(target.as_str().to_owned());
+        }
+    }
+    let journal = world
+        .get_resource::<lunco_doc_bevy::JournalResource>()
+        .cloned();
+    let apply_all = |world: &mut World| {
+        world
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .apply_group_against(doc, parent_gen, ops)
+            .map_err(|reject| {
+                format!(
+                    "USD document {doc} compound edit at {:?} rejected: {reject}",
+                    paths
+                )
+            })
+    };
+    let (change_set_id, result) = match journal.as_ref() {
+        Some(journal) => {
+            let (id, result) = journal.change_set_with_id(label, || apply_all(world));
+            (Some(id), result)
+        }
+        None => (None, apply_all(world)),
+    };
+    let mut ack = result?;
+    ack.data = Some(usd_ack_data(
+        doc,
+        &target_layers,
+        &paths,
+        ack.new_gen.unwrap_or_default(),
+        change_set_id,
+        journal.as_ref(),
+    ));
+    Ok((ack, total))
+}
+
 pub fn apply_ops_as_change_set(
     world: &mut World,
     doc: DocumentId,
@@ -1581,28 +2002,14 @@ pub fn apply_ops_as_change_set(
     ops: Vec<UsdOp>,
 ) -> (usize, usize) {
     let total = ops.len();
-    // Clone the handle FIRST: the registry takes a mutable borrow, so
-    // the journal resource can't stay borrowed across it.
-    let journal = world
-        .get_resource::<lunco_doc_bevy::JournalResource>()
-        .cloned();
-
-    let apply_all = |world: &mut World| {
-        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-        match registry.apply_group(doc, ops) {
-            Ok(_) => total,
-            Err(reject) => {
-                bevy::log::warn!("[usd] {doc} compound operation rejected: {reject:?}");
-                0
-            }
+    let applied = match apply_ops_as_change_set_result(world, doc, label, ops, None) {
+        Ok(_) => total,
+        Err(error) => {
+            bevy::log::warn!("[usd] {error}");
+            0
         }
     };
-
-    let applied = match journal {
-        Some(j) => j.change_set(label, || apply_all(world)),
-        None => apply_all(world),
-    };
-    if applied != 0 {
+    if applied == total && total != 0 {
         claim_user_document_if_projected(world, doc);
     }
     (applied, total)
@@ -2605,6 +3012,11 @@ mod change_set_tests {
 mod tests {
     use super::*;
 
+    fn install_command_result_resources(app: &mut App) {
+        app.init_resource::<CommandResults>()
+            .init_resource::<ActiveCommandId>();
+    }
+
     #[test]
     fn is_usd_path_recognises_extensions() {
         assert!(is_usd_path("/tmp/scene.usda"));
@@ -2633,6 +3045,103 @@ mod tests {
             .expect("usd kind registered");
         assert_eq!(meta.display_name, "USD Stage");
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdDocument"));
+    }
+
+    #[test]
+    fn fork_and_discard_use_document_lifecycle_commands() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        install_command_result_resources(&mut app);
+        app.update();
+
+        let source = {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            registry.allocate(
+                "#usda 1.0\ndef Xform \"Rig\" { def Xform \"Chassis\" {} }\n".to_owned(),
+                lunco_doc::PathlessOrigin::untitled("Source.usda"),
+            )
+        };
+        app.update();
+
+        app.world_mut().trigger(ForkDocument {
+            source,
+            name: "Fork.usda".to_owned(),
+        });
+        app.update();
+        let ids: Vec<_> = app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .ids()
+            .collect();
+        assert_eq!(ids.len(), 2);
+        let fork = *ids.iter().find(|id| **id != source).expect("fork id");
+        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
+        assert_eq!(
+            registry.host(fork).expect("fork host").document().source(),
+            registry
+                .host(source)
+                .expect("source host")
+                .document()
+                .source()
+        );
+        assert!(registry
+            .host(fork)
+            .expect("fork host")
+            .document()
+            .origin()
+            .is_untitled());
+
+        app.world_mut().trigger(DiscardDocument { doc: fork });
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(fork));
+        assert!(app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(source));
+    }
+
+    #[test]
+    fn inspect_query_requires_explicit_document_and_reads_composed_prim() {
+        let mut world = World::new();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let doc = registry.allocate(
+            "#usda 1.0\ndef Xform \"Rig\" { def Xform \"Chassis\" {} }\n".to_owned(),
+            lunco_doc::PathlessOrigin::untitled("Inspect.usda"),
+        );
+        world.insert_resource(registry);
+        let provider = crate::assembly_api::InspectUsdDocumentProvider;
+
+        let missing = lunco_api::queries::ApiQueryProvider::execute(
+            &provider,
+            &world,
+            &serde_json::json!({}),
+        );
+        assert!(matches!(
+            missing,
+            lunco_api::schema::ApiResponse::Error { .. }
+        ));
+        let inspected = lunco_api::queries::ApiQueryProvider::execute(
+            &provider,
+            &world,
+            &serde_json::json!({ "doc": doc.raw(), "path": "/Rig/Chassis" }),
+        );
+        let lunco_api::schema::ApiResponse::Ok { data: Some(data) } = inspected else {
+            panic!("inspection query must return structured data");
+        };
+        assert_eq!(data["doc"], serde_json::json!(doc));
+        assert_eq!(data["prim"]["exists"], serde_json::json!(true));
+        assert_eq!(data["prim"]["type"], serde_json::json!("Xform"));
     }
 
     fn wait_for_one_usd_document(app: &mut App) {
@@ -2735,6 +3244,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
+        install_command_result_resources(&mut app);
         app.update();
 
         // Allocate a blank document.
@@ -2780,7 +3290,11 @@ mod tests {
             },
         ];
         for op in ops {
-            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.world_mut().trigger(ApplyUsdOp {
+                doc: doc_id,
+                parent_gen: None,
+                op,
+            });
             app.update();
         }
         // One more tick to flush any final queued world commands.
@@ -2833,6 +3347,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
+        install_command_result_resources(&mut app);
         // The Twin-journal plugin isn't part of `UsdCommandsPlugin`; install
         // the resource directly so the apply funnel has somewhere to record.
         app.insert_resource(lunco_doc_bevy::JournalResource::default());
@@ -2864,7 +3379,11 @@ mod tests {
             },
         ];
         for op in forward_ops.clone() {
-            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.world_mut().trigger(ApplyUsdOp {
+                doc: doc_id,
+                parent_gen: None,
+                op,
+            });
             app.update();
         }
         app.update();

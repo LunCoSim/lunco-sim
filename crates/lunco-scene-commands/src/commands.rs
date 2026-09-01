@@ -243,6 +243,7 @@ pub fn persist_detach_to_runtime_layer(
 
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::RemovePrim {
             edit_target: LayerId::runtime(),
             path,
@@ -434,6 +435,7 @@ pub fn on_spawn_entity_command(
         info!("SPAWN_ENTITY: authoring {} at {:?}", prim_path, position);
         commands.trigger(ApplyUsdOps {
             doc,
+            parent_gen: None,
             label: format!("Spawn {}", entry.display_name),
             ops,
         });
@@ -1210,6 +1212,7 @@ pub fn persist_transform_to_runtime_layer(
     let (rx, ry, rz) = local_rotation.to_euler(EulerRot::XYZ);
     commands.trigger(ApplyUsdOps {
         doc,
+        parent_gen: None,
         label: "Transform entity".to_string(),
         ops: vec![
             UsdOp::SetTranslate {
@@ -1298,6 +1301,7 @@ pub fn persist_move_to_runtime_layer(
     };
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
             path,
@@ -1354,6 +1358,7 @@ pub fn persist_rotation_to_runtime_layer(
     let (rx, ry, rz) = local.to_euler(EulerRot::XYZ);
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetRotate {
             edit_target: LayerId::runtime(),
             path,
@@ -1534,6 +1539,7 @@ pub fn persist_delete_to_runtime_layer(
     }
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::RemovePrim {
             edit_target: LayerId::runtime(),
             path,
@@ -1633,6 +1639,7 @@ pub fn persist_property_to_runtime_layer(
     let name = format!("primvars:{}", lunco_materials::to_snake_case(&cmd.property));
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
             path: prim.path.clone(),
@@ -1678,6 +1685,7 @@ pub fn on_set_usd_connection(
     };
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetConnection {
             edit_target: LayerId::runtime(),
             path,
@@ -1744,6 +1752,7 @@ pub fn on_set_usd_attribute(
     }
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
             path: cmd.path.clone(),
@@ -1904,6 +1913,7 @@ pub fn persist_wheel_to_runtime_layer(
 
     commands.trigger(ApplyUsdOp {
         doc,
+        parent_gen: None,
         op: UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
             path: prim.path.clone(),
@@ -2040,6 +2050,7 @@ pub fn persist_environment_light_to_runtime_layer(
         for (name, type_name, value) in &attrs {
             commands.trigger(ApplyUsdOp {
                 doc,
+                parent_gen: None,
                 op: UsdOp::SetAttribute {
                     edit_target: LayerId::runtime(),
                     path: prim.path.clone(),
@@ -2065,6 +2076,7 @@ pub fn persist_environment_light_to_runtime_layer(
             let (rx, ry, rz) = quat.to_euler(EulerRot::XYZ);
             commands.trigger(ApplyUsdOp {
                 doc,
+                parent_gen: None,
                 op: UsdOp::SetRotate {
                     edit_target: LayerId::runtime(),
                     path: prim.path.clone(),
@@ -2111,6 +2123,7 @@ pub fn persist_environment_light_to_runtime_layer(
             for (name, type_name, value) in &fill_attrs {
                 commands.trigger(ApplyUsdOp {
                     doc,
+                    parent_gen: None,
                     op: UsdOp::SetAttribute {
                         edit_target: LayerId::runtime(),
                         path: prim.path.clone(),
@@ -2160,6 +2173,7 @@ pub fn persist_environment_light_to_runtime_layer(
     if prim_missing(&env_path) {
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::AddPrim {
                 edit_target: LayerId::runtime(),
                 parent_path,
@@ -2172,6 +2186,7 @@ pub fn persist_environment_light_to_runtime_layer(
     for (name, type_name, value) in &env_attrs {
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::runtime(),
                 path: env_path.clone(),
@@ -2214,6 +2229,7 @@ pub fn persist_environment_light_to_runtime_layer(
         if prim_missing(&fill_path) {
             commands.trigger(ApplyUsdOp {
                 doc,
+                parent_gen: None,
                 op: UsdOp::AddPrim {
                     edit_target: LayerId::runtime(),
                     parent_path: env_path,
@@ -2225,6 +2241,7 @@ pub fn persist_environment_light_to_runtime_layer(
         }
         commands.trigger(ApplyUsdOp {
             doc,
+            parent_gen: None,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::runtime(),
                 path: fill_path,
@@ -2401,6 +2418,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
         if key == "double_sided" {
             world.trigger(ApplyUsdOp {
                 doc,
+                parent_gen: None,
                 op: UsdOp::SetAttribute {
                     edit_target: LayerId::root(),
                     path: prim.path.clone(),
@@ -2458,6 +2476,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
         for op in ops {
             world.trigger(ApplyUsdOp {
                 doc,
+                parent_gen: None,
                 op: op.clone(),
             });
         }
@@ -4734,6 +4753,7 @@ mod tests {
         assert_eq!(ops.len(), 4, "spawn lowers to one complete change set");
         app.world_mut().trigger(ApplyUsdOps {
             doc,
+            parent_gen: None,
             label: "Spawn Test Rover".into(),
             ops,
         });

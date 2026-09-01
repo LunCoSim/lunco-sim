@@ -39,6 +39,8 @@ fn test_apply_usd_op_integration() {
     // 2. Add USD plugins
     app.add_plugins(UsdBevyPlugin);
     app.add_plugins(UsdCommandsPlugin);
+    app.init_resource::<lunco_core::CommandResults>()
+        .init_resource::<lunco_core::ActiveCommandId>();
     app.add_plugins(UsdViewportPlugin);
 
     // 3. Define initial USDA document containing a Material, Shader and a bound Cube Mesh
@@ -132,6 +134,7 @@ def Xform "World"
     };
     app.world_mut().trigger(ApplyUsdOp {
         doc: doc_id,
+        parent_gen: None,
         op: color_op,
     });
 
@@ -144,6 +147,7 @@ def Xform "World"
     };
     app.world_mut().trigger(ApplyUsdOp {
         doc: doc_id,
+        parent_gen: None,
         op: roughness_op,
     });
 
@@ -183,6 +187,7 @@ def Xform "World"
     // instead — see `document::set_attribute_overwrite_inverts_to_typed_op`.)
     app.world_mut().trigger(ApplyUsdOp {
         doc: doc_id,
+        parent_gen: None,
         op: UsdOp::ReplaceSource {
             edit_target: LayerId::root(),
             text: usda_content.to_string(),

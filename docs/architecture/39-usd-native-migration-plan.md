@@ -88,7 +88,7 @@ live stage on the UI thread.
   `SetConnection { edit_target, path, name, type_name, sources: Vec<String> }` in `lunco-usd/document.rs`;
   apply = `require_prim_anywhere` → parse `sources`→`SdfPath` → `stage.create_attribute(path.name, type_name)`
   → `set_connections(...)` (explicit `connectionPaths` list-op; **empty `sources` = clear**).
-  `ApplyUsdOp{op:UsdOp}` is generic → auto-dispatches via API/MCP/rhai, records as `EntryKind::Op{domain:Usd}`
+  `ApplyUsdOp{doc,parent_gen,op:UsdOp}` is generic → auto-dispatches via API/MCP/rhai, records as `EntryKind::Op{domain:Usd}`
   → journaled and distributed. Satisfies requirement (3) at the authoring end.
 - **P1.1 [in place] — Connections survive composition + read through the shared composed reader.**
   `StageView::rel_target` folds relationship targets and `.connect` uniformly; both the live `StageView`

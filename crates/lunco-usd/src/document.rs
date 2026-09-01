@@ -546,6 +546,61 @@ impl Default for UsdOp {
 
 impl DocumentOp for UsdOp {}
 
+impl UsdOp {
+    /// The authored layer selected by this operation.
+    pub fn edit_target(&self) -> &LayerId {
+        match self {
+            Self::ReplaceSource { edit_target, .. }
+            | Self::AddPrim { edit_target, .. }
+            | Self::RemovePrim { edit_target, .. }
+            | Self::SetTranslate { edit_target, .. }
+            | Self::SetRotate { edit_target, .. }
+            | Self::SetAttribute { edit_target, .. }
+            | Self::SetTimeSample { edit_target, .. }
+            | Self::RemoveTimeSample { edit_target, .. }
+            | Self::SetRelationship { edit_target, .. }
+            | Self::SetConnection { edit_target, .. }
+            | Self::MovePrim { edit_target, .. }
+            | Self::SetApiSchemas { edit_target, .. }
+            | Self::SetVariantSelection { edit_target, .. }
+            | Self::SetPayload { edit_target, .. }
+            | Self::SetActive { edit_target, .. } => edit_target,
+        }
+    }
+
+    /// Return the authored prim or property paths touched by this operation.
+    ///
+    /// This is metadata for acknowledgements and diagnostics; validation and
+    /// mutation remain owned by [`UsdDocument`].
+    pub fn affected_paths(&self) -> Vec<String> {
+        match self {
+            Self::ReplaceSource { .. } => vec!["/".to_owned()],
+            Self::AddPrim {
+                parent_path, name, ..
+            } => vec![if parent_path == "/" {
+                format!("/{name}")
+            } else {
+                format!("{parent_path}/{name}")
+            }],
+            Self::RemovePrim { path, .. }
+            | Self::SetTranslate { path, .. }
+            | Self::SetRotate { path, .. }
+            | Self::SetAttribute { path, .. }
+            | Self::SetTimeSample { path, .. }
+            | Self::RemoveTimeSample { path, .. }
+            | Self::SetRelationship { path, .. }
+            | Self::SetConnection { path, .. }
+            | Self::SetApiSchemas { path, .. }
+            | Self::SetVariantSelection { path, .. }
+            | Self::SetPayload { path, .. }
+            | Self::SetActive { path, .. } => vec![path.clone()],
+            Self::MovePrim {
+                from_path, to_path, ..
+            } => vec![from_path.clone(), to_path.clone()],
+        }
+    }
+}
+
 /// Participation in the canonical Twin journal ([`lunco_twin_journal`]).
 ///
 /// `UsdOp` derives `Serialize`, so the journal records the **real op**
@@ -732,6 +787,21 @@ impl UsdDocument {
     /// runtime op lands.
     pub fn runtime_data(&self) -> &sdf::Data {
         &self.runtime
+    }
+
+    /// Revision of the persisted authored layer.
+    pub fn base_revision(&self) -> u64 {
+        self.base_revision
+    }
+
+    /// Revision of the non-persisted runtime overlay layer.
+    pub fn runtime_revision(&self) -> u64 {
+        self.runtime_revision
+    }
+
+    /// Source parse diagnostic, when the document was opened with invalid USDA.
+    pub fn parse_error(&self) -> Option<&str> {
+        self.parse_error.as_deref()
     }
 
     /// The **composed** view: the runtime overlay merged over the base layer
