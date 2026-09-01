@@ -36,6 +36,11 @@ dependency cycle, put the provider in a small `*-api` adapter crate and have
 each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
+Project-owned persistence policy belongs to the active Twin manifest's generic
+settings boundary. A domain may define one namespaced scalar key and expose it
+through the existing `SetTwinSetting` path; it must not add a global settings
+section or a second cache reader/writer for the same artifact.
+
 ## Source-backed program attachment
 
 `AttachProgram` is the one authoring boundary for binding a `.mo`, `.py`,

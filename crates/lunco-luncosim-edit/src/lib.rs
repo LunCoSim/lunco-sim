@@ -182,18 +182,34 @@ impl Plugin for SceneEditPlugin {
                     .before(lunco_time::InteractionRecordSet),
             ),
         );
-        app.add_systems(Update, gizmo::sync_gizmo_camera);
+        // The viewport reconciler is the sole writer of window-camera
+        // activation. Reconcile the gizmo marker in the same presentation
+        // phase, after that binding is actuated and before camera projection,
+        // so a selection never uses the previous view for one frame.
+        app.add_systems(
+            PostUpdate,
+            gizmo::sync_gizmo_camera
+                .after(lunco_core::SceneViewportSet::Reconcile)
+                .before(bevy::camera::CameraUpdateSystems),
+        );
         // The gizmo crate reads a target's pose from `Transform` but its camera
         // from `GlobalTransform`. The `GizmoTarget` therefore lives on an
         // unparented proxy whose `Transform` is render-frame state; every edit
         // is converted back through the active BigSpace pose boundary.
+        // Selection observers mutate markers through deferred commands. Run
+        // proxy reconciliation after those commands and after transform
+        // propagation, so the Last gizmo pass sees one coherent target set.
         app.add_systems(
-            Update,
-            (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies),
+            PostUpdate,
+            (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies)
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(
             PostUpdate,
-            gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),
+            gizmo::sync_gizmo_proxies
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(gizmo::despawn_gizmo_proxies),
         );
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-

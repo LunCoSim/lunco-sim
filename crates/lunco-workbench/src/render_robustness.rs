@@ -238,9 +238,6 @@ fn presentation_is_active(state: Option<Res<PresentationState>>) -> bool {
 /// Why a persistent presentation warning is being shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderWarningKind {
-    /// The authored or persisted graphics configuration limits or rejects
-    /// shadow resources; rendering itself is still healthy.
-    ConfiguredShadowLimit,
     /// The requested graphics configuration is invalid or unsupported by the
     /// current adapter and therefore was not applied.
     GraphicsSettings,
@@ -251,7 +248,6 @@ pub enum RenderWarningKind {
 impl RenderWarningKind {
     fn title(self) -> &'static str {
         match self {
-            Self::ConfiguredShadowLimit => "SHADOWS LIMITED",
             Self::GraphicsSettings => "GRAPHICS SETTINGS",
             Self::RuntimeFailure => "RENDERING DEGRADED",
         }
@@ -389,6 +385,7 @@ pub(crate) struct ShadowAdmissionState {
     budget_bytes: Option<u64>,
     configuration_signature: Option<u64>,
     policy_signature: Option<u64>,
+    configured_limit_status_active: bool,
 }
 
 impl Ladder {
@@ -1142,6 +1139,7 @@ fn apply_shadow_caster_policy(
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
     warning: Option<Res<RenderWarning>>,
+    status_bus: Option<ResMut<crate::status_bus::StatusBus>>,
     health: Option<Res<RenderHealthHandle>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_shadow_map: Res<bevy::light::PointLightShadowMap>,
@@ -1174,6 +1172,7 @@ fn apply_shadow_caster_policy(
     let profile = match settings.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
+            state.configured_limit_status_active = false;
             if warning.is_none() {
                 commands.insert_resource(RenderWarning {
                     kind: RenderWarningKind::GraphicsSettings,
@@ -1299,6 +1298,7 @@ fn apply_shadow_caster_policy(
         state.budget_bytes = Some(admission_budget);
         state.configuration_signature = Some(configuration_signature);
         state.policy_signature = Some(policy_signature);
+        state.configured_limit_status_active = false;
         return;
     }
 
@@ -1368,6 +1368,7 @@ fn apply_shadow_caster_policy(
                 ),
             });
         }
+        state.configured_limit_status_active = false;
         state.light_count = Some(light_count);
         state.enabled_caster_count = Some(enabled_caster_count);
         state.directional_map_size = Some(directional_shadow_map.size);
@@ -1525,17 +1526,21 @@ fn apply_shadow_caster_policy(
         directional_shadow_map.size,
         point_shadow_map.size,
     );
-    if limit_shed_count > 0 && warning.is_none() {
-        commands.insert_resource(RenderWarning {
-            kind: RenderWarningKind::ConfiguredShadowLimit,
-            message: format!(
-                "Configured shadow caster limits: kept {} directional, {} point, and {} spot shadow caster(s); {} caster(s) are disabled by the Graphics settings.",
-                kept_directionals.len(),
-                kept_points.len(),
-                kept_spots.len(),
-                limit_shed_count,
-            ),
-        });
+    if limit_shed_count > 0 {
+        if !state.configured_limit_status_active {
+            if let Some(mut status_bus) = status_bus {
+                status_bus.push(
+                    crate::status_bus::RENDER_SOURCE,
+                    crate::status_bus::StatusLevel::Warn,
+                    format!(
+                        "Configured shadow limits active: {limit_shed_count} light(s) do not receive shadows."
+                    ),
+                );
+            }
+            state.configured_limit_status_active = true;
+        }
+    } else {
+        state.configured_limit_status_active = false;
     }
 
     // Cache the post-policy state, not the pre-policy observation. Otherwise a
@@ -1705,11 +1710,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn warning_titles_distinguish_configuration_from_render_failure() {
-        assert_eq!(
-            RenderWarningKind::ConfiguredShadowLimit.title(),
-            "SHADOWS LIMITED"
-        );
+    fn warning_titles_distinguish_invalid_configuration_from_render_failure() {
         assert_eq!(
             RenderWarningKind::GraphicsSettings.title(),
             "GRAPHICS SETTINGS"
@@ -2228,6 +2229,7 @@ mod tests {
             ..Default::default()
         };
         app.insert_resource(settings);
+        app.insert_resource(crate::status_bus::StatusBus::default());
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
@@ -2271,7 +2273,28 @@ mod tests {
             health.shadow_budget_bytes.load(Ordering::Relaxed),
             16 * 1024 * 1024
         );
-        assert!(app.world().get_resource::<RenderWarning>().is_some());
+        assert!(app.world().get_resource::<RenderWarning>().is_none());
+        let status_bus = app.world().resource::<crate::status_bus::StatusBus>();
+        assert_eq!(
+            status_bus
+                .history()
+                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .count(),
+            1
+        );
+        assert!(status_bus.history().any(|event| event.message
+            == "Configured shadow limits active: 4 light(s) do not receive shadows."));
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::status_bus::StatusBus>()
+                .history()
+                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .count(),
+            1,
+            "an unchanged shadow-limit condition must not spam status history"
+        );
     }
 
     #[test]
@@ -2426,6 +2449,7 @@ mod tests {
             ..Default::default()
         };
         app.insert_resource(settings);
+        app.insert_resource(crate::status_bus::StatusBus::default());
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
@@ -2438,6 +2462,14 @@ mod tests {
         }
 
         app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::status_bus::StatusBus>()
+                .history()
+                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .count(),
+            1
+        );
         let disabled = {
             let mut query = app
                 .world_mut()
@@ -2453,6 +2485,16 @@ mod tests {
             .shadow_maps_enabled = true;
 
         app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<crate::status_bus::StatusBus>()
+                .history()
+                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .count(),
+            1,
+            "re-arming a caster must not duplicate the active-limit notice"
+        );
 
         let enabled = {
             let mut query = app.world_mut().query::<&bevy::light::PointLight>();

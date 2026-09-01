@@ -11,16 +11,16 @@
 //! `<twin-root>/.lunco/runtime/<scene-path-relative-to-twin>`, parallel to the
 //! journal (`journal_persistence.rs` in `lunco-workspace`), and can reload it
 //! when the document opens — so runtime state survives across sessions without
-//! ever touching the authored scene file. Loading is opt-in; saving is
-//! independent and enabled by default.
+//! ever touching the authored scene file. Persistence is one Twin-scoped opt-in
+//! for both directions and is disabled unless the active Twin says otherwise.
 //!
-//! - **Load** on [`DocumentOpened`]: only when the persisted setting
-//!   `runtime_persistence.load` is true, read the overlay and
+//! - **Load** on [`DocumentOpened`]: only when the active Twin's
+//!   [`RUNTIME_PERSISTENCE_SETTING`] is `true`, read the overlay and
 //!   [`restore_runtime`](crate::document::UsdDocument::restore_runtime) it into
 //!   the freshly-built document.
-//! - **Save** on [`DocumentChanged`]: controlled independently by
-//!   `runtime_persistence.save`, enabled by default. A stale or corrupt `.lunco`
-//!   file cannot affect the normal authored-scene load path.
+//! - **Save** on [`DocumentChanged`]: controlled by the same Twin setting. A
+//!   stale or corrupt `.lunco` file cannot affect the normal authored-scene
+//!   load path.
 //!
 //! UI-free + headless; I/O goes through [`lunco_storage`]. No-ops for untitled /
 //! non-twin docs (nowhere stable to persist) and when no `WorkspaceResource`
@@ -32,7 +32,6 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
-use lunco_settings::SettingsSection;
 use lunco_storage::{Storage, StorageHandle};
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
@@ -50,38 +49,70 @@ use lunco_doc_bevy::DocumentRegistry;
 /// excluders must not be able to drift apart.
 use lunco_twin::RUNTIME_SUBDIR;
 
-/// Whether generated `.lunco/runtime` overlays are loaded and saved.
-#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
-pub struct RuntimePersistenceSettings {
-    /// Restore persisted runtime state into a newly opened scene.
-    pub load: bool,
-    /// Persist newly authored runtime state for a later opt-in restore.
-    pub save: bool,
+/// Twin-manifest key controlling persistence of generated runtime scene edits.
+///
+/// The value is deliberately a single boolean: loading without saving would
+/// resurrect a state that later silently stops changing, while saving without
+/// loading would write a cache that the user cannot see. The generic Twin
+/// setting command and the Settings menu are the two callers of this one
+/// project-owned policy.
+pub const RUNTIME_PERSISTENCE_SETTING: &str = "usd.runtime_persistence";
+
+/// Resolve the Twin that owns a document path.
+///
+/// The most-specific root wins when a workspace contains nested roots. Path
+/// ownership and setting lookup must use the same resolver or a child document
+/// could write into one Twin while reading policy from another.
+fn twin_for_path<'a>(
+    workspace: &'a WorkspaceResource,
+    path: &Path,
+) -> Option<&'a lunco_twin::Twin> {
+    workspace
+        .twins()
+        .filter(|(_, twin)| path.strip_prefix(&twin.root).is_ok())
+        .max_by_key(|(_, twin)| twin.root.components().count())
+        .map(|(_, twin)| twin)
 }
 
-impl Default for RuntimePersistenceSettings {
-    fn default() -> Self {
-        Self {
-            load: false,
-            save: true,
-        }
+/// Resolve the Twin's runtime-persistence policy for a document.
+///
+/// Omitted means disabled. A malformed value is an authoring error and is
+/// returned to the caller so the owner can report it rather than silently
+/// interpreting a typo as permission to write project state.
+pub fn runtime_persistence_enabled(
+    workspace: &WorkspaceResource,
+    doc_path: &Path,
+) -> Result<bool, String> {
+    let Some(twin) = twin_for_path(workspace, doc_path) else {
+        return Ok(false);
+    };
+    runtime_persistence_for_twin(twin)
+}
+
+/// Read the runtime-persistence policy from one Twin manifest.
+///
+/// This is shared by the runtime writer/loader and the Settings menu so the
+/// UI cannot advertise a policy different from the one that guards I/O.
+pub fn runtime_persistence_for_twin(twin: &lunco_twin::Twin) -> Result<bool, String> {
+    let Some(manifest) = twin.manifest.as_ref() else {
+        return Ok(false);
+    };
+    match manifest.setting(RUNTIME_PERSISTENCE_SETTING) {
+        None => Ok(false),
+        Some(lunco_twin::TwinSettingValue::Bool(enabled)) => Ok(*enabled),
+        Some(value) => Err(format!(
+            "`{RUNTIME_PERSISTENCE_SETTING}` must be a boolean, got {value:?}"
+        )),
     }
-}
-
-impl SettingsSection for RuntimePersistenceSettings {
-    const KEY: &'static str = "runtime_persistence";
 }
 
 /// `<twin-root>/.lunco/runtime/<scene-rel>` for a document whose file lives
 /// inside an open twin; `None` for untitled docs or files outside every open
 /// twin (nowhere stable to persist).
 fn runtime_path(workspace: &WorkspaceResource, doc_path: &Path) -> Option<PathBuf> {
-    workspace.twins().find_map(|(_, twin)| {
-        doc_path
-            .strip_prefix(&twin.root)
-            .ok()
-            .map(|rel| twin.root.join(RUNTIME_SUBDIR).join(rel))
-    })
+    let twin = twin_for_path(workspace, doc_path)?;
+    let rel = doc_path.strip_prefix(&twin.root).ok()?;
+    Some(twin.root.join(RUNTIME_SUBDIR).join(rel))
 }
 
 /// Resolve a document's runtime-overlay path from the workspace + the doc's
@@ -134,10 +165,20 @@ pub(crate) fn restore_doc_runtime(
     workspace: &WorkspaceResource,
     registry: &mut DocumentRegistry<UsdDocument>,
     doc: DocumentId,
-    enabled: bool,
 ) {
-    if !enabled {
+    let Some(doc_path) = registry
+        .host(doc)
+        .and_then(|host| host.document().origin().canonical_path())
+    else {
         return;
+    };
+    match runtime_persistence_enabled(workspace, doc_path) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            warn!("[usd-runtime] {error}");
+            return;
+        }
     }
     let Some(path) = doc_runtime_path(workspace, registry, doc) else {
         return;
@@ -181,15 +222,9 @@ pub(crate) fn on_doc_opened_load_runtime(
     trigger: On<DocumentOpened>,
     workspace: Option<Res<WorkspaceResource>>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    settings: Option<Res<RuntimePersistenceSettings>>,
 ) {
     let Some(workspace) = workspace else { return };
-    restore_doc_runtime(
-        &workspace,
-        &mut registry,
-        trigger.event().doc,
-        settings.is_some_and(|s| s.load),
-    );
+    restore_doc_runtime(&workspace, &mut registry, trigger.event().doc);
 }
 
 // TODO(#7 journal replay-on-open): today a reopened document's *current state* is
@@ -213,11 +248,7 @@ pub(crate) fn on_doc_changed_save_runtime(
     trigger: On<DocumentChanged>,
     workspace: Option<Res<WorkspaceResource>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    settings: Option<Res<RuntimePersistenceSettings>>,
 ) {
-    if !settings.is_none_or(|s| s.save) {
-        return;
-    }
     let doc = trigger.event().doc;
     let Some(workspace) = workspace else { return };
     let Some(host) = registry.host(doc) else {
@@ -226,6 +257,17 @@ pub(crate) fn on_doc_changed_save_runtime(
     let Some(path) = doc_runtime_path(&workspace, &registry, doc) else {
         return;
     };
+    let Some(doc_path) = host.document().origin().canonical_path() else {
+        return;
+    };
+    match runtime_persistence_enabled(&workspace, doc_path) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            warn!("[usd-runtime] {error}");
+            return;
+        }
+    }
     let runtime = host.document().runtime_data();
     if !runtime_has_content(runtime) {
         return; // no spawns / moves — don't litter `.lunco` with empty overlays
@@ -260,17 +302,60 @@ mod tests {
     }
 
     #[test]
-    fn runtime_persistence_saves_by_default_but_does_not_load() {
-        let settings = RuntimePersistenceSettings::default();
-        assert!(!settings.load);
-        assert!(settings.save);
+    fn runtime_persistence_is_off_without_twin_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(open_twin(dir.path()));
+        let scene = dir.path().join("scene.usda");
+        assert_eq!(runtime_persistence_enabled(&ws, &scene), Ok(false));
+    }
+
+    fn open_twin_with_setting(p: &Path, value: lunco_twin::TwinSettingValue) -> lunco_twin::Twin {
+        let mut manifest = lunco_twin::TwinManifest::new("runtime persistence test");
+        manifest
+            .set_setting(RUNTIME_PERSISTENCE_SETTING, value)
+            .unwrap();
+        manifest
+            .write(&p.join(lunco_twin::MANIFEST_FILENAME))
+            .unwrap();
+        match lunco_twin::TwinMode::open(p).unwrap() {
+            lunco_twin::TwinMode::Twin(twin) => twin,
+            other => panic!("expected manifest-backed Twin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_persistence_requires_a_boolean_twin_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let twin =
+            open_twin_with_setting(dir.path(), lunco_twin::TwinSettingValue::Text("yes".into()));
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(twin);
+        let error = runtime_persistence_enabled(&ws, &dir.path().join("scene.usda"))
+            .expect_err("malformed setting must be visible");
+        assert!(error.contains("must be a boolean"));
+    }
+
+    #[test]
+    fn runtime_persistence_is_enabled_only_by_the_twin_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let twin = open_twin_with_setting(dir.path(), lunco_twin::TwinSettingValue::Bool(true));
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(twin);
+        assert_eq!(
+            runtime_persistence_enabled(&ws, &dir.path().join("scene.usda")),
+            Ok(true)
+        );
     }
 
     #[test]
     fn corrupt_runtime_overlay_is_ignored_when_loading_is_enabled() {
         let dir = tempfile::tempdir().unwrap();
         let mut ws = WorkspaceResource::new();
-        ws.add_twin(open_twin(dir.path()));
+        ws.add_twin(open_twin_with_setting(
+            dir.path(),
+            lunco_twin::TwinSettingValue::Bool(true),
+        ));
         let scene_abs = dir.path().join("scene.usda");
         std::fs::write(&scene_abs, TINY).unwrap();
         let path = dir.path().join(".lunco/runtime/scene.usda");
@@ -278,7 +363,44 @@ mod tests {
 
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
-        restore_doc_runtime(&ws, &mut registry, doc, true);
+        restore_doc_runtime(&ws, &mut registry, doc);
+        assert!(!runtime_has_content(
+            registry.host(doc).unwrap().document().runtime_data()
+        ));
+    }
+
+    #[test]
+    fn runtime_overlay_is_ignored_without_twin_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(open_twin(dir.path()));
+        let scene_abs = dir.path().join("scene.usda");
+        std::fs::write(&scene_abs, TINY).unwrap();
+
+        let mut source = UsdDocument::with_origin(
+            DocumentId::new(11),
+            TINY,
+            DocumentOrigin::writable_file(scene_abs.clone()),
+        );
+        source
+            .apply(UsdOp::AddPrim {
+                edit_target: LayerId::runtime(),
+                parent_path: "/World".into(),
+                name: "rover_1".into(),
+                type_name: None,
+                reference: Some("vessels/rovers/skid_rover.usda".into()),
+            })
+            .unwrap();
+        let text = lunco_usd_bevy::author::data_to_usda(source.runtime_data()).unwrap();
+        write_bytes(
+            &dir.path().join(".lunco/runtime/scene.usda"),
+            text.as_bytes(),
+        )
+        .unwrap();
+
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
+        restore_doc_runtime(&ws, &mut registry, doc);
         assert!(!runtime_has_content(
             registry.host(doc).unwrap().document().runtime_data()
         ));
@@ -370,7 +492,10 @@ mod tests {
         // on twin open").
         let dir = tempfile::tempdir().unwrap();
         let mut ws = WorkspaceResource::new();
-        ws.add_twin(open_twin(dir.path()));
+        ws.add_twin(open_twin_with_setting(
+            dir.path(),
+            lunco_twin::TwinSettingValue::Bool(true),
+        ));
 
         let scene_abs = dir.path().join("scene.usda");
         std::fs::write(&scene_abs, TINY).unwrap();
@@ -399,7 +524,7 @@ mod tests {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
 
-        restore_doc_runtime(&ws, &mut registry, doc, true);
+        restore_doc_runtime(&ws, &mut registry, doc);
         let host = registry.host(doc).unwrap();
         assert!(
             runtime_has_content(host.document().runtime_data()),
@@ -407,7 +532,7 @@ mod tests {
         );
         let gen_after_first = host.document().generation();
 
-        restore_doc_runtime(&ws, &mut registry, doc, true);
+        restore_doc_runtime(&ws, &mut registry, doc);
         assert_eq!(
             registry.host(doc).unwrap().document().generation(),
             gen_after_first,

@@ -62,6 +62,12 @@ values are visible errors, and the derived tree is cleared on active
 `TwinClosed`; do not cache this choice in a global UI resource or keep it across
 Twin replacement.
 
+Generated USD runtime scene edits use the same Twin-owned settings boundary:
+`usd.runtime_persistence` is one boolean opt-in for both reading and writing
+the `.lunco/runtime` cache. The Settings menu reads the USD owner's policy and
+emits `SetTwinSetting`; it must not register a global autosave section or
+invent a second persistence path.
+
 Camera labels are a shared projection owned by
 `lunco-usd-bevy::camera_switch::camera_display_labels`. Reuse it in workbench
 camera lists, the USD/entity trees, and Inspector; keep the full USD path as

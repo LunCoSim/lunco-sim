@@ -115,7 +115,7 @@ more structured experiences without ceremony:
 |------|---------------|--------------|----------------|
 | **Single File** (orphan) | `balloon.mo`, `scene.usda`, ... | Editor for that one file. Save in place. | No library / file tree. No cross-document tooling. |
 | **Folder** (VS Code–like) | `my_models/` (no `twin.toml`) | File browser for the folder. Edit any file in tabs. | No Twin-level manifest. No registered external libraries. No automatic cross-reference rewriting. |
-| **Twin** (full project) | `my_base/` with `twin.toml` | Library browser with categorization, cross-reference tracking, app-aware rename with preview, autosave, external library linking, workspace presets, environment config, reference-repair flow. | *(the full experience)* |
+| **Twin** (full project) | `my_base/` with `twin.toml` | Library browser with categorization, cross-reference tracking, app-aware rename with preview, explicit-save workflow, external library linking, workspace presets, environment config, reference-repair flow. | *(the full experience)* |
 
 | VS Code analog | LunCoSim mode |
 |----------------|---------------|
@@ -824,8 +824,11 @@ No data loss from crashes. Matches VS Code's `Backups` behavior.
 
 ### Autosave
 
-- **In a Twin:** autosave after ~5 s of idle. Matches VS Code / IntelliJ.
-  Session state saves more aggressively.
+- **In a Twin:** scene edits do not autosave by default. Authored document
+  changes still use explicit Save; generated USD runtime spawns and moves use
+  the Twin setting `[settings] usd.runtime_persistence = true` when the user
+  explicitly opts into reading and writing the `.lunco/runtime` cache.
+  Session-only state remains disposable.
 - **Orphan:** autosave only after the first explicit save (so the user
   controls initial location). After that, same ~5 s idle rule.
 
