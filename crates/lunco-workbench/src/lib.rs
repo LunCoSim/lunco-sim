@@ -5553,8 +5553,16 @@ fn status_message_summary(message: &str) -> &str {
         .unwrap_or(message)
 }
 
+const STATUS_POPUP_VIEWPORT_MARGIN: f32 = 24.0;
+const STATUS_POPUP_VIEWPORT_RATIO: f32 = 0.5;
+const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
+const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
+
 fn status_popup_width(content_width: f32) -> f32 {
-    (content_width - 24.0).max(0.0)
+    let available = (content_width - STATUS_POPUP_VIEWPORT_MARGIN).max(0.0);
+    (available * STATUS_POPUP_VIEWPORT_RATIO)
+        .clamp(STATUS_POPUP_MIN_WIDTH, STATUS_POPUP_MAX_WIDTH)
+        .min(available)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6503,11 +6511,12 @@ mod tests {
     }
 
     #[test]
-    fn status_popup_width_uses_the_parent_viewport_with_margin() {
+    fn status_popup_width_is_compact_but_uses_available_viewport() {
         assert_eq!(status_popup_width(200.0), 176.0);
         assert_eq!(status_popup_width(320.0), 296.0);
-        assert_eq!(status_popup_width(1024.0), 1000.0);
-        assert_eq!(status_popup_width(1920.0), 1896.0);
+        assert_eq!(status_popup_width(1024.0), 500.0);
+        assert_eq!(status_popup_width(1920.0), 948.0);
+        assert_eq!(status_popup_width(4000.0), STATUS_POPUP_MAX_WIDTH);
     }
 
     #[test]
