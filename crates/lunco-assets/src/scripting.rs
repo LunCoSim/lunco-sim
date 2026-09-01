@@ -213,7 +213,7 @@ mod tests {
         }
         // Known built-ins are present (guards a broken move / path).
         let tool_names: Vec<_> = tool_libraries().into_iter().map(|(n, _)| n).collect();
-        for t in ["formation", "survey", "debug_viz"] {
+        for t in ["assembly_edit", "formation", "survey", "debug_viz"] {
             assert!(tool_names.contains(&t), "tool {t} missing: {tool_names:?}");
         }
         assert!(example("mission_plan").is_some());

@@ -366,6 +366,7 @@ mod tests {
         register_builtins();
         let names = lunco_tools::names();
         for expected in [
+            "assembly_edit",
             "formation",
             "survey",
             "debug_viz",
