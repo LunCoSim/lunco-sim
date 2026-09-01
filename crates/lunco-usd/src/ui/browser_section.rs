@@ -22,7 +22,10 @@ use lunco_usd_bevy::UsdData;
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::ui::viewport::{OpenUsdPreview, EDITOR_PREVIEW_ID, USD_VIEWPORT_PANEL_ID};
 use crate::ui::USD_CONNECTION_CANVAS_PANEL_ID;
-use crate::LayerId;
+use crate::{
+    CommitUsdProposal, LayerId, ReviewUsdProposal, UsdProposalId, UsdProposalReviewAction,
+    UsdProposalState, UsdProposalSummary,
+};
 
 /// Twin navigation entry for the composed USD connection graph.
 ///
@@ -142,10 +145,13 @@ impl BrowserSection for UsdSceneSection {
         // immutable borrows the closures hold; we batch one click and
         // dispatch after the rows finish painting.
         let mut focus_doc: Option<DocumentId> = None;
+        let mut proposal_actions = Vec::new();
 
         for row in &rows {
             let header_id = ui.make_persistent_id(("usd-stage", &row.salt));
             let writable_badge = if row.writable { "" } else { "  [read-only]" };
+            let dirty_badge = if row.dirty { "  [modified]" } else { "" };
+            let review_badge = review_badge(&row.edit_proposals);
             let viewport_doc = row.doc_id;
             let default_open = row.default_open;
 
@@ -162,7 +168,10 @@ impl BrowserSection for UsdSceneSection {
                 header_id,
                 default_open,
                 |ui| {
-                    let label = format!("{}{}", row.name, writable_badge);
+                    let label = format!(
+                        "{}{}{}{}",
+                        row.name, writable_badge, dirty_badge, review_badge
+                    );
                     if viewport_doc.is_none() {
                         ui.label(label);
                         return false;
@@ -175,6 +184,12 @@ impl BrowserSection for UsdSceneSection {
                 },
                 |ui| {
                     body_clicked = render_stage_body(ui, row, error_color, &query);
+                    render_proposal_review(
+                        ui,
+                        &row.edit_proposals,
+                        error_color,
+                        &mut proposal_actions,
+                    );
                 },
             );
 
@@ -196,6 +211,123 @@ impl BrowserSection for UsdSceneSection {
                 id: USD_VIEWPORT_PANEL_ID.0.to_string(),
             });
         }
+        for action in proposal_actions {
+            match action {
+                ProposalAction::Review { proposal, action } => {
+                    ctx.trigger(ReviewUsdProposal { proposal, action });
+                }
+                ProposalAction::Commit { proposal } => {
+                    ctx.trigger(CommitUsdProposal { proposal });
+                }
+            }
+        }
+    }
+}
+
+fn review_badge(proposals: &[UsdProposalSummary]) -> String {
+    let conflicts = proposals
+        .iter()
+        .filter(|proposal| proposal.state == UsdProposalState::Conflict)
+        .count();
+    let pending = proposals
+        .iter()
+        .filter(|proposal| proposal.state == UsdProposalState::Pending)
+        .count();
+    let muted = proposals
+        .iter()
+        .filter(|proposal| proposal.state == UsdProposalState::Muted)
+        .count();
+    if conflicts != 0 {
+        format!("  [conflict {conflicts}]")
+    } else if pending != 0 {
+        format!("  [review {pending}]")
+    } else if muted != 0 {
+        format!("  [muted {muted}]")
+    } else {
+        String::new()
+    }
+}
+
+enum ProposalAction {
+    Review {
+        proposal: UsdProposalId,
+        action: UsdProposalReviewAction,
+    },
+    Commit {
+        proposal: UsdProposalId,
+    },
+}
+
+fn render_proposal_review(
+    ui: &mut egui::Ui,
+    proposals: &[UsdProposalSummary],
+    error_color: egui::Color32,
+    actions: &mut Vec<ProposalAction>,
+) {
+    if proposals.is_empty() {
+        return;
+    }
+
+    ui.separator();
+    ui.label("Assembly edit review");
+    for proposal in proposals {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "#{} · {} · {}",
+                proposal.id.0,
+                proposal.scope.as_str(),
+                proposal.label
+            ));
+            ui.weak(format!("{} operation(s)", proposal.operation_count));
+        });
+        ui.small(format!("Paths: {}", proposal.affected_paths.join(", ")));
+        if !proposal.diagnostics.is_empty() {
+            ui.colored_label(error_color, proposal.diagnostics.join("; "));
+        }
+        ui.horizontal(|ui| match proposal.state {
+            UsdProposalState::Pending => {
+                if ui.button("Commit").clicked() {
+                    actions.push(ProposalAction::Commit {
+                        proposal: proposal.id,
+                    });
+                }
+                if ui.button("Mute").clicked() {
+                    actions.push(ProposalAction::Review {
+                        proposal: proposal.id,
+                        action: UsdProposalReviewAction::Mute,
+                    });
+                }
+                if ui.button("Reject").clicked() {
+                    actions.push(ProposalAction::Review {
+                        proposal: proposal.id,
+                        action: UsdProposalReviewAction::Reject,
+                    });
+                }
+            }
+            UsdProposalState::Muted => {
+                if ui.button("Unmute").clicked() {
+                    actions.push(ProposalAction::Review {
+                        proposal: proposal.id,
+                        action: UsdProposalReviewAction::Unmute,
+                    });
+                }
+                if ui.button("Reject").clicked() {
+                    actions.push(ProposalAction::Review {
+                        proposal: proposal.id,
+                        action: UsdProposalReviewAction::Reject,
+                    });
+                }
+            }
+            UsdProposalState::Conflict => {
+                ui.colored_label(error_color, "Conflict — create a fresh proposal");
+                if ui.button("Reject").clicked() {
+                    actions.push(ProposalAction::Review {
+                        proposal: proposal.id,
+                        action: UsdProposalReviewAction::Reject,
+                    });
+                }
+            }
+        });
     }
 }
 

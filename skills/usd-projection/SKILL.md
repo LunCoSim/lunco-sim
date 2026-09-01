@@ -96,14 +96,23 @@ Agents and editor automation should use the built-in `assembly_edit` Rhai
 library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
 `ResolveUsdTarget`, `SyncUsdDocument`, `ApplyUsdOp`/`ApplyUsdOps` (including
 `SetTimeSample` and `RemoveTimeSample` for keyframes),
-`AttachComponent`, `DetachComponent`, and `UndoDocument`/`RedoDocument`; it
-does not create another document registry, resolver, or USDA writer. `open`
+`AttachComponent`, `DetachComponent`, `UndoDocument`/`RedoDocument`,
+`CreateUsdProposal`, `InspectUsdEditSession`, `ReviewUsdProposal`, and
+`CommitUsdProposal`; it does not create another document registry, resolver,
+USDA writer, or operation log. `open`
 returns the normal asynchronous command acknowledgement and callers discover
 the resulting id through `ListOpenDocuments`. Read helpers require an explicit
 `doc`; authored helpers require `doc`, an edit target, and a USD path. Their
 optional `parent_gen` is the existing stale-write precondition, and `batch`,
-`transform`, or a keyframe change land as typed journal/undo operations. Use the tool catalog and
-completion query to discover the source and signatures.
+`transform`, or a keyframe change land as typed journal/undo operations. A
+proposal requires a generation and explicit `SourceAsset`/`Assembly`/
+`InstanceOverride` scope, validates without mutating the document, and is
+visible through `InspectUsdEditSession`. Mute/unmute and reject are review-only;
+commit rechecks generation, layer revision, origin, file watermark, scope, and
+typed validation before using the ordinary grouped journal/undo path. A
+conflict requires a fresh proposal; no automatic rebase or overwrite exists.
+Use the tool catalog and completion query to discover the source and
+signatures.
 
 A scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the

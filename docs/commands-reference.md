@@ -718,6 +718,51 @@ Read one explicit USD document and optionally one composed local prim path.
 | `doc` | `u64` |  Required open USD document id. |
 | `path` | `String` |  Optional absolute USD prim path. |
 
+#### `InspectUsdEditSession` (query)
+
+Inspect pending Assembly Editor proposals for one explicit USD document. The
+response includes typed operations, explicit scope, review state,
+generation/layer-origin preconditions, affected paths, diagnostics, and
+external-file staleness.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `u64` | Required open USD document id. |
+
+#### `CreateUsdProposal`
+
+Validate and queue a typed Assembly Editor plan without mutating authored USD.
+The plan is validated against a cloned document and remains outside the
+journal until committed.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` | Target USD document. |
+| `scope` | `UsdEditScope` | `SourceAsset`, `Assembly`, or `InstanceOverride`. |
+| `label` | `String` | Human-readable intent and eventual change-set label. |
+| `parent_gen` | `u64` | Required document generation inspected by the caller. |
+| `ops` | `Vec<UsdOp>` | Complete typed root-layer operation plan. |
+
+#### `ReviewUsdProposal`
+
+Change proposal review state without changing authored USD.
+
+| Field | Type | Description |
+|---|---|---|
+| `proposal` | `UsdProposalId` | Proposal returned by `CreateUsdProposal`. |
+| `action` | `UsdProposalReviewAction` | `Mute`, `Unmute`, or `Reject`. |
+
+#### `CommitUsdProposal`
+
+Revalidate and commit one pending proposal as one ordinary USD journal change
+set and document undo unit. Generation, layer revision, origin, file
+watermark, scope, and typed operations are checked again; a mismatch remains a
+visible conflict and is never rebased or overwritten.
+
+| Field | Type | Description |
+|---|---|---|
+| `proposal` | `UsdProposalId` | Proposal returned by `CreateUsdProposal`. |
+
 #### `ResolveUsdTarget` (query)
 
 Resolve one explicit prim path for an assembly edit. Local paths use the
