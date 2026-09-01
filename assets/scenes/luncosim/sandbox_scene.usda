@@ -119,13 +119,8 @@ def Xform "SandboxScene" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                # Keep the star field subordinate to the physical Sun.  The
-                # camera is HDR and blooms bright emitters; overdriving these
-                # additive values makes ordinary stars compete with the Sun.
-                float inputs:brightness = 0.006
-                float inputs:band_intensity = 0.05
-                float inputs:point_size = 0.25
-                float inputs:glow = 0.0
+                # The WGSL defaults are the single sky presentation contract;
+                # this scene intentionally carries no per-scene sky overrides.
                 token outputs:surface
             }
         }
