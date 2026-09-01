@@ -14,6 +14,7 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
+use bevy::math::DQuat;
 use bevy::prelude::Transform;
 use openusd::ar::ResolvedPath;
 use openusd::sdf::{FieldKey, Path as SdfPath, Value};
@@ -186,6 +187,59 @@ pub trait UsdRead {
             }
         }
         None
+    }
+
+    /// The authored USD quaternion at default time, normalized into Bevy's
+    /// component order and `f64` precision. USD stores quaternion components as
+    /// `(w, x, y, z)` while Bevy exposes `(x, y, z, w)`; keeping that conversion
+    /// here means composed readers and editor consumers cannot each get the
+    /// order wrong. The stage-to-canonical basis conversion remains the
+    /// caller's responsibility because a raw stage read is also needed by
+    /// authoring and diagnostics.
+    fn quat_d(&self, prim: &SdfPath, name: &str) -> Option<DQuat> {
+        match self.attr_value(prim, name)? {
+            Value::Quatf(q) => Some(DQuat::from_xyzw(
+                q.x as f64, q.y as f64, q.z as f64, q.w as f64,
+            )),
+            Value::Quatd(q) => Some(DQuat::from_xyzw(q.x, q.y, q.z, q.w)),
+            Value::Quath(q) => Some(DQuat::from_xyzw(
+                q.x.to_f32() as f64,
+                q.y.to_f32() as f64,
+                q.z.to_f32() as f64,
+                q.w.to_f32() as f64,
+            )),
+            _ => None,
+        }
+    }
+
+    /// The composed USD type name of an attribute value. This is intentionally
+    /// derived from the resolved value rather than a caller-maintained table,
+    /// so an editor can preserve an authored `float3`/`double3` or
+    /// `quatf`/`quatd` channel when creating a time sample.
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        let type_name = match self.attr_value(prim, name)? {
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Int64(_) => "int64",
+            Value::Float(_) => "float",
+            Value::Double(_) => "double",
+            Value::Vec3f(_) => "float3",
+            Value::Vec3d(_) => "double3",
+            Value::Quatf(_) => "quatf",
+            Value::Quatd(_) => "quatd",
+            Value::Quath(_) => "quath",
+            Value::Token(_) => "token",
+            Value::String(_) => "string",
+            Value::AssetPath(_) => "asset",
+            Value::FloatVec(_) => "float[]",
+            Value::DoubleVec(_) => "double[]",
+            Value::Vec3fVec(_) => "float3[]",
+            Value::Vec3dVec(_) => "double3[]",
+            Value::TokenVec(_) => "token[]",
+            Value::StringVec(_) => "string[]",
+            _ => return None,
+        };
+        Some(type_name.to_owned())
     }
 
     /// The text of a `string`- **or** `token`-typed attribute.
@@ -565,6 +619,8 @@ pub trait UsdReadObject {
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
     fn points3(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 3]>;
     fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]>;
+    fn quat_d(&self, prim: &SdfPath, name: &str) -> Option<DQuat>;
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn text(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn asset(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64>;
@@ -629,6 +685,14 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
 
     fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
         UsdRead::vec3_f64(self, prim, name)
+    }
+
+    fn quat_d(&self, prim: &SdfPath, name: &str) -> Option<DQuat> {
+        UsdRead::quat_d(self, prim, name)
+    }
+
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        UsdRead::attr_type_name(self, prim, name)
     }
 
     fn text(&self, prim: &SdfPath, name: &str) -> Option<String> {

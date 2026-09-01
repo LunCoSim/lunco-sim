@@ -132,11 +132,15 @@ the side panels for tabbed dock trees.
    celestial body, FPS, and the latest status event. Warnings and errors
    identify their level and source in the strip; the history popup keeps
    events ordered and distinct in one responsive level/source/message/
-   progress row; diagnostic rows expand or collapse their complete diagnostics
-   when the row is clicked and expose that affordance through the row cursor and
-   tooltip, while attention rows retain their typed action control. Active
-   progress entries are included from the same StatusBus reader. Warning and
-   error rows copy the unmodified message without depending on the window width;
+   progress row inside a compact popup sized to roughly half the parent
+   window (clamped to 420–960 logical px); each message column uses the
+   remaining inner width after present progress and action controls; diagnostic
+   rows expand or collapse their complete diagnostics when the row is clicked
+   and expose that affordance
+   through the row cursor and tooltip, while attention rows retain their typed
+   action control. Active progress entries are included from the same StatusBus
+   reader. Warning and error rows copy the unmodified message without depending
+   on the window width;
    attention rows emit the owning typed action.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
@@ -280,7 +284,7 @@ are just the defaults; everything is editable.
 Registration controls whether a perspective can be activated by the typed API
 or a guided tutorial. `Perspective::show_in_switcher()` controls only whether
 it appears in the default title-bar switcher. Luncosim keeps `terrain_sculpt`
-and `assembly` registered for their authored flows, but hides them from
+and `editor` registered for their authored flows, but hides them from
 everyday navigation; this does not remove or duplicate either authoring mode.
 
 ### Guided presentation ownership

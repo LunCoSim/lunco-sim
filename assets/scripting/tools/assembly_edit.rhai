@@ -17,7 +17,7 @@ fn open(path) {
     cmd("OpenFile", #{ path: path })
 }
 
-/// Open one explicit isolated Assembly preview. `preview` identifies the
+/// Open one explicit isolated Editor preview. `preview` identifies the
 /// session lease, so another document can remain rendered independently.
 fn preview_open(preview, doc, edit_target) {
     cmd("OpenUsdPreview", #{
@@ -27,12 +27,12 @@ fn preview_open(preview, doc, edit_target) {
     })
 }
 
-/// Focus an existing Assembly preview lease in the desktop USD dock.
+/// Focus an existing Editor preview lease in the desktop USD dock.
 fn preview_focus(preview) {
     cmd("FocusUsdPreview", #{ preview: preview })
 }
 
-/// Close one Assembly preview lease and release its presentation resources.
+/// Close one Editor preview lease and release its presentation resources.
 fn preview_close(preview) {
     cmd("CloseUsdPreview", #{ preview: preview })
 }
@@ -109,7 +109,7 @@ fn transform(doc, edit_target, path, translation, rotation, parent_gen) {
     cmd("ApplyUsdOps", #{
         doc: doc,
         parent_gen: parent_gen,
-        label: "Assembly transform",
+        label: "Editor transform",
         ops: ops,
     })
 }
@@ -125,6 +125,39 @@ fn attribute(doc, edit_target, path, name, type_name, value, parent_gen) {
             name: name,
             type_name: type_name,
             value: value,
+        }},
+    })
+}
+
+/// Author one USD time sample through the existing reversible keyframe op.
+/// `time` is a USD time code and `value` is a literal in `type_name`'s USD
+/// syntax. For xform channels, the document owner also maintains
+/// `xformOpOrder` when the first channel is keyed.
+fn keyframe(doc, edit_target, path, name, type_name, time, value, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ SetTimeSample: #{
+            edit_target: edit_target,
+            path: path,
+            name: name,
+            type_name: type_name,
+            time: time,
+            value: value,
+        }},
+    })
+}
+
+/// Remove one exact USD time sample through the existing reversible keyframe op.
+fn remove_keyframe(doc, edit_target, path, name, time, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ RemoveTimeSample: #{
+            edit_target: edit_target,
+            path: path,
+            name: name,
+            time: time,
         }},
     })
 }

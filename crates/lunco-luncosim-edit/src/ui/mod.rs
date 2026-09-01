@@ -41,6 +41,8 @@ pub mod terrain_tools;
 /// Bounded, terrain-conforming motion trails for topology-derived vehicles.
 pub mod trail;
 pub use trail::VehicleTrailPlugin;
+pub mod usd_animation;
+pub mod usd_joint;
 pub mod usd_mount;
 pub mod usd_params;
 pub mod usd_prim_tree;
@@ -152,10 +154,31 @@ pub fn usd_selection_view_changed(
     selection.is_changed() || target.is_changed() || revision.is_changed()
 }
 
+/// Return whether an entity belongs to the focused Editor preview subtree.
+/// The preview root itself is part of that scope; all other entities must be
+/// descendants through Bevy's authoritative hierarchy.
+pub(crate) fn is_editor_preview_entity(
+    entity: Entity,
+    root: Entity,
+    parents: &Query<&ChildOf>,
+) -> bool {
+    if entity == root {
+        return true;
+    }
+    let mut current = entity;
+    while let Ok(parent) = parents.get(current) {
+        current = parent.parent();
+        if current == root {
+            return true;
+        }
+    }
+    false
+}
+
 /// A document switch changes the meaning of every entity-backed editor target.
 /// Clear those transient selections at the explicit document boundary so the
-/// Assembly Inspector cannot display or author against the previous file.
-fn clear_selection_on_assembly_document_switch(
+/// Editor Inspector cannot display or author against the previous file.
+fn clear_selection_on_editor_document_switch(
     viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
@@ -297,7 +320,7 @@ impl Plugin for SceneEditUiPlugin {
         // the gate.
         app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
-        app.add_systems(Update, clear_selection_on_assembly_document_switch);
+        app.add_systems(Update, clear_selection_on_editor_document_switch);
 
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();
@@ -441,9 +464,9 @@ impl Plugin for SceneEditUiPlugin {
                     has_tour: false,
                 },
             )
-            .register_perspective(AssemblyPerspective)
+            .register_perspective(EditorPerspective)
             .register_perspective_help(
-                PerspectiveId("assembly"),
+                PerspectiveId("editor"),
                 lunco_workbench::PerspectiveHelp {
                     description: "Assemble and edit a USD document. Choose the \
                                   document in the Twin Browser, navigate its structure, \
@@ -543,7 +566,7 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<connection_canvas::UsdCanvasState>();
         app.add_view_model(
             connection_canvas::produce_usd_canvas,
-            connection_canvas::assembly_canvas_changed,
+            connection_canvas::editor_canvas_changed,
         );
 
         // Autopilot graph: a small O(1) read of the selected vessel's derived
@@ -559,7 +582,7 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<usd_prim_tree::UsdPrimTreeView>();
         app.add_view_model(
             usd_prim_tree::produce_usd_prim_tree,
-            usd_prim_tree::assembly_prim_tree_changed,
+            usd_prim_tree::editor_prim_tree_changed,
         );
 
         // USD parameter sliders: harvest the selected prim's customData-ranged
@@ -587,6 +610,20 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<usd_mount::UsdMountView>();
         app.add_view_model(
             usd_mount::produce_usd_mount_view,
+            usd_selection_view_changed,
+        );
+
+        // Standard USD Physics joint authoring: the producer reads the
+        // composed joint once per selection/stage revision, while the Inspector
+        // dispatches the same typed USD operations as Rhai and the API.
+        app.init_resource::<usd_joint::UsdJointView>();
+        app.add_view_model(
+            usd_joint::produce_usd_joint_view,
+            usd_selection_view_changed,
+        );
+        app.init_resource::<usd_animation::UsdAnimationView>();
+        app.add_view_model(
+            usd_animation::produce_usd_animation_view,
             usd_selection_view_changed,
         );
 
@@ -830,9 +867,9 @@ impl Perspective for BuildPerspective {
     }
 }
 
-/// Assembly mode — edit one explicit USD assembly document.
+/// Editor mode — edit one explicit USD assembly document.
 ///
-/// Distinct from Build (which edits the live simulation scene): Assembly leads
+/// Distinct from Build (which edits the live simulation scene): Editor leads
 /// with the selected document's USD structure and isolated USD preview. The
 /// document is selected explicitly in the Twin Browser; the preview subtree,
 /// prim tree, Inspector, and all authoring commands then share that document
@@ -841,14 +878,14 @@ impl Perspective for BuildPerspective {
 /// The Rhai editor lives beside this build surface. The USD connection canvas
 /// is opened from the Connections entry in the Lunica/Twin navigation so the
 /// graph has one discoverable home instead of another top-level perspective.
-pub struct AssemblyPerspective;
+pub struct EditorPerspective;
 
-impl Perspective for AssemblyPerspective {
+impl Perspective for EditorPerspective {
     fn id(&self) -> PerspectiveId {
-        PerspectiveId("assembly")
+        PerspectiveId("editor")
     }
     fn title(&self) -> String {
-        "Assembly".into()
+        "Editor".into()
     }
     fn show_in_switcher(&self) -> bool {
         false
@@ -906,5 +943,18 @@ impl Perspective for TerrainPerspective {
             PanelId("entity_list"),
         ]);
         layout.set_bottom(None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_perspective_uses_editor_identity() {
+        let perspective = EditorPerspective;
+
+        assert_eq!(perspective.id(), PerspectiveId("editor"));
+        assert_eq!(perspective.title(), "Editor");
     }
 }

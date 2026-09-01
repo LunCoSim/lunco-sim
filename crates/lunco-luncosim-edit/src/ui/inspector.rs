@@ -1246,6 +1246,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     //    its placement + joint anchor from the mount frames (doc 48 §3.1). ──
     mount_section(ui, ctx, entity);
 
+    // Authored USD Physics joint facts are distinct from the live joint
+    // setpoint readout below. The editor writes bodies, frames, limits, and
+    // drives through the same journaled USD operation surface as Rhai/API.
+    crate::ui::usd_joint::authored_joint_section(ui, ctx, entity);
+    crate::ui::usd_animation::authored_animation_section(ui, ctx, entity);
+
     // ── Transform component ──────────────────────────────────────
     // The sliders author a **document op**, they do not poke ECS: a committed
     // translation edit fires `MoveEntity`, whose observers seat the body and author

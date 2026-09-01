@@ -1,7 +1,7 @@
 //! USD **prim tree** panel — the scene's authoring hierarchy.
 //!
 //! Where the Entity list (`entity_list.rs`) shows the simulation ECS, this shows
-//! the faithful **USD prim hierarchy** of the explicitly active Assembly
+//! the faithful **USD prim hierarchy** of the explicitly active Editor
 //! document — `/Assembly → Chassis → Wheel_FL`. It is reconstructed from the
 //! document's isolated preview projection; intermediate xforms that carry no
 //! entity of their own are synthesized from the path so the structure is complete.
@@ -34,7 +34,7 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
 /// Tree-node identity: the composed USD prim path in the explicitly active
-/// Assembly document. Document scope comes from [`UsdViewportState`], so two
+/// Editor document. Document scope comes from [`UsdViewportState`], so two
 /// open files can contain the same paths without colliding.
 type NodeKey = String;
 
@@ -74,10 +74,10 @@ impl UsdPrimTreeView {
     }
 }
 
-/// Wake the Assembly tree only when its explicit document projection or the
+/// Wake the Editor tree only when its explicit document projection or the
 /// composed USD stage changes. There is no meaningful tree when the preview
 /// has no selected document.
-pub fn assembly_prim_tree_changed(
+pub fn editor_prim_tree_changed(
     viewport: Option<Res<UsdViewportState>>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
 ) -> bool {
@@ -110,25 +110,13 @@ pub fn produce_usd_prim_tree(
     };
     let stage_id = handle.id();
 
-    // The focused preview owns the editor stage. Restrict the entity mapping
-    // to that preview subtree: a Twin scene can share the same stage handle,
-    // but its live entities are not Assembly-editor entities.
-    let is_preview_entity = |entity: Entity| {
-        let mut current = entity;
-        while let Ok(parent) = q_parents.get(current) {
-            current = parent.parent();
-            if current == preview_root {
-                return true;
-            }
-        }
-        false
-    };
-
     // The set of explicit document paths drives the change gate. The preview
     // root is the document scope; the live simulation is intentionally absent.
     let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
     for (e, p, _) in q.iter() {
-        if p.stage_handle.id() == stage_id && is_preview_entity(e) {
+        if p.stage_handle.id() == stage_id
+            && crate::ui::is_editor_preview_entity(e, preview_root, &q_parents)
+        {
             entity_of.insert(p.path.clone(), e);
         }
     }
@@ -136,7 +124,9 @@ pub fn produce_usd_prim_tree(
     let camera_identities: Vec<(Entity, String)> = q
         .iter()
         .filter(|(entity, path, is_camera)| {
-            *is_camera && path.stage_handle.id() == stage_id && is_preview_entity(*entity)
+            *is_camera
+                && path.stage_handle.id() == stage_id
+                && crate::ui::is_editor_preview_entity(*entity, preview_root, &q_parents)
         })
         .map(|(entity, path, _)| (entity, path.path.clone()))
         .collect();

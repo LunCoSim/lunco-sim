@@ -71,7 +71,7 @@ or direct filesystem reads to this path. After admission,
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
 
-The Assembly editor is document-scoped. `DocumentId` from the existing
+The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
 Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
 lease and can later use `FocusUsdPreview` or `CloseUsdPreview`. The isolated
@@ -94,14 +94,15 @@ replacement for OpenUSD PCP resolution.
 
 Agents and editor automation should use the built-in `assembly_edit` Rhai
 library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
-`ResolveUsdTarget`, `SyncUsdDocument`, `ApplyUsdOp`/`ApplyUsdOps`,
+`ResolveUsdTarget`, `SyncUsdDocument`, `ApplyUsdOp`/`ApplyUsdOps` (including
+`SetTimeSample` and `RemoveTimeSample` for keyframes),
 `AttachComponent`, `DetachComponent`, and `UndoDocument`/`RedoDocument`; it
 does not create another document registry, resolver, or USDA writer. `open`
 returns the normal asynchronous command acknowledgement and callers discover
 the resulting id through `ListOpenDocuments`. Read helpers require an explicit
 `doc`; authored helpers require `doc`, an edit target, and a USD path. Their
-optional `parent_gen` is the existing stale-write precondition, and `batch` or
-`transform` land as one typed journal/undo group. Use the tool catalog and
+optional `parent_gen` is the existing stale-write precondition, and `batch`,
+`transform`, or a keyframe change land as typed journal/undo operations. Use the tool catalog and
 completion query to discover the source and signatures.
 
 A scene loaded from disk and a prim authored at runtime therefore produce
