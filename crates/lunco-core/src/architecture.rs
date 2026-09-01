@@ -459,7 +459,8 @@ pub struct PhysicsStateReady;
 /// The input *vocabulary is data* — the keys present here declare exactly which
 /// input ports this entity accepts, so the port backend stays strict (an
 /// undeclared name is rejected → still reported as a dangling wire). A rover may
-/// expose `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, and a
+/// expose `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up` plus the
+/// normalized `speed_boost` modifier, and a
 /// factory `start_cycle`/`target_rate`. Inputs are scalar `f64`s: an intent such
 /// as `Action` or `Thrust` normally produces a binary `0.0`/`1.0` input, while analog control
 /// can supply any normalized or physical value. The keys are seeded from the vessel's

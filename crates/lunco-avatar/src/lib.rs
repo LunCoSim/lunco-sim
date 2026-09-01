@@ -29,7 +29,7 @@ use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_controller::{ControllerLink, InputBindingsSettings, SimulatedIntents};
+use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{
     on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
     SessionProfiles, Spacecraft,
@@ -1594,14 +1594,15 @@ pub fn spawn_avatar_camera(
 }
 
 /// The local avatar is a **controllable described like a rover**: it carries a
-/// `InputPorts` surface (`forward`/`side`/`up` input ports) + a
+/// `InputPorts` surface (`forward`/`side`/`up` movement ports plus the normalized
+/// `speed_boost` modifier) + a
 /// `ControlBinding` mapping move intents to those ports. The SAME
 /// `lunco_controller::drive_from_bindings`
 /// path then drives it — its *self-drive* branch fires for an entity that holds its
 /// own `ActionState` + `ControlBinding` and, when free, no `ControllerLink`
 /// (possession adds a `ControllerLink→vessel`, which excludes the avatar from
 /// self-drive and redirects control to the vessel — no possession-code changes).
-/// `apply_fly` reads the resulting `forward`/`side`/`up` ports back.
+/// `apply_fly` reads the resulting command frame back.
 ///
 /// The command *vocabulary* is seeded from the binding by
 /// `lunco_mobility::sync_input_ports`, exactly like a rover. Authored in
@@ -1673,6 +1674,7 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
         ("left".to_string(), "side".to_string(), -1.0),
         ("yaw_right".to_string(), "up".to_string(), 1.0),
         ("yaw_left".to_string(), "up".to_string(), -1.0),
+        ("speed_boost".to_string(), "speed_boost".to_string(), 1.0),
     ]);
     // No `OutputPorts` (no hardware actuators — `apply_fly` reads the command
     // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is
@@ -1684,7 +1686,8 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
     // present in `InputPorts::values` are writable, and
     // `INPUT_PORTS_BACKEND::write_input` returns `false` for anything else. This
     // used to insert `InputPorts::default()` — an EMPTY map — so every
-    // `forward`/`side`/`up` write `drive_self_drivers` produced was dropped by the
+    // `forward`/`side`/`up` and `speed_boost` writes `drive_self_drivers` produced
+    // were dropped by the
     // registry, `apply_fly`'s `inputs.cmd("forward")` read a constant 0.0, and the
     // avatar could not move. The only trace was a per-port
     // `[cosim] SetPorts targets unknown input port` warning, which reads like a
@@ -3218,23 +3221,14 @@ fn write_avatar_grid_position(
 /// controller unless the active Twin explicitly opts into traversal.
 ///
 /// Only active with a `FreeFlightCamera`/`SurfaceCamera`, or when CTRL is held while
-/// possessing a vessel (a momentary free-flight overlay). `Shift` boosts speed ×10.
+/// possessing a vessel (a momentary free-flight overlay). The controller writes the
+/// normalized `speed_boost` command beside the movement axes, so the modifier and
+/// direction are consumed as one command frame.
 /// Q/E elevation follows world up in free flight and gravity up in surface mode.
 /// Runs in the interaction cadence at wall-clock time, so the local camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
-fn free_flight_speed_multiplier(
-    entity: Entity,
-    intents: &IntentState,
-    simulated_intents: Option<&SimulatedIntents>,
-) -> f64 {
-    let held = intents.pressed(&UserIntent::SpeedBoost)
-        || simulated_intents.is_some_and(|simulated| {
-            simulated
-                .0
-                .get(&entity)
-                .is_some_and(|set| set.contains(&UserIntent::SpeedBoost))
-        });
-    if held {
+fn free_flight_speed_multiplier(speed_boost: f64) -> f64 {
+    if speed_boost > 0.5 {
         10.0
     } else {
         1.0
@@ -3252,7 +3246,6 @@ fn apply_fly(
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
             Option<&SurfaceRelativeMode>,
-            &IntentState,
         ),
         (
             With<Avatar>,
@@ -3265,7 +3258,6 @@ fn apply_fly(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     gravity: Res<LocalGravityField>,
     keys: Res<ButtonInput<KeyCode>>,
-    simulated_intents: Option<Res<SimulatedIntents>>,
     // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
     // paused, because pausing the simulation is not supposed to paralyse the user.
     time: Res<Time>,
@@ -3296,7 +3288,6 @@ fn apply_fly(
         has_freeflight,
         has_surface_camera,
         surface_mode,
-        intents,
     ) in q_avatar.iter_mut()
     {
         let Ok(grid) = q_grids.get(child_of.0) else {
@@ -3313,10 +3304,10 @@ fn apply_fly(
         // `ControlBinding`). When free (no ControllerLink)
         // `drive_from_bindings` writes these; while possessing they stay 0 (control is
         // redirected to the vessel).
-        let boost = free_flight_speed_multiplier(entity, intents, simulated_intents.as_deref());
         let forward = inputs.cmd("forward") as f32;
         let side = inputs.cmd("side") as f32;
         let elevation = inputs.cmd("up") as f32;
+        let boost = free_flight_speed_multiplier(inputs.cmd("speed_boost"));
         if forward.abs() < 0.01 && side.abs() < 0.01 && elevation.abs() < 0.01 {
             continue;
         }
@@ -5759,25 +5750,11 @@ mod tests {
     }
 
     #[test]
-    fn speed_boost_uses_the_semantic_intent_and_is_tenfold() {
-        let entity = Entity::from_bits(42);
-        let mut intents = IntentState::default();
-        assert_eq!(free_flight_speed_multiplier(entity, &intents, None), 1.0);
-
-        intents.press(&UserIntent::SpeedBoost);
-        assert_eq!(free_flight_speed_multiplier(entity, &intents, None), 10.0);
-
-        intents.release(&UserIntent::SpeedBoost);
-        let mut simulated = SimulatedIntents::default();
-        simulated
-            .0
-            .entry(entity)
-            .or_default()
-            .insert(UserIntent::SpeedBoost);
-        assert_eq!(
-            free_flight_speed_multiplier(entity, &intents, Some(&simulated)),
-            10.0
-        );
+    fn speed_boost_command_is_a_normalized_port() {
+        assert_eq!(free_flight_speed_multiplier(0.0), 1.0);
+        assert_eq!(free_flight_speed_multiplier(0.49), 1.0);
+        assert_eq!(free_flight_speed_multiplier(-1.0), 1.0);
+        assert_eq!(free_flight_speed_multiplier(1.0), 10.0);
     }
 
     #[test]

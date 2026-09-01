@@ -142,6 +142,10 @@ release, or speed boost rather than embedding physical keys. Editing or rebindin
 reflected by the live input map and by tutorial copy that uses
 `input_binding(...)`/`input_hint(...)`.
 
+For the free-flight avatar, speed boost is a semantic `SpeedBoost` intent and
+an authored normalized `speed_boost` command port. It is delivered in the same
+controller command frame as movement, including while Q/E transitions.
+
 When a lander is possessed, Telemetry shows its authored body-axis mapping and
 the selected camera frame. In the default `orbit` frame, forward/back, left/right,
 and yaw remain lander-relative even when the camera is moved; opposite commands

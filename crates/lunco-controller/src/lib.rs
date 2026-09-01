@@ -1062,14 +1062,18 @@ mod tests {
     use lunco_core::UserIntent;
 
     #[derive(Resource, Default)]
-    struct InteractionObserved(Option<(f64, f64)>);
+    struct InteractionObserved(Option<(f64, f64, f64)>);
 
     fn observe_interaction_ports(
         q: Query<&lunco_core::InputPorts>,
         mut observed: ResMut<InteractionObserved>,
     ) {
         let inputs = q.single().expect("the free avatar input surface");
-        observed.0 = Some((inputs.cmd("forward"), inputs.cmd("up")));
+        observed.0 = Some((
+            inputs.cmd("forward"),
+            inputs.cmd("up"),
+            inputs.cmd("speed_boost"),
+        ));
     }
 
     /// The configured pointer button is part of the same semantic `Look`
@@ -1472,6 +1476,76 @@ mod tests {
         assert!(state.pressed(&UserIntent::MoveBackward));
     }
 
+    /// Shift is a movement modifier, not a second input path.  It must remain
+    /// active when Q/E transitions while the modifier is held, regardless of
+    /// which physical Shift key was pressed first.
+    #[test]
+    fn shift_composes_with_both_vertical_movement_intents() {
+        use bevy::input::InputPlugin;
+        use leafwing_input_manager::prelude::InputManagerPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((
+                ActionState::<UserIntent>::default(),
+                InputBindingsSettings::default().input_map().unwrap(),
+            ))
+            .id();
+
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::KeyQ);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("input manager action state");
+        assert!(state.pressed(&UserIntent::MoveDown));
+        assert!(!state.pressed(&UserIntent::SpeedBoost));
+
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::ShiftLeft);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("action state after left Shift transition");
+        assert!(state.pressed(&UserIntent::MoveDown));
+        assert!(state.pressed(&UserIntent::SpeedBoost));
+
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyQ);
+        keys.press(KeyCode::KeyE);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("action state after Q-to-E transition");
+        assert!(!state.pressed(&UserIntent::MoveDown));
+        assert!(state.pressed(&UserIntent::MoveUp));
+        assert!(state.pressed(&UserIntent::SpeedBoost));
+
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::ShiftLeft);
+        keys.press(KeyCode::ShiftRight);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("action state after right Shift handoff");
+        assert!(state.pressed(&UserIntent::MoveUp));
+        assert!(state.pressed(&UserIntent::SpeedBoost));
+    }
+
     /// The self-driver and the free-avatar movement consumer share the
     /// interaction schedule.  Both components of a diagonal must be visible
     /// to the consumer in the same step; a one-step-late deferred `SetPorts`
@@ -1500,13 +1574,15 @@ mod tests {
         let mut state = ActionState::<UserIntent>::default();
         state.press(&UserIntent::MoveDown);
         state.press(&UserIntent::MoveForward);
+        state.press(&UserIntent::SpeedBoost);
         app.world_mut().spawn((
             state,
-            lunco_core::InputPorts::new(&["forward", "up"]),
+            lunco_core::InputPorts::new(&["forward", "up", "speed_boost"]),
             ControlBinding {
                 binds: vec![
                     (UserIntent::MoveForward, "forward".into(), 1.0),
                     (UserIntent::MoveDown, "up".into(), -1.0),
+                    (UserIntent::SpeedBoost, "speed_boost".into(), 1.0),
                 ],
             },
         ));
@@ -1515,8 +1591,8 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<InteractionObserved>().0,
-            Some((1.0, -1.0)),
-            "the consumer must see both Q and W in the same interaction step"
+            Some((1.0, -1.0, 1.0)),
+            "the consumer must see Q, W, and Shift in the same interaction step"
         );
     }
 
