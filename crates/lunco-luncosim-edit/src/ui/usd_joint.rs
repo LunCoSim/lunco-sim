@@ -6,14 +6,14 @@
 //! vehicle-specific rules and no runtime joint setter: a joint is a USD
 //! relationship plus standard `UsdPhysics` attributes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::ui::viewport::UsdViewportState;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
     author::normalize_value_literal, stage_convention, CanonicalStages, SdfPath, UsdPrimPath,
     UsdRead, UsdStageAsset,
@@ -57,8 +57,9 @@ pub struct JointBoolean {
 
 /// Render-ready authored joint view. It is derived state; USD remains
 /// authoritative and every mutation is dispatched as a typed document command.
-#[derive(Resource, Default, Clone)]
-pub struct UsdJointView {
+#[derive(Default, Clone)]
+pub struct UsdJointSessionView {
+    pub preview: UsdPreviewId,
     pub entity: Option<Entity>,
     pub doc: Option<DocumentId>,
     pub edit_target: Option<LayerId>,
@@ -80,9 +81,24 @@ pub struct UsdJointView {
     pub scalars: Vec<JointScalar>,
 }
 
-impl UsdJointView {
+impl UsdJointSessionView {
     fn clear(&mut self) {
         *self = Self::default();
+    }
+}
+
+/// Session-keyed authored joint views. Runtime joint state remains a separate
+/// live physics view; this resource contains only composed USD authoring data.
+#[derive(Resource, Default)]
+pub struct UsdJointView {
+    sessions: HashMap<UsdPreviewId, UsdJointSessionView>,
+}
+
+impl UsdJointView {
+    pub(crate) fn focused(&self, viewport: &UsdViewportState) -> Option<&UsdJointSessionView> {
+        viewport
+            .focused_preview_id()
+            .and_then(|preview| self.sessions.get(&preview))
     }
 }
 
@@ -188,7 +204,7 @@ fn scalar_unit(type_name: &str, joint_type: &str, name: &str) -> String {
     String::new()
 }
 
-/// Rebuild the selected joint view from the focused Editor preview.
+/// Rebuild authored joint state for every open preview lease.
 pub fn produce_usd_joint_view(
     selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
@@ -197,143 +213,146 @@ pub fn produce_usd_joint_view(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     viewport: Option<Res<UsdViewportState>>,
-    mut view: ResMut<UsdJointView>,
+    mut views: ResMut<UsdJointView>,
 ) {
-    view.clear();
-
     let Some(viewport) = viewport else {
+        views.sessions.clear();
         return;
     };
-    let Some(preview_root) = viewport.focused_scene_root() else {
-        return;
-    };
-    let Some(doc) = viewport.focused_doc() else {
-        return;
-    };
-    let Some(edit_target) = viewport.focused_edit_target().cloned() else {
-        return;
-    };
-    let Some(entity) = target
-        .as_deref()
-        .and_then(|value| value.part)
-        .filter(|entity| q.get(*entity).is_ok())
-        .or_else(|| selected.as_deref().and_then(|value| value.primary()))
-    else {
-        return;
-    };
-    if !crate::ui::is_editor_preview_entity(entity, preview_root, &q_parents) {
-        return;
-    }
-    let Ok(prim) = q.get(entity) else {
-        return;
-    };
-    let Some(handle) = viewport.focused_stage_handle() else {
-        return;
-    };
-    if prim.stage_handle.id() != handle.id() {
-        return;
-    }
-    let stage_id = handle.id();
-    if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(handle).and_then(|asset| asset.recipe.clone()) {
-            canonical.get_or_build(stage_id, &recipe);
-        }
-    }
-    let Some(stage) = canonical.get(stage_id).map(|value| value.view()) else {
-        return;
-    };
-    let Ok(path) = SdfPath::new(&prim.path) else {
-        return;
-    };
-    let Some(type_name) = stage.type_name(&path).filter(|name| is_joint(name)) else {
-        return;
-    };
-    let Ok(convention) = stage_convention(&stage) else {
-        return;
-    };
+    let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
+    views.sessions.retain(|preview, _| open.contains(preview));
 
-    let mut body_options = vec![String::new()];
-    let mut seen = BTreeSet::new();
-    seen.insert(String::new());
-    for candidate in stage.prim_paths() {
-        if stage.has_api_schema(&candidate, "PhysicsRigidBodyAPI") {
-            let candidate = candidate.as_str().to_owned();
-            if seen.insert(candidate.clone()) {
-                body_options.push(candidate);
-            }
-        }
-    }
-    let body0 = stage
-        .rel_targets(&path, "physics:body0")
-        .into_iter()
-        .map(|value| value.as_str().to_owned())
-        .collect::<Vec<_>>();
-    let body1 = stage
-        .rel_targets(&path, "physics:body1")
-        .into_iter()
-        .map(|value| value.as_str().to_owned())
-        .collect::<Vec<_>>();
-    for current in body0.iter().chain(body1.iter()) {
-        if seen.insert(current.clone()) {
-            body_options.push(current.clone());
-        }
-    }
-    body_options.sort();
+    for session in viewport.sessions() {
+        let view = views
+            .sessions
+            .entry(session.id())
+            .or_insert_with(|| UsdJointSessionView {
+                preview: session.id(),
+                doc: Some(session.doc()),
+                edit_target: Some(session.edit_target().clone()),
+                ..Default::default()
+            });
+        view.clear();
+        view.preview = session.id();
+        view.doc = Some(session.doc());
+        view.edit_target = Some(session.edit_target().clone());
+        view.generation = session.projected_generation();
 
-    let axis = matches!(
-        type_name.as_str(),
-        "PhysicsRevoluteJoint" | "PhysicsPrismaticJoint"
-    )
-    .then(|| stage.text(&path, "physics:axis"))
-    .flatten();
-
-    let mut booleans = Vec::new();
-    for &(name, label) in JOINT_BOOL_ATTRIBUTES {
-        if let Some(value) = stage.boolean(&path, name) {
-            booleans.push(JointBoolean { name, label, value });
-        }
-    }
-
-    let mut scalars = Vec::new();
-    for name in stage.attr_names(&path) {
-        if !authored_scalar_name(&name) {
-            continue;
-        }
-        let Some(value) = stage.real(&path, &name) else {
+        let Some(entity) = crate::ui::selected_entity_in_preview(
+            session,
+            selected.as_deref(),
+            target.as_deref(),
+            &q,
+            &q_parents,
+        ) else {
             continue;
         };
-        if !value.is_finite() {
+        let Ok(prim) = q.get(entity) else {
+            continue;
+        };
+        let handle = session.stage_handle();
+        if prim.stage_handle.id() != handle.id() {
             continue;
         }
-        scalars.push(JointScalar {
-            type_name: schema_type(&name, "float"),
-            label: scalar_label(&name),
-            unit: scalar_unit(&schema_type(&name, "float"), &type_name, &name),
-            name,
-            value,
-        });
-    }
-    scalars.sort_by(|a, b| a.name.cmp(&b.name));
+        let stage_id = handle.id();
+        if canonical.get(stage_id).is_none() {
+            if let Some(recipe) = stages.get(handle).and_then(|asset| asset.recipe.clone()) {
+                canonical.get_or_build(stage_id, &recipe);
+            }
+        }
+        let Some(stage) = canonical.get(stage_id).map(|value| value.view()) else {
+            continue;
+        };
+        let Ok(path) = SdfPath::new(&prim.path) else {
+            continue;
+        };
+        let Some(type_name) = stage.type_name(&path).filter(|name| is_joint(name)) else {
+            continue;
+        };
+        let Ok(convention) = stage_convention(&stage) else {
+            continue;
+        };
 
-    view.entity = Some(entity);
-    view.doc = Some(doc);
-    view.edit_target = Some(edit_target);
-    view.generation = viewport
-        .focused_session()
-        .map(|session| session.projected_generation())
-        .unwrap_or_default();
-    view.path = prim.path.clone();
-    view.type_name = type_name;
-    view.body0 = body0;
-    view.body1 = body1;
-    view.body_options = body_options;
-    view.axis = axis;
-    view.local_pos0 = canonical_position(&stage, &path, "physics:localPos0", &convention);
-    view.local_pos1 = canonical_position(&stage, &path, "physics:localPos1", &convention);
-    view.local_rot0 = canonical_rotation(&stage, &path, "physics:localRot0", &convention);
-    view.local_rot1 = canonical_rotation(&stage, &path, "physics:localRot1", &convention);
-    view.booleans = booleans;
-    view.scalars = scalars;
+        let mut body_options = vec![String::new()];
+        let mut seen = BTreeSet::new();
+        seen.insert(String::new());
+        for candidate in stage.prim_paths() {
+            if stage.has_api_schema(&candidate, "PhysicsRigidBodyAPI") {
+                let candidate = candidate.as_str().to_owned();
+                if seen.insert(candidate.clone()) {
+                    body_options.push(candidate);
+                }
+            }
+        }
+        let body0 = stage
+            .rel_targets(&path, "physics:body0")
+            .into_iter()
+            .map(|value| value.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let body1 = stage
+            .rel_targets(&path, "physics:body1")
+            .into_iter()
+            .map(|value| value.as_str().to_owned())
+            .collect::<Vec<_>>();
+        for current in body0.iter().chain(body1.iter()) {
+            if seen.insert(current.clone()) {
+                body_options.push(current.clone());
+            }
+        }
+        body_options.sort();
+
+        let axis = matches!(
+            type_name.as_str(),
+            "PhysicsRevoluteJoint" | "PhysicsPrismaticJoint"
+        )
+        .then(|| stage.text(&path, "physics:axis"))
+        .flatten();
+
+        let booleans = JOINT_BOOL_ATTRIBUTES
+            .iter()
+            .filter_map(|&(name, label)| {
+                stage
+                    .boolean(&path, name)
+                    .map(|value| JointBoolean { name, label, value })
+            })
+            .collect();
+
+        let mut scalars = Vec::new();
+        for name in stage.attr_names(&path) {
+            if !authored_scalar_name(&name) {
+                continue;
+            }
+            let Some(value) = stage.real(&path, &name) else {
+                continue;
+            };
+            if !value.is_finite() {
+                continue;
+            }
+            let type_name_for_attr = schema_type(&name, "float");
+            scalars.push(JointScalar {
+                type_name: type_name_for_attr.clone(),
+                label: scalar_label(&name),
+                unit: scalar_unit(&type_name_for_attr, &type_name, &name),
+                name,
+                value,
+            });
+        }
+        scalars.sort_by(|a, b| a.name.cmp(&b.name));
+
+        view.entity = Some(entity);
+        view.path = prim.path.clone();
+        view.type_name = type_name;
+        view.body0 = body0;
+        view.body1 = body1;
+        view.body_options = body_options;
+        view.axis = axis;
+        view.local_pos0 = canonical_position(&stage, &path, "physics:localPos0", &convention);
+        view.local_pos1 = canonical_position(&stage, &path, "physics:localPos1", &convention);
+        view.local_rot0 = canonical_rotation(&stage, &path, "physics:localRot0", &convention);
+        view.local_rot1 = canonical_rotation(&stage, &path, "physics:localRot1", &convention);
+        view.booleans = booleans;
+        view.scalars = scalars;
+    }
 }
 
 fn body_text(targets: &[String]) -> String {
@@ -350,7 +369,7 @@ fn body_value(targets: &[String]) -> Option<String> {
 
 fn apply_attribute(
     ctx: &mut lunco_workbench::PanelCtx,
-    view: &UsdJointView,
+    view: &UsdJointSessionView,
     name: &str,
     type_name: &str,
     value: String,
@@ -373,7 +392,7 @@ fn apply_attribute(
 
 fn apply_relationship(
     ctx: &mut lunco_workbench::PanelCtx,
-    view: &UsdJointView,
+    view: &UsdJointSessionView,
     name: &str,
     target: String,
 ) {
@@ -459,7 +478,11 @@ pub fn authored_joint_section(
     entity: Entity,
 ) {
     let Some(view) = ctx
-        .resource::<UsdJointView>()
+        .resource::<UsdViewportState>()
+        .and_then(|viewport| {
+            ctx.resource::<UsdJointView>()
+                .and_then(|views| views.focused(viewport))
+        })
         .filter(|view| view.entity == Some(entity))
         .cloned()
     else {

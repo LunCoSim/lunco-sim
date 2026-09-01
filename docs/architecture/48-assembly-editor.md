@@ -38,6 +38,14 @@ listed below; they do not introduce a second authoring model.
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
   the lease shown by the dock and `CloseUsdPreview` releases only that lease.
   All preview leases are isolated from the simulation scene.
+- Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
+  connection canvas, parameter/variant/mount views, joint editor, and
+  animation editor derive one entry per open lease and paint only the focused
+  entry. Pan/zoom, graph selection, drilled Inspector target, authored layer,
+  document generation, and render resources therefore cannot leak between two
+  open documents with identical prim paths. The shared ECS selection is only
+  the focused-lease projection; the editor-owned session selection restores it
+  when focus changes.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -58,9 +66,9 @@ The existing implementation provides the substrate the perspective composes:
 The perspective must remain a composition of these surfaces. The Twin Browser
 opens an explicit preview lease for the selected document; the USD preview, prim
 tree, Connections graph, Inspector, and command handlers consume that same
-explicit document binding. The Connections graph is empty until that preview
-document is focused;
-it never infers an editable stage from entity counts or the live simulation.
+explicit document binding. The Connections graph and native USD panels are
+empty until their focused lease has a projected stage; they never infer an
+editable stage from entity counts or the live simulation.
 Do not add a second graph library, a special rover assembly implementation, or
 direct ECS mutation for convenience.
 

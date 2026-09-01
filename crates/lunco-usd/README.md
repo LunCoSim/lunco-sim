@@ -60,6 +60,14 @@ added separately by app composition (not by `UsdPlugins`):
   and `CloseUsdPreview` own preview lifecycle; other leases remain projected
   while the dock displays one focus.
 
+Native Assembly Editor panels key their derived state by `UsdPreviewId`. Each
+open lease retains its own prim tree, connection canvas, parameter/variant/
+mount view, joint and animation view, authored layer, and projection
+generation; the dock paints only the focused entry. The shared ECS selection is
+the focused-lease projection and is restored from the editor session selection
+when focus changes. Panel edits resolve the lease's explicit `DocumentId`,
+`LayerId`, and generation before dispatching typed USD commands.
+
 ## Document model
 
 The egui-free USD document model lives in `document` (`UsdDocument`, `UsdOp`,

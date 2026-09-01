@@ -75,8 +75,13 @@ The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
 Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
 lease and can later use `FocusUsdPreview` or `CloseUsdPreview`. The isolated
-preview, prim tree, Inspector, and USD commands consume that same document
-binding.
+preview, prim tree, connection canvas, Inspector, parameter/variant/mount,
+joint, and animation view-models consume that same lease binding. Native
+editor view-model resources are keyed by `UsdPreviewId` and derive one entry
+per open lease; panels paint only the focused entry. The shared ECS selection
+is a focused-lease projection restored from editor-owned session selection,
+not a document identity. Panel writes use the lease's explicit `DocumentId`,
+`LayerId`, and projection generation.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.

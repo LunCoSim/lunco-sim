@@ -1,8 +1,8 @@
 //! USD **prim tree** panel — the scene's authoring hierarchy.
 //!
 //! Where the Entity list (`entity_list.rs`) shows the simulation ECS, this shows
-//! the faithful **USD prim hierarchy** of the explicitly active Editor
-//! document — `/Assembly → Chassis → Wheel_FL`. It is reconstructed from the
+//! the faithful **USD prim hierarchy** of each open Editor preview
+//! — `/Assembly → Chassis → Wheel_FL`. It is reconstructed from each
 //! document's isolated preview projection; intermediate xforms that carry no
 //! entity of their own are synthesized from the path so the structure is complete.
 //! That is the structure you navigate when editing an assembly: drill the
@@ -24,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
-use lunco_usd::ui::viewport::UsdViewportState;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
     camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
     UsdStageAsset,
@@ -33,9 +33,9 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
-/// Tree-node identity: the composed USD prim path in the explicitly active
-/// Editor document. Document scope comes from [`UsdViewportState`], so two
-/// open files can contain the same paths without colliding.
+/// Tree-node identity: the composed USD prim path in one preview lease.
+/// Document scope comes from [`UsdViewportState`], so two open files can
+/// contain the same paths without colliding.
 type NodeKey = String;
 
 /// One node in the prim tree.
@@ -55,8 +55,8 @@ struct PrimTreeNode {
 }
 
 /// Render-ready USD prim hierarchy. Derived, never authoritative.
-#[derive(Resource, Default)]
-pub struct UsdPrimTreeView {
+#[derive(Default)]
+pub struct UsdPrimTreeSessionView {
     nodes: HashMap<NodeKey, PrimTreeNode>,
     /// Top-level node keys, sorted by name.
     roots: Vec<NodeKey>,
@@ -65,12 +65,18 @@ pub struct UsdPrimTreeView {
     built: bool,
 }
 
+/// Session-keyed USD hierarchy views. Every open preview retains its own
+/// composed tree; the panel only paints the focused lease.
+#[derive(Resource, Default)]
+pub struct UsdPrimTreeView {
+    sessions: HashMap<UsdPreviewId, UsdPrimTreeSessionView>,
+}
+
 impl UsdPrimTreeView {
-    fn clear(&mut self) {
-        self.nodes.clear();
-        self.roots.clear();
-        self.hash = 0;
-        self.built = false;
+    pub(crate) fn focused(&self, viewport: &UsdViewportState) -> Option<&UsdPrimTreeSessionView> {
+        viewport
+            .focused_preview_id()
+            .and_then(|preview| self.sessions.get(&preview))
     }
 }
 
@@ -97,176 +103,176 @@ pub fn produce_usd_prim_tree(
     viewport: Option<Res<UsdViewportState>>,
 ) {
     let Some(viewport) = viewport else {
-        view.clear();
+        view.sessions.clear();
         return;
     };
-    let Some(preview_root) = viewport.focused_scene_root() else {
-        view.clear();
-        return;
-    };
-    let Some(handle) = viewport.focused_stage_handle().cloned() else {
-        view.clear();
-        return;
-    };
-    let stage_id = handle.id();
+    let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
+    view.sessions.retain(|preview, _| open.contains(preview));
 
-    // The set of explicit document paths drives the change gate. The preview
-    // root is the document scope; the live simulation is intentionally absent.
-    let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
-    for (e, p, _) in q.iter() {
-        if p.stage_handle.id() == stage_id
-            && crate::ui::is_editor_preview_entity(e, preview_root, &q_parents)
-        {
-            entity_of.insert(p.path.clone(), e);
-        }
-    }
+    for session in viewport.sessions() {
+        let session_view = view.sessions.entry(session.id()).or_default();
+        let preview_root = session.scene_root();
+        let handle = session.stage_handle().clone();
+        let stage_id = handle.id();
 
-    let camera_identities: Vec<(Entity, String)> = q
-        .iter()
-        .filter(|(entity, path, is_camera)| {
-            *is_camera
-                && path.stage_handle.id() == stage_id
-                && crate::ui::is_editor_preview_entity(*entity, preview_root, &q_parents)
-        })
-        .map(|(entity, path, _)| (entity, path.path.clone()))
-        .collect();
-    let camera_names: Vec<String> = camera_identities
-        .iter()
-        .map(|(_, identity)| identity.clone())
-        .collect();
-    let camera_identity_by_entity: HashMap<Entity, String> =
-        camera_identities.iter().cloned().collect();
-    let camera_labels: HashMap<Entity, String> = camera_identities
-        .into_iter()
-        .zip(camera_display_labels(&camera_names))
-        .map(|((entity, _), label)| (entity, label))
-        .collect();
-
-    // Every path plus all ancestor prefixes, so intermediate xforms appear
-    // under the correct authored hierarchy.
-    let mut all_paths: BTreeSet<NodeKey> = BTreeSet::new();
-    for path in entity_of.keys() {
-        let mut acc = String::new();
-        for seg in path.split('/').filter(|s| !s.is_empty()) {
-            acc.push('/');
-            acc.push_str(seg);
-            all_paths.insert(acc.clone());
-        }
-    }
-
-    let hash = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for key in &all_paths {
-            key.hash(&mut h);
-            if let Some(entity) = entity_of.get(key) {
-                true.hash(&mut h);
-                q_callsign
-                    .get(*entity)
-                    .ok()
-                    .map(|value| value.0.as_str())
-                    .hash(&mut h);
-                q_catalog_id
-                    .get(*entity)
-                    .ok()
-                    .map(|value| value.0.as_str())
-                    .hash(&mut h);
-            } else {
-                false.hash(&mut h);
+        // The set of explicit document paths drives the change gate. The
+        // preview root is the document scope; the live simulation is absent.
+        let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
+        for (e, p, _) in q.iter() {
+            if p.stage_handle.id() == stage_id
+                && crate::ui::is_editor_preview_entity(e, preview_root, &q_parents)
+            {
+                entity_of.insert(p.path.clone(), e);
             }
         }
-        h.finish()
-    };
-    if view.built && view.hash == hash {
-        return;
-    }
 
-    // Ensure the canonical stage is built so we can read type/body per prim.
-    if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
-            canonical.get_or_build(stage_id, &recipe);
-        }
-    }
-    let stage_view = canonical.get(stage_id).map(|cs| cs.view());
-
-    let mut nodes: HashMap<NodeKey, PrimTreeNode> = HashMap::new();
-    let mut roots: Vec<NodeKey> = Vec::new();
-
-    for key in &all_paths {
-        let path = key;
-        let name = path.rsplit('/').next().unwrap_or(path);
-        let default_display_name = entity_of
-            .get(key)
-            .map(|entity| {
-                let path_name = Name::new(path.clone());
-                lunco_core::entity_display_name(
-                    Some(&path_name),
-                    q_callsign.get(*entity).ok(),
-                    q_catalog_id.get(*entity).ok(),
-                )
+        let camera_identities: Vec<(Entity, String)> = q
+            .iter()
+            .filter(|(entity, path, is_camera)| {
+                *is_camera
+                    && path.stage_handle.id() == stage_id
+                    && crate::ui::is_editor_preview_entity(*entity, preview_root, &q_parents)
             })
-            .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| lunco_core::humanize_identifier(name));
-        let (type_name, is_body) = match &stage_view {
-            Some(v) => match SdfPath::new(path) {
-                Ok(sdf) => (
-                    v.type_name(&sdf).unwrap_or_default(),
-                    v.has_api_schema(&sdf, "PhysicsRigidBodyAPI"),
-                ),
-                Err(_) => (String::new(), false),
-            },
-            None => (String::new(), false),
-        };
-        let display_name = entity_of
-            .get(key)
-            .and_then(|entity| camera_labels.get(entity))
-            .cloned()
-            .unwrap_or(default_display_name);
-        nodes.insert(
-            key.clone(),
-            PrimTreeNode {
-                display_name,
-                camera_identity: entity_of
-                    .get(key)
-                    .and_then(|entity| camera_identity_by_entity.get(entity))
-                    .cloned(),
-                type_name,
-                entity: entity_of.get(key).copied(),
-                is_body,
-                children: Vec::new(),
-            },
-        );
-    }
+            .map(|(entity, path, _)| (entity, path.path.clone()))
+            .collect();
+        let camera_names: Vec<String> = camera_identities
+            .iter()
+            .map(|(_, identity)| identity.clone())
+            .collect();
+        let camera_identity_by_entity: HashMap<Entity, String> =
+            camera_identities.iter().cloned().collect();
+        let camera_labels: HashMap<Entity, String> = camera_identities
+            .into_iter()
+            .zip(camera_display_labels(&camera_names))
+            .map(|((entity, _), label)| (entity, label))
+            .collect();
 
-    // Wire parent → children and collect roots from the explicit USD paths.
-    for key in &all_paths {
-        match key.rsplit_once('/') {
-            Some(("", _)) | None => roots.push(key.clone()),
-            Some((parent, _)) => {
-                let parent_key = parent.to_string();
-                if let Some(p) = nodes.get_mut(&parent_key) {
-                    p.children.push(key.clone());
+        // Every path plus all ancestor prefixes, so intermediate xforms appear
+        // under the correct authored hierarchy.
+        let mut all_paths: BTreeSet<NodeKey> = BTreeSet::new();
+        for path in entity_of.keys() {
+            let mut acc = String::new();
+            for seg in path.split('/').filter(|s| !s.is_empty()) {
+                acc.push('/');
+                acc.push_str(seg);
+                all_paths.insert(acc.clone());
+            }
+        }
+
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for key in &all_paths {
+                key.hash(&mut h);
+                if let Some(entity) = entity_of.get(key) {
+                    true.hash(&mut h);
+                    q_callsign
+                        .get(*entity)
+                        .ok()
+                        .map(|value| value.0.as_str())
+                        .hash(&mut h);
+                    q_catalog_id
+                        .get(*entity)
+                        .ok()
+                        .map(|value| value.0.as_str())
+                        .hash(&mut h);
                 } else {
-                    // Parent prefix wasn't itself a prim (shouldn't happen — we
-                    // inserted every prefix — but stay total).
-                    roots.push(key.clone());
+                    false.hash(&mut h);
+                }
+            }
+            h.finish()
+        };
+        if session_view.built && session_view.hash == hash {
+            continue;
+        }
+
+        // Ensure the canonical stage is built so we can read type/body per prim.
+        if canonical.get(stage_id).is_none() {
+            if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(stage_id, &recipe);
+            }
+        }
+        let stage_view = canonical.get(stage_id).map(|cs| cs.view());
+
+        let mut nodes: HashMap<NodeKey, PrimTreeNode> = HashMap::new();
+        let mut roots: Vec<NodeKey> = Vec::new();
+
+        for key in &all_paths {
+            let path = key;
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let default_display_name = entity_of
+                .get(key)
+                .map(|entity| {
+                    let path_name = Name::new(path.clone());
+                    lunco_core::entity_display_name(
+                        Some(&path_name),
+                        q_callsign.get(*entity).ok(),
+                        q_catalog_id.get(*entity).ok(),
+                    )
+                })
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| lunco_core::humanize_identifier(name));
+            let (type_name, is_body) = match &stage_view {
+                Some(v) => match SdfPath::new(path) {
+                    Ok(sdf) => (
+                        v.type_name(&sdf).unwrap_or_default(),
+                        v.has_api_schema(&sdf, "PhysicsRigidBodyAPI"),
+                    ),
+                    Err(_) => (String::new(), false),
+                },
+                None => (String::new(), false),
+            };
+            let display_name = entity_of
+                .get(key)
+                .and_then(|entity| camera_labels.get(entity))
+                .cloned()
+                .unwrap_or(default_display_name);
+            nodes.insert(
+                key.clone(),
+                PrimTreeNode {
+                    display_name,
+                    camera_identity: entity_of
+                        .get(key)
+                        .and_then(|entity| camera_identity_by_entity.get(entity))
+                        .cloned(),
+                    type_name,
+                    entity: entity_of.get(key).copied(),
+                    is_body,
+                    children: Vec::new(),
+                },
+            );
+        }
+
+        // Wire parent → children and collect roots from the explicit USD paths.
+        for key in &all_paths {
+            match key.rsplit_once('/') {
+                Some(("", _)) | None => roots.push(key.clone()),
+                Some((parent, _)) => {
+                    let parent_key = parent.to_string();
+                    if let Some(p) = nodes.get_mut(&parent_key) {
+                        p.children.push(key.clone());
+                    } else {
+                        // Parent prefix wasn't itself a prim (shouldn't happen — we
+                        // inserted every prefix — but stay total).
+                        roots.push(key.clone());
+                    }
                 }
             }
         }
-    }
 
-    // Sort children + roots by leaf name for a stable tree (leaf == node name,
-    // so sorting by the path's last segment avoids a borrow of `nodes`).
-    for node in nodes.values_mut() {
-        node.children
-            .sort_by_key(|c| c.rsplit('/').next().unwrap_or(c).to_string());
-    }
-    roots.sort_by_key(|p| p.rsplit('/').next().unwrap_or(p).to_string());
+        // Sort children + roots by leaf name for a stable tree (leaf == node name,
+        // so sorting by the path's last segment avoids a borrow of `nodes`).
+        for node in nodes.values_mut() {
+            node.children
+                .sort_by_key(|c| c.rsplit('/').next().unwrap_or(c).to_string());
+        }
+        roots.sort_by_key(|p| p.rsplit('/').next().unwrap_or(p).to_string());
 
-    view.nodes = nodes;
-    view.roots = roots;
-    view.hash = hash;
-    view.built = true;
+        session_view.nodes = nodes;
+        session_view.roots = roots;
+        session_view.hash = hash;
+        session_view.built = true;
+    }
 }
 
 /// USD prim tree panel.
@@ -308,7 +314,13 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let mut to_select: Option<Entity> = None;
 
     {
-        let Some(view) = ctx.resource::<UsdPrimTreeView>() else {
+        let Some(viewport) = ctx.resource::<UsdViewportState>() else {
+            return;
+        };
+        let Some(view) = ctx
+            .resource::<UsdPrimTreeView>()
+            .and_then(|views| views.focused(viewport))
+        else {
             return;
         };
         if !view.built || view.roots.is_empty() {
@@ -338,7 +350,7 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 fn render_prim_node(
     ui: &mut egui::Ui,
     key: &NodeKey,
-    view: &UsdPrimTreeView,
+    view: &UsdPrimTreeSessionView,
     selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<Entity>,
     depth: usize,

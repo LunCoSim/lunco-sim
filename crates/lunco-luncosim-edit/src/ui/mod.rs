@@ -4,6 +4,8 @@
 //! and emit commands. They never mutate domain state directly (except for
 //! UI-local state like SpawnState and SelectedEntity).
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, TheLocalAvatar};
@@ -150,8 +152,12 @@ pub fn usd_selection_view_changed(
     selection: Res<lunco_scene_commands::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
+    viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
 ) -> bool {
-    selection.is_changed() || target.is_changed() || revision.is_changed()
+    selection.is_changed()
+        || target.is_changed()
+        || revision.is_changed()
+        || viewport.is_some_and(|state| state.is_changed())
 }
 
 /// Return whether an entity belongs to the focused Editor preview subtree.
@@ -175,22 +181,156 @@ pub(crate) fn is_editor_preview_entity(
     false
 }
 
-/// A document switch changes the meaning of every entity-backed editor target.
-/// Clear those transient selections at the explicit document boundary so the
-/// Editor Inspector cannot display or author against the previous file.
-fn clear_selection_on_editor_document_switch(
+/// Resolve a USD editor selection against one explicit preview lease.
+///
+/// `SelectedEntities` is shared with the live scene because it is the generic
+/// entity-selection projection. USD panels must not treat it as a document
+/// identity, however: the same path can exist in several isolated previews
+/// and a live entity can be selected while a preview is focused. This helper
+/// applies the existing lease root and stage handle before a panel derives any
+/// authored view-model.
+pub(crate) fn selected_entity_in_preview(
+    session: &lunco_usd::ui::viewport::UsdPreviewSession,
+    selected: Option<&lunco_scene_commands::SelectedEntities>,
+    target: Option<&crate::InspectorTarget>,
+    q_paths: &Query<&lunco_usd_bevy::UsdPrimPath>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let belongs = |entity: Entity| {
+        q_paths.get(entity).is_ok_and(|path| {
+            path.stage_handle.id() == session.stage_handle().id()
+                && is_editor_preview_entity(entity, session.scene_root(), q_parents)
+        })
+    };
+
+    target
+        .and_then(|value| value.part)
+        .filter(|entity| belongs(*entity))
+        .or_else(|| {
+            selected
+                .and_then(lunco_scene_commands::SelectedEntities::primary)
+                .filter(|entity| belongs(*entity))
+        })
+}
+
+#[derive(Clone, Default)]
+struct EditorSessionSelection {
+    entities: Vec<Entity>,
+    target: Option<Entity>,
+}
+
+/// Session-owned editor selection. `SelectedEntities` remains the shared ECS
+/// highlight/gizmo projection, while this resource owns which preview lease
+/// that projection belongs to and restores it after focus changes.
+#[derive(Resource, Default)]
+struct EditorSessionSelections {
+    sessions: HashMap<lunco_usd::ui::viewport::UsdPreviewId, EditorSessionSelection>,
+    live: EditorSessionSelection,
+}
+
+/// Keep the generic ECS selection projection scoped to the focused USD lease.
+/// Without this boundary, focusing a second preview leaves the first preview's
+/// entity in the Inspector even though every USD view-model has switched
+/// documents. The session map is the UI state; `SelectedEntities` and
+/// `InspectorTarget` are synchronized projections used by existing panels and
+/// gizmo systems.
+fn sync_editor_session_selection(
     viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
-    mut last_doc: Local<Option<lunco_doc::DocumentId>>,
+    q_parents: Query<&ChildOf>,
+    q_selected: Query<Entity, With<crate::selection::Selected>>,
+    mut commands: Commands,
+    mut sessions: ResMut<EditorSessionSelections>,
+    mut last_preview: Local<Option<lunco_usd::ui::viewport::UsdPreviewId>>,
 ) {
-    let focused_doc = viewport.and_then(|state| state.focused_doc());
-    if *last_doc == focused_doc {
+    let focused = viewport
+        .as_deref()
+        .and_then(|state| state.focused_preview_id());
+    let open: std::collections::HashSet<_> = viewport
+        .as_deref()
+        .into_iter()
+        .flat_map(|state| state.sessions().map(|session| session.id()))
+        .collect();
+    sessions
+        .sessions
+        .retain(|preview, _| open.contains(preview));
+
+    let belongs = |preview: lunco_usd::ui::viewport::UsdPreviewId, entity: Entity| {
+        viewport
+            .as_deref()
+            .and_then(|state| state.session(preview))
+            .is_some_and(|session| {
+                crate::ui::is_editor_preview_entity(entity, session.scene_root(), &q_parents)
+            })
+    };
+
+    if *last_preview != focused {
+        if let Some(previous) = *last_preview {
+            if open.contains(&previous) {
+                let entry = sessions.sessions.entry(previous).or_default();
+                entry.entities = selected
+                    .entities
+                    .iter()
+                    .copied()
+                    .filter(|entity| belongs(previous, *entity))
+                    .collect();
+                entry.target = inspector_target
+                    .part
+                    .filter(|entity| belongs(previous, *entity));
+            }
+        } else {
+            sessions.live.entities.clone_from(&selected.entities);
+            sessions.live.target = inspector_target.part;
+        }
+
+        for entity in q_selected.iter() {
+            commands
+                .entity(entity)
+                .remove::<crate::selection::Selected>()
+                .remove::<crate::gizmo::GizmoSelected>();
+        }
+        selected.entities.clear();
+        inspector_target.part = None;
+
+        if let Some(preview) = focused {
+            let entry = sessions.sessions.entry(preview).or_default();
+            entry.entities.retain(|entity| belongs(preview, *entity));
+            selected.entities.clone_from(&entry.entities);
+            inspector_target.part = entry.target.filter(|entity| belongs(preview, *entity));
+            for &entity in &entry.entities {
+                commands
+                    .entity(entity)
+                    .try_insert((crate::selection::Selected, crate::gizmo::GizmoSelected));
+            }
+        } else {
+            selected.entities.clone_from(&sessions.live.entities);
+            inspector_target.part = sessions.live.target;
+            for &entity in &sessions.live.entities {
+                commands
+                    .entity(entity)
+                    .try_insert((crate::selection::Selected, crate::gizmo::GizmoSelected));
+            }
+        }
+        *last_preview = focused;
         return;
     }
-    *last_doc = focused_doc;
-    selected.entities.clear();
-    inspector_target.part = None;
+
+    if let Some(preview) = focused {
+        let entry = sessions.sessions.entry(preview).or_default();
+        entry.entities = selected
+            .entities
+            .iter()
+            .copied()
+            .filter(|entity| belongs(preview, *entity))
+            .collect();
+        entry.target = inspector_target
+            .part
+            .filter(|entity| belongs(preview, *entity));
+    } else {
+        sessions.live.entities.clone_from(&selected.entities);
+        sessions.live.target = inspector_target.part;
+    }
 }
 
 // `every_frame()` (an always-true gate handed to `add_view_model`) is gone: it
@@ -320,7 +460,11 @@ impl Plugin for SceneEditUiPlugin {
         // the gate.
         app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
-        app.add_systems(Update, clear_selection_on_editor_document_switch);
+        app.init_resource::<EditorSessionSelections>();
+        app.add_systems(
+            Update,
+            sync_editor_session_selection.before(ViewModelSet(())),
+        );
 
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();

@@ -68,6 +68,7 @@ const PHYSICS_MATERIALS: &str = "PhysicsMaterials";
 /// otherwise), and [`UsdOp::SetApiSchemas`] authors the full explicit list, so
 /// the existing schemas must ride along with the one being added.
 pub fn ensure_preview_surface_ops(
+    edit_target: LayerId,
     geom_path: &str,
     geom_api_schemas: &[String],
 ) -> Option<(Vec<UsdOp>, String)> {
@@ -93,7 +94,7 @@ pub fn ensure_preview_surface_ops(
     let mat = format!("{looks}/{mat_name}");
     let shader = format!("{mat}/{SURFACE}");
 
-    let root_layer = LayerId::root();
+    let root_layer = edit_target;
     let mut ops = vec![
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
@@ -336,7 +337,8 @@ mod tests {
     use super::*;
 
     fn paths_with_schemas(geom: &str, schemas: &[String]) -> (Vec<String>, String) {
-        let (ops, shader) = ensure_preview_surface_ops(geom, schemas).expect("ops");
+        let (ops, shader) =
+            ensure_preview_surface_ops(LayerId::root(), geom, schemas).expect("ops");
         let described = ops
             .iter()
             .map(|op| match op {
@@ -442,8 +444,8 @@ mod tests {
 
     #[test]
     fn rejects_non_absolute_paths() {
-        assert!(ensure_preview_surface_ops("World/Ball", &[]).is_none());
-        assert!(ensure_preview_surface_ops("/", &[]).is_none());
+        assert!(ensure_preview_surface_ops(LayerId::root(), "World/Ball", &[]).is_none());
+        assert!(ensure_preview_surface_ops(LayerId::root(), "/", &[]).is_none());
     }
 
     /// A physics material is its OWN `Material` prim, in its own scope, bound for

@@ -69,6 +69,14 @@ the selection/tooltip identity. Unique leaves are compact, duplicate leaves
 gain nearest-owner context, generated ID suffixes stay out of primary text,
 and only an unavoidable normalized collision gets an ordinal.
 
+Document-scoped editor panels use the existing `UsdPreviewId` lease as their
+view-model key. Keep each open lease's tree, canvas, authored Inspector data,
+joint/animation state, authored layer, and projection generation isolated;
+paint only the focused entry. The generic ECS selection is a focused-lease
+projection and must be restored from editor-owned session selection on focus
+changes. Dispatch edits with the lease's explicit document, authored layer, and
+generation through the typed USD command surface.
+
 World-space vehicle trails are transient render presentation, not UI-owned state.
 Read the vehicle root's solved Avian `Position` in the active physics/grid frame,
 project through `GridSurfaceQuery`, and use bounded history with explicit
