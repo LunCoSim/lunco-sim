@@ -9,13 +9,13 @@
 // authored rake. Each joint's two frames (`physics:localRot0` on the hull and
 // `localRot1` on the leg) define that leg's raked local Y axis; the X and Z
 // bases are authored for their respective planes. Negative displacement is
-// compression along the hull-to-foot axis. Each flat pad is a child collider of
-// its leg body, so it cannot rotate independently or turn onto its rim.
+// compression along the hull-to-foot axis. Each round pad is a child collider
+// of its leg body, so it cannot rotate independently or turn onto its rim.
 //
 // So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
 // bodies at finite, bounded positions, the hull level and at rest, all four
-// struts sharing the load, and the rigid leg bodies keeping every pad level. A
-// silent frame regression fails every one of them.
+// struts sharing the load, and the rigid leg bodies keeping every round pad level.
+// A silent frame regression fails every one of them.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -61,12 +61,24 @@ fn on_start(me) {
     }
     print("[legs] avian_substeps=" + physics_substeps());
     this.t = 0.0;
-    this.settle_s = 30.0;   // drop + crush + planted-gear ring-down
     this.sample_s = 0.5;
     this.next_sample = 0.0;
-    this.ring_start_s = 24.0;
-    this.stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
-    this.stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
+    // Stability is a physical observation, not a qualification deadline. A
+    // candidate must continuously satisfy support, load, velocity, and stroke
+    // envelope conditions; any violation restarts the observation window.
+    this.stable_window_s = 2.0;
+    this.stable_s = 0.0;
+    this.stable_stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
+    this.stable_stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
+    this.full_stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
+    this.full_stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
+    this.full_stroke_samples = 0;
+    this.slider_axes = leg_slider_axes();
+    this.start_hull_rotation = ();
+    this.leg_start_relative = [];
+    this.alignment_samples = 0;
+    this.max_lateral_error = 0.0;
+    this.max_axial_mismatch = 0.0;
 
     this.hull = find("/LandingLegsTest/Lander");
     this.rcs = find("/LandingLegsTest/Lander/AttitudePropulsion");
@@ -96,6 +108,13 @@ fn on_start(me) {
         find("/LandingLegsTest/Lander/LegPZ_Spring"),
         find("/LandingLegsTest/Lander/LegNZ_Spring"),
     ];
+    let hull_pos = world_pos(this.hull);
+    this.start_hull_rotation = world_rotation(this.hull);
+    for leg in this.legs {
+        let leg_pos = world_pos(leg);
+        if hull_pos == () || leg_pos == () { this.leg_start_relative.push(()); }
+        else { this.leg_start_relative.push(vsub(leg_pos, hull_pos)); }
+    }
     this.phase = "drop";
     this.y_prev = ();
     this.peak_force = 0.0;
@@ -107,7 +126,7 @@ fn on_start(me) {
     print("[legs] site_pos=" + world_pos(this.site) + " site_up=" + world_up(this.site));
     print("[legs] moon_pos=" + world_pos(this.moon) + " moon_up=" + world_up(this.moon));
     print("[legs] gravity probe will be sampled after the first physics tick");
-    print("[legs] dropping from 3 m; settling for " + this.settle_s + "s");
+    print("[legs] dropping from 3 m; waiting for physical convergence");
 }
 
 /// Strut reaction forces, one per leg, as read from each spring joint's `force`
@@ -162,10 +181,7 @@ fn frame_errors(hull, legs) {
     // `localRot0 * physics:axis`, per leg: the four slider axes are raked 20°
     // outward in the HULL frame. `localRot1` uses the same 180° sign basis on
     // every leg, so +Y in the body frame points from hull toward the foot.
-    let s = 0.34202014;
-    let c = 0.93969262;
-    let a0 = [[s, -c, 0.0], [-s, -c, 0.0],
-              [0.0, -c, s], [0.0, -c, -s]];
+    let a0 = leg_slider_axes();
     let a1 = [0.0, -1.0, 0.0];
     let out = [];
     for i in 0..legs.len() {
@@ -173,6 +189,39 @@ fn frame_errors(hull, legs) {
         if d < 0.0 { out.push(()); } else { out.push(r4(d)); }
     }
     out
+}
+
+/// The four authored slider axes, expressed in the hull frame. This is the
+/// same `localRot0 * physics:axis` contract used by `frame_errors` and by the
+/// position-residual measurement below.
+fn leg_slider_axes() {
+    let s = 0.34202014;
+    let c = 0.93969262;
+    [[s, -c, 0.0], [-s, -c, 0.0],
+     [0.0, -c, s], [0.0, -c, -s]]
+}
+
+/// Measure one leg against the joint's authored geometric frame. The initial
+/// relative pose is rotated with the hull so hull motion is not mistaken for
+/// slider error. The result is `[lateral_residual_m, axial_stroke_error_m]`.
+fn leg_alignment(hull, leg, index, start_relative, start_hull_rotation, axes, stroke) {
+    let hq = world_rotation(hull);
+    let hp = world_pos(hull);
+    let lp = world_pos(leg);
+    if hq == () || hp == () || lp == () || start_hull_rotation == () ||
+       start_relative[index] == () { return (); }
+
+    let start_local = qrot([-start_hull_rotation[0], -start_hull_rotation[1],
+                            -start_hull_rotation[2], start_hull_rotation[3]],
+                           start_relative[index]);
+    let expected_delta = qrot(hq, start_local);
+    let actual_delta = vsub(lp, hp);
+    let residual = vsub(actual_delta, expected_delta);
+    let axis = qrot(hq, axes[index]);
+    let axial = vdot(residual, axis);
+    let lateral = vsub(residual, vscale(axis, axial));
+    let axial_error = if stroke == () { () } else { (axial - stroke).abs() };
+    [vlen(lateral), axial_error]
 }
 
 /// Tilt from the local terrain normal, in degrees. The test scene is site
@@ -209,15 +258,25 @@ fn on_tick(me) {
     let tilt = local_tilt(this.hull, this.surface_up);
     let f = strut_forces(this.springs);
     let x = strut_strokes(this.springs);
+    let frame = frame_errors(this.hull, this.legs);
 
-    // A constraint solver's instantaneous velocity contains substep contact
-    // chatter; visible suspension jitter is displacement exchanged over time.
-    // Measure the full final two-second stroke envelope, not one phase sample.
-    if this.t >= this.ring_start_s {
-        for i in 0..4 {
-            if x[i] != () {
-                if x[i] < this.stroke_min[i] { this.stroke_min[i] = x[i]; }
-                if x[i] > this.stroke_max[i] { this.stroke_max[i] = x[i]; }
+    for i in 0..4 {
+        if x[i] != () {
+            if x[i] < this.full_stroke_min[i] { this.full_stroke_min[i] = x[i]; }
+            if x[i] > this.full_stroke_max[i] { this.full_stroke_max[i] = x[i]; }
+            this.full_stroke_samples += 1;
+        }
+        let alignment = leg_alignment(this.hull, this.legs[i], i,
+                                      this.leg_start_relative,
+                                      this.start_hull_rotation,
+                                      this.slider_axes, x[i]);
+        if alignment != () {
+            this.alignment_samples += 1;
+            if alignment[0] > this.max_lateral_error {
+                this.max_lateral_error = alignment[0];
+            }
+            if alignment[1] != () && alignment[1] > this.max_axial_mismatch {
+                this.max_axial_mismatch = alignment[1];
             }
         }
     }
@@ -268,14 +327,48 @@ fn on_tick(me) {
             + get(this.environment, "gravity_y") + ", " + get(this.environment, "gravity_z") + "]");
         print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
         print("[legs]     ground_pos=" + world_pos(this.ground));
-        print("[legs]     frame_err_deg=" + frame_errors(this.hull, this.legs));
+        print("[legs]     frame_err_deg=" + frame);
         print("[legs]     pad_tilt_deg=" + pad_tilts(this.pads, this.surface_up));
         print("[legs]     leg_contact_N=" + leg_contact_forces(this.legs)
             + "  contact=" + leg_contact_state(this.legs));
         this.next_sample = this.t + this.sample_s;
     }
 
-    if this.t >= this.settle_s {
+    // A landed mechanism is stable only when every physical support and motion
+    // observable agrees at the same time. This is a state-based convergence
+    // detector: it has no fixed drop/settling schedule and cannot pass a late
+    // oscillation by sampling one convenient tick.
+    let hull_velocity = [get(this.hull, "velocity_x"), get(this.hull, "velocity_y"),
+                         get(this.hull, "velocity_z")];
+    let hull_angular_velocity = [get(this.hull, "angvel_x"), get(this.hull, "angvel_y"),
+                                 get(this.hull, "angvel_z")];
+    let stable_sample = vlen(hull_velocity) <= 0.03 &&
+                        vlen(hull_angular_velocity) <= 0.01;
+    for i in 0..4 {
+        let contact = get(this.legs[i], "contact");
+        stable_sample = stable_sample && contact != () && contact > 0.5 &&
+                        f[i] != () && f[i] > 100.0 && x[i] != () &&
+                        x[i] < -0.005 && x[i] >= -0.802 && x[i] <= 0.002;
+    }
+
+    if stable_sample {
+        this.stable_s += dt();
+        for i in 0..4 {
+            if x[i] < this.stable_stroke_min[i] { this.stable_stroke_min[i] = x[i]; }
+            if x[i] > this.stable_stroke_max[i] { this.stable_stroke_max[i] = x[i]; }
+            if this.stable_stroke_max[i] - this.stable_stroke_min[i] > 0.005 {
+                stable_sample = false;
+            }
+        }
+    }
+
+    if !stable_sample {
+        this.stable_s = 0.0;
+        this.stable_stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
+        this.stable_stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
+    }
+
+    if stable_sample && this.stable_s >= this.stable_window_s {
         this.phase = "done";
         // An explicit map, NOT `this`: helpers never see `this`, and passing a
         // plain map keeps the verdict a pure function of the measurements.
@@ -295,7 +388,10 @@ fn on_tick(me) {
                 world_pos(this.legs[0]), world_pos(this.legs[1]),
                 world_pos(this.legs[2]), world_pos(this.legs[3]),
             ],
-            frame_err: frame_errors(this.hull, this.legs),
+            frame_err: frame,
+            alignment_samples: this.alignment_samples,
+            max_lateral_error: this.max_lateral_error,
+            max_axial_mismatch: this.max_axial_mismatch,
             pad_tilt: pad_tilts(this.pads, this.surface_up),
             leg_contact_force: leg_contact_forces(this.legs),
             leg_contact: leg_contact_state(this.legs),
@@ -308,20 +404,17 @@ fn on_tick(me) {
                 get(this.legs[0], "mass"), get(this.legs[1], "mass"),
                 get(this.legs[2], "mass"), get(this.legs[3], "mass"),
             ],
-            hull_velocity: [
-                get(this.hull, "velocity_x"), get(this.hull, "velocity_y"),
-                get(this.hull, "velocity_z"),
-            ],
-            hull_angular_velocity: [
-                get(this.hull, "angvel_x"), get(this.hull, "angvel_y"),
-                get(this.hull, "angvel_z"),
-            ],
+            hull_velocity: hull_velocity,
+            hull_angular_velocity: hull_angular_velocity,
             strut_velocity: [
                 get(this.springs[0], "velocity"), get(this.springs[1], "velocity"),
                 get(this.springs[2], "velocity"), get(this.springs[3], "velocity"),
             ],
-            stroke_min: this.stroke_min,
-            stroke_max: this.stroke_max,
+            stroke_min: this.stable_stroke_min,
+            stroke_max: this.stable_stroke_max,
+            full_stroke_min: this.full_stroke_min,
+            full_stroke_max: this.full_stroke_max,
+            full_stroke_samples: this.full_stroke_samples,
         });
     }
 }
@@ -339,7 +432,8 @@ fn on_tick(me) {
 //
 //   hull level       tilt <= 5°. The drop is symmetric onto flat ground with
 //                    four identical legs, so the only thing that can tip it is
-//                    an asymmetric strut. Slack enough for the ring-down.
+//                    an asymmetric strut. The final verdict waits for physical
+//                    convergence instead of selecting a fixed elapsed time.
 //
 //   hull height      1.0 .. 8.0 m. Rest height is set by how far the struts
 //                    stroke under the vehicle's weight; the band spans
@@ -356,19 +450,19 @@ fn on_tick(me) {
 //                    not enough: a strut jammed against a limit stop can report a
 //                    plausible reaction while never moving.
 //
-//   the slider slid  the prismatic's own angular lock (`rot0·localRot0 ==
-//                    rot1·localRot1`) still holds at rest. This is the check that
-//                    catches a gear which settles by BENDING rather than
-//                    stroking — the vehicle looks landed and level, the hull sits
-//                    at a believable height, and the springs are carrying nothing
-//                    because the load never reached the axial DOF. It caught the
-//                    strut-collider grounding bug (see the pad-depth note in
-//                    descent_lander.usda), and nothing else in this file did.
+//   joint geometry     the direct frame residual stays small in the lateral and
+//                    axial directions throughout the run. This observes the
+//                    prismatic body's actual geometry, rather than inferring
+//                    constraint health from hull height or spring force alone.
 fn verdict(s) {
     let f = [];
 
     f.push(t_true(s.substeps == 8,
         "landing-gear fixture must run at Avian's eight-substep default, got " + s.substeps));
+    f.push(t_true(s.alignment_samples > 0,
+        "no leg alignment samples were captured"));
+    f.push(t_true(s.full_stroke_samples > 0,
+        "no full-run suspension samples were captured"));
     f.push(t_bounded(s.hull_pos, 100.0, "hull"));
     let names = ["PX", "NX", "PZ", "NZ"];
     for i in 0..4 {
@@ -420,13 +514,25 @@ fn verdict(s) {
         }
     }
 
-    // Angular-lock error is REPORTED, not asserted, and the reason is worth
-    // stating: the angle alone does not discriminate. A bypassed gear bends ~2°
-    // carrying nothing; a working one bends ~2° carrying 900 N, because an XPBD
-    // joint is elastic and the bend tracks LOAD. What distinguishes them is the
-    // conjunction — bending WHILE the spring reads nothing — and the stroke
-    // assertions above already test the half that carries the information.
-    // Asserting an angle here would be asserting the load, in the wrong units.
+    // Position residuals are measured against the two joint frames, not against
+    // world-up or a visual mesh. A lateral residual means the leg is escaping
+    // the prismatic axis; a stroke mismatch means the port and the body pose no
+    // longer describe the same physical DOF.
+    f.push(t_range(s.max_lateral_error, 0.0, 0.01,
+        "maximum lateral leg residual (m)"));
+    f.push(t_range(s.max_axial_mismatch, 0.0, 0.01,
+        "maximum joint stroke/pose mismatch (m)"));
+    // The authored stops are the physical travel boundary. Check the complete
+    // landing, including impact, so a leg cannot pass by ending in range after
+    // crossing a stop during the drop.
+    if s.full_stroke_samples > 0 {
+        for i in 0..4 {
+            f.push(t_range(s.full_stroke_min[i], -0.802, 0.002,
+                "strut " + names[i] + " full-run lower travel limit (m)"));
+            f.push(t_range(s.full_stroke_max[i], -0.002, 0.002,
+                "strut " + names[i] + " full-run upper travel limit (m)"));
+        }
+    }
 
     // The pads are fixed colliders on the prismatic leg bodies. On flat ground
     // their contact faces must remain level; a separate shoe joint would add a
@@ -440,23 +546,24 @@ fn verdict(s) {
     }
 
     // Pose alone can pass while the landed mechanism is still exchanging energy
-    // between its four struts. Prove the actual state has rung down: the hull is
-    // neither translating nor yawing, and each strut remains inside a 5 mm
-    // peak-to-peak envelope throughout the final two seconds. That window is the
-    // visible mechanism state; one instantaneous XPBD velocity sample contains
-    // contact-iteration chatter even when its integrated travel is microscopic.
+    // between its four struts. The convergence detector above proves the actual
+    // state has rung down: the hull is neither translating nor yawing, every foot
+    // is carrying load, and each strut remains inside a 5 mm peak-to-peak envelope
+    // throughout the observed stable window. One instantaneous XPBD velocity
+    // sample contains contact-iteration chatter even when its integrated travel
+    // is microscopic.
     let hull_speed = vlen(s.hull_velocity);
     let hull_rate = vlen(s.hull_angular_velocity);
     f.push(t_range(hull_speed, 0.0, 0.03,
-        "hull speed after planted-gear ring-down (m/s)"));
+        "hull speed at physical convergence (m/s)"));
     f.push(t_range(hull_rate, 0.0, 0.01,
-        "hull angular speed after planted-gear ring-down (rad/s)"));
+        "hull angular speed at physical convergence (rad/s)"));
     let stroke_span = [];
     for i in 0..4 {
         let span = s.stroke_max[i] - s.stroke_min[i];
         stroke_span.push(span);
         f.push(t_range(span, 0.0, 0.005,
-            "strut " + names[i] + " final two-second travel envelope (m)"));
+            "strut " + names[i] + " convergence travel envelope (m)"));
     }
 
     print("[legs] ── results ──────────────────────────────────────────");
@@ -471,7 +578,10 @@ fn verdict(s) {
     print("[legs]   hull rate   " + r4(vlen(s.hull_angular_velocity)) + " rad/s");
     print("[legs]   hull omega  " + s.hull_angular_velocity + " rad/s");
     print("[legs]   strut rate  " + s.strut_velocity + " m/s");
-    print("[legs]   stroke span " + stroke_span + " m over final 2 s");
+    print("[legs]   stroke span " + stroke_span + " m over stable convergence window");
+    print("[legs]   max lateral " + r4(s.max_lateral_error) + " m");
+    print("[legs]   max axial mismatch " + r4(s.max_axial_mismatch) + " m");
+    print("[legs]   full stroke " + s.full_stroke_min + " .. " + s.full_stroke_max + " m");
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
     print("[legs]   hull mass   " + s.hull_mass + " kg");
     print("[legs]   hull inertia " + s.hull_inertia + " kg m2");

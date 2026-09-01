@@ -270,12 +270,23 @@ A physical member is projected from the standard `PhysicsPrismaticJoint` and
 and force capacity are read once through the composed `StageView` and lowered to
 Avian's native implicit spring-damper motor. The native prismatic joint remains
 responsible for anchors, alignment, rotation lock, limits, and the drive
-reaction. The physics owner performs one fixed, generic contact-coupling pass
-for touching prismatic joints after contact relaxation, giving a contact impulse
-through a long suspension link its native return path without increasing
-substeps or applying an asset-specific correction. No custom material component,
-outer-tick force accumulator, transform write, or vehicle-specific branch is
-involved.
+reaction. Avian 0.7's signed lower-limit correction has the opposite sign to
+its positional-impulse convention: the native lower-limit branch can move a
+slider farther outside its authored range. The physics owner therefore adds
+one generic XPBD user-constraint projection after Avian's native prismatic
+solve. It uses the signed limit residual, the actual joint-anchor Jacobian, the
+effective mass, and the authored limit compliance; Avian's native velocity
+projection then converts the corrected solver delta into a coherent velocity.
+
+Avian's velocity projection also leaves relative angular velocity introduced by
+a contact impulse when the prismatic frames are already aligned. A second
+generic, inertia-weighted velocity projection removes that locked angular
+component before damping. Both corrections operate on Avian's solver-body delta
+pose and velocity in the active BigSpace physics frame, never on render
+`GlobalTransform`; `StageView` remains the sole composed-USD reader upstream.
+They do not write transforms, repeat the native joint solve, increase substeps,
+or depend on a vehicle-specific branch. No custom material component,
+outer-tick force accumulator, or second joint mechanism is involved.
 
 ---
 

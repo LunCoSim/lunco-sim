@@ -32,15 +32,9 @@
 //! Holds are keyed by a `&'static str` reason, so several subsystems can hold
 //! concurrently and each releases only its own; physics runs when the set is empty.
 
-use avian3d::dynamics::joints::EntityConstraint;
-use avian3d::dynamics::solver::{
-    solver_body::{SolverBody, SolverBodyInertia},
-    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
-};
 use avian3d::prelude::{
-    AngularVelocity, ContactGraph, CustomPositionIntegration, JointDisabled, LinearVelocity,
-    Physics, Position, PrismaticJoint, RigidBody, RigidBodyColliders, RigidBodyDisabled, Rotation,
-    Sensor,
+    AngularVelocity, ComputedCenterOfMass, CustomPositionIntegration, LinearVelocity, Physics,
+    Position, RigidBody, Rotation,
 };
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
@@ -823,80 +817,242 @@ pub fn grant_physics_step(
     }
 }
 
-/// Installs the physics readiness gate. Add wherever `avian3d`'s `PhysicsPlugins`
-/// are added — whoever owns physics owns its gate.
-pub struct PhysicsGatePlugin;
-
-/// Complete the native contact/joint coupling for touching prismatic joints.
-/// Avian prepares joint state before the substep loop and solves the native
-/// joint before contact relaxation. Reusing the prepared native constraint after
-/// that relaxation gives the contact impulse one fixed Gauss-Seidel return path
-/// through a long joint, without changing the fixed timestep or applying an
-/// asset-specific correction.
-fn solve_contact_prismatic_joint(
-    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
-    mut joints: Query<
-        (&mut PrismaticJoint, &mut PrismaticJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
+/// Correct the signed lower/upper limit projection for native prismatic joints.
+///
+/// Avian 0.7's `DistanceLimit::compute_correction_along_axis` returns a
+/// positive correction for a signed lower-limit violation, but
+/// `PositionConstraint::apply_positional_impulse` applies that impulse in the
+/// opposite separation direction. The upper limit uses the opposite sign and
+/// therefore does not expose the defect. This system is the generic solver
+/// boundary for that missing lower-limit case: it uses the same joint frame,
+/// active BigSpace-local solver pose, Jacobian, and effective mass as Avian's
+/// native prismatic constraint, then leaves velocity projection to Avian.
+fn correct_prismatic_limit_position(
+    bodies: Query<
+        (
+            &mut avian3d::dynamics::solver::solver_body::SolverBody,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia,
+        ),
+        Without<avian3d::prelude::RigidBodyDisabled>,
     >,
-    collider_lists: Query<&RigidBodyColliders>,
-    disabled_bodies: Query<(), With<RigidBodyDisabled>>,
-    sensors: Query<(), With<Sensor>>,
-    contact_graph: Res<ContactGraph>,
+    joints: Query<
+        &avian3d::prelude::PrismaticJoint,
+        (
+            Without<avian3d::prelude::RigidBody>,
+            Without<avian3d::prelude::JointDisabled>,
+        ),
+    >,
+    poses: Query<
+        (
+            &avian3d::prelude::Position,
+            &avian3d::prelude::Rotation,
+            &ComputedCenterOfMass,
+        ),
+        Without<avian3d::prelude::RigidBodyDisabled>,
+    >,
     time: Res<Time>,
 ) {
     let delta_secs = time.delta_secs_f64();
-    let mut dummy_body1 = SolverBody::DUMMY;
-    let mut dummy_body2 = SolverBody::DUMMY;
+    let mut dummy_body1 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
+    let mut dummy_body2 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
 
-    for (mut joint, mut solver_data) in &mut joints {
-        let [entity1, entity2] = joint.entities();
-        let has_contact = [entity1, entity2].into_iter().any(|body| {
-            let Ok(colliders) = collider_lists.get(body) else {
-                return false;
-            };
-            colliders.into_iter().any(|collider| {
-                contact_graph.contact_pairs_with(collider).any(|pair| {
-                    pair.is_touching()
-                        && !sensors.contains(pair.collider1)
-                        && !sensors.contains(pair.collider2)
-                        && pair
-                            .body1
-                            .is_some_and(|body| !disabled_bodies.contains(body))
-                        && pair
-                            .body2
-                            .is_some_and(|body| !disabled_bodies.contains(body))
-                })
-            })
-        });
-        if !has_contact {
-            continue;
-        }
+    for joint in &joints {
+        let (mut body1, mut inertia1) = (
+            &mut dummy_body1,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
+        );
+        let (mut body2, mut inertia2) = (
+            &mut dummy_body2,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
+        );
 
-        let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
-        let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity1) } {
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body1) } {
             body1 = body.into_inner();
             inertia1 = inertia;
         }
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity2) } {
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body2) } {
             body2 = body.into_inner();
             inertia2 = inertia;
         }
+
+        // Match Avian's dominance rule: the more dominant body is the
+        // immovable side of this constraint for the current solve.
         match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
-            std::cmp::Ordering::Greater => inertia1 = &SolverBodyInertia::DUMMY,
-            std::cmp::Ordering::Less => inertia2 = &SolverBodyInertia::DUMMY,
+            std::cmp::Ordering::Greater => {
+                inertia1 = &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY
+            }
+            std::cmp::Ordering::Less => {
+                inertia2 = &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY
+            }
             std::cmp::Ordering::Equal => {}
         }
 
-        joint.solve(
-            [body1, body2],
-            [inertia1, inertia2],
-            &mut solver_data,
+        let Some(limits) = joint.limits else {
+            continue;
+        };
+        let (
+            Ok((position1, rotation1, center_of_mass1)),
+            Ok((position2, rotation2, center_of_mass2)),
+        ) = (poses.get(joint.body1), poses.get(joint.body2))
+        else {
+            continue;
+        };
+        let (Some(local_anchor1), Some(local_anchor2), Some(local_basis1)) = (
+            joint.local_anchor1(),
+            joint.local_anchor2(),
+            joint.local_basis1(),
+        ) else {
+            continue;
+        };
+
+        let local_r1 = rotation1.0 * (local_anchor1 - center_of_mass1.0);
+        let local_r2 = rotation2.0 * (local_anchor2 - center_of_mass2.0);
+        let world_r1 = body1.delta_rotation * local_r1;
+        let world_r2 = body2.delta_rotation * local_r2;
+        let axis = body1.delta_rotation * (rotation1.0 * local_basis1) * joint.slider_axis;
+        let anchor1 =
+            position1.0 + rotation1.0 * center_of_mass1.0 + body1.delta_position + world_r1;
+        let anchor2 =
+            position2.0 + rotation2.0 * center_of_mass2.0 + body2.delta_position + world_r2;
+        let displacement = (anchor2 - anchor1).dot(axis);
+        let correction = if displacement < limits.min {
+            displacement - limits.min
+        } else if displacement > limits.max {
+            displacement - limits.max
+        } else {
+            0.0
+        };
+        if correction.abs() <= avian3d::math::Scalar::EPSILON {
+            continue;
+        }
+
+        let inverse_mass1 = inertia1.effective_inv_mass();
+        let inverse_mass2 = inertia2.effective_inv_mass();
+        let inverse_angular_inertia1 = inertia1.effective_inv_angular_inertia();
+        let inverse_angular_inertia2 = inertia2.effective_inv_angular_inertia();
+        let angular_axis1 = world_r1.cross(axis);
+        let angular_axis2 = world_r2.cross(axis);
+        let effective_mass = axis.dot(inverse_mass1 * axis)
+            + angular_axis1.dot(inverse_angular_inertia1 * angular_axis1)
+            + axis.dot(inverse_mass2 * axis)
+            + angular_axis2.dot(inverse_angular_inertia2 * angular_axis2);
+        if effective_mass <= avian3d::math::Scalar::EPSILON {
+            continue;
+        }
+
+        // The constraint residual is `displacement - limit`. Avian's
+        // positional-impulse convention moves the measured separation by
+        // `-effective_mass * impulse`, so the signed Lagrange update receives
+        // the negated residual. This preserves the authored limit compliance
+        // instead of turning a soft limit into an implicit hard stop.
+        let delta_lagrange = avian3d::dynamics::solver::xpbd::compute_lagrange_update(
+            0.0,
+            -correction,
+            &[effective_mass],
+            joint.limit_compliance,
             delta_secs,
         );
+        let impulse = axis * delta_lagrange;
+        if !body1.flags.is_kinematic() {
+            body1.delta_position += inverse_mass1 * impulse;
+            let delta_rotation = avian3d::math::Quaternion::from_scaled_axis(
+                inverse_angular_inertia1 * world_r1.cross(impulse),
+            );
+            body1.delta_rotation.0 = delta_rotation * body1.delta_rotation.0;
+        }
+        if !body2.flags.is_kinematic() {
+            body2.delta_position -= inverse_mass2 * impulse;
+            let delta_rotation = avian3d::math::Quaternion::from_scaled_axis(
+                inverse_angular_inertia2 * world_r2.cross(-impulse),
+            );
+            body2.delta_rotation.0 = delta_rotation * body2.delta_rotation.0;
+        }
     }
 }
+
+/// Project relative angular velocity for native prismatic joints.
+///
+/// Avian's XPBD prismatic constraint projects orientation changes, but its
+/// velocity projection leaves a relative angular velocity that arrived from a
+/// contact impulse untouched when the orientation was already aligned. That is
+/// physically inconsistent for a prismatic joint: all three relative angular
+/// degrees of freedom are locked. A long slider then carries that residual rate
+/// to its contact point and can turn a stationary support into persistent slip.
+///
+/// This is the velocity-level complement to Avian's native position solver. It
+/// applies the unique impulse that removes relative angular velocity while
+/// distributing the correction through the two effective inverse inertias. It
+/// does not move transforms, repeat the XPBD solve, or add a scene-specific
+/// correction.
+fn project_prismatic_angular_velocity(
+    bodies: Query<
+        (
+            &mut avian3d::dynamics::solver::solver_body::SolverBody,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia,
+        ),
+        Without<avian3d::prelude::RigidBodyDisabled>,
+    >,
+    joints: Query<
+        &avian3d::prelude::PrismaticJoint,
+        (
+            Without<avian3d::prelude::RigidBody>,
+            Without<avian3d::prelude::JointDisabled>,
+        ),
+    >,
+) {
+    let mut dummy_body1 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
+    let mut dummy_body2 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
+
+    for joint in &joints {
+        let (mut body1, mut inertia1) = (
+            &mut dummy_body1,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
+        );
+        let (mut body2, mut inertia2) = (
+            &mut dummy_body2,
+            &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
+        );
+
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body1) } {
+            body1 = body.into_inner();
+            inertia1 = inertia;
+        }
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body2) } {
+            body2 = body.into_inner();
+            inertia2 = inertia;
+        }
+
+        // Match Avian's dominance rule: the more dominant body is the
+        // immovable side of this constraint for the current solve.
+        match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
+            std::cmp::Ordering::Greater => {
+                inertia1 = &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY
+            }
+            std::cmp::Ordering::Less => {
+                inertia2 = &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+
+        let relative = body2.angular_velocity - body1.angular_velocity;
+        if relative.length_squared() > avian3d::math::Scalar::EPSILON {
+            let inv_inertia1 = inertia1.effective_inv_angular_inertia();
+            let inv_inertia2 = inertia2.effective_inv_angular_inertia();
+            let impulse = (inv_inertia1 + inv_inertia2).inverse_or_zero() * relative;
+
+            if !body1.flags.is_kinematic() {
+                body1.angular_velocity += inv_inertia1 * impulse;
+            }
+            if !body2.flags.is_kinematic() {
+                body2.angular_velocity -= inv_inertia2 * impulse;
+            }
+        }
+    }
+}
+
+/// Installs the physics readiness gate. Add wherever `avian3d`'s `PhysicsPlugins`
+/// are added — whoever owns physics owns its gate.
+pub struct PhysicsGatePlugin;
 
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
@@ -930,9 +1086,15 @@ impl Plugin for PhysicsGatePlugin {
             .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
             .add_systems(
                 avian3d::prelude::SubstepSchedule,
-                solve_contact_prismatic_joint.in_set(
+                correct_prismatic_limit_position.in_set(
                     avian3d::dynamics::solver::xpbd::XpbdSolverSystems::SolveUserConstraints,
                 ),
+            )
+            .add_systems(
+                avian3d::prelude::SubstepSchedule,
+                project_prismatic_angular_velocity
+                    .after(avian3d::dynamics::solver::xpbd::XpbdSolverSystems::VelocityProjection)
+                    .before(avian3d::dynamics::solver::schedule::SubstepSolverSystems::Damping),
             )
             .add_plugins(escape::EscapeDiagnosticPlugin)
             // Same reasoning: a readiness decision that nothing enforces is a
