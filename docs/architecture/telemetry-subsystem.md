@@ -59,7 +59,11 @@ as `pin voltage` and `pin current`; their exact `p.v`/`p.i` identities remain in
 API `name`, and model-variable metadata. Generated member variables receive the declaration's
 units and descriptions through the existing Modelica source projection before they enter the
 shared registry. The generated-name setting only selects the presentation projection; it never
-changes identity, history, bindings, or the USD/Modelica model. A new producer therefore supplies
+changes identity, history, bindings, or the USD/Modelica model. `SignalExposure` is the
+authoritative internal/public distinction: the telemetry browser applies the shared theme's
+internal-state styling once in its legend and to internal row labels, without appending a
+category suffix to every label. Exact generated names remain available through the existing
+detail and generated-name views. A new producer therefore supplies
 ownership and source metadata once and does not need a second naming table in those surfaces. A
 runtime-authored compact surface may additionally opt a declaration into its
 operator summary with the standard USD `ui:displayName`; the USD projector carries that explicit
@@ -218,7 +222,9 @@ This is runtime exploration, not authored schema: no USD output attribute and no
 choice when an author wants a stable mission-facing name, custom rate/unit, or a non-Modelica
 source. Both producers write the same signal identity and registry, so the telemetry browser,
 API, recorder, and plot surfaces see one catalog. Plot bindings only choose what to display; they
-do not decide whether model state exists.
+do not decide whether model state exists. The Modelica inspector likewise lists runtime-published
+variables, authored inputs, and experiment outputs; it does not infer observable variables from
+static component types before a solver publishes them.
 
 The model inspector answers "what is the model doing now?"; the telemetry browser answers "what
 channels and history are available?". Both use the shared deadband to suppress numerical jitter,

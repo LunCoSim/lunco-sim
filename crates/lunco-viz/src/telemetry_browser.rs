@@ -699,34 +699,39 @@ fn row_visible(
         )
 }
 
-/// Display the authored/operator channel name.  Public rows stay concise; the
-/// exact Modelica class, variable, and source asset remain in the row detail
-/// tooltip.  Internal rows retain their generated identity so implementation
-/// channels cannot collapse into apparent duplicates.
+/// Display the authored/operator channel name. Public and internal rows share
+/// the same concise operator projection; [`SignalExposure`] supplies the
+/// visual distinction while the row detail tooltip retains the exact
+/// Modelica class, variable, and source asset.
 fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
     if row.exposure == SignalExposure::Internal && !show_generated_names {
         // The tree already identifies the authored component.  Show the
         // Modelica variable here and keep the exact solver address in the
         // detail strip, so inspecting internal state does not require reading
         // a generated namespace.
-        let variable = row
+        return row
             .model_variable
             .as_deref()
             .or_else(|| row.sig.path.rsplit('.').next())
             .map(|variable| operator_identifier_label(variable, row.unit.as_deref()))
             .unwrap_or_else(|| "state".to_string());
-        return format!("{variable} · internal");
     }
-    let base = display_channel_label(
+    display_channel_label(
         &row.sig.path,
         row.group_path.as_deref(),
         row.unit.as_deref(),
         show_generated_names,
-    );
-    if show_generated_names {
-        return base;
+    )
+}
+
+fn telemetry_row_label_color(row: &Row, theme: &lunco_theme::Theme) -> egui::Color32 {
+    if !row.active {
+        theme.tokens.text_subdued
+    } else if row.exposure == SignalExposure::Internal {
+        theme.tokens.warning
+    } else {
+        theme.tokens.text
     }
-    base
 }
 
 fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> bool {
@@ -848,11 +853,7 @@ fn render_tree_node(
                                 } else {
                                     format!("{channel_label} (archived)")
                                 })
-                                .color(if row.active {
-                                    theme.tokens.text
-                                } else {
-                                    theme.tokens.text_subdued
-                                }),
+                                .color(telemetry_row_label_color(row, theme)),
                             )
                         },
                     );
@@ -1172,6 +1173,23 @@ impl Panel for TelemetryBrowserPanel {
                 .desired_width(f32::INFINITY),
         );
 
+        if self.show_model_variables {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Internal state")
+                        .small()
+                        .color(theme.tokens.warning),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Amber labels are implementation values; hover a row for its exact path.",
+                    )
+                    .small()
+                    .color(subdued),
+                );
+            });
+        }
+
         // ── Selection scope ──────────────────────────────────────
         // The focus resource is written by whichever app owns selection
         // (`lunco-luncosim-edit` mirrors `SelectedEntities` into it); absent ⇒ a host
@@ -1204,8 +1222,8 @@ impl Panel for TelemetryBrowserPanel {
             ui.checkbox(&mut self.show_model_variables, "Internal variables")
                 .on_hover_text(
                     "Include generated Modelica inputs, connector values, and component state. \
-                     Canonical USD-facing channels remain visible; implementation rows are \
-                     marked internal and keep their generated identity.",
+                     Canonical USD-facing channels remain visible; implementation rows use the \
+                     shared internal-state styling and keep their exact identity in details.",
                 );
             ui.checkbox(&mut display_settings.show_archived, "Archived histories")
                 .on_hover_text(
@@ -1583,10 +1601,7 @@ mod tests {
             "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power",
         );
         internal.exposure = SignalExposure::Internal;
-        assert_eq!(
-            telemetry_row_label(&internal, false),
-            "electrical power · internal"
-        );
+        assert_eq!(telemetry_row_label(&internal, false), "electrical power");
         assert_eq!(
             telemetry_row_label(&internal, true),
             "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power"
@@ -2108,16 +2123,10 @@ mod tests {
             in_focus: false,
             active: true,
         };
-        assert_eq!(
-            telemetry_row_label(&internal, false),
-            "pin voltage · internal"
-        );
+        assert_eq!(telemetry_row_label(&internal, false), "pin voltage");
         internal.model_variable = Some("p.i".into());
         internal.unit = Some("A".into());
-        assert_eq!(
-            telemetry_row_label(&internal, false),
-            "pin current · internal"
-        );
+        assert_eq!(telemetry_row_label(&internal, false), "pin current");
     }
 
     #[test]

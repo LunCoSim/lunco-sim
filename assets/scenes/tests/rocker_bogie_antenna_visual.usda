@@ -7,12 +7,16 @@
 )
 
 # Visual companion for the numeric rocker-bogie antenna test. It reuses the
-# production fixture's celestial frame, rover, camera track, and starfield.
+# production fixture's celestial frame, canonical infinite-storage rover, camera
+# track, and starfield. The finite-storage sibling is covered by the numeric
+# fixture and is inactive here so this review has one readable subject.
 def Xform "RockerBogieAntennaVisual" (
     prepend references = @lunco://scenes/tests/rocker_bogie_antenna.usda@</RockerBogieAntennaTest>
     kind = "assembly"
 )
 {
+    over "RoverBattery" (active = false) { }
+
     def Xform "Sky" (
         prepend references = @lunco://components/environment/starfield_sky.usda@</StarfieldSky>
     )
@@ -116,9 +120,7 @@ def Xform "RockerBogieAntennaVisual" (
     )
     {
         # A low rear three-quarter take keeps the front and rear wheel groups
-        # on one readable baseline. The previous high camera made the depth
-        # separation look like detached suspension while hiding the rocker
-        # pivots behind the chassis.
+        # on one readable baseline while keeping the rocker pivots visible.
         double3 lunco:cameraLookAt = (-0.2, 0.75, 0.2)
         double3 xformOp:translate = (-6.4, 3.2, 9.2)
         float focalLength = 30.0

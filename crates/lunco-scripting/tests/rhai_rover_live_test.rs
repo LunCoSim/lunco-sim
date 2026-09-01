@@ -18,7 +18,8 @@
 use bevy::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{
-    on_command, register_commands, Ack, Command, GlobalEntityId, OpId, TelemetryEvent,
+    command_telemetry_event, on_command, register_commands, Ack, Command, GlobalEntityId, OpId,
+    TelemetryEvent,
 };
 use lunco_doc::{DocumentHost, DocumentId};
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage, ScriptedModel};
@@ -724,8 +725,8 @@ fn builtin_task_and_mission_run_together() {
 }
 
 #[test]
-fn rhai_event_delivered_to_on_event_next_tick() {
-    // P3 frame-delayed event delivery: tick 1 emits PING, tick 2 the on_event
+fn rhai_event_delivered_to_on_event_next_scenario_pass() {
+    // P3 pass-delayed event delivery: pass 1 emits PING, pass 2 the on_event
     // hook receives it and records a marker via emit("GOT_PING").
     let source = r#"
         fn on_start(me) { this.sent = false; }
@@ -744,11 +745,43 @@ fn rhai_event_delivered_to_on_event_next_tick() {
     let events = &app.world().resource::<EventLog>().0;
     assert!(
         events.iter().any(|n| n == "PING"),
-        "tick 1 should emit PING; got {events:?}"
+        "pass 1 should emit PING; got {events:?}"
     );
     assert!(
         events.iter().any(|n| n == "GOT_PING"),
-        "tick 2 on_event should have received PING and emitted GOT_PING; got {events:?}"
+        "pass 2 on_event should have received PING and emitted GOT_PING; got {events:?}"
+    );
+}
+
+#[test]
+fn rhai_event_reaches_on_event_while_simulation_is_paused() {
+    let source = r#"
+        fn on_start(me) { emit("STARTED", 1); }
+        fn on_tick(me) { emit("TICKED", 1); }
+        fn on_event(me, evt) {
+            if evt.name == "cmd:TutorialNext" { emit("ADVANCED", 1); }
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    app.world_mut()
+        .trigger(command_telemetry_event("TutorialNext"));
+
+    app.world_mut().run_schedule(Update);
+    app.world_mut().flush();
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|name| name == "STARTED"),
+        "paused pass should start the scenario; got {events:?}"
+    );
+    assert!(
+        events.iter().any(|name| name == "ADVANCED"),
+        "paused pass should deliver TutorialNext to on_event; got {events:?}"
+    );
+    assert!(
+        !events.iter().any(|name| name == "TICKED"),
+        "paused pass must not run fixed-step on_tick; got {events:?}"
     );
 }
 

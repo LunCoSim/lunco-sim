@@ -209,7 +209,7 @@ You'll use these constantly (the complete table is in
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, and source for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
-| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` next tick); scalar, array, and map payloads keep their typed structure. |
+| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass); scalar, array, and map payloads keep their typed structure. |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
 | `list_entities()` | every entity (`#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}`) — identity comes from USD/catalog data; filter/select in-script. |
 
@@ -278,7 +278,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
-| `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` next tick) |
+| `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |

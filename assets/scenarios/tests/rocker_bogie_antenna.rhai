@@ -100,123 +100,165 @@ fn support_measurements(antenna, rover) {
     }
 }
 
+fn rover_specs() {
+    [
+        #{
+            id: "infinite",
+            root: "/RockerBogieAntennaTest/Rover",
+        },
+        #{
+            id: "battery",
+            root: "/RockerBogieAntennaTest/RoverBattery",
+        },
+    ]
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.phase = "settle";
-    this.rover = find("/RockerBogieAntennaTest/Rover");
-    this.antenna = find("/RockerBogieAntennaTest/Rover/Antenna");
-    this.baseline = ();
-    this.rover_start = ();
-    this.antenna_start = ();
-    this.travel = 0.0;
-    this.prev = ();
-    print("[rb-antenna] ── mast/yoke/dish support check ────────────────");
-    print("[rb-antenna] rover=" + this.rover + " antenna=" + this.antenna);
+    this.specs = rover_specs();
+    this.rovers = [];
+    this.antennas = [];
+    this.baselines = [];
+    this.rover_start = [];
+    this.antenna_start = [];
+    this.travel = [];
+    this.prev = [];
+    for spec in this.specs {
+        this.rovers.push(find(spec.root));
+        this.antennas.push(find(spec.root + "/Antenna"));
+        this.baselines.push(());
+        this.rover_start.push(());
+        this.antenna_start.push(());
+        this.travel.push(0.0);
+        this.prev.push(());
+    }
+    print("[rb-antenna] ── shared hardware across power variants ────────");
+    for i in 0..this.specs.len() {
+        print("[rb-antenna] " + this.specs[i].id + " rover=" + this.rovers[i] +
+              " antenna=" + this.antennas[i]);
+    }
 }
 
 fn on_tick(me) {
     if this.phase == "done" { return; }
-    if this.rover == () || this.rover < 0 || this.antenna == () || this.antenna < 0 {
-        fail_fast("rocker-bogie rover or antenna was not composed",
-                  "ROCKER BOGIE ANTENNA", "ROCKER_BOGIE_ANTENNA");
-        this.phase = "done";
-        return;
-    }
-
     this.t += dt();
-    let p = world_pos(this.rover);
-    if p == () {
-        fail_fast("rocker-bogie rover has no world pose",
-                  "ROCKER BOGIE ANTENNA", "ROCKER_BOGIE_ANTENNA");
-        this.phase = "done";
-        return;
+    for i in 0..this.specs.len() {
+        if this.rovers[i] == () || this.rovers[i] < 0 ||
+           this.antennas[i] == () || this.antennas[i] < 0 {
+            fail_fast("" + this.specs[i].id +
+                      " rocker-bogie rover or antenna was not composed",
+                      "ROCKER BOGIE ANTENNA", "ROCKER_BOGIE_ANTENNA");
+            this.phase = "done";
+            return;
+        }
     }
 
     if this.phase == "settle" {
-        brake(this.rover);
+        for rover in this.rovers { brake(rover); }
         if this.t >= SETTLE_S {
             this.phase = "drive";
-            this.baseline = support_measurements(this.antenna, this.rover);
-            this.rover_start = p;
-            this.antenna_start = world_pos(this.antenna);
-            this.prev = p;
-            print("[rb-antenna] baseline mast_to_yaw=" + r4(this.baseline.mast_to_yaw) +
-                  " m yoke_to_dish=" + r4(this.baseline.yoke_to_dish) + " m");
+            for i in 0..this.specs.len() {
+                let p = world_pos(this.rovers[i]);
+                this.baselines[i] = support_measurements(this.antennas[i], this.rovers[i]);
+                this.rover_start[i] = p;
+                this.antenna_start[i] = world_pos(this.antennas[i]);
+                this.prev[i] = p;
+                print("[rb-antenna] " + this.specs[i].id +
+                      " baseline mast_to_yaw=" + r4(this.baselines[i].mast_to_yaw) +
+                      " m yoke_to_dish=" + r4(this.baselines[i].yoke_to_dish) + " m");
+            }
         }
         return;
     }
 
-    drive(this.rover, 1.0, 0.0);
-    this.travel += vlen(vsub(p, this.prev));
-    this.prev = p;
+    for i in 0..this.specs.len() {
+        let p = world_pos(this.rovers[i]);
+        drive(this.rovers[i], 1.0, 0.0);
+        this.travel[i] += vlen(vsub(p, this.prev[i]));
+        this.prev[i] = p;
+    }
 
     if this.t >= SETTLE_S + DRIVE_S {
         this.phase = "done";
-        brake(this.rover);
-        let end = support_measurements(this.antenna, this.rover);
-        verdict(#{
-            baseline: this.baseline,
-            end: end,
-            rover_start: this.rover_start,
-            rover_end: p,
-            antenna_start: this.antenna_start,
-            antenna_end: world_pos(this.antenna),
-            travel: this.travel,
-        });
+        let snapshots = [];
+        for i in 0..this.specs.len() {
+            brake(this.rovers[i]);
+            snapshots.push(#{
+                id: this.specs[i].id,
+                baseline: this.baselines[i],
+                end: support_measurements(this.antennas[i], this.rovers[i]),
+                rover_start: this.rover_start[i],
+                rover_end: world_pos(this.rovers[i]),
+                antenna_start: this.antenna_start[i],
+                antenna_end: world_pos(this.antennas[i]),
+                travel: this.travel[i],
+            });
+        }
+        verdict(snapshots);
     }
 }
 
-fn verdict(s) {
+fn variant_verdict(s) {
     let f = [];
-    f.push(t_present(s.baseline.mast, "antenna mast"));
-    f.push(t_present(s.baseline.yaw, "antenna yaw head"));
-    f.push(t_present(s.baseline.yoke, "antenna dish yoke"));
-    f.push(t_present(s.baseline.dish, "antenna dish head"));
-    f.push(t_present(s.baseline.deck, "rover solar roof"));
-    f.push(t_present(s.baseline.wifi_housing, "Wi-Fi radio housing"));
-    f.push(t_present(s.baseline.wifi_whip, "Wi-Fi radio whip"));
-    f.push(t_present(s.baseline.science_mast, "science mast"));
-    f.push(t_present(s.baseline.camera_head, "science camera head"));
-    f.push(t_range(s.baseline.mast_to_yaw, 0.0, MAX_SUPPORT_GAP_M,
-        "mast top is disconnected from the YawHead"));
-    f.push(t_range(s.baseline.yoke_to_dish, 0.0, MAX_SUPPORT_GAP_M,
-        "DishYoke is disconnected from the DishHead"));
-    f.push(t_range(s.baseline.deck_to_antenna_mast, 0.0, MAX_SUPPORT_GAP_M,
-        "antenna mast is floating above the rover roof"));
-    f.push(t_range(s.baseline.deck_to_wifi_housing, 0.0, MAX_SUPPORT_GAP_M,
-        "Wi-Fi radio housing is floating above the rover roof"));
-    f.push(t_range(s.baseline.wifi_housing_to_whip, 0.0, MAX_SUPPORT_GAP_M,
-        "Wi-Fi radio whip is disconnected from its housing"));
-    f.push(t_range(s.baseline.science_mast_to_camera, 0.0, MAX_SUPPORT_GAP_M,
-        "science camera head is disconnected from its mast"));
+    let label = "[" + s.id + "] ";
+    let b = s.baseline;
+    let e = s.end;
+    f.push(t_present(b.mast, label + "antenna mast"));
+    f.push(t_present(b.yaw, label + "antenna yaw head"));
+    f.push(t_present(b.yoke, label + "antenna dish yoke"));
+    f.push(t_present(b.dish, label + "antenna dish head"));
+    f.push(t_present(b.deck, label + "rover solar roof"));
+    f.push(t_present(b.wifi_housing, label + "Wi-Fi radio housing"));
+    f.push(t_present(b.wifi_whip, label + "Wi-Fi radio whip"));
+    f.push(t_present(b.science_mast, label + "science mast"));
+    f.push(t_present(b.camera_head, label + "science camera head"));
+    f.push(t_range(b.mast_to_yaw, 0.0, MAX_SUPPORT_GAP_M,
+        label + "mast top is disconnected from the YawHead"));
+    f.push(t_range(b.yoke_to_dish, 0.0, MAX_SUPPORT_GAP_M,
+        label + "DishYoke is disconnected from the DishHead"));
+    f.push(t_range(b.deck_to_antenna_mast, 0.0, MAX_SUPPORT_GAP_M,
+        label + "antenna mast is floating above the rover roof"));
+    f.push(t_range(b.deck_to_wifi_housing, 0.0, MAX_SUPPORT_GAP_M,
+        label + "Wi-Fi radio housing is floating above the rover roof"));
+    f.push(t_range(b.wifi_housing_to_whip, 0.0, MAX_SUPPORT_GAP_M,
+        label + "Wi-Fi radio whip is disconnected from its housing"));
+    f.push(t_range(b.science_mast_to_camera, 0.0, MAX_SUPPORT_GAP_M,
+        label + "science camera head is disconnected from its mast"));
     f.push(t_moved(vlen(vsub(s.rover_end, s.rover_start)), 1.0,
-        "rocker-bogie rover travel"));
+        label + "rocker-bogie rover travel"));
 
     let rover_offset_start = vsub(s.antenna_start, s.rover_start);
     let rover_offset_end = vsub(s.antenna_end, s.rover_end);
     f.push(t_range(point_gap(rover_offset_start, rover_offset_end),
         0.0, MAX_DRIVE_DRIFT_M,
-        "antenna mount drifted away from the moving rover"));
-    f.push(t_range(s.end.mast_to_yaw, 0.0, MAX_SUPPORT_GAP_M,
-        "mast top separated from the YawHead during motion"));
-    f.push(t_range(s.end.yoke_to_dish, 0.0, MAX_SUPPORT_GAP_M,
-        "DishYoke separated from the DishHead during motion"));
-    f.push(t_range(s.end.deck_to_antenna_mast, 0.0, MAX_SUPPORT_GAP_M,
-        "antenna mast separated from the rover roof during motion"));
-    f.push(t_range(s.end.deck_to_wifi_housing, 0.0, MAX_SUPPORT_GAP_M,
-        "Wi-Fi radio housing separated from the rover roof during motion"));
-    f.push(t_range(s.end.wifi_housing_to_whip, 0.0, MAX_SUPPORT_GAP_M,
-        "Wi-Fi radio whip separated from its housing during motion"));
-    f.push(t_range(s.end.science_mast_to_camera, 0.0, MAX_SUPPORT_GAP_M,
-        "science camera head separated from its mast during motion"));
+        label + "antenna mount drifted away from the moving rover"));
+    f.push(t_range(e.mast_to_yaw, 0.0, MAX_SUPPORT_GAP_M,
+        label + "mast top separated from the YawHead during motion"));
+    f.push(t_range(e.yoke_to_dish, 0.0, MAX_SUPPORT_GAP_M,
+        label + "DishYoke separated from the DishHead during motion"));
+    f.push(t_range(e.deck_to_antenna_mast, 0.0, MAX_SUPPORT_GAP_M,
+        label + "antenna mast separated from the rover roof during motion"));
+    f.push(t_range(e.deck_to_wifi_housing, 0.0, MAX_SUPPORT_GAP_M,
+        label + "Wi-Fi radio housing separated from the rover roof during motion"));
+    f.push(t_range(e.wifi_housing_to_whip, 0.0, MAX_SUPPORT_GAP_M,
+        label + "Wi-Fi radio whip separated from its housing during motion"));
+    f.push(t_range(e.science_mast_to_camera, 0.0, MAX_SUPPORT_GAP_M,
+        label + "science camera head separated from its mast during motion"));
 
-    print("[rb-antenna] ── results ───────────────────────────────────");
-    print("[rb-antenna]   rover travel     " + r2(s.travel) + " m");
-    print("[rb-antenna]   mast→yaw gap     " + r4(s.end.mast_to_yaw) + " m");
-    print("[rb-antenna]   yoke→dish gap    " + r4(s.end.yoke_to_dish) + " m");
-    print("[rb-antenna]   roof→antenna gap  " + r4(s.end.deck_to_antenna_mast) + " m");
-    print("[rb-antenna]   roof→radio gap    " + r4(s.end.deck_to_wifi_housing) + " m");
-    print("[rb-antenna]   radio→whip gap    " + r4(s.end.wifi_housing_to_whip) + " m");
-    print("[rb-antenna]   mast→camera gap   " + r4(s.end.science_mast_to_camera) + " m");
+    print("[rb-antenna] " + s.id + " travel=" + r2(s.travel) +
+          " m mast→yaw=" + r4(e.mast_to_yaw) +
+          " m yoke→dish=" + r4(e.yoke_to_dish) +
+          " m roof→antenna=" + r4(e.deck_to_antenna_mast) +
+          " m roof→radio=" + r4(e.deck_to_wifi_housing) + " m");
+    f
+}
+
+fn verdict(snapshots) {
+    let f = [];
+    for s in snapshots {
+        let checks = variant_verdict(s);
+        for check in checks { f.push(check); }
+    }
     report_verdict(f, "ROCKER BOGIE ANTENNA", "ROCKER_BOGIE_ANTENNA");
 }
