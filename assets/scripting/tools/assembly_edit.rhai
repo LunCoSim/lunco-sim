@@ -18,7 +18,7 @@ fn open(path) {
 }
 
 /// Open one explicit isolated Editor preview. `preview` identifies the
-/// session lease, so another document can remain rendered independently.
+/// session, so another document can remain rendered independently.
 fn preview_open(preview, doc, edit_target) {
     cmd("OpenUsdPreview", #{
         preview: preview,
@@ -27,12 +27,33 @@ fn preview_open(preview, doc, edit_target) {
     })
 }
 
-/// Focus an existing Editor preview lease in the desktop USD dock.
+/// Open one additional dockable view over an existing preview session. `view`
+/// is an explicit stable presentation identity; all views of the session share
+/// the same projected USD stage.
+fn preview_view_open(preview, view) {
+    cmd("OpenUsdPreviewView", #{
+        preview: preview,
+        view: view,
+    })
+}
+
+/// Focus one exact presentation view.
+fn preview_view_focus(view) {
+    cmd("FocusUsdPreviewView", #{ view: view })
+}
+
+/// Close one presentation view. Closing the final view closes its parent
+/// preview session.
+fn preview_view_close(view) {
+    cmd("CloseUsdPreviewView", #{ view: view })
+}
+
+/// Focus an existing Editor preview session in the desktop USD dock.
 fn preview_focus(preview) {
     cmd("FocusUsdPreview", #{ preview: preview })
 }
 
-/// Close one Editor preview lease and release its presentation resources.
+/// Close one Editor preview session and release its presentation resources.
 fn preview_close(preview) {
     cmd("CloseUsdPreview", #{ preview: preview })
 }

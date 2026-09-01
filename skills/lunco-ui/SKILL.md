@@ -75,13 +75,17 @@ the selection/tooltip identity. Unique leaves are compact, duplicate leaves
 gain nearest-owner context, generated ID suffixes stay out of primary text,
 and only an unavoidable normalized collision gets an ordinal.
 
-Document-scoped editor panels use the existing `UsdPreviewId` lease as their
-view-model key. Keep each open lease's tree, canvas, authored Inspector data,
+Document-scoped editor panels use the existing `UsdPreviewId` session as their
+view-model key. Keep each open session's tree, canvas, authored Inspector data,
 joint/animation state, authored layer, and projection generation isolated;
-paint only the focused entry. The generic ECS selection is a focused-lease
-projection and must be restored from editor-owned session selection on focus
-changes. Dispatch edits with the lease's explicit document, authored layer, and
-generation through the typed USD command surface.
+paint the session selected by the focused `UsdPreviewViewId`. Views share that
+session projection while keeping independent camera/render-target state. The
+viewport applies `UsdPreviewRenderBudget` to visible view targets (2048 px per
+axis, 4,194,304 pixels per view, and 8,388,608 visible pixels per frame by
+default) and leaves hidden cameras inactive. The generic ECS selection is a
+focused-session projection and must be restored from editor-owned session
+selection on focus changes. Dispatch edits with the session's explicit
+document, authored layer, and generation through the typed USD command surface.
 
 For interactive reusable-assembly authoring, follow the
 [edit-usd-assembly runbook](../edit-usd-assembly/SKILL.md): the production

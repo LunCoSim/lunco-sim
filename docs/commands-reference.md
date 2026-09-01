@@ -770,29 +770,78 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
-#### `FocusUsdPreview`
-
- Focus an already-open preview lease in the USD dock.
-
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `preview` | `UsdPreviewId` |   |
-
 #### `OpenUsdPreview`
 
- Open one explicit document and authored edit target in an isolated preview
- session. Opening the same `preview` id replaces that lease; other sessions
- keep their roots, cameras, and stages untouched.
+ Open one explicit USD document in an isolated Editor preview session. The
+ `preview` identity is caller-owned; opening another identity does not replace
+ an existing session. Opening the same identity replaces that session.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Stable caller-owned identity of the preview lease. |
-| `doc` | `DocumentId` |  The USD document to render. |
-| `edit_target` | `LayerId` |  The authored layer to use for editor mutations made from this preview. |
+| `preview` | `UsdPreviewId` |  Stable identity of the preview session. |
+| `doc` | `DocumentId` |  USD document to project. |
+| `edit_target` | `LayerId` |  Authored layer used by editor mutations. |
+
+#### `FocusUsdPreview`
+
+ Select an already-open preview session for the USD dock and Editor surfaces.
+ Focusing changes presentation only; every open session continues to receive
+ canonical stage updates.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Existing preview session to display. |
+
+#### `OpenUsdPreviewView`
+
+ Open an additional dockable 3D view over an existing USD preview session.
+ The session's projected USD stage is shared; only the camera, light, orbit
+ pose, and render target are new. Drag the resulting instance tab to a dock
+ edge to create a split.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Existing projected session. |
+| `view` | `UsdPreviewViewId` |  Explicit stable identity of the presentation view. |
+
+#### `FocusUsdPreviewView`
+
+ Focus one exact USD presentation view and its parent session.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |  Existing view to focus. |
+
+#### `CloseUsdPreviewView`
+
+ Close one USD presentation view and release its camera, light, and render
+ target. Closing the final view also closes its parent preview session.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |  Existing view to close. |
+
+#### `CloseUsdPreview`
+
+ Close one preview session and release its views, scene root, and projection.
+ Shared document coordinates remain until the last preview session and
+ workspace Twin are closed.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Existing preview session to close. |
 
 #### `ReviewUsdProposal`
 

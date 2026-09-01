@@ -55,18 +55,22 @@ Behind the `ui` feature the `ui` module adds the egui browser/viewport panels,
 added separately by app composition (not by `UsdPlugins`):
 
 - **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
-- **`UsdViewportPlugin`** — `UsdViewportPanel`, the focused isolated USD
-  preview lease rendered into the dock. `OpenUsdPreview`, `FocusUsdPreview`,
-  and `CloseUsdPreview` own preview lifecycle; other leases remain projected
-  while the dock displays one focus.
+- **`UsdViewportPlugin`** — `UsdViewportPanel` plus the instance-backed
+  `UsdPreviewViewPanel`. `OpenUsdPreview` owns one projected USD session;
+  `OpenUsdPreviewView` adds an independent camera/render target over that
+  session for a dock tab or split. `FocusUsdPreviewView` and
+  `CloseUsdPreviewView` address the exact presentation view; hidden views do
+  not render. Visible targets use `UsdPreviewRenderBudget`: 2048 px per axis,
+  4,194,304 pixels per view, and 8,388,608 visible pixels per frame by default.
 
 Native Assembly Editor panels key their derived state by `UsdPreviewId`. Each
-open lease retains its own prim tree, connection canvas, parameter/variant/
+open session retains its own prim tree, connection canvas, parameter/variant/
 mount view, joint and animation view, authored layer, and projection
-generation; the dock paints only the focused entry. The shared ECS selection is
-the focused-lease projection and is restored from the editor session selection
-when focus changes. Panel edits resolve the lease's explicit `DocumentId`,
-`LayerId`, and generation before dispatching typed USD commands.
+generation; the dock paints the session selected by the focused view. The
+shared ECS selection is the focused-session projection and is restored from
+the editor session selection when focus changes. Panel edits resolve the
+session's explicit `DocumentId`, `LayerId`, and generation before dispatching
+typed USD commands.
 
 ## Document model
 
