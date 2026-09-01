@@ -1,11 +1,10 @@
-//! Engine-side producers for the generic exposure registry.
+//! Runtime projection for the generic exposure registry.
 //!
-//! This module has no HTML, egui, or Flair dependency. It resolves authoritative
-//! engine state for the currently possessed vessel and publishes a named
-//! capability snapshot through `lunco_core::exposure::EngineExposures`. Any
-//! consumer can read that snapshot: runtime HTML, egui, API, telemetry, or a
-//! remote client. The producer is scheduled with the simulation, not with a
-//! particular presentation surface.
+//! This module has no HTML, egui, or Flair dependency. It resolves generic
+//! runtime state and authored telemetry, then publishes named capability
+//! snapshots through `lunco_core::exposure::EngineExposures`. Any consumer can
+//! read that snapshot: runtime HTML, egui, API, telemetry, or a remote client.
+//! Domain values and transformations remain in their authored owners.
 //!
 //! Continuous sources are invalidated by Bevy change ticks and coalesced to the
 //! bounded exposure cadence. Static or paused scenes do not repeat the expensive
@@ -954,6 +953,8 @@ pub(crate) fn publish_exposure(
             &queries.callsign,
             &queries.catalog_id,
             &queries.sim,
+            &runtime.signals,
+            &queries.channels,
             &queries.parents,
             &queries.grids,
             &queries.velocity,
@@ -1058,6 +1059,8 @@ pub(crate) fn publish_exposure(
         &queries.callsign,
         &queries.catalog_id,
         &queries.sim,
+        &runtime.signals,
+        &queries.channels,
         &queries.parents,
         &queries.grids,
         &queries.velocity,
@@ -1262,6 +1265,12 @@ fn publish_control_exposures(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    signals: &SignalRegistry,
+    q_channels: &Query<(
+        Entity,
+        &lunco_core::telemetry::Parameter,
+        Option<&lunco_core::markers::Callsign>,
+    )>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
@@ -1275,10 +1284,16 @@ fn publish_control_exposures(
     let mut roots = authored_control_roots(q_paths, stages, canonical);
     roots.sort_by_key(|(_, column)| *column);
 
+    let first_root = roots.first().and_then(|(entity, _)| *entity);
+    let first_telemetry = first_root
+        .map(|root| resolve_authored_telemetry(root, signals, q_parents, q_channels))
+        .unwrap_or_default();
+
     publish_selected_control_exposure(
         exposures,
         "lander-control-0",
-        roots.first().and_then(|(entity, _)| *entity),
+        first_root,
+        &first_telemetry,
         q_name,
         q_callsign,
         q_catalog_id,
@@ -1293,10 +1308,17 @@ fn publish_control_exposures(
         stages,
         canonical,
     );
+
+    let second_root = roots.get(1).and_then(|(entity, _)| *entity);
+    let second_telemetry = second_root
+        .map(|root| resolve_authored_telemetry(root, signals, q_parents, q_channels))
+        .unwrap_or_default();
+
     publish_selected_control_exposure(
         exposures,
         "lander-control-1",
-        roots.get(1).and_then(|(entity, _)| *entity),
+        second_root,
+        &second_telemetry,
         q_name,
         q_callsign,
         q_catalog_id,
@@ -1420,6 +1442,7 @@ fn publish_selected_control_exposure(
     exposures: &mut EngineExposures,
     namespace: &str,
     root: Option<Entity>,
+    telemetry: &[PublicTelemetryValue],
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -1446,8 +1469,7 @@ fn publish_selected_control_exposure(
     ui.property("altitude", "—");
     ui.property("target_offset", "—");
     ui.property("predicted_impact", "—");
-    ui.property("propellant", "—");
-    ui.property("propellant_width", "0%");
+    ui.property("telemetry_summary", "TELEMETRY UNAVAILABLE");
     ui.property("roll", "—");
     ui.property("pitch", "—");
     ui.property("yaw", "—");
@@ -1458,9 +1480,6 @@ fn publish_selected_control_exposure(
     ui.property("torque_x", "—");
     ui.property("torque_y", "—");
     ui.property("torque_z", "—");
-    ui.property("main_engine", "—");
-    ui.property("main_engine_width", "0%");
-    ui.property("main_engine_color", "var(--muted-color)");
 
     let Some(root) = root else {
         return;
@@ -1516,14 +1535,11 @@ fn publish_selected_control_exposure(
     let has_control_outputs = outputs.contains_key("torque_x")
         || outputs.contains_key("torque_y")
         || outputs.contains_key("torque_z")
-        || outputs.contains_key("engine_activity")
-        || outputs.contains_key("thrust_n")
-        || outputs.contains_key("propellant_mass")
+        || !telemetry.is_empty()
         || max_valve > 0.0;
     if !has_control_outputs {
         return;
     }
-    let main_activity = engine_firing_fraction(&outputs);
     let landing_handoff = outputs.get("landing_handoff").copied();
     let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
     let flight_handoff = landing_handoff.is_some_and(|value| value >= 0.5);
@@ -1533,8 +1549,6 @@ fn publish_selected_control_exposure(
         ("GEAR SETTLING", "var(--ok-color)")
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
-    } else if main_activity > 0.01 {
-        ("ENGINE FIRING", "var(--warm-color)")
     } else {
         ("ATTITUDE HOLD", "var(--ok-color)")
     };
@@ -1587,11 +1601,6 @@ fn publish_selected_control_exposure(
         }
         _ => "—".to_owned(),
     };
-    let propellant_mass = outputs.get("propellant_mass").copied();
-    let propellant_fraction = outputs
-        .get("propellant_fraction")
-        .copied()
-        .map(|value| value.clamp(0.0, 1.0));
 
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);
@@ -1639,18 +1648,12 @@ fn publish_selected_control_exposure(
     ui.property("target_offset", target_offset);
     ui.property("predicted_impact", predicted_impact);
     ui.property(
-        "propellant",
-        match (propellant_fraction, propellant_mass) {
-            (Some(fraction), Some(mass)) => format!("{:.0}% · {:.0} kg", fraction * 100.0, mass),
-            (Some(fraction), None) => format!("{:.0}%", fraction * 100.0),
-            (None, Some(mass)) => format!("{mass:.0} kg"),
-            (None, None) => "—".to_owned(),
+        "telemetry_summary",
+        if telemetry.is_empty() {
+            "TELEMETRY UNAVAILABLE".to_owned()
+        } else {
+            format_telemetry_summary(telemetry)
         },
-    );
-    ui.property(
-        "propellant_width",
-        propellant_fraction
-            .map_or_else(|| "0%".to_owned(), |value| format!("{:.1}%", value * 100.0)),
     );
     ui.property(
         "roll",
@@ -1689,26 +1692,6 @@ fn publish_selected_control_exposure(
             .get("torque_z")
             .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
     );
-    ui.property(
-        "main_engine",
-        if main_activity > 0.01 {
-            format!("FIRING {:.0}%", main_activity * 100.0)
-        } else {
-            "OFF".to_owned()
-        },
-    );
-    ui.property(
-        "main_engine_width",
-        format!("{:.1}%", main_activity * 100.0),
-    );
-    ui.property(
-        "main_engine_color",
-        if main_activity > 0.01 {
-            "var(--warm-color)"
-        } else {
-            "var(--muted-color)"
-        },
-    );
 }
 
 /// Names on the prim's composed public co-simulation boundary.
@@ -1734,27 +1717,6 @@ fn authored_output_names(
         .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
         .collect::<std::collections::HashSet<_>>();
     (!names.is_empty()).then_some(names)
-}
-
-/// Delivered main-engine thrust fraction for operator display.
-///
-/// A chamber can still move a trace amount of propellant while producing no
-/// useful force. `ENGINE FIRING` therefore reports the physically delivered
-/// thrust fraction whenever the authored engine boundary provides it. Older or
-/// non-thrust actuators retain their explicit activity output as the fallback.
-fn engine_firing_fraction(outputs: &std::collections::HashMap<String, f64>) -> f64 {
-    let fraction = outputs
-        .get("thrust_n")
-        .zip(outputs.get("maximum_thrust_n"))
-        .filter(|(_, maximum)| maximum.is_finite() && **maximum > f64::EPSILON)
-        .map(|(thrust, maximum)| thrust / maximum)
-        .or_else(|| outputs.get("engine_activity").copied())
-        .unwrap_or(0.0);
-    if fraction.is_finite() {
-        fraction.clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
 }
 
 /// RCS valve names are the authored actuator contract of AttitudeActuation:
@@ -1801,27 +1763,6 @@ fn rcs_axis_label(outputs: &std::collections::HashMap<String, f64>) -> (String, 
         ("OFF".to_owned(), peak)
     } else {
         (active.join(" · "), peak)
-    }
-}
-
-#[cfg(test)]
-mod control_exposure_tests {
-    use super::*;
-
-    #[test]
-    fn engine_display_uses_delivered_thrust_over_stale_activity() {
-        let outputs = std::collections::HashMap::from([
-            ("thrust_n".to_owned(), 0.0),
-            ("maximum_thrust_n".to_owned(), 93_000.0),
-            ("engine_activity".to_owned(), 0.07),
-        ]);
-        assert_eq!(engine_firing_fraction(&outputs), 0.0);
-    }
-
-    #[test]
-    fn engine_display_falls_back_to_explicit_activity_without_thrust_contract() {
-        let outputs = std::collections::HashMap::from([("engine_activity".to_owned(), 0.4)]);
-        assert_eq!(engine_firing_fraction(&outputs), 0.4);
     }
 }
 

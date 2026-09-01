@@ -478,7 +478,7 @@ known per-extraction work at its owning render acknowledgement boundary.
 #### 2026-08-30 exposure publisher cadence gating
 
 Tracy attributed approximately **0.93 ms** of mean work to
-`engine_exposure::publish_exposure`. The publisher already emitted snapshots at
+`runtime_exposures::publish_exposure`. The publisher already emitted snapshots at
 20 Hz, but Bevy entered the system every render frame to tick a private timer
 and construct its large query parameter set before returning. The cadence is
 now an existing Bevy scheduler condition shared by the change detector and

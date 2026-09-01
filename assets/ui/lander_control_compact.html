@@ -9,17 +9,13 @@
   <property name="altitude">—</property>
   <property name="target_offset">—</property>
   <property name="predicted_impact">—</property>
-  <property name="propellant">—</property>
-  <property name="propellant_width">0%</property>
+  <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
   <property name="roll">—</property>
   <property name="pitch">—</property>
   <property name="yaw">—</property>
   <property name="rcs_activity">0%</property>
   <property name="rcs_activity_width">0%</property>
   <property name="rcs_axis">OFF</property>
-  <property name="main_engine">—</property>
-  <property name="main_engine_width">0%</property>
-  <property name="main_engine_color">var(--muted-color)</property>
 
   <node id="compact-control-root">
     <node id="compact-control-header">
@@ -40,17 +36,11 @@
       <node id="compact-altitude"><text id="compact-altitude-label">HEIGHT</text><text id="compact-altitude-value">{altitude}</text></node>
     </node>
 
-    <node id="compact-fuel-row">
-      <text id="compact-fuel-label">FUEL</text>
-      <node id="compact-fuel-meter"><node id="compact-fuel-fill" /></node>
-      <text id="compact-fuel-value">{propellant}</text>
+    <node id="compact-telemetry-row">
+      <text id="compact-telemetry-value">{telemetry_summary}</text>
     </node>
 
     <node id="compact-control-bottom">
-      <node id="compact-engine-status">
-        <text id="compact-engine-label">MAIN</text>
-        <node id="compact-engine-meter"><node id="compact-engine-fill" /></node>
-      </node>
       <text id="compact-rcs-value">RCS {rcs_axis} {rcs_activity}</text>
     </node>
   </node>

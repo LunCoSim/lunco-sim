@@ -60,8 +60,9 @@ The shipped luncosim surfaces live in [`assets/ui/`](../../assets/ui/):
   reference.
 
 The runtime bridge is in `crates/lunco-luncosim/src/ui/runtime_exposure.rs`.
-Engine-side producers are in `engine_exposure.rs`; the bridge is intentionally
-independent of those domain calculations. `lunco-workbench` supplies the
+Runtime snapshot projection is in `runtime_exposures.rs`; it is intentionally
+independent of domain calculations. Modelica and Rhai own domain values and
+policy, while `lunco-workbench` supplies the
 egui host camera, dock rectangles, and scene-pick ownership.
 
 ## Authoring a surface
@@ -177,6 +178,12 @@ When a future surface needs project-authored policy, add a manifest `setting`
 binding and use the generic Twin map. Do not persist its live progress, current
 selection, or network state in the Twin merely because the pixels are rendered
 by HUI.
+
+The lander control profile reads Modelica-owned propulsion values through the
+authored telemetry channel contract. Its generic telemetry summary preserves
+the authored display label and unit, so remaining fuel is shown in kg and
+unavailable channels remain explicit. No lander-specific fuel or thrust
+conversion lives in the runtime snapshot projector.
 
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the

@@ -29,7 +29,7 @@ when its source was an external boundary output (for example
 the mobility path move while the generated electrical motor demand stayed at
 zero.
 
-The engine HUD producer (`lunco-luncosim/src/engine_exposure.rs`) therefore no
+The runtime HUD projector (`lunco-luncosim/src/runtime_exposures.rs`) therefore no
 longer performs a domain-specific power lookup.
 
 **Implementation:** the reusable Battery component now authors SOC,

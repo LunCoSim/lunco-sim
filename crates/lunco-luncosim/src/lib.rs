@@ -77,10 +77,6 @@ use lunco_terrain_surface::TerrainSurfacePlugin;
 // added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica::ModelicaSet;
 
-/// Domain producers for the generic engine exposure registry. Consumers are
-/// independent of this module: HTML, egui, API, and telemetry can all read the
-/// same retained snapshot.
-mod engine_exposure;
 /// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
 /// against the rendered `Transform`, so it only means anything in a `ui` build.
 #[cfg(feature = "ui")]
@@ -92,6 +88,11 @@ mod jitter_probe;
 mod light_policy;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
+/// Runtime producers for the generic exposure registry. Consumers are
+/// independent of this module: HTML, egui, API, and telemetry can all read the
+/// same retained snapshot. Domain models publish their own authored telemetry;
+/// this module only projects it into runtime surfaces.
+mod runtime_exposures;
 #[cfg(feature = "ui")]
 mod terrain_horizon;
 #[cfg(feature = "ui")]
@@ -2838,17 +2839,17 @@ impl Plugin for SandboxCorePlugin {
             // then let the camera domain's status-change event update the
             // exposure registry; it does not belong in the continuous HUD
             // invalidation/presentation loop below.
-            .add_systems(Startup, engine_exposure::publish_initial_camera_exposure)
-            .add_observer(engine_exposure::on_camera_selection_status_changed)
+            .add_systems(Startup, runtime_exposures::publish_initial_camera_exposure)
+            .add_observer(runtime_exposures::on_camera_selection_status_changed)
             // Dirty detection must run every frame: possession and release are
             // edge changes that can be gone before the bounded publisher tick.
             // Only the snapshot rebuild is cadence-limited.
-            .add_systems(Update, engine_exposure::mark_exposure_dirty)
+            .add_systems(Update, runtime_exposures::mark_exposure_dirty)
             .add_systems(
                 Update,
-                engine_exposure::publish_exposure
-                    .after(engine_exposure::mark_exposure_dirty)
-                    .run_if(engine_exposure::exposure_publish_due),
+                runtime_exposures::publish_exposure
+                    .after(runtime_exposures::mark_exposure_dirty)
+                    .run_if(runtime_exposures::exposure_publish_due),
             )
             .add_plugins(lunco_core::WorldShellPlugin)
             // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer

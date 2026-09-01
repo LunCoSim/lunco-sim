@@ -68,6 +68,9 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
+    bool lunco:ui:controlHud = true
+    int lunco:ui:controlHudColumn = 0
+
     # The USD rigid-body projection aggregates each leg's foot collider into its
     # Avian compound body. Bind the landing surface at that body boundary so
     # the solver receives the authored friction for the compound, rather than
@@ -146,6 +149,35 @@ def Xform "DescentLander" (
         float outputs:vehicle_com_x_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_x_m>
         float outputs:vehicle_com_y_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_y_m>
         float outputs:vehicle_com_z_m.connect = </DescentLander/MainPropulsion/PropellantStatus.outputs:vehicle_com_z_m>
+
+        # Operator channels expose solver-owned values without introducing a
+        # lander-specific presentation path in Rust. The values and units are
+        # authored at the Modelica network boundary; the runtime only reads
+        # the generic telemetry contract.
+        def Scope "FuelRemainingTelemetry" (
+            prepend apiSchemas = ["LunCoTelemetryAPI"]
+        )
+        {
+            bool lunco:telemetry = true
+            string ui:displayName = "FUEL LEFT"
+            token lunco:telemetry:port = "propellant_mass"
+            token lunco:telemetry:name = "lander.fuel_remaining"
+            token lunco:telemetry:unit = "kg"
+            string lunco:telemetry:description = "Remaining fuel and oxidizer mass from the lander's PropellantStatus model."
+            rel lunco:telemetry:target = <..>
+        }
+        def Scope "MainThrustTelemetry" (
+            prepend apiSchemas = ["LunCoTelemetryAPI"]
+        )
+        {
+            bool lunco:telemetry = true
+            string ui:displayName = "THRUST"
+            token lunco:telemetry:port = "thrust_n"
+            token lunco:telemetry:name = "lander.main_thrust"
+            token lunco:telemetry:unit = "N"
+            string lunco:telemetry:description = "Delivered main-engine thrust from the lander's Modelica propulsion model."
+            rel lunco:telemetry:target = <..>
+        }
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </DescentLander/MainPropulsion/FuelTank>,

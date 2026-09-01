@@ -76,15 +76,13 @@
         "altitude": { "source": "altitude" },
         "target_offset": { "source": "target_offset" },
         "predicted_impact": { "source": "predicted_impact" },
-        "propellant": { "source": "propellant" },
-        "propellant_width": { "source": "propellant_width" },
+        "telemetry_summary": { "source": "telemetry_summary" },
         "roll": { "source": "roll" },
         "pitch": { "source": "pitch" },
         "yaw": { "source": "yaw" },
         "rcs_activity": { "source": "rcs_activity" },
         "rcs_activity_width": { "source": "rcs_activity_width" },
-        "rcs_axis": { "source": "rcs_axis" },
-        "main_engine": { "source": "main_engine" }
+        "rcs_axis": { "source": "rcs_axis" }
       },
       "placement": {
         "mode": "window",
@@ -111,15 +109,13 @@
         "altitude": { "source": "altitude" },
         "target_offset": { "source": "target_offset" },
         "predicted_impact": { "source": "predicted_impact" },
-        "propellant": { "source": "propellant" },
-        "propellant_width": { "source": "propellant_width" },
+        "telemetry_summary": { "source": "telemetry_summary" },
         "roll": { "source": "roll" },
         "pitch": { "source": "pitch" },
         "yaw": { "source": "yaw" },
         "rcs_activity": { "source": "rcs_activity" },
         "rcs_activity_width": { "source": "rcs_activity_width" },
-        "rcs_axis": { "source": "rcs_axis" },
-        "main_engine": { "source": "main_engine" }
+        "rcs_axis": { "source": "rcs_axis" }
       },
       "placement": {
         "mode": "window",

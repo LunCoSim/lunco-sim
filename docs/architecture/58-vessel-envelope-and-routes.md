@@ -91,7 +91,7 @@ contact, and averaging would flatter a rover with one bald tire.
 
 | Consumer | Where the derivation lives |
 |---|---|
-| Driver HUD (reactive engine exposure) | `tilt_bands()` in `crates/lunco-luncosim/src/engine_exposure.rs`, fed by the wheel query the producer already has |
+| Driver HUD (reactive runtime exposure) | `tilt_bands()` in `crates/lunco-luncosim/src/runtime_exposures.rs`, fed by the wheel query the projector already has |
 | Lessons (one-shot, rhai) | `slip_limit()` / `exceeds_slip()` in `assets/scripting/prelude/vessel.rhai`, reading `WheelRaycast.friction_mu` by reflection |
 
 The cost profile is the right way round: the engine producer resolves six wheels

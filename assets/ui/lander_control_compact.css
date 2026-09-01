@@ -3,9 +3,6 @@
 
 :root {
   --ui-status-color: var(--accent-color);
-  --ui-main-engine-width: 0%;
-  --ui-main-engine-color: var(--muted-color);
-  --ui-propellant-width: 0%;
 }
 
 #compact-control-root {
@@ -36,8 +33,7 @@
 }
 
 #compact-ground-label,
-#compact-altitude-label,
-#compact-fuel-label {
+#compact-altitude-label {
   color: var(--muted-color);
   font-size: 10px;
   font-weight: 700;
@@ -116,41 +112,25 @@
   color: var(--ok-color);
 }
 
-#compact-fuel-row {
+#compact-telemetry-row {
   display: flex;
   align-items: center;
-  column-gap: 6px;
   min-width: 0px;
   padding-top: 2px;
   border-top-width: 1px;
   border-top-color: rgba(169, 181, 205, 0.16);
 }
 
-#compact-fuel-label {
-  flex-shrink: 0;
-}
-
-#compact-fuel-meter {
-  flex: 1;
-  min-width: 28px;
-  height: 4px;
+#compact-telemetry-value {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0px;
+  min-width: 0px;
   overflow: hidden;
-  border-radius: 2px;
-  background-color: rgba(169, 181, 205, 0.18);
-}
-
-#compact-fuel-fill {
-  width: var(--ui-propellant-width);
-  height: 100%;
-  border-radius: 2px;
-  background-color: var(--accent-color);
-}
-
-#compact-fuel-value {
-  flex-shrink: 0;
   color: var(--accent-color);
   font-size: 10px;
   font-weight: 700;
+  -bevy-line-break: no-wrap;
 }
 
 #compact-control-bottom {
@@ -164,35 +144,8 @@
   border-top-color: rgba(169, 181, 205, 0.22);
 }
 
-#compact-rcs-value,
-#compact-engine-label {
+#compact-rcs-value {
   color: var(--accent-color);
   font-size: 10px;
   font-weight: 700;
-}
-
-#compact-engine-status {
-  display: flex;
-  align-items: center;
-  column-gap: 5px;
-  min-width: 72px;
-}
-
-#compact-engine-label {
-  color: var(--muted-color);
-}
-
-#compact-engine-meter {
-  width: 40px;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 2px;
-  background-color: rgba(169, 181, 205, 0.18);
-}
-
-#compact-engine-fill {
-  width: var(--ui-main-engine-width);
-  height: 100%;
-  border-radius: 2px;
-  background-color: var(--warm-color);
 }
