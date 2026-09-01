@@ -46,8 +46,10 @@ never inspect HTML ids or call domain resources. Unknown fields/actions and
 unsafe asset paths are rejected before mounting.
 
 The camera-status card binds the deterministic compact `active_label` projection;
-the full `active_name` remains available to runtime consumers. The button is
-intentionally only the picker open intent. HUI 0.7
+the full `active_name` remains available to runtime consumers. The complete
+camera-status surface is the picker open button, so its label, camera name, and
+card padding share one click target. The button is intentionally only the
+picker open intent. HUI 0.7
 does not provide a dynamic repeated-list or payload-action contract, so the
 existing egui host renders the camera options from `CameraSelectionStatus` at
 the measured HUI anchor and emits the typed camera command. This keeps the

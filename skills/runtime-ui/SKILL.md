@@ -205,7 +205,9 @@ observer maps that action to an existing typed command/event. A template must
 not mutate resources or call a domain API directly.
 
 The closed action set includes `camera.picker.toggle` for the authored
-camera-status trigger. That action only opens the camera picker; because HUI
+camera-status trigger. The complete camera-status surface is the authored
+button, so its label, camera name, and padding share one interaction target.
+That action only opens the camera picker; because HUI
 has no dynamic repeated-list or payload-action contract, the existing egui host
 renders the options from `CameraSelectionStatus`, anchors them to the measured
 HUI surface rectangle, measures the widest rendered option, clamps the popup to

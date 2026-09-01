@@ -324,5 +324,8 @@ pub fn build_input_overlay(app: &mut App) {
         bevy_egui::EguiPrimaryContextPass,
         draw_input_overlay.in_set(crate::ApplicationOverlayRenderSet),
     );
-    app.add_systems(PreUpdate, emit_injected_pointer);
+    app.add_systems(
+        PreUpdate,
+        emit_injected_pointer.before(bevy::input::InputSystems),
+    );
 }

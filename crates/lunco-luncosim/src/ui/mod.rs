@@ -52,6 +52,27 @@ struct DismissTerrainOverlay;
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 struct CameraPickerState {
     open: bool,
+    /// The pointer press that opened the picker must not close it when its
+    /// release is delivered to the popup on the following frame.
+    ignore_opening_click: bool,
+}
+
+impl CameraPickerState {
+    fn toggle(&mut self) {
+        self.open = !self.open;
+        self.ignore_opening_click = self.open;
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+        self.ignore_opening_click = false;
+    }
+
+    fn consume_opening_click(&mut self, clicked: bool) {
+        if self.ignore_opening_click && clicked {
+            self.ignore_opening_click = false;
+        }
+    }
 }
 
 /// The luncosim's interactive layer: egui workbench, bevy_picking, the USD Twin
@@ -493,7 +514,7 @@ fn on_runtime_ui_action(
             });
         }
         runtime_exposure::RuntimeUiActionKind::ToggleCameraPicker => {
-            camera_picker.open = !camera_picker.open;
+            camera_picker.toggle();
         }
     }
 }
@@ -523,14 +544,14 @@ fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
 }
 
 fn reset_camera_picker(mut picker: ResMut<CameraPickerState>) {
-    picker.open = false;
+    picker.close();
 }
 
 fn reset_camera_picker_on_twin_closed(
     _trigger: On<lunco_workspace::TwinClosed>,
     mut picker: ResMut<CameraPickerState>,
 ) {
-    picker.open = false;
+    picker.close();
 }
 
 /// Draw the shared camera list for both the authored-triggered popup and the
@@ -655,6 +676,7 @@ fn draw_camera_picker(
         .unwrap_or_else(lunco_theme::Theme::dark);
     let popup_id = egui::Id::new("camera_status_picker");
     let mut open = picker.open;
+    let ignore_opening_click = picker.ignore_opening_click;
     let mut selected = None;
     let mut observe_avatar = false;
     let mut resume_director = false;
@@ -671,7 +693,11 @@ fn draw_camera_picker(
     .align(egui::RectAlign::BOTTOM_START)
     .gap(6.0)
     .open_bool(&mut open)
-    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+    .close_behavior(if ignore_opening_click {
+        egui::PopupCloseBehavior::IgnoreClicks
+    } else {
+        egui::PopupCloseBehavior::CloseOnClickOutside
+    })
     .layout(egui::Layout::top_down(egui::Align::Min))
     .frame(
         egui::Frame::new()
@@ -710,6 +736,10 @@ fn draw_camera_picker(
         open = false;
     }
     picker.open = open;
+    picker.consume_opening_click(ctx.input(|input| input.pointer.any_click()));
+    if !open {
+        picker.close();
+    }
     if let Some(name) = selected {
         commands.trigger(SetUserCamera { name });
     } else if observe_avatar {
@@ -1603,6 +1633,7 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::camera_picker_content_max_width;
+    use super::CameraPickerState;
     use lunco_usd_bevy::camera_switch::camera_display_labels;
 
     #[test]
@@ -1637,5 +1668,22 @@ mod tests {
         assert_eq!(camera_picker_content_max_width(1200.0, 400.0), 360.0);
         assert_eq!(camera_picker_content_max_width(500.0, 400.0), 360.0);
         assert_eq!(camera_picker_content_max_width(200.0, 400.0), 176.0);
+    }
+
+    #[test]
+    fn camera_picker_consumes_only_the_click_that_opened_it() {
+        let mut picker = CameraPickerState::default();
+        picker.toggle();
+        assert!(picker.open);
+        assert!(picker.ignore_opening_click);
+
+        picker.consume_opening_click(false);
+        assert!(picker.ignore_opening_click);
+        picker.consume_opening_click(true);
+        assert!(!picker.ignore_opening_click);
+        assert!(picker.open);
+
+        picker.toggle();
+        assert_eq!(picker, CameraPickerState::default());
     }
 }

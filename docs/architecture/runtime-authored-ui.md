@@ -130,8 +130,8 @@ full current camera fact (`active_name`) and a deterministic compact identity
 projection (`active_label`) through the generic `camera-status` exposure. Rhai
 owns authored camera-selection policy through `set_camera(name)` and can read
 the full fact with `get_exposure(...)`; HUI/CSS owns the compact retained
-presentation and binds `active_label` while its authored button emits
-`camera.picker.toggle`.
+presentation and binds `active_label` while its complete authored button emits
+`camera.picker.toggle` from the label, camera name, and card padding.
 The native picker uses the measured HUI rectangle only as its anchor; it sizes
 the popup from the widest rendered option, clamps that width to egui's menu and
 viewport limits, and truncates only the display projection when a bound is
