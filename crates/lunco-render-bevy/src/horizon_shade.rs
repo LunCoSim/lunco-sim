@@ -66,7 +66,7 @@ pub(crate) fn build(app: &mut App) {
     // `wire_blueprint_origin` consumes the same finalized render-space frame as
     // the mesh GlobalTransforms. The camera-origin writer runs before BigSpace's
     // recenter/propagation phases; running this in Update would read the previous
-    // frame's LocalFloatingOrigin and make the shader's Cartesian coordinates
+    // frame's render transform and make the shader's Cartesian coordinates
     // disagree with the vertices for one frame whenever the origin moves.
     app.add_systems(
         PostUpdate,
@@ -507,17 +507,16 @@ pub fn wire_sun_for_non_terrain_materials(
 /// BigSpace deliberately exposes camera-relative `GlobalTransform` values to
 /// the renderer. That is the right frame for rasterisation, but it is not the
 /// frame in which an authored terrain grid is defined. The shader receives the
-/// current floating-origin cell offset plus the active frame's render-space
-/// origin and inverse rotation before evaluating its periodic coordinates.
-/// This runs after BigSpace's low-precision propagation so those uniforms and
-/// the rendered vertices are derived from one finalized floating-origin state.
+/// active frame's finalized render-space origin and inverse rotation before
+/// evaluating its periodic coordinates. The active frame is a render
+/// projection here; semantic pose remains owned by the f64 grid hierarchy.
+/// Reading the finalized transform is important: re-projecting the semantic
+/// pose through the WorldGrid would round the same nested hierarchy a second,
+/// different way and make periodic lines move at large coordinates.
 pub fn wire_blueprint_origin(
     origin: Query<(&CellCoord, &Grid), With<lunco_core::OriginAnchor>>,
     active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
-    world_grids: Query<(Entity, &Grid), With<lunco_core::WorldGrid>>,
-    frame_parents: Query<&ChildOf>,
-    frame_grids: Query<&Grid>,
-    frame_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    frame_render: Query<&GlobalTransform>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, Without<RenderLayers>>,
 ) {
@@ -534,31 +533,18 @@ pub fn wire_blueprint_origin(
     let mut frame_rotation = Vec4::new(0.0, 0.0, 0.0, 1.0);
 
     // A site-mounted surface is authored in the active physics/site grid, not
-    // in inertial WorldGrid XZ. Resolve that frame in f64, then convert its pose
-    // into the same render frame as the fragment position. The subtraction is
-    // deliberately render-relative: adding a huge absolute cell to a f32
-    // shader coordinate would reintroduce the precision loss BigSpace avoids.
+    // in inertial WorldGrid XZ. Use the exact finalized render projection that
+    // BigSpace gave that frame. The subtraction is deliberately render-relative:
+    // adding a huge absolute cell to a f32 shader coordinate would reintroduce
+    // the precision loss BigSpace avoids.
     if let Some(active_frame) = active_frame {
-        let Ok((world_grid_entity, world_grid)) = world_grids.single() else {
+        let Ok(frame_render) = frame_render.get(active_frame.0) else {
             return;
         };
-        let Some((position, rotation)) = lunco_core::coords::pose_in_grid(
-            active_frame.0,
-            world_grid_entity,
-            &frame_parents,
-            &frame_grids,
-            &frame_spatial,
-        ) else {
-            return;
-        };
-        let (render_position, render_rotation) = lunco_core::coords::grid_absolute_pose_to_render(
-            world_grid,
-            lunco_core::coords::GridPos(position),
-            lunco_core::coords::GridRot(rotation),
-        );
+        let (_, render_rotation, render_position) = frame_render.to_scale_rotation_translation();
         blueprint_origin = Vec3::ZERO;
-        frame_origin = render_position.0.as_vec3();
-        frame_rotation = Vec4::from_array(render_rotation.0.inverse().as_quat().to_array());
+        frame_origin = render_position;
+        frame_rotation = Vec4::from_array(render_rotation.inverse().to_array());
     }
 
     let values = [
@@ -645,11 +631,11 @@ mod tests {
         app
     }
 
-    /// The blueprint material must be updated after the origin writer and all
-    /// BigSpace propagation phases in the same frame. If it runs in `Update`,
-    /// it samples the previous `LocalFloatingOrigin` while the mesh receives
-    /// the new origin-relative transform in `PostUpdate`, producing the
-    /// systematic angle-dependent line displacement seen in the sandbox.
+    /// The blueprint material must use the same finalized render transform as
+    /// the mesh in the same frame. If it runs in `Update`, it samples the
+    /// previous render state while the mesh receives the new origin-relative
+    /// transform in `PostUpdate`, producing a one-frame line displacement when
+    /// the origin moves.
     #[test]
     fn blueprint_frame_uniform_tracks_finalized_big_space_origin() {
         use big_space::plugin::BigSpaceMinimalPlugins;
@@ -748,6 +734,151 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_ne!(actual, Vec3::new(5.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn blueprint_frame_uniform_matches_nested_grid_render_transform() {
+        use big_space::plugin::BigSpaceMinimalPlugins;
+        use std::sync::Arc;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<ShaderMaterial>();
+
+        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let origin = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<lunco_core::OriginAnchor>>();
+            query.single(app.world()).expect("one origin anchor")
+        };
+        app.world_mut()
+            .entity_mut(origin)
+            .insert(GlobalTransform::default());
+
+        let body_grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(160_000, -70_000, 90_000),
+                Transform::from_xyz(317.25, -81.5, 142.0)
+                    .with_rotation(Quat::from_rotation_y(0.713)),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let surface_grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(-43_000, 21_000, 18_000),
+                Transform::from_xyz(-422.75, 61.25, 205.5)
+                    .with_rotation(Quat::from_rotation_x(-0.417)),
+                GlobalTransform::default(),
+                ChildOf(body_grid),
+            ))
+            .id();
+        let frame = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(11, -7, 13),
+                Transform::from_xyz(47.125, 2.75, -31.5)
+                    .with_rotation(Quat::from_rotation_z(0.291)),
+                GlobalTransform::default(),
+                ChildOf(surface_grid),
+            ))
+            .id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+
+        let schema = lunco_materials::ParamSchema::parse(
+            "struct Material {\n\
+                blueprint_origin: vec3<f32>,\n\
+                blueprint_frame_origin: vec3<f32>,\n\
+                blueprint_frame_rotation: vec4<f32>,\n\
+            }",
+        )
+        .expect("the blueprint engine fields must be reflectable");
+        let mut material = ShaderMaterial::default();
+        material.set_schema(Arc::new(schema));
+        let material_handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(material);
+        app.world_mut()
+            .spawn(MeshMaterial3d::<ShaderMaterial>(material_handle.clone()));
+
+        build(&mut app);
+        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_core::OriginAnchor>>) {
+            origins
+                .single_mut()
+                .expect("the test has one canonical origin anchor")
+                .set_if_neq(CellCoord::new(160_007, -70_004, 90_002));
+        }
+        app.add_systems(
+            PostUpdate,
+            move_origin_once.before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
+        );
+        app.update();
+
+        let actual_uniform = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&material_handle)
+            .and_then(|material| material.get_vec3("blueprint_frame_origin"))
+            .expect("blueprint frame origin must be written");
+        let frame_render = app
+            .world()
+            .get::<GlobalTransform>(frame)
+            .expect("the active frame must have a propagated render transform")
+            .translation();
+        let (_, frame_rotation, _) = app
+            .world()
+            .get::<GlobalTransform>(frame)
+            .expect("the active frame must have a propagated render transform")
+            .to_scale_rotation_translation();
+        let actual_rotation = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&material_handle)
+            .and_then(|material| material.get_vec4("blueprint_frame_rotation"))
+            .expect("blueprint frame rotation must be written");
+        let expected_rotation = Vec4::from_array(frame_rotation.inverse().to_array());
+
+        assert!(
+            (actual_uniform - frame_render).length() < 1.0e-3,
+            "uniform {actual_uniform:?}, frame GlobalTransform {frame_render:?}, delta {:?}",
+            actual_uniform - frame_render
+        );
+        assert!((actual_rotation - expected_rotation).length() < 1.0e-6);
+
+        // A rotating ancestor changes the finalized render projection without
+        // changing the authored active-frame pose. The next frame must still
+        // feed that exact projection to the shader.
+        app.world_mut()
+            .get_mut::<Transform>(body_grid)
+            .expect("the body grid must retain its transform")
+            .rotation = Quat::from_rotation_y(1.137);
+        app.update();
+
+        let actual_uniform = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&material_handle)
+            .and_then(|material| material.get_vec3("blueprint_frame_origin"))
+            .expect("blueprint frame origin must be refreshed");
+        let frame_render = app
+            .world()
+            .get::<GlobalTransform>(frame)
+            .expect("the active frame must retain a propagated render transform")
+            .translation();
+        assert!((actual_uniform - frame_render).length() < 1.0e-3);
     }
 
     /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.
