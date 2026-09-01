@@ -103,12 +103,34 @@ fn shared_rock_mesh(
         .clone()
 }
 
-/// Scatters faceted boulders bounded to a near-field region around the origin.
+/// Scatters faceted boulders over the composed terrain, or over an explicit
+/// authored near-field region when `regionM` is positive.
 struct RockScatterLayer {
     rocks: RockLayer,
     region_half_extent: f32,
     pattern: Pattern,
     seed: u64,
+}
+
+/// Resolve the authored scatter scope against the composed terrain footprint.
+/// `regionM = 0` is the USD schema default and means the whole terrain; a
+/// positive value is an explicit half-extent. Invalid authored values are
+/// rejected at the scatter owner instead of silently becoming another scope.
+fn resolve_region_half_extent(
+    authored: f32,
+    terrain_half_extent: f32,
+) -> Result<f32, &'static str> {
+    if !authored.is_finite() || authored < 0.0 {
+        return Err("regionM must be finite and non-negative");
+    }
+    if !terrain_half_extent.is_finite() || terrain_half_extent <= 0.0 {
+        return Err("the composed terrain extent is not finite and positive");
+    }
+    Ok(if authored == 0.0 {
+        terrain_half_extent
+    } else {
+        authored.min(terrain_half_extent)
+    })
 }
 
 fn hash_size_dist(h: &mut lunco_precompute::Fnv1a, size: SizeDist) {
@@ -158,10 +180,15 @@ impl TerrainLayer for RockScatterLayer {
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
         let oracle = cx.oracle;
-        let half = self.region_half_extent.min(oracle.half_extent());
-        if half <= 0.0 {
-            return;
-        }
+        let half = match resolve_region_half_extent(self.region_half_extent, oracle.half_extent()) {
+            Ok(half) => half,
+            Err(reason) => {
+                warn!(
+                    "[terrain-layer/rocks] refusing scatter for invalid authored scope: {reason}"
+                );
+                return;
+            }
+        };
         let side = (2.0 * half) as f64;
         let requested_count = ((self.rocks.density as f64 * side * side) / 10_000.0)
             .round()
@@ -318,7 +345,7 @@ impl TerrainLayer for RockScatterLayer {
 /// Build a rock layer from a typed [`RockLayer`] (e.g. the Inspector's
 /// `ObstacleFieldSpec.rocks`) so live tuning can rebuild the terrain's rock layer
 /// directly — honouring density, full size distribution, scatter `pattern`, and
-/// the near-field `region_half_extent`.
+/// the explicit `region_half_extent` (`0` means the whole composed terrain).
 pub fn rock_layer(
     rocks: RockLayer,
     region_half_extent: f32,
@@ -435,7 +462,8 @@ pub(super) fn parse_rock_instance(a: &dyn LayerAttrSource) -> Option<Arc<dyn Ter
 /// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
 /// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
 /// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
-/// (near-field scatter half-extent), and `seed`.
+/// (optional scatter half-extent; zero or omitted covers the whole composed
+/// terrain), and `seed`.
 pub(super) fn params(a: &dyn LayerAttrSource) -> (RockLayer, f32, u64) {
     // Visibility is independent from density. Keeping density authored makes a
     // disable/enable cycle survive a document reload and a new session.
@@ -452,7 +480,10 @@ pub(super) fn params(a: &dyn LayerAttrSource) -> (RockLayer, f32, u64) {
         size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
         dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
     };
-    let region_half_extent = a.get_f32("regionM").unwrap_or(300.0);
+    // `regionM` is optional in USD. Its schema fallback is zero, and zero means
+    // the full composed terrain; an arbitrary near-field default would make a
+    // layer appear concentrated even when the authored terrain is much larger.
+    let region_half_extent = a.get_f32("regionM").unwrap_or(0.0);
     let seed = a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1);
     (rocks, region_half_extent, seed)
 }
@@ -492,5 +523,21 @@ mod tests {
         assert_eq!(size_bucket(0.60), size_bucket(0.62));
         // Genuinely different sizes do not.
         assert_ne!(size_bucket(0.6), size_bucket(2.0));
+    }
+
+    #[test]
+    fn region_scope_uses_the_composed_extent_when_unbounded() {
+        assert_eq!(
+            resolve_region_half_extent(0.0, 2_000.0),
+            Ok(2_000.0),
+            "the schema default must cover the composed terrain"
+        );
+        assert_eq!(
+            resolve_region_half_extent(300.0, 2_000.0),
+            Ok(300.0),
+            "a positive regionM remains an explicit near-field scope"
+        );
+        assert!(resolve_region_half_extent(-1.0, 2_000.0).is_err());
+        assert!(resolve_region_half_extent(f32::NAN, 2_000.0).is_err());
     }
 }

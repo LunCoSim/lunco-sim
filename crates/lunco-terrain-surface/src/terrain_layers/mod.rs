@@ -86,7 +86,7 @@ pub fn apply_obstacle_spec_to_stack(
         stack.push_layer("craters", crater_layer(spec.craters, spec.seed));
     }
     if spec.rocks.enabled && spec.rocks.density > 0.0 {
-        // Rocks scatter across the WHOLE DEM (the layer clamps `f32::MAX` to the grid
+        // Rocks scatter across the WHOLE DEM (`regionM = 0` resolves to the oracle's
         // half-extent), not just the ±region centre — capped to a sane total in the
         // layer so a 16 km map doesn't try to spawn hundreds of thousands of entities.
         //
@@ -99,7 +99,7 @@ pub fn apply_obstacle_spec_to_stack(
             "rocks",
             rock_layer(
                 spec.rocks,
-                f32::MAX,
+                0.0,
                 lunco_obstacle_field::spec::Pattern::Uniform,
                 spec.seed,
             ),
