@@ -17,6 +17,39 @@ fn open(path) {
     cmd("OpenFile", #{ path: path })
 }
 
+/// Create a new untitled USD assembly document.
+fn new_document() {
+    cmd("NewDocument", #{ kind: "usd" })
+}
+
+/// Fork one explicit USD document into an independently editable assembly.
+/// The result is asynchronous; discover the new DocumentId with
+/// `ListOpenDocuments`.
+fn fork_document(source, name) {
+    cmd("ForkDocument", #{ source: source, name: name })
+}
+
+/// Persist one explicit USD document at its current file identity.
+fn save_document(doc) {
+    cmd("SaveDocument", #{ doc: doc })
+}
+
+/// Persist one explicit USD document at a new path. An empty path uses the
+/// normal Save-As picker owned by the workbench.
+fn save_as_document(doc, path) {
+    cmd("SaveAsDocument", #{ doc: doc, path: path })
+}
+
+/// Close one explicit USD document and release its projection/session state.
+fn close_document(doc) {
+    cmd("CloseDocument", #{ doc: doc })
+}
+
+/// Discard one explicit USD document's local edits through its owner.
+fn discard_document(doc) {
+    cmd("DiscardDocument", #{ doc: doc })
+}
+
 /// Open one explicit isolated Editor preview. `preview` identifies the
 /// session, so another document can remain rendered independently.
 fn preview_open(preview, doc, edit_target) {

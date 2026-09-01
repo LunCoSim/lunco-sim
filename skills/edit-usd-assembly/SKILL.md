@@ -81,9 +81,11 @@ The document registry and OpenUSD composition system are authoritative. Never
 guess a document id, preview id, prim path, or edit layer from a name or from
 the active simulation viewport.
 
-1. Open a Twin folder with `OpenTwin` (its path contains `twin.toml`) or open a
-   source with `assembly_edit::open(path)`. `OpenFile` is the normal async
-   document lifecycle; `LoadScene` is only for mounting a scene.
+1. Open a Twin folder with `OpenTwin` (its path contains `twin.toml`), open a
+   source with `assembly_edit::open(path)`, create a new assembly with
+   `assembly_edit::new_document()`, or fork an existing document with
+   `assembly_edit::fork_document(source, name)`. These are the normal async
+   document lifecycle paths; `LoadScene` is only for mounting a scene.
 2. Query `ListOpenDocuments` and select the returned `DocumentId`.
 3. Use `assembly_edit::describe(doc)`, `inspect(doc, path)`, and
    `resolve_target(doc, path, edit_target)` to read composed topology, layer
@@ -252,10 +254,13 @@ before retrying.
 ## Save, verify, and close
 
 Do not save automatically as part of proposal commit. After the user approves
-the visible result, dispatch `SaveDocument` for a file-backed document or
-`SaveAsDocument` for a fork, then confirm the document is no longer dirty with
-`ListOpenDocuments`/`InspectUsdDocument`. Keep undo/redo available through
-`UndoDocument` and `RedoDocument` during feedback.
+the visible result, call `assembly_edit::save_document(doc)` for a file-backed
+document or `assembly_edit::save_as_document(doc, path)` for a fork, then
+confirm the document is no longer dirty with
+`ListOpenDocuments`/`InspectUsdDocument`. Use
+`assembly_edit::discard_document(doc)` to restore the file through the owner,
+or `assembly_edit::close_document(doc)` after the final checkpoint. Keep
+undo/redo available through `UndoDocument` and `RedoDocument` during feedback.
 
 For runtime behavior, use the production scene/scenario gate and inspect its
 real verdict. `--validate` is parse/preflight only. For code or authored asset

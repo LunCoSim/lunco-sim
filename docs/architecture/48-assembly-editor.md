@@ -152,16 +152,21 @@ referenced or variant-contained prim.
 ### Agent and automation surface
 
 The built-in `assembly_edit` Rhai tool library is the shared agent/editor
-policy surface for these APIs. It calls `OpenFile`, the four read-only USD
-queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`, `DetachComponent`, and
-the generic document undo/redo commands through `cmd`/`query`; it adds no
+policy surface for these APIs. It calls `OpenFile`, `NewDocument`,
+`ForkDocument`, the document save/close/discard lifecycle verbs, the four
+read-only USD queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`,
+`DetachComponent`, and the generic document undo/redo commands through
+`cmd`/`query`; it adds no
 second registry, resolver, cache, parser, operation log, or persistence format.
-`open(path)` acknowledges the existing asynchronous open lifecycle, so callers
-obtain the resulting `DocumentId` from `ListOpenDocuments` rather than guessing
-one. `describe`, `inspect`, `resolve_target`, and `sync_document` always receive an
-explicit document. Every authored helper receives an explicit `@root@` or
-`@runtime@` target, and `batch` requires each reflected `UsdOp` to carry its
-own target.
+`open(path)`, `new_document()`, and `fork_document(source, name)` acknowledge
+the existing asynchronous document lifecycle, so callers obtain the resulting
+`DocumentId` from `ListOpenDocuments` rather than guessing one. The
+`save_document`, `save_as_document`, `close_document`, and
+`discard_document` helpers route to the same explicit lifecycle verbs used by
+the human UI. `describe`, `inspect`, `resolve_target`, and `sync_document`
+always receive an explicit document. Every authored helper receives an
+explicit `@root@` or `@runtime@` target, and `batch` requires each reflected
+`UsdOp` to carry its own target.
 
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
