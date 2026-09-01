@@ -47,6 +47,10 @@ decision guide for *where* colors/spacing come from in this repo.
    literals. The merged workbench title bar uses
    `theme.spacing.titlebar_height` and
    `theme.spacing.titlebar_control_size` for one shared alignment contract.
+7. **Translucent workbench surfaces use `theme.tokens.overlay_backdrop`.**
+   Let `lunco-workbench` own the body fill and keep standard `PanelCtx` content
+   frames transparent over it; do not introduce panel-local alpha values or
+   duplicate backdrop tokens.
 
 ### Runtime-authored HTML/CSS surfaces
 

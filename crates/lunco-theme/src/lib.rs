@@ -239,8 +239,8 @@ pub struct DesignTokens {
     /// cue it exists to create. Only the alpha varies by mode — a light UI needs
     /// less wash to read as the same separation.
     pub scrim: egui::Color32,
-    /// Background for a floating HUD panel drawn OVER the 3D viewport
-    /// (input overlay, tutorial card, telemetry readout).
+    /// Background for a translucent surface drawn OVER the 3D viewport
+    /// (workbench panel, input overlay, tutorial card, telemetry readout).
     ///
     /// Distinct from [`Self::surface_raised`], which is opaque and sits on a
     /// panel: this is translucent so the scene stays partly legible through it,

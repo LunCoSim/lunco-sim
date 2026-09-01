@@ -169,12 +169,14 @@ impl<'w> PanelCtx<'w> {
     /// Resolve the shared fill for a panel-owned content surface.
     ///
     /// The workbench setting controls this centrally so a panel cannot drift
-    /// from the dock body's appearance. A panel that wants a card should use
-    /// [`Self::panel_content_frame`] rather than copying the theme fill.
+    /// from the dock body's appearance. The parent body owns the translucent
+    /// backdrop, so standard content frames stay transparent in that mode. A
+    /// panel that wants a card should use [`Self::panel_content_frame`] rather
+    /// than copying the theme fill.
     pub fn panel_content_fill(&self) -> egui::Color32 {
         if self
             .resource::<crate::WorkbenchAppearanceSettings>()
-            .is_some_and(|settings| settings.transparent_tab_content)
+            .is_some_and(|settings| settings.translucent_tab_content)
         {
             egui::Color32::TRANSPARENT
         } else {

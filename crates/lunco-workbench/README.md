@@ -136,6 +136,13 @@ that snapshot with every panel surface. Panel render paths should consume the
 active style or theme tokens; they must not rebuild a full visuals palette per
 frame.
 
+Ordinary dock and side-panel bodies use the theme's translucent
+`DesignTokens::overlay_backdrop` by default, so the active scene remains
+visible without sacrificing text contrast. `WorkbenchAppearanceSettings` owns
+the opt-out to an opaque mantle body, while standard `PanelCtx` content frames
+stay transparent over the shared body. The full panel leaf remains workbench
+chrome for pointer routing in either mode.
+
 ## Not yet built
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /

@@ -316,6 +316,12 @@ pub trait Panel: Send + Sync + 'static {
 }
 ```
 
+The workbench owns panel-surface presentation. Ordinary dock and side-panel
+bodies use the theme's translucent `DesignTokens::overlay_backdrop` by default;
+`WorkbenchAppearanceSettings` can opt into the opaque mantle surface. Standard
+`PanelCtx` content frames do not add a second backdrop, and the complete panel
+leaf remains chrome for pointer routing in both modes.
+
 A panel's default slot derives from its `default_slot()` (and `id` substring conventions — e.g. an `id` containing `"inspector"` auto-docks right):
 
 | Category | Default slot | Examples |

@@ -727,6 +727,15 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
     theme.colors.mantle
 }
 
+/// Resolve the one themed surface used behind ordinary workbench panels.
+fn panel_surface_fill(theme: &lunco_theme::Theme, translucent_tab_content: bool) -> egui::Color32 {
+    if translucent_tab_content {
+        theme.tokens.overlay_backdrop
+    } else {
+        theme.colors.mantle
+    }
+}
+
 /// Persisted workbench appearance preferences.
 ///
 /// This is shell-level presentation state rather than a panel preference: the
@@ -734,26 +743,37 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
 /// panel-owned content cards. Keeping the decision here prevents one tab from
 /// accidentally becoming transparent while another still paints an opaque
 /// rectangle over the scene.
-#[derive(
-    Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug, Default,
-)]
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct WorkbenchAppearanceSettings {
-    /// Let the scene show through every dock/tab content body and its standard
-    /// panel surface. The default keeps the themed mantle surface everywhere.
-    #[serde(default)]
-    pub transparent_tab_content: bool,
+    /// Use the theme's translucent surface behind every dock/tab content body.
+    /// The default keeps panel chrome readable while allowing the scene to
+    /// remain visible behind it.
+    #[serde(default = "default_translucent_tab_content")]
+    pub translucent_tab_content: bool,
+}
+
+fn default_translucent_tab_content() -> bool {
+    true
+}
+
+impl Default for WorkbenchAppearanceSettings {
+    fn default() -> Self {
+        Self {
+            translucent_tab_content: default_translucent_tab_content(),
+        }
+    }
 }
 
 impl SettingsSection for WorkbenchAppearanceSettings {
     const KEY: &'static str = "workbench_appearance";
 }
 
-/// Whether the current panel body should reveal the scene below the workbench.
+/// Whether the current panel body leaves the scene unobscured by egui chrome.
 ///
 /// The main scene viewport is always transparent because it is the scene host;
-/// ordinary panels follow the global appearance setting. The declared panel
-/// value remains the fallback for standalone panel harnesses that do not install
-/// the workbench settings resource.
+/// ordinary panels use the theme's translucent surface or opaque mantle. A
+/// declared panel transparency remains available for standalone panel
+/// harnesses that do not install the workbench settings resource.
 fn panel_body_is_transparent(
     world: &World,
     declared_transparent: bool,
@@ -764,7 +784,7 @@ fn panel_body_is_transparent(
     }
     world
         .get_resource::<WorkbenchAppearanceSettings>()
-        .map(|settings| settings.transparent_tab_content)
+        .map(|_| false)
         .unwrap_or(declared_transparent)
 }
 
@@ -4706,9 +4726,9 @@ fn render_layout(
     let has_dock_tabs = !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
-        let transparent_tab_content = world
+        let translucent_tab_content = world
             .resource::<WorkbenchAppearanceSettings>()
-            .transparent_tab_content;
+            .translucent_tab_content;
         let WorkbenchLayout {
             panels,
             instance_panels,
@@ -4753,11 +4773,7 @@ fn render_layout(
         // the focused leaf, so the active treatment must be applied to both
         // states or the selection disappears as soon as the pane is focused.
         let palette = &theme.colors;
-        style.tab.tab_body.bg_fill = if transparent_tab_content {
-            egui::Color32::TRANSPARENT
-        } else {
-            palette.mantle
-        };
+        style.tab.tab_body.bg_fill = panel_surface_fill(theme, translucent_tab_content);
         let active_fill = theme.tokens.surface_raised;
         // The selected tab is already distinguished by its raised fill and
         // text. Keep the tab name area quiet: outlines make the tab strip look
@@ -4883,14 +4899,12 @@ fn render_layout(
         let right_default = (screen.width() * 0.10).max(140.0);
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
-        let side_panel_fill = if world
-            .resource::<WorkbenchAppearanceSettings>()
-            .transparent_tab_content
-        {
-            egui::Color32::TRANSPARENT
-        } else {
-            theme.colors.mantle
-        };
+        let side_panel_fill = panel_surface_fill(
+            theme,
+            world
+                .resource::<WorkbenchAppearanceSettings>()
+                .translucent_tab_content,
+        );
 
         if let Some(id) = layout.side_browser.first().copied() {
             let r = egui::Panel::left("lunco_workbench_side_panel_left")
@@ -5707,16 +5721,16 @@ fn register_workbench_appearance_settings_menu(world: &mut World) {
         };
         let original = settings;
         ui.checkbox(
-            &mut settings.transparent_tab_content,
-            "Transparent tab content",
+            &mut settings.translucent_tab_content,
+            "Translucent tab content",
         )
         .on_hover_text(
-            "Show the 3D scene through every tab body and its standard panel surface. "
+            "Keep the 3D scene visible behind every tab body and its standard panel surface. "
                 .to_string(),
         );
         ui.label(
             egui::RichText::new(
-                "Off uses the same themed background in every tab; on reveals the scene behind all tabs.",
+                "On uses a themed translucent surface; off uses the same opaque background in every tab.",
             )
             .weak()
             .small(),
@@ -6403,7 +6417,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tab_content_setting_has_uniform_default_and_transparent_override() {
+    fn tab_content_setting_uses_translucent_default_for_panel_chrome() {
         let mut world = World::new();
 
         // Standalone panel harnesses retain the panel declaration when the
@@ -6411,22 +6425,32 @@ mod tests {
         assert!(panel_body_is_transparent(&world, true, false));
 
         world.insert_resource(WorkbenchAppearanceSettings::default());
-        // The application default is one opaque mantle surface for every tab,
-        // including panels that historically opted into transparency.
+        // The application default uses a translucent body, which still blocks
+        // scene input across the complete panel leaf.
         assert!(!panel_body_is_transparent(&world, true, false));
 
         world
             .resource_mut::<WorkbenchAppearanceSettings>()
-            .transparent_tab_content = true;
-        assert!(panel_body_is_transparent(&world, false, false));
+            .translucent_tab_content = false;
+        assert!(!panel_body_is_transparent(&world, true, false));
         // The scene host is always transparent, independent of the preference.
         assert!(panel_body_is_transparent(&world, false, true));
     }
 
     #[test]
-    fn tab_content_setting_deserializes_older_empty_section() {
+    fn tab_content_setting_deserializes_empty_section() {
         let settings: WorkbenchAppearanceSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, WorkbenchAppearanceSettings::default());
+    }
+
+    #[test]
+    fn panel_surface_fill_uses_themed_translucency() {
+        let theme = lunco_theme::Theme::dark();
+        let translucent = panel_surface_fill(&theme, true);
+
+        assert_eq!(translucent, theme.tokens.overlay_backdrop);
+        assert!(translucent.a() > 0 && translucent.a() < u8::MAX);
+        assert_eq!(panel_surface_fill(&theme, false), theme.colors.mantle);
     }
 
     #[test]
