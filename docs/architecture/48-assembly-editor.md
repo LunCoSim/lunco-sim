@@ -99,6 +99,23 @@ authored layers and revisions, local composed prim topology, dependency arcs
 from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
 active document or constructs another resolver/cache.
 
+`ResolveUsdTarget` requires `doc`, a prim `path`, and an explicit `edit_target`
+(`@root@` or `@runtime@`). Local authored and runtime opinions are resolved by
+`UsdDocument`; referenced or payloaded paths are resolved by the already-mounted
+`CanonicalStage`, and the returned OpenUSD prim stack identifies the actual
+composed opinions. If an arc has no mounted canonical stage, the query rejects
+the request instead of guessing from the flat authored layer. `SyncUsdDocument`
+uses the document's bounded typed-op ring: a covered generation returns an
+ordered delta, while an expired cursor returns the complete base/runtime layer
+snapshot needed to resync. A future cursor is rejected. Neither query creates a
+second composition cache, resolver, or history log.
+
+The target response reports `edit_scope` (`authored_layer`, `local_override`,
+`composed_read_only`, or `missing`) instead of claiming that every composed
+prim supports every operation. Namespace edits still follow the operation's
+typed validation; a composed read is not permission to remove or move a
+referenced or variant-contained prim.
+
 ## Mount and attach contract
 
 A reusable component declares a plug frame. A host applies

@@ -32,6 +32,12 @@ existing subsystems:
   resolver. Added unconditionally so server / sandbox / networking bins get the
   full USD document surface (egui-free).
 
+Assembly agents and editor view models use the registered read queries
+`InspectUsdDocument`, `ResolveUsdTarget`, and `SyncUsdDocument`. They operate on
+the same document registry, typed op ring, journal, and mounted canonical
+OpenUSD stage as the command path; they do not maintain a second resolver or
+history store.
+
 > There is **no `UsdLunCoPlugin`** — that was an old doc artifact.
 
 ## UI plugins (`ui` feature only)

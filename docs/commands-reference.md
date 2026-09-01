@@ -718,6 +718,35 @@ Read one explicit USD document and optionally one composed local prim path.
 | `doc` | `u64` |  Required open USD document id. |
 | `path` | `String` |  Optional absolute USD prim path. |
 
+#### `ResolveUsdTarget` (query)
+
+Resolve one explicit prim path for an assembly edit. Local paths use the
+document's authored layers; referenced and payloaded paths use the already
+mounted OpenUSD canonical stage and return its composed prim stack. The query
+rejects an arc target when that stage is not mounted rather than inferring a
+target from flat layer data. The result includes an `edit_scope` so callers can
+distinguish authored-layer edits, local overrides, composed read-only paths,
+and missing paths; it does not grant namespace-edit permission implicitly.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `u64` | Required open USD document id. |
+| `path` | `String` | Required absolute USD prim path. |
+| `edit_target` | `String` | Required `@root@` or `@runtime@` document layer. |
+
+#### `SyncUsdDocument` (query)
+
+Synchronize an explicit USD document from a generation cursor. A covered cursor
+returns `{ kind: "delta", ops: [...] }` using the document's typed op ring. If
+the bounded ring no longer covers the cursor, the response is `{ kind:
+"snapshot", ... }` with complete serialized root/runtime layers. A cursor
+newer than the document is rejected.
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `u64` | Required open USD document id. |
+| `since_generation` | `u64` | Optional cursor; omit it to request a full snapshot. |
+
 #### `AttachComponent`
 
  Attach one component asset to a host body as one journalled USD change set.
