@@ -196,7 +196,8 @@ explicit entity or a missing local camera is rejected at the avatar-camera
 boundary and remains visible through runtime diagnostics; no entity-order
 selection is permitted.
 
-The local avatar also carries an `InputPorts` surface for free-flight movement,
+The local avatar also carries an `InputPorts` surface for free-flight movement
+(`forward`/`side`/`up`) and its normalized `speed_boost` modifier,
 but the `Avatar` domain marker makes that endpoint ineligible for vessel
 possession. Plain-click resolution continues past an avatar endpoint to the
 nearest non-avatar input surface, and direct `PossessVessel` requests apply the
@@ -217,6 +218,12 @@ The controller has one shared input path: persisted `input_bindings` resolve raw
 devices to semantic `UserIntent`s, then the vessel's authored `ControlBinding`
 resolves those intents to named command ports. A vehicle profile owns the second
 mapping; Rust does not add key-specific or vehicle-kind exceptions.
+
+The free-flight avatar uses the same contract: the configured `SpeedBoost`
+intent maps to its normalized `speed_boost` command port and is emitted in the
+same `SetPorts` batch as movement. The avatar actuator consumes that command
+frame, so modifier transitions cannot bypass controller ordering or diverge
+from Q/E movement.
 
 `LanderControls` is body-relative. Its forward/back, left/right, and yaw
 intents write the authored lander's body `pitch`, `roll`, and `yaw` ports; thrust

@@ -47,9 +47,10 @@ Tutorials use `input_binding("forward")` / `input_hint("forward")` through the
 Rhai bridge, so their labels follow the same resolved settings resource rather
 than copying physical key names.
 
-The bundled `speed_boost` intent (`ShiftLeft`/`ShiftRight`) is consumed by the
-free-flight avatar. It is part of the shared map, so rebinding and
-`SimulateIntent` use the same semantic path as movement.
+The bundled `speed_boost` intent (`ShiftLeft`/`ShiftRight`) is authored on the
+free-flight avatar as a normalized `speed_boost` command port. It is emitted in
+the same `SetPorts` batch as `forward`/`side`/`up`, so physical Shift and
+`SimulateIntent` use one controller path and cannot split a movement frame.
 
 The settings section is an override layer over the bundled map: omitted semantic
 bindings inherit the current defaults, while an explicit empty array means
