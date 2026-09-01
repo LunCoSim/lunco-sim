@@ -216,7 +216,9 @@ my_lunar_base/
     └── textures/
 ```
 
-The app scans for Documents dynamically based on manifest-declared paths.
+The app scans for Documents dynamically based on domain manifest paths when
+declared, and on each domain's authoritative Twin index when no domain section
+is present.
 Users organize their Twin however matches their mental model: by system
 (`electrical/`, `thermal/`), by lifecycle phase (`concept/`, `detail/`),
 by vendor (`rover_supplier/`), or flat.

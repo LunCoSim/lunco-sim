@@ -74,8 +74,9 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
-    glob_matches, DownloadManifest, JournalManifest, TwinChildRef, TwinManifest, TwinSettingValue,
-    UsdManifest, DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
+    glob_matches, DownloadManifest, JournalManifest, ModelicaExternal, ModelicaManifest,
+    TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, DEFAULT_SCENE_GLOBS,
+    MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -85,8 +86,24 @@ pub use lunco_storage;
 
 use lunco_storage::StorageHandle;
 
-fn is_safe_child_path(path: &Path) -> bool {
+/// Whether a path can be joined to a Twin root without escaping it.
+///
+/// `.` is accepted because domain manifest sections use it to designate the
+/// Twin root itself. Callers that require a concrete child entry (such as a
+/// declared default scene or child Twin) can apply their stricter contract.
+pub fn is_safe_relative_path(path: &Path) -> bool {
     !path.as_os_str().is_empty()
+        && path.is_relative()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
+fn is_safe_child_path(path: &Path) -> bool {
+    is_safe_relative_path(path)
         && path
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
@@ -231,6 +248,17 @@ impl TwinMode {
                         path: scene_path,
                         root: twin.root,
                     });
+                }
+            }
+
+            if let Some(modelica) = &manifest.modelica {
+                for path in &modelica.paths {
+                    if !is_safe_relative_path(path) {
+                        return Err(TwinError::PathOutsideRoot {
+                            path: twin.root.join(path),
+                            root: twin.root.clone(),
+                        });
+                    }
                 }
             }
 
@@ -381,6 +409,7 @@ impl Twin {
                         default_scene: Some(rel),
                         scenes: None,
                     }),
+                    modelica: None,
                     journal: None,
                     downloads: None,
                     settings: Default::default(),
@@ -672,6 +701,7 @@ version = "0.1.0"
             default_perspective: None,
             children: vec![],
             usd: None,
+            modelica: None,
             journal: None,
             downloads: None,
             settings: Default::default(),
@@ -968,5 +998,23 @@ version = "0.1.0"
             .map(|t| t.manifest.as_ref().unwrap().name.clone())
             .collect();
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn modelica_search_path_cannot_escape_twin_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest(
+            &tmp.path().join(MANIFEST_FILENAME),
+            r#"
+name = "unsafe"
+version = "0.1.0"
+
+[modelica]
+paths = ["../outside"]
+"#,
+        );
+
+        let result = TwinMode::open(tmp.path());
+        assert!(matches!(result, Err(TwinError::PathOutsideRoot { .. })));
     }
 }

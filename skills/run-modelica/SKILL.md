@@ -103,12 +103,15 @@ same surface is `attach_program(...)` with `program_input_connection(...)`,
 result with `ListPorts`, `CosimStatus`, and `GetBrokenConnections`; a source
 without declared ports is reported as source-only and does not step.
 
-Modelica packages under `assets/models/<Root>/` use the standard
-`package.mo`/`package.order` layout and members' `within` declarations. A
-qualified reference such as `LunCo.Electrical.Battery` is resolved by its root
-segment through the normal Modelica search-path inventory; do not add a
-library-specific Rust load call. The compiler loads a cold structured root on
-the unresolved-reference path and retries. A generated policy's `source_roots`
+Modelica packages under `assets/models/<Root>/` and inside a Twin use the standard
+`package.mo`/`package.order` layout and members' `within` declarations. A Twin may
+declare `[modelica].paths` (Twin-relative, with `"."` meaning the Twin root) and
+`externals` in `twin.toml`. Without that section, the Modelica owner derives roots
+from the indexed Twin `.mo` files, so package discovery does not depend on a
+hard-coded folder. A qualified reference such as `LunCo.Electrical.Battery` is
+resolved by its root segment through the normal Modelica search-path inventory;
+do not add a library-specific Rust load call. Every admitted Twin root uses the
+existing `LoadSourceRoot` worker path. A generated policy's `source_roots`
 metadata can prewarm a dependency, but it is not the source of truth for class
 discovery. The worker's prepared-solve cache keys library state from the
 revisions that `ModelicaCompiler` records while admitting source roots; it does

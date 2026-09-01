@@ -1821,9 +1821,9 @@ impl Plugin for ModelicaPlugin {
         // compile session. Loading is driven by the qualified root used by a
         // document or class lookup and completed before its first DAE compile.
         app.insert_resource(source_roots::SourceRootRegistry::build());
-        // A mounted twin may ship its own Modelica packages under `<twin>/models`;
-        // load them into the compile session so twin-authored programs resolve their
-        // imports through the same source-root mechanism as bundled packages.
+        // A mounted Twin declares Modelica roots in its manifest, or exposes
+        // indexed `.mo` package roots when no domain section is present. Both
+        // cases use the same source-root admission system as bundled packages.
         app.add_systems(Update, source_roots::load_twin_source_roots);
         app.add_plugins(ui::ModelicaUiPlugin);
         app.add_plugins(lunco_doc_bevy::ViewSyncPlugin);
@@ -2331,6 +2331,7 @@ pub struct ModelicaOutput {
 mod observables_smoke {
     use super::*;
     use lunco_experiments::RunBounds;
+    use std::fs;
 
     #[test]
     fn source_root_reports_unstrippable_bound_input_files() {
@@ -2382,6 +2383,30 @@ mod observables_smoke {
             multi_result.is_ok(),
             "the multi-document path must share source-root ownership: {:?}",
             multi_result.err()
+        );
+    }
+
+    #[test]
+    fn disk_source_root_loads_standard_package_members() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("package.mo"),
+            "within ; package Vehicle end Vehicle;",
+        )
+        .unwrap();
+        let member = "within Vehicle;\nmodel Part\n  Real x;\nequation\n  x = 1;\nend Part;\n";
+        fs::write(temp.path().join("Part.mo"), member).unwrap();
+
+        let mut compiler = ModelicaCompiler::new();
+        let report = compiler.load_source_root("twin:demo", temp.path());
+        assert_eq!(report.parsed_file_count, 2);
+        assert_eq!(report.inserted_file_count, 2);
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+        assert!(
+            compiler
+                .compile_str("Part", member, "workspace/Part.mo")
+                .is_ok(),
+            "a package member loaded from disk must remain compilable"
         );
     }
 
