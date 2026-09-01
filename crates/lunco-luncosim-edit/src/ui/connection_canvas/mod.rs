@@ -209,7 +209,7 @@ pub fn produce_usd_canvas(
         state.clear();
     }
 
-    // The Assembly preview root is the document boundary. The live simulation
+    // The Editor preview root is the document boundary. The live simulation
     // can contain the same stage handle, but those entities are not editable
     // through this file-scoped graph.
     let is_preview_entity = |entity: Entity| {
@@ -303,10 +303,10 @@ pub fn produce_usd_canvas(
     }
 }
 
-/// Wake the Assembly connection graph when its explicit preview document or
+/// Wake the Editor connection graph when its explicit preview document or
 /// the composed USD stage changes. A missing preview clears the graph through
 /// the producer instead of leaving the previous document visible.
-pub fn assembly_canvas_changed(
+pub fn editor_canvas_changed(
     viewport: Option<Res<UsdViewportState>>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
 ) -> bool {
@@ -453,7 +453,7 @@ impl Panel for UsdCanvasPanel {
             if !state.built {
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        "No Assembly document selected — choose a USD document in the Twin Browser.",
+                        "No Editor document selected — choose a USD document in the Twin Browser.",
                     );
                 });
                 return;

@@ -239,7 +239,7 @@ impl Plugin for SandboxUiPlugin {
         lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
-            // USD Twin browser plus the explicit Assembly preview. The preview
+            // USD Twin browser plus the explicit Editor preview. The preview
             // owns a private, render-layer-isolated projection only after the
             // user selects a document in the Twin Browser; it never auto-mounts
             // the simulation's default scene and therefore cannot duplicate the
@@ -275,7 +275,7 @@ impl Plugin for SandboxUiPlugin {
                 );
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
-                // Rhai behaviour editor (Assembly). Its view-model is
+                // Rhai behaviour editor (Editor). Its view-model is
                 // produced each frame from the selection + ScriptRegistry.
                 app.register_panel(rhai_editor_panel::RhaiEditorPanel);
                 app.init_resource::<rhai_editor_panel::RhaiEditorVm>();

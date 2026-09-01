@@ -8,7 +8,7 @@ separate USD document. It projects that document's prims and connections into
 the existing canvas, prim-tree, inspector, and isolated USD viewport surfaces.
 It does not create a second scene model or a vehicle-specific assembly API.
 
-The workbench exposes this surface through the registered `assembly`
+The workbench exposes this surface through the registered `editor`
 perspective. The registered `terrain_sculpt` perspective exposes the existing
 terrain tools and keeps sculpting separate from object assembly. Both are hidden
 from the default title-bar switcher, but remain available to authored tutorials
@@ -34,7 +34,7 @@ listed below; they do not introduce a second authoring model.
   inverse operations, save, undo, and live projection.
 - The editor operates on an explicitly opened USD document. The existing
   `OpenFile`/`NewDocument`/`SaveAsDocument` commands provide the file lifecycle;
-  the Assembly preview is opened with `OpenUsdPreview`, which carries an
+  the Editor preview is opened with `OpenUsdPreview`, which carries an
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
   the lease shown by the dock and `CloseUsdPreview` releases only that lease.
   All preview leases are isolated from the simulation scene.
@@ -133,8 +133,9 @@ explicit document. Every authored helper receives an explicit `@root@` or
 `@runtime@` target, and `batch` requires each reflected `UsdOp` to carry its
 own target.
 
-The optional `parent_gen` on `add_prim`, `transform`, `attribute`,
-`relationship`, `connection`, `schema`, `variant`, and `batch` is the existing
+The optional `parent_gen` on `add_prim`, `transform`, `attribute`, `keyframe`,
+`remove_keyframe`, `relationship`, `connection`, `schema`, `variant`, and
+`batch` is the existing
 revision precondition. A supplied cursor makes stale edits fail atomically
 before authoring or journaling; `()` is reserved for an operation with no
 causal predecessor. `transform` uses one `ApplyUsdOps` change set for its
@@ -144,6 +145,14 @@ listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview/review
 operation.
+
+`keyframe` and `remove_keyframe` expose the existing reversible
+`SetTimeSample`/`RemoveTimeSample` primitives to agents. The Editor Inspector
+uses those same primitives for a selected prim's current pose, while the
+Environment panel's existing `ControlAnimation` transport plays and scrubs the
+result. The document authoring owner adds a missing xform channel to
+`xformOpOrder` as part of the first keyframe, so a keyed pose is a valid USD
+transform rather than an unattached attribute.
 
 ## Mount and attach contract
 

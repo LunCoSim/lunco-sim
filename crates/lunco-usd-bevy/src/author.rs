@@ -220,6 +220,17 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
         .ok_or_else(|| anyhow!("could not parse `{type_name} = {literal}` into a USD value"))
 }
 
+/// Normalize a USDA literal through the OpenUSD parser and writer.
+///
+/// Adapters can use this for values assembled from typed controls without
+/// maintaining a second literal formatter. The returned spelling is the
+/// canonical spelling used by typed document inverses.
+pub fn normalize_value_literal(type_name: &str, literal: &str) -> Result<String> {
+    let value = parse_attribute_value(type_name, literal)?;
+    value_to_literal(type_name, value)
+        .ok_or_else(|| anyhow!("USD value type `{type_name}` has no USDA literal form"))
+}
+
 /// Inverse of [`parse_attribute_value`]: format `value` (of USD type
 /// `type_name`) back into the USDA literal that `parse_attribute_value(type_name,
 /// <literal>)` would re-read to the same value. Delegates to the fork's own
