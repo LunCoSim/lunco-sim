@@ -482,26 +482,10 @@ impl Panel for TelemetryPanel {
                 let mut all_names: Vec<_> = model_vars;
                 all_names.extend(model_inputs);
                 all_names.extend(exp_vars.iter().cloned());
-
-                // Proactively pull names from the document index if we're
-                // looking at a model that hasn't run yet.
                 let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
                 let index_ref = registry
                     .and_then(|r| r.host(doc_id))
                     .map(|h| h.document().index());
-                if let Some(index) = index_ref {
-                    for comp in &index.components {
-                        // Very rough heuristic: if it's a Real and not
-                        // obviously a parameter, it's probably an
-                        // observable. This is just to seed the list
-                        // before the first compile.
-                        if comp.type_name == "Real"
-                            && comp.variability == crate::index::Variability::Continuous
-                        {
-                            all_names.push(comp.name.clone());
-                        }
-                    }
-                }
 
                 all_names.sort();
                 all_names.dedup();
