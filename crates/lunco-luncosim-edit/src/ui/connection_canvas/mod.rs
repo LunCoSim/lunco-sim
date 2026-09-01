@@ -188,15 +188,15 @@ pub fn produce_usd_canvas(
         state.clear();
         return;
     };
-    let Some(doc) = viewport.active_doc() else {
+    let Some(doc) = viewport.focused_doc() else {
         state.clear();
         return;
     };
-    let Some(handle) = viewport.active_stage_handle().cloned() else {
+    let Some(handle) = viewport.focused_stage_handle().cloned() else {
         state.clear();
         return;
     };
-    let Some(preview_root) = viewport.preview_scene_root() else {
+    let Some(preview_root) = viewport.focused_scene_root() else {
         state.clear();
         return;
     };

@@ -169,6 +169,10 @@ struct TwinSceneRef {
     roots: Vec<PathBuf>,
     name: String,
     rel: String,
+    /// Number of open editor preview leases using these coordinates. A
+    /// synthetic document projection has no Twin root, so this count is the
+    /// lifetime owner for its `TwinRoots` registration.
+    preview_leases: usize,
     synced_generation: Option<u64>,
     /// Generation the **persistence overlay** was last serialized at. Tracked apart
     /// from `synced_generation` so the expensive whole-stage serialization happens
@@ -239,10 +243,54 @@ impl DocBackedTwinScenes {
                 roots: vec![root],
                 name,
                 rel,
+                preview_leases: 0,
                 synced_generation: None,
                 overlay_synced_generation: None,
             },
         );
+    }
+
+    /// Track an editor preview without pretending that it is a workspace Twin
+    /// root. Multiple preview leases share these coordinates and therefore
+    /// the same `UsdStageAsset` and `CanonicalStage`.
+    pub fn track_preview(&mut self, doc: DocumentId, name: String, rel: String) {
+        if self.map.contains_key(&doc) {
+            return;
+        }
+        self.map.insert(
+            doc,
+            TwinSceneRef {
+                roots: Vec::new(),
+                name,
+                rel,
+                preview_leases: 0,
+                synced_generation: None,
+                overlay_synced_generation: None,
+            },
+        );
+    }
+
+    /// Acquire one explicit editor preview lease for a tracked document.
+    pub fn acquire_preview(&mut self, doc: DocumentId) {
+        if let Some(scene) = self.map.get_mut(&doc) {
+            scene.preview_leases = scene.preview_leases.saturating_add(1);
+        }
+    }
+
+    /// Release one editor preview lease. Returns synthetic Twin coordinates
+    /// only when the final preview closes and no workspace Twin owns the
+    /// document, allowing the caller to unregister the authority exactly once.
+    pub fn release_preview(&mut self, doc: DocumentId) -> Option<(String, String)> {
+        let scene = self.map.get_mut(&doc)?;
+        if scene.preview_leases == 0 {
+            return None;
+        }
+        scene.preview_leases -= 1;
+        if scene.preview_leases == 0 && scene.roots.is_empty() {
+            let scene = self.map.remove(&doc)?;
+            return Some((scene.name, scene.rel));
+        }
+        None
     }
 
     /// Release the scene lease for a closed Twin and return documents that no
@@ -253,7 +301,7 @@ impl DocBackedTwinScenes {
             scene
                 .roots
                 .retain(|existing| !lunco_doc::same_file(existing, root));
-            if scene.roots.is_empty() {
+            if scene.roots.is_empty() && scene.preview_leases == 0 {
                 released.push(*doc);
                 false
             } else {
@@ -267,15 +315,28 @@ impl DocBackedTwinScenes {
     }
 
     /// Forget a document after its registry host has been removed.
-    pub fn forget_document(&mut self, doc: DocumentId) {
-        self.map.remove(&doc);
+    pub fn forget_document(&mut self, doc: DocumentId) -> Option<(String, String)> {
+        let synthetic = self
+            .map
+            .remove(&doc)
+            .and_then(|scene| scene.roots.is_empty().then_some((scene.name, scene.rel)));
         self.user_owned.remove(&doc);
+        synthetic
     }
 
-    /// Drop only the current projection coordinates while retaining the user
-    /// lease. The viewport uses this when a Twin authority disappears and the
-    /// document must be rehomed under its session-owned source.
+    /// Drop only the current projection coordinates while retaining preview
+    /// leases. The viewport uses this when a Twin authority disappears and
+    /// the document must be rehomed under its preview-owned source.
     pub fn detach_projection(&mut self, doc: DocumentId) {
+        if let Some(scene) = self.map.get_mut(&doc) {
+            if scene.preview_leases > 0 {
+                // Keep the preview lease and its stable coordinates alive while
+                // the workspace Twin authority is being replaced. The next
+                // preview mount re-registers the same synthetic authority.
+                scene.roots.clear();
+                return;
+            }
+        }
         self.map.remove(&doc);
     }
 }
@@ -727,22 +788,22 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
-    // The shared USD preview is a second legitimate mount: its scene_root is
-    // deliberately NOT a `UsdSceneRoot` (it is `UsdPreviewOnly`, so sim/avian
-    // walkers bail at it), so the query above never sees it. Without this, an
-    // editor viewport doc is tracked but never projected — `ApplyUsdOp` edits
-    // author into the document yet the preview keeps the stale visuals.
-    // The viewport is UI; without the `ui` feature there is no second mount to
-    // consider and only the sim-side `UsdSceneRoot` doc projects.
+    // Editor previews are additional legitimate mounts: their roots are
+    // deliberately NOT `UsdSceneRoot` (they are `UsdPreviewOnly`, so sim/avian
+    // walkers bail at them), so the query above never sees them. Every open
+    // preview document must still be admitted here; otherwise a document edit
+    // would update only the focused preview and leave other leases stale.
+    // Without the `ui` feature there are no editor mounts to consider.
     #[cfg(feature = "ui")]
-    let viewport_doc: Option<DocumentId> = world
+    let viewport_docs: HashSet<DocumentId> = world
         .get_resource::<crate::ui::viewport::UsdViewportState>()
-        .and_then(|s| s.active_doc());
+        .map(|state| state.preview_docs().collect())
+        .unwrap_or_default();
     #[cfg(not(feature = "ui"))]
-    let viewport_doc: Option<DocumentId> = None;
+    let viewport_docs: HashSet<DocumentId> = HashSet::new();
 
     for (doc, name, rel, synced, overlay_synced) in entries {
-        if active_doc != Some(doc) && viewport_doc != Some(doc) {
+        if active_doc != Some(doc) && !viewport_docs.contains(&doc) {
             continue;
         }
         // Read the generation before any whole-stage payload. The composed source
@@ -881,6 +942,12 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .get_mut(&doc)
         {
             s.synced_generation = Some(cur_gen);
+        }
+        #[cfg(feature = "ui")]
+        if let Some(mut viewport) =
+            world.get_resource_mut::<crate::ui::viewport::UsdViewportState>()
+        {
+            viewport.mark_projected_generation(doc, cur_gen);
         }
         if synced.is_some() && Some(cur_gen) != overlay_synced {
             world.write_message(TwinProjectionSettle {
@@ -1689,11 +1756,11 @@ fn spawn_prim_op(
 /// rebuild.
 pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
     let roots: Vec<Entity> = {
-        // A live simulation is rooted by `UsdSceneRoot`; the editor's shared
-        // offscreen viewport is rooted by `UsdPreviewOnly`. Both are stage
-        // ownership roots and must survive a visual refresh. Restricting this
-        // to `UsdSceneRoot` silently despawned the preview subtree, leaving no
-        // entity to re-instantiate after a material edit.
+        // A live simulation is rooted by `UsdSceneRoot`; each editor preview
+        // lease is rooted by `UsdPreviewOnly`. Both are stage ownership roots
+        // and must survive a visual refresh. Restricting this to `UsdSceneRoot`
+        // silently despawned preview subtrees, leaving no entity to
+        // re-instantiate after a material edit.
         let mut q = world.query_filtered::<(Entity, &UsdPrimPath), Or<(
             With<UsdSceneRoot>,
             With<lunco_usd_bevy::UsdPreviewOnly>,
@@ -2247,6 +2314,23 @@ mod tests {
         assert!(backed.release_root(&root_a).is_empty());
         assert!(backed.coords_of(doc).is_some());
         assert_eq!(backed.release_root(&root_b), vec![doc]);
+        assert!(backed.coords_of(doc).is_none());
+    }
+
+    #[test]
+    fn closing_one_of_multiple_preview_leases_keeps_the_authority() {
+        let doc = DocumentId::new(1);
+        let mut backed = DocBackedTwinScenes::default();
+        backed.track_preview(doc, "assembly".into(), "scene.usda".into());
+        backed.acquire_preview(doc);
+        backed.acquire_preview(doc);
+
+        assert!(backed.release_preview(doc).is_none());
+        assert!(backed.coords_of(doc).is_some());
+        assert_eq!(
+            backed.release_preview(doc),
+            Some(("assembly".into(), "scene.usda".into()))
+        );
         assert!(backed.coords_of(doc).is_none());
     }
 

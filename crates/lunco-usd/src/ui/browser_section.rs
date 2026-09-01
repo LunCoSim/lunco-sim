@@ -20,8 +20,9 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::UsdData;
 
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
-use crate::ui::viewport::{SetActiveUsdViewport, USD_VIEWPORT_PANEL_ID};
+use crate::ui::viewport::{OpenUsdPreview, EDITOR_PREVIEW_ID, USD_VIEWPORT_PANEL_ID};
 use crate::ui::USD_CONNECTION_CANVAS_PANEL_ID;
+use crate::LayerId;
 
 /// Twin navigation entry for the composed USD connection graph.
 ///
@@ -182,13 +183,15 @@ impl BrowserSection for UsdSceneSection {
             }
         }
 
-        // Clicking any stage / prim row retargets the shared USD
-        // viewport at the owning doc and focuses the viewport tab.
-        // `SetActiveUsdViewport` / `FocusPanel` are typed commands —
-        // emitted after paint so the egui pass stays a
-        // pure read.
+        // Clicking any stage / prim row opens or replaces the desktop editor's
+        // explicit preview lease and focuses the viewport tab. The command is
+        // emitted after paint so the egui pass stays a pure read.
         if let Some(doc) = focus_doc {
-            ctx.trigger(SetActiveUsdViewport { doc });
+            ctx.trigger(OpenUsdPreview {
+                preview: EDITOR_PREVIEW_ID,
+                doc,
+                edit_target: LayerId::root(),
+            });
             ctx.trigger(lunco_workbench::FocusPanel {
                 id: USD_VIEWPORT_PANEL_ID.0.to_string(),
             });
