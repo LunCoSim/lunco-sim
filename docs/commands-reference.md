@@ -797,7 +797,7 @@ newer than the document is rejected.
 
 #### `OpenUsdPreview`
 
- Open one explicit USD document in an isolated Assembly preview lease. The
+ Open one explicit USD document in an isolated Editor preview lease. The
  `preview` identity is caller-owned; opening another identity does not replace
  an existing lease. Opening the same identity replaces that lease.
 
@@ -811,7 +811,7 @@ newer than the document is rejected.
 
 #### `FocusUsdPreview`
 
- Select an already-open preview lease for the USD dock and Assembly surfaces.
+ Select an already-open preview lease for the USD dock and Editor surfaces.
  Focusing changes presentation only; every open lease continues to receive
  canonical stage updates.
 
@@ -1962,7 +1962,7 @@ newer than the document is rejected.
 
  Activate a registered [`Perspective`](crate::Perspective) by its
  `PerspectiveId` string. The luncosim registers `sandbox_view`,
- `rover_build`, `terrain_sculpt`, and `assembly`; the last two are
+ `rover_build`, `terrain_sculpt`, and `editor`; the last two are
  explicit authoring modes and are hidden from the default title-bar
  switcher. Unknown ids produce a user-visible status error.
 
@@ -1970,7 +1970,7 @@ newer than the document is rejected.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | `String` |  The id string of a registered perspective (e.g. `"assembly"`). |
+| `id` | `String` |  The id string of a registered perspective (e.g. `"editor"`). |
 
 #### `CaptureFromCamera`
 

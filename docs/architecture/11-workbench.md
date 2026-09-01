@@ -280,7 +280,7 @@ are just the defaults; everything is editable.
 Registration controls whether a perspective can be activated by the typed API
 or a guided tutorial. `Perspective::show_in_switcher()` controls only whether
 it appears in the default title-bar switcher. Luncosim keeps `terrain_sculpt`
-and `assembly` registered for their authored flows, but hides them from
+and `editor` registered for their authored flows, but hides them from
 everyday navigation; this does not remove or duplicate either authoring mode.
 
 ### Guided presentation ownership

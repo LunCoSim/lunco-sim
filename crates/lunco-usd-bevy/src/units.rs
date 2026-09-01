@@ -770,6 +770,48 @@ impl ConventionTransform {
         }
     }
 
+    /// Convert a canonical value for a standard `UsdPhysics` joint attribute
+    /// to the stage representation.
+    ///
+    /// Joint frame rotations are local rotations, so they use the same basis
+    /// conjugation as an authored local xform. They are not geometry
+    /// orientations: applying the latter's left-multiply would produce a
+    /// different frame on a Z-up stage. Other joint values use the ordinary
+    /// USD type-role conversion (`point3f` anchors, tokens, and scalars).
+    pub fn stage_physics_joint_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("physics:localRot0" | "physics:localRot1", "quatf", V::Quatf(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("physics:localRot0" | "physics:localRot1", "quatd", V::Quatd(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.stage_xform_value(name, type_name, value),
+        }
+    }
+
     /// The inverse of [`stage_xform_value`], for a composed stage value read
     /// back into the canonical op representation.
     pub fn canonical_xform_value(
@@ -851,6 +893,42 @@ impl ConventionTransform {
                 })
             }
             (_, _, value) => self.canonical_value(type_name, value),
+        }
+    }
+
+    /// Convert a stage-authored `UsdPhysics` joint value back to canonical
+    /// coordinates. This is the inverse of [`stage_physics_joint_value`].
+    pub fn canonical_physics_joint_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("physics:localRot0" | "physics:localRot1", "quatf", V::Quatf(q)) => {
+                let r = self.rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("physics:localRot0" | "physics:localRot1", "quatd", V::Quatd(q)) => {
+                let r = self.rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.canonical_xform_value(name, type_name, value),
         }
     }
 

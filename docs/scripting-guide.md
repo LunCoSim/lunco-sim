@@ -424,8 +424,12 @@ operation or journal entry is applied. `transform` batches translation and
 rotation into one undo unit; `batch` accepts the existing reflected `UsdOp`
 variants. `attach_component` and `detach_component` use the existing mount,
 socket, joint, and topology validators. Use `undo`/`redo` on the same explicit
-document. There is no assembly-specific preview/review or runtime-only setter;
-those require a typed owner before they can be exposed.
+document. `keyframe` and `remove_keyframe` author or remove one USD time sample
+through the same journaled operations used by the Editor Inspector; `time` is
+a USD time code and `value` is the literal for its explicit `type_name`.
+Playback and scrubbing remain the shared `ControlAnimation` transport in the
+Environment panel. There is no assembly-specific runtime setter or second
+animation clock.
 
 ## F. Policy hooks (decision functions)
 

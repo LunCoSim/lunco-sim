@@ -371,7 +371,9 @@ pub enum UsdOp {
     /// up the animation curve; the translator interpolates between them
     /// when it evaluates the attribute at a clock time. A brand-new sample
     /// inverts to a typed [`UsdOp::RemoveTimeSample`]; overwriting an existing
-    /// one inverts to a typed `SetTimeSample` carrying the prior value.
+    /// one inverts to a typed `SetTimeSample` carrying the prior value. When the
+    /// first xform channel also adds an `xformOpOrder` entry, the inverse is a
+    /// source snapshot so both authored opinions are removed atomically.
     SetTimeSample {
         /// Layer to write to.
         edit_target: LayerId,
@@ -1319,6 +1321,27 @@ fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
     }
 }
 
+fn xform_op_order_for_edit(data: &sdf::Data, prim: &SdfPath, op_name: &str) -> (Vec<String>, bool) {
+    let order = xform_op_order_tokens(data, prim);
+    let append = !order.iter().any(|token| token == op_name);
+    (order, append)
+}
+
+fn author_xform_op_order(
+    stage: &openusd::usd::Stage,
+    path: &str,
+    mut order: Vec<String>,
+    op_name: &str,
+) -> Result<(), DocumentError> {
+    order.push(op_name.to_owned());
+    stage
+        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+        .map_err(author_err)?
+        .set(sdf::Value::token_vec(order))
+        .map_err(author_err)?;
+    Ok(())
+}
+
 /// The identity contract: one document per file, content refreshed from disk,
 /// unsaved edits never clobbered. Everything here already existed as inherent
 /// methods — this just hands them to the generic
@@ -1505,8 +1528,8 @@ impl Document for UsdDocument {
                 // layer may already list ops this edit must not discard. When
                 // the op is missing, materialise that order plus the new op into
                 // the target layer — append, never clobber.
-                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
-                let append_op = !composed_order.iter().any(|t| t == "xformOp:translate");
+                let (composed_order, append_op) =
+                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
@@ -1529,13 +1552,7 @@ impl Document for UsdDocument {
                     .set(authored)
                     .map_err(author_err)?;
                 if append_op {
-                    let mut order = composed_order;
-                    order.push("xformOp:translate".into());
-                    stage
-                        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
-                        .map_err(author_err)?
-                        .set(sdf::Value::token_vec(order))
-                        .map_err(author_err)?;
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:translate")?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
@@ -1582,8 +1599,8 @@ impl Document for UsdDocument {
                     .is_some();
                 let old_rotate =
                     layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
-                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
-                let append_op = !composed_order.iter().any(|t| t == "xformOp:rotateXYZ");
+                let (composed_order, append_op) =
+                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
@@ -1602,13 +1619,7 @@ impl Document for UsdDocument {
                     .set(authored)
                     .map_err(author_err)?;
                 if append_op {
-                    let mut order = composed_order;
-                    order.push("xformOp:rotateXYZ".into());
-                    stage
-                        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
-                        .map_err(author_err)?
-                        .set(sdf::Value::token_vec(order))
-                        .map_err(author_err)?;
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:rotateXYZ")?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
@@ -1691,7 +1702,7 @@ impl Document for UsdDocument {
                 // here would risk changing values it was only meant to move.
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let conv = authoring_stage_convention(&conv_stage)?;
-                let val = conv.stage_xform_value(&name, &type_name, val);
+                let val = conv.stage_physics_joint_value(&name, &type_name, val);
 
                 // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
                 // `double`, so the fact that it scales with `metersPerUnit` lives in
@@ -1736,7 +1747,7 @@ impl Document for UsdDocument {
                     // straight out of the layer, so it is in the stage's frame, and a
                     // `SetAttribute` carries canonical values.
                     prior
-                        .map(|old| conv.canonical_xform_value(&name, &type_name, old))
+                        .map(|old| conv.canonical_physics_joint_value(&name, &type_name, old))
                         .map(|old| match linear {
                             crate::schema::LinearUnit::Length {
                                 stage_units_per_unit,
@@ -1802,7 +1813,7 @@ impl Document for UsdDocument {
                 // serialized file on any non-canonical stage.
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let conv = authoring_stage_convention(&conv_stage)?;
-                let val = conv.stage_xform_value(&name, &type_name, val);
+                let val = conv.stage_physics_joint_value(&name, &type_name, val);
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
                     crate::schema::LinearUnit::Length {
@@ -1812,6 +1823,17 @@ impl Document for UsdDocument {
                     }
                     _ => val,
                 };
+                // A time-sampled xform channel is not usable unless its token is
+                // present in the prim's xformOpOrder. Reuse the same composed-order
+                // append rule as SetTranslate/SetRotate so keyframing a channel is
+                // a complete USD edit rather than a detached attribute that the
+                // transform evaluator ignores.
+                let (composed_order, append_xform_op) =
+                    if name.starts_with("xformOp:") && name != "xformOpOrder" {
+                        xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, &name)
+                    } else {
+                        (Vec::new(), false)
+                    };
                 // Authoring a brand-new sample (no prior opinion at this exact
                 // time, in this layer) is exactly undone by removing it — a typed,
                 // cheap inverse. Overwriting an existing sample restores the prior
@@ -1833,7 +1855,7 @@ impl Document for UsdDocument {
                         _ => None,
                     })
                     .map(|old| {
-                        let old = conv.canonical_xform_value(&name, &type_name, old);
+                        let old = conv.canonical_physics_joint_value(&name, &type_name, old);
                         match linear {
                             crate::schema::LinearUnit::Length {
                                 stage_units_per_unit,
@@ -1843,24 +1865,31 @@ impl Document for UsdDocument {
                             _ => old,
                         }
                     });
-                let inverse = match prior_sample {
-                    Some(old) => match author::value_to_literal(&type_name, old) {
-                        Some(v) => UsdOp::SetTimeSample {
+                let inverse = if append_xform_op {
+                    // There is no typed operation for removing one xformOpOrder
+                    // token. The existing exact document snapshot inverse removes
+                    // the channel and its order entry together.
+                    self.coarse_inverse(target, &id)
+                } else {
+                    match prior_sample {
+                        Some(old) => match author::value_to_literal(&type_name, old) {
+                            Some(v) => UsdOp::SetTimeSample {
+                                edit_target: id,
+                                path: path.clone(),
+                                name: name.clone(),
+                                type_name: type_name.clone(),
+                                time,
+                                value: v,
+                            },
+                            None => self.coarse_inverse(target, &id),
+                        },
+                        None => UsdOp::RemoveTimeSample {
                             edit_target: id,
                             path: path.clone(),
                             name: name.clone(),
-                            type_name: type_name.clone(),
                             time,
-                            value: v,
                         },
-                        None => self.coarse_inverse(target, &id),
-                    },
-                    None => UsdOp::RemoveTimeSample {
-                        edit_target: id,
-                        path: path.clone(),
-                        name: name.clone(),
-                        time,
-                    },
+                    }
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1868,6 +1897,9 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set_at(val, openusd::usd::TimeCode::new(time))
                     .map_err(author_err)?;
+                if append_xform_op {
+                    author_xform_op_order(&stage, &path, composed_order, &name)?;
+                }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
@@ -1908,7 +1940,7 @@ impl Document for UsdDocument {
                 let conv = authoring_stage_convention(&conv_stage)?;
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
-                    let old = conv.canonical_xform_value(&name, &ty, old);
+                    let old = conv.canonical_physics_joint_value(&name, &ty, old);
                     let old = match linear {
                         crate::schema::LinearUnit::Length {
                             stage_units_per_unit,
@@ -3804,8 +3836,10 @@ mod tests {
             "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Mover\"\n{\n}\n",
             DocumentOrigin::writable_file("/tmp/anim.usda"),
         );
-        // Two keyframes of the translate, authored as time samples. Each fresh
-        // keyframe inverts to a typed `RemoveTimeSample` at the same time.
+        // Two keyframes of the translate, authored as time samples. The first
+        // keyframe also declares the transform channel in `xformOpOrder`, so its
+        // inverse is a complete source snapshot; subsequent samples use the
+        // typed `RemoveTimeSample` inverse.
         let mut inverses = Vec::new();
         for (t, x) in [(0.0_f64, 0.0_f64), (10.0, 10.0)] {
             inverses.push(
@@ -3820,12 +3854,17 @@ mod tests {
                 .unwrap(),
             );
         }
+        let mover = SdfPath::new("/Mover").unwrap();
         assert!(
-            matches!(inverses[0], UsdOp::RemoveTimeSample { time, .. } if time == 0.0),
-            "a fresh keyframe inverts to a typed RemoveTimeSample"
+            matches!(inverses[0], UsdOp::ReplaceSource { .. }),
+            "the first xform keyframe must undo its sample and xformOpOrder together"
         );
         assert!(matches!(inverses[1], UsdOp::RemoveTimeSample { time, .. } if time == 10.0));
-        let mover = SdfPath::new("/Mover").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(doc.data(), &mover),
+            vec!["xformOp:translate"],
+            "a keyed xform channel must be part of the authored transform order"
+        );
         // Time-aware read interpolates the authored curve.
         assert_eq!(
             doc.data()
@@ -3845,8 +3884,8 @@ mod tests {
             None,
             "time samples must not leak into the default opinion"
         );
-        // Undo LIFO: replaying the typed inverses removes both samples, and the
-        // attribute round-trips to having no samples at all.
+        // Undo LIFO: the second typed inverse removes its sample, and the first
+        // snapshot removes both the first sample and the transform-order entry.
         while let Some(inv) = inverses.pop() {
             doc.apply(inv).unwrap();
         }
