@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
+use lunco_usd::runtime_persistence::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
 use lunco_usd_bevy::camera_switch::camera_display_labels;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
@@ -171,6 +172,48 @@ pub(crate) fn register_settings_menu(world: &mut World) {
             }
             Err(error) => {
                 ui.label(format!("Grid scope error: {error}"));
+            }
+        }
+
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Runtime scene edits (active Twin)")
+                .weak()
+                .small(),
+        );
+        let persistence_state = ctx.resource::<WorkspaceResource>().map(|workspace| {
+            let Some(twin_id) = workspace.active_twin else {
+                return (false, Ok(false));
+            };
+            let Some(twin) = workspace.twin(twin_id) else {
+                return (false, Ok(false));
+            };
+            (twin.manifest.is_some(), runtime_persistence_for_twin(twin))
+        });
+        let Some((can_persist, persistence_result)) = persistence_state else {
+            ui.label("No workspace session is available.");
+            return;
+        };
+        match persistence_result {
+            Ok(current) => {
+                let mut next = current;
+                ui.add_enabled_ui(can_persist, |ui| {
+                    ui.checkbox(&mut next, "Persist runtime scene edits")
+                        .on_hover_text(
+                            "When enabled, generated spawns and moves are read and written from this Twin's .lunco/runtime cache. Off means no runtime cache I/O.",
+                        );
+                });
+                if !can_persist {
+                    ui.weak("Open a manifest-backed Twin to opt in to runtime persistence.");
+                } else if next != current {
+                    ctx.trigger(SetTwinSetting {
+                        key: RUNTIME_PERSISTENCE_SETTING.into(),
+                        value: TwinSettingInput::Bool(next),
+                    });
+                }
+            }
+            Err(error) => {
+                ui.label(format!("Runtime persistence error: {error}"));
             }
         }
     });

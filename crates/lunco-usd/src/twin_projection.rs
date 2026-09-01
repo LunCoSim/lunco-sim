@@ -565,7 +565,6 @@ pub(crate) fn drain_pending_twin_docs(
     sources: Res<Assets<UsdSourceText>>,
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    runtime_settings: Option<Res<crate::runtime_persistence::RuntimePersistenceSettings>>,
     mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
 ) {
@@ -626,12 +625,7 @@ pub(crate) fn drain_pending_twin_docs(
         // after the stage load has already read its bytes. Guarded: whichever
         // runs second is a no-op.
         if let Some(ws) = workspace.as_deref() {
-            crate::runtime_persistence::restore_doc_runtime(
-                ws,
-                &mut registry,
-                doc,
-                runtime_settings.as_ref().is_some_and(|s| s.load),
-            );
+            crate::runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
         }
         // Publish the composed source as the twin overlay so the stage build
         // reads `base ⊕ runtime`, and mark the scene synced at this generation —

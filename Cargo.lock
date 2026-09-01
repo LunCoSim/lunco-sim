@@ -8075,7 +8075,6 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-render",
- "lunco-settings",
  "lunco-storage",
  "lunco-theme",
  "lunco-twin",

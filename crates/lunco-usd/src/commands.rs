@@ -41,7 +41,6 @@ use lunco_doc_bevy::{
     CloseDocument, DiscardDocument, DocumentChanged, DocumentClosed, DocumentOpened, ForkDocument,
     NewDocument, OpenFile, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument,
 };
-use lunco_settings::AppSettingsExt;
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
@@ -266,7 +265,6 @@ impl Plugin for UsdCommandsPlugin {
         if !app.is_plugin_added::<lunco_assets::TwinRootsPlugin>() {
             app.add_plugins(lunco_assets::TwinRootsPlugin);
         }
-        app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         let mut query_registry = app

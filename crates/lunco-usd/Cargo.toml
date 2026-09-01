@@ -26,7 +26,6 @@ lunco-doc = { path = "../lunco-doc" }
 # doc-bevy's own `ui`, re-enabled by our `ui` feature below.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
-lunco-settings = { path = "../lunco-settings" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 # Canonical Twin edit journal. USD records its (forward, inverse) op pairs
 # here — lossless, since `UsdOp` derives `Serialize` (no hand summaries).
