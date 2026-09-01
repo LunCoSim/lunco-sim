@@ -89,6 +89,16 @@ struct ProceduralSkyboxPipelineKey {
     samples: u32,
 }
 
+fn same_skybox_render_item(
+    previous: Option<&(MainEntity, ProceduralSkyboxPipelineKey)>,
+    owner: MainEntity,
+    pipeline_key: &ProceduralSkyboxPipelineKey,
+) -> bool {
+    previous.is_some_and(|(previous_owner, previous_key)| {
+        previous_owner.id() == owner.id() && previous_key == pipeline_key
+    })
+}
+
 impl SpecializedRenderPipeline for ProceduralSkyboxPipeline {
     type Key = ProceduralSkyboxPipelineKey;
 
@@ -301,7 +311,9 @@ fn queue_procedural_skybox(
     pipeline: Res<ProceduralSkyboxPipeline>,
     skyboxes: Query<(Entity, &MainEntity, &ProceduralSkyboxMaterial)>,
     views: Query<(&ExtractedView, &Msaa), With<Camera3d>>,
-    mut previous_skyboxes: Local<HashMap<RetainedViewEntity, MainEntity>>,
+    mut previous_skyboxes: Local<
+        HashMap<RetainedViewEntity, (MainEntity, ProceduralSkyboxPipelineKey)>,
+    >,
 ) {
     let draw_procedural_skybox = opaque_draw_functions
         .read()
@@ -321,26 +333,24 @@ fn queue_procedural_skybox(
         let Some(opaque_phase) = opaque_render_phases.get_mut(&view_entity) else {
             continue;
         };
-        if let Some(previous) = previous_skyboxes.remove(&view_entity) {
-            let same_owner = skybox
-                .as_ref()
-                .is_some_and(|(_, main_entity, _)| main_entity.id() == previous.id());
-            if !same_owner {
+        let Some((render_entity, main_entity, shader)) = skybox.as_ref() else {
+            if let Some((previous, _)) = previous_skyboxes.remove(&view_entity) {
+                opaque_phase.remove(previous);
+            }
+            continue;
+        };
+        let pipeline_key = ProceduralSkyboxPipelineKey {
+            shader: shader.clone(),
+            target_format: view.target_format,
+            samples: msaa.samples(),
+        };
+        let previous = previous_skyboxes.remove(&view_entity);
+        if !same_skybox_render_item(previous.as_ref(), *main_entity, &pipeline_key) {
+            if let Some((previous, _)) = previous {
                 opaque_phase.remove(previous);
             }
         }
-        let Some((render_entity, main_entity, shader)) = skybox.as_ref() else {
-            continue;
-        };
-        let pipeline_id = pipelines.specialize(
-            &pipeline_cache,
-            &pipeline,
-            ProceduralSkyboxPipelineKey {
-                shader: shader.clone(),
-                target_format: view.target_format,
-                samples: msaa.samples(),
-            },
-        );
+        let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, pipeline_key.clone());
         opaque_phase.add(
             Opaque3dBatchSetKey {
                 draw_function: draw_procedural_skybox,
@@ -356,7 +366,36 @@ fn queue_procedural_skybox(
             InputUniformIndex::default(),
             BinnedRenderPhaseType::NonMesh,
         );
-        previous_skyboxes.insert(view_entity, *main_entity);
+        previous_skyboxes.insert(view_entity, (*main_entity, pipeline_key));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(target_format: TextureFormat) -> ProceduralSkyboxPipelineKey {
+        ProceduralSkyboxPipelineKey {
+            shader: Handle::default(),
+            target_format,
+            samples: 1,
+        }
+    }
+
+    #[test]
+    fn render_item_changes_when_target_attachment_changes() {
+        let owner = MainEntity::from(Entity::from_raw_u32(7).unwrap());
+        let previous = (owner, key(TextureFormat::Rgba16Float));
+        assert!(same_skybox_render_item(
+            Some(&previous),
+            owner,
+            &key(TextureFormat::Rgba16Float)
+        ));
+        assert!(!same_skybox_render_item(
+            Some(&previous),
+            owner,
+            &key(TextureFormat::Rgba8UnormSrgb)
+        ));
     }
 }
 

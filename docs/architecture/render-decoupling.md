@@ -122,9 +122,12 @@ item in Bevy's built-in `Opaque3d` phase. The phase renders it after opaque
 geometry in the same render pass, so Bevy owns the color/depth lifecycle and
 reverse-Z depth testing leaves the already-rendered scene in front while the
 clear value admits the background. It therefore has no mesh, radius, culling
-bound, or camera far-plane dependency. A scene must have at most one active
-procedural background owner; multiple owners disable the pass until authoring is
-corrected. Textured `DomeLight` remains the separate environment-lighting path.
+bound, or camera far-plane dependency. The binder tracks the owner, shader,
+target format, and MSAA sample count for each queued item, removing its prior
+opaque-phase item before queuing a changed specialization. A scene must have at
+most one active procedural background owner; multiple owners disable the pass
+until authoring is corrected. Textured `DomeLight` remains the separate
+environment-lighting path.
 
 `ShaderLookReady` is the render binder's dependency-presence latch. A shader
 `Added`/`Modified` event invalidates the latch because reflection and material
