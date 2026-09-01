@@ -87,6 +87,23 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+### Temporary diagnostic visuals
+
+Temporary camera/collider/dynamics diagnostics are runtime presentation, not
+USD facts. Reuse the existing `Gizmos` systems and one Twin-scoped
+`DiagnosticVisualLease` store: Rhai/API/UI selects an explicit target and
+policy, while Rust resolves `SceneViewport`, `StageView`, Avian collider
+realization, BigSpace render poses, bounded snapshots, and lifecycle cleanup.
+Do not add a diagnostic USD schema, temporary physics entity, per-frame USD
+edit, second camera selector, or global name-only registry. Handles must carry
+the Twin/root/mount generation and become stale on `SceneTeardown`, reload,
+target deletion, or `TwinClosed`; missing targets and unsupported shapes are
+visible errors. The draw pass reads finalized render transforms and never writes
+physics or scene state. Existing separate debug toggles must converge on this
+lease boundary when the feature is implemented rather than gaining another
+toggle API. See
+[`docs/architecture/temporary-diagnostic-visuals.md`](../../docs/architecture/temporary-diagnostic-visuals.md).
+
 ### Assembly document snapshots
 
 Assembly editing starts from the existing document system. Use
