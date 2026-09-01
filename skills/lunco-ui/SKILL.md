@@ -34,9 +34,10 @@ and design decisions. This skill is a quick-reference summary.
 
 The workbench status history is one shared presentation surface: render Info,
 Progress, Warn, Error, and Attention through the same responsive
-level/source/message/progress/action row. Its popup uses the available parent
-window width so the message column grows with the surface rather than using a
-fixed cap. Diagnostic rows keep the shared column geometry, expose row
+level/source/message/progress/action row. Its popup is compact, sized to roughly
+half the available parent window and clamped to 420–960 logical px;
+the message column consumes the remaining inner width rather than an arbitrary
+fixed fraction. Diagnostic rows keep the shared column geometry, expose row
 activation through the cursor and tooltip, and add the complete diagnostic as
 an optional body under that row. Emit the existing typed action for Attention;
 do not create level-specific row layouts or source-specific styling.
