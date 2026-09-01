@@ -385,10 +385,47 @@ leaves and `mission(me)` declaration.
 A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
-- Author one: drop a `.rhai` in [`rhai/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
+- Examples: [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
+
+### Explicit USD assembly editing
+
+Use `assembly_edit` for agent and editor automation over an open USD document.
+It is a thin policy library over the existing typed USD command/query surface;
+it does not parse USDA, maintain a second document/session, or write ECS state.
+Open a source with `assembly_edit::open(path)`, then discover its explicit
+`DocumentId` through `ListOpenDocuments`. Read with `describe`, `inspect`,
+`resolve_target`, and `sync_document`. All authored edits require the document,
+`@root@` or `@runtime@` layer, and the USD path explicitly:
+
+```rhai
+let doc = 3;
+let before = assembly_edit::describe(doc);
+let generation = before.generation;
+let changed = assembly_edit::transform(
+    doc, "@root@", "/Rover",
+    [1.0, 0.0, 0.0], (), generation,
+);
+let plan = [#{ SetAttribute: #{
+    edit_target: "@root@",
+    path: "/Rover",
+    name: "kind",
+    type_name: "token",
+    value: "\"assembly\"",
+}}];
+assembly_edit::batch(doc, "Declare rover assembly", plan, changed.data.generation);
+```
+
+Pass `()` for a missing causal predecessor. A generation from `InspectUsdDocument`,
+`SyncUsdDocument`, or a command acknowledgement rejects stale writes before any
+operation or journal entry is applied. `transform` batches translation and
+rotation into one undo unit; `batch` accepts the existing reflected `UsdOp`
+variants. `attach_component` and `detach_component` use the existing mount,
+socket, joint, and topology validators. Use `undo`/`redo` on the same explicit
+document. There is no assembly-specific preview/review or runtime-only setter;
+those require a typed owner before they can be exposed.
 
 ## F. Policy hooks (decision functions)
 
