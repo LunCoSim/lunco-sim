@@ -3,10 +3,11 @@
 //!
 //! ## Why not Hz
 //!
-//! Sim time is warpable, so any fixed rate is wrong at every other warp factor.
+//! Sim time can be accelerated, so any fixed rate is wrong at different
+//! transport settings.
 //! The required epoch step is derived from a certified maximum angular-motion
 //! bound supplied by the active ephemeris provider and authored frame models.
-//! At low warp this avoids solving an unchanged render frame; at high warp the
+//! At low rates this avoids solving an unchanged render frame; at high rates the
 //! same geometric error budget automatically opens the gate as often as needed.
 //!
 //! ## What sets the default
@@ -311,7 +312,7 @@ pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
 /// Decide whether the current celestial inputs are outside the committed
 /// solve. This is deliberately a pure epoch/revision decision: wall-clock
 /// time is not a valid proxy for geometric error when simulation time is
-/// warped.
+/// accelerated.
 fn epoch_requires_solve(
     current_jd: f64,
     solved_jd: f64,
@@ -424,15 +425,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn high_warp_epoch_advance_opens_the_gate_each_render_frame() {
+    fn large_epoch_advance_opens_the_gate_each_render_frame() {
         let motion = std::f64::consts::TAU / 27.321_661;
         let step = CelestialCadenceSettings::default().max_epoch_step_jd(motion);
-        // At 100000x, one 60 Hz render interval represents this much simulated
-        // time. It exceeds the angular-error budget, so the geometric pose must
-        // be solved on that frame instead of being held for a wall-time quota.
-        let one_frame_at_100kx = 100_000.0 / 60.0 / 86_400.0;
-        assert!(one_frame_at_100kx > step);
-        assert!(epoch_requires_solve(one_frame_at_100kx, 0.0, 0, 0, step,));
+        // A large epoch advance exceeds the angular-error budget, so the
+        // geometric pose must be solved on that frame instead of being held
+        // for a wall-time quota.
+        let large_epoch_delta = 100_000.0 / 60.0 / 86_400.0;
+        assert!(large_epoch_delta > step);
+        assert!(epoch_requires_solve(large_epoch_delta, 0.0, 0, 0, step,));
     }
 
     #[test]

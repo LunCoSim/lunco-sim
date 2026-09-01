@@ -41,10 +41,9 @@
 //!    leaking into the solver) and as fast as the CPU can go (no sleeping, no
 //!    vsync, no realtime pacing).
 //!
-//!    This is *not* the same as asking the sim to warp. Realtime warp is capped
-//!    at `MAX_REALTIME_RATE = 16`; above that the physics tick FREEZES rather
-//!    than going faster. Manual stepping sidesteps the rate limiter entirely
-//!    because there is no "realtime" to be a multiple of.
+//!    This is a deterministic manual stepping mode, independent of the live
+//!    transport rate. It is useful for scene tests because there is no realtime
+//!    pacing or frame-time noise in the step sequence.
 //!
 //! 2. **A single-threaded compute pool.** The deterministic scene-test contract
 //!    avian's parallel solver reorders island/contact work across threads, so a

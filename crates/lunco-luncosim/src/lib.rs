@@ -293,7 +293,7 @@ mod fixed_step_budget_tests {
     }
 
     #[test]
-    fn eight_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
+    fn eight_x_is_bounded_to_the_fixed_step_budget_per_raw_frame() {
         let fixed = Duration::from_secs_f64(1.0 / 60.0);
         let limit = lunco_time::fixed_step_raw_delta_limit(8.0, fixed);
         let requested_fixed = limit.as_secs_f64() * 8.0 / fixed.as_secs_f64();
@@ -304,7 +304,7 @@ mod fixed_step_budget_tests {
     }
 
     #[test]
-    fn sixteen_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
+    fn sixteen_x_is_bounded_to_the_fixed_step_budget_per_raw_frame() {
         let fixed = Duration::from_secs_f64(1.0 / 60.0);
         let limit = lunco_time::fixed_step_raw_delta_limit(16.0, fixed);
         let requested_fixed = limit.as_secs_f64() * 16.0 / fixed.as_secs_f64();
@@ -315,10 +315,10 @@ mod fixed_step_budget_tests {
     }
 
     #[test]
-    fn kinematic_warp_restores_the_normal_raw_cap() {
+    fn sixty_four_x_stays_within_the_fixed_step_budget() {
         assert_eq!(
-            lunco_time::fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
-            lunco_time::BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(64.0, Duration::from_secs_f64(1.0 / 60.0)),
+            Duration::from_secs_f64(1.0 / 60.0)
         );
     }
 }

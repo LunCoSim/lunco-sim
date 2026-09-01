@@ -409,7 +409,7 @@ pub fn celestial_visuals_system(
 
     // Per-body camera altitude → per-body texture↔blueprint transition.
     // Body-local coords (camera relative to body center) prevent thrashing
-    // at high time warp — only depends on camera's position relative to the
+    // at high transport rates — only depends on camera's position relative to the
     // body, not where the body happens to be in orbit.
     //
     // EVERY body gets its transition — not just the nearest. The old

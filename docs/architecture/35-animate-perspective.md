@@ -189,12 +189,12 @@ markers (`TriggerZone`, `portEvents`, objective completions) and live emissions.
 So the editor scrubs the **kinematic preview** domain (`AnimationPreview`), not
 live simulation:
 
-- **Authoring / preview mode** — `TimeRegime::KinematicWarp`: tick frozen,
-  animation sampled from `Playback.head`, full backward/forward scrub of keyed
-  motion + camera cuts. This is the editor's normal mode.
-- **Live / run mode** — `TimeRegime::RealtimePhysics`: physics runs forward, the
-  timeline shows a read-only playhead + markers, scrubbing disabled. "Arm & run"
-  transitions here.
+- **Authoring / preview mode** — `AnimationPreview` samples from
+  `Playback.head`, with full backward/forward scrub of keyed motion and camera
+  cuts. This is the editor's normal mode.
+- **Live / run mode** — `TimeTransport` advances the causal fixed-step world,
+  the timeline shows a read-only playhead and markers, and scrubbing is
+  disabled. "Arm & run" transitions here.
 
 To make the *descent itself* scrubbable (not just authored cameras), **bake** the
 live physics run to `timeSamples` once (record `Transform` per frame → author via
@@ -277,7 +277,7 @@ interaction lift; 7 is optional pipeline interchange.
 - [18-unified-journal-and-history](18-unified-journal-and-history.md) — the
   journal that records every keyframe edit (undo/redo, shared authors).
 - [19-unified-time-and-clock](19-unified-time-and-clock.md) — `Playback` /
-  `TimeDomain` / `TimeRegime` the timeline scrubs.
+  `TimeDomain` and the live `TimeTransport` used by the timeline.
 - [21-domain-usd](21-domain-usd.md) — `timeSamples`, `UsdOp`, authoring engine.
 - [34-scenario-and-multidomain](34-scenario-and-multidomain.md) — the rhai
   scenario/sequencer the timeline complements; the cinematic driving example.

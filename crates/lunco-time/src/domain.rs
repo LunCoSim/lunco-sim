@@ -59,7 +59,7 @@ pub struct TimeDomain {
     pub parent: Option<Entity>,
     /// Affine offset over the parent (seconds).
     pub offset: f64,
-    /// Affine scale over the parent (rate multiplier; `100` = the factory at 100×).
+    /// Affine scale over the parent (rate multiplier; `100` means 100×).
     pub scale: f64,
     /// Coupling class.
     pub regime: DomainRegime,
@@ -177,13 +177,9 @@ pub enum ClockRoot {
     /// The **mission epoch projection** (`WorldTime.met_secs` — epoch seconds since
     /// the mission epoch). This is the celestial clock's default root.
     ///
-    /// Why not simply `derived(Tick)`? Because the epoch and the tick already
-    /// legitimately diverge in [`TimeRegime::KinematicWarp`](crate::TimeRegime):
-    /// above `MAX_REALTIME_RATE` the tick freezes (the solver cannot keep up) while
-    /// the epoch keeps advancing off a wall preview, so the sky still moves. Rooting
-    /// celestial on `Tick` would freeze the sky in warp — a regression. Rooting it on
-    /// the epoch projection makes the default **bit-identical to the old behaviour**,
-    /// warp included, while still being an ordinary node you can re-parent away.
+    /// The epoch projection is a separate root because celestial systems consume
+    /// calendar seconds while simulation systems consume mission seconds. Both
+    /// values are derived from the same authoritative tick.
     Epoch,
 }
 
@@ -222,9 +218,8 @@ pub struct Clocks {
     /// Wall-rooted interaction clock: avatar, camera smoothing, UI easing. Keeps
     /// running while the sim is paused (that is its entire reason to exist).
     pub interaction: Entity,
-    /// The epoch clock. Default: derived from `sim`, scale 1 — so `epoch_jd` stays
-    /// exactly the tick-derived value and pausing the sim freezes the planets.
-    /// Re-parent to `real` to run the sky independently of the simulation.
+    /// The epoch clock. Default: mission epoch projection, scale 1. Re-parent
+    /// to `real` to run the sky independently of the simulation.
     pub celestial: Entity,
 }
 
@@ -357,8 +352,8 @@ pub struct RootTimes {
     pub sim_secs: f64,
     /// `Time<Real>` elapsed seconds. Never frozen.
     pub wall_secs: f64,
-    /// `WorldTime.met_secs` — epoch seconds since the mission epoch. Tracks the tick,
-    /// except in `KinematicWarp` where it advances while the tick is frozen.
+    /// `WorldTime.met_secs` — epoch seconds since the mission epoch. Derived from
+    /// the same authoritative tick as `sim_secs`.
     pub epoch_secs: f64,
 }
 
@@ -535,10 +530,8 @@ pub fn advance_and_resolve_domains(
 
 /// Startup: spawn the four well-known clocks (doc 19 §11b) and publish [`Clocks`].
 ///
-/// `celestial` is deliberately a **derived child of `sim` at scale 1**, so the epoch
-/// stays exactly the tick-derived value it has always been — deterministic and
-/// network-safe. Running the sky independently is an explicit [`SetClock`] away, not
-/// a default.
+/// `celestial` is rooted at the mission epoch projection. Running the sky
+/// independently is an explicit [`SetClock`] operation.
 fn spawn_well_known_clocks(mut commands: Commands) {
     let real = commands
         .spawn((
@@ -561,10 +554,8 @@ fn spawn_well_known_clocks(mut commands: Commands) {
             TimeDomain::derived(Some(real), 0.0, 1.0),
         ))
         .id();
-    // Rooted on the epoch projection, NOT on `sim` — see `ClockRoot::Epoch`. This
-    // makes `epoch_jd` exactly the value it has always been (warp included) while
-    // still being a node you can re-parent onto the wall root to run the sky
-    // independently of the simulation.
+    // Rooted on the epoch projection, not on `sim`, because celestial consumers
+    // use calendar seconds. It can be explicitly re-parented onto the wall root.
     let celestial = commands
         .spawn((
             Name::new("Clock:Celestial"),
@@ -717,10 +708,9 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 /// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
 /// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
-/// `{"rate":4.0}` runs it 4× realtime, and the bounded live ladder ends at
-/// 100×. Rates 32×–100× enter the explicit kinematic-warp regime: the physics
-/// tick freezes while pure epoch consumers advance. Use `SetClock` for a
-/// presentation-only celestial rate above 100×. This is THE pause command:
+/// `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
+/// 64×. Higher rates are rejected. Use `SetClock` for a presentation-only
+/// celestial rate when a detached clock is explicitly needed. This is THE pause command:
 /// exposed on the API/MCP and wrapped by the rhai prelude verbs
 /// `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
 /// one-liner can freeze the world.
@@ -730,8 +720,8 @@ pub struct SetTimeTransport {
     #[serde(default)]
     #[reflect(default)]
     pub playing: Option<bool>,
-    /// Speed multiplier vs realtime (1.0 = realtime, bounded to 100.0 for the
-    /// live transport); `None` leaves it.
+    /// Speed multiplier vs realtime (1.0 = realtime, bounded to 64.0 for the
+    /// causal live transport); `None` leaves it.
     #[serde(default)]
     #[reflect(default)]
     pub rate: Option<f64>,
@@ -761,12 +751,12 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
         };
     }
     if let Some(rate) = cmd.rate {
-        if rate.is_finite() && (0.0..=crate::MAX_TRANSPORT_RATE).contains(&rate) {
+        if rate.is_finite() && (0.0..=crate::MAX_REALTIME_RATE).contains(&rate) {
             transport.rate = rate;
         } else {
             bevy::log::warn!(
                 "[time] rejected live transport rate {rate:?}; supported range is 0..={}x",
-                crate::MAX_TRANSPORT_RATE
+                crate::MAX_REALTIME_RATE
             );
         }
     }
@@ -797,10 +787,9 @@ fn on_set_mission_epoch(
     let jd = trigger.event().epoch_jd;
     *clock = crate::MissionClock::anchored(jd, tick.0);
 
-    // `epoch_jd = mission_epoch0_jd + celestial_t / 86400`. Re-anchoring the
-    // mission alone leaves the celestial domain's old affine offset in place.
-    // Solve that offset against the NEW source time so a previous 100 000x
-    // seek cannot be projected onto the new mission date.
+    // Keep the celestial affine domain continuous at the newly authored epoch.
+    // A wall-rooted domain is solved against its current wall source time; the
+    // mission-rooted domain source is zero at this tick.
     if let Some(clocks) = clocks {
         if let Ok(mut domain) = q.get_mut(clocks.celestial) {
             // The sim/epoch roots restart at zero at this tick; only a sky
@@ -872,18 +861,8 @@ pub struct SetClock {
 /// The time a clock's affine maps FROM — its parent's time if it is derived, its
 /// root's source if it is a root.
 ///
-/// Every continuity solve is `offset = want_local − scale · source_t`, so this is
-/// the one question all three [`SetClock`] branches must ask. They used to guess
-/// it instead, each differently: the rate branch fell back to the clock's own
-/// `local_t` and the seek branch to `0.0`, both of which are wrong for a ROOT
-/// clock — and the celestial clock (the one users actually scale) is a root.
-///
-/// The cost was measured, not theoretical. With the old source-time guess, the first rate
-/// click happens to be continuous (while `scale == 1, offset == 0` a root's
-/// `local_t` equals its source), and every later click jumps by
-/// `scale · (scale_prev − 1) · Δt`: the sky moved −17 d at 1000×, +169 637 d at
-/// 10 000×, and at 100 000× the epoch went NEGATIVE (JD −1.7e10). That is the
-/// "sun jumps when I click a rate" bug.
+/// Every continuity solve is `offset = want_local - scale * source_t`, so this
+/// is the common source lookup for all [`SetClock`] operations.
 fn clock_source_time(
     domain: &TimeDomain,
     root: Option<&ClockRoot>,
@@ -983,20 +962,15 @@ fn on_set_clock(
 
 /// Reset the **entire clock tree** to defaults — fired on every scene load.
 ///
-/// This is the architecture that keeps time correct across scene reloads: a scene may
-/// have detached the celestial clock, run it at 100 000×, scrubbed the animation
-/// preview or paused the transport, and none of that may bleed into the next scene.
-/// Rather than have each subsystem remember to undo its own edits, one command
-/// restores the standing shape (doc 19 §11b):
+/// This command restores the standing clock shape across scene reloads (doc 19
+/// §11b):
 ///
-/// * **celestial** → back on the `Epoch` root, affine identity (re-coupled to the sim,
-///   so a sky left running at 100 000× stops the instant the scene reloads);
+/// * **celestial** → back on the `Epoch` root, affine identity;
 /// * **interaction** → wall-rooted identity (its default);
 /// * **animation preview** → playhead 0, playing, 1×;
 /// * **transport** → Playing at 1×;
-/// * **mission calendar** → the authored mission origin, with any kinematic warp
-///   preview cleared. The mission origin itself is preserved so a scene load can
-///   apply its `SetMissionEpoch` afterward.
+/// * **mission calendar** → the authored mission origin. The mission origin itself
+///   is preserved so a scene load can apply its `SetMissionEpoch` afterward.
 #[Command(default)]
 pub struct ResetTime {}
 
@@ -1041,15 +1015,12 @@ fn on_reset_time(
     // Transport: a reloaded scene starts playing at realtime.
     *transport = crate::TimeTransport::default();
 
-    // The clock tree is only one half of celestial time. Restore the calendar
-    // anchor too; otherwise a 100 000x preview leaves the Sun at the warped date
-    // after the rate UI has returned to 1x, which can make a lunar scene appear
-    // completely black on its night side.
+    // Restore the calendar anchor so the next scene starts from its authored
+    // mission date.
     mission.reset_calendar();
 
     // Clock entities persist across scene loads, so clear their sample history
-    // too. The new scene must not emit a giant negative dt from the previous
-    // scene's 100 000x celestial clock.
+    // before resolving the replacement scene.
     *resolved = ResolvedDomains::default();
     *last = LastClockT::default();
 
@@ -1075,11 +1046,9 @@ pub(crate) fn build_domain_tree(app: &mut App) {
         .register_type::<ClockRoot>()
         .init_resource::<ResolvedDomains>()
         .init_resource::<LastClockT>()
-        // The tree resolves in `PreUpdate`, AFTER the spine writes the `sim` root's
-        // `sim_secs` and BEFORE any consumer reads a clock (doc 19 §11d). It used to
-        // run in `Update`, which was fine when the only consumer was the animation
-        // sampler, but the epoch is derived from a clock now — and the celestial
-        // chain runs in `PreUpdate`.
+        // The tree resolves in `PreUpdate`, after the spine writes the `sim` root's
+        // `sim_secs` and before any consumer reads a clock (doc 19 §11d). The epoch
+        // chain also runs in `PreUpdate`.
         // Both run INSIDE `TimeSpineSet`, chained after `advance_world_clock`.
         //
         // They must be in the set, not merely after it: the epoch is a projection of
@@ -1107,19 +1076,15 @@ pub(crate) fn build_domain_tree(app: &mut App) {
 
 /// Write `WorldTime.epoch_jd` from the **celestial clock** (doc 19 §11d).
 ///
-/// The epoch used to be computed straight from `MissionClock.anchor` + tick, which
-/// meant it was not a clock at all — it could not be re-parented, rate-scaled or
-/// seeked. It is now a projection of one tree node:
+/// Write the epoch as a projection of the celestial clock tree node:
 ///
 /// ```text
 /// epoch_jd = mission_epoch0_jd + celestial_t / 86400
 /// ```
 ///
-/// With the default wiring (`celestial = derived(sim, offset 0, scale 1)`),
-/// `celestial_t == sim_secs`, so this reproduces the tick-derived epoch **exactly**
-/// — same determinism, same replay, no behaviour change. Re-parent the node to the
-/// wall root and the sky runs while the sim is paused; scale it and the sky runs
-/// fast; seek it and the sky jumps to a date. All without touching the simulation.
+/// With the default `Epoch` root, the celestial clock follows the mission epoch
+/// projection. Re-parenting or scaling that node changes presentation time
+/// without touching the simulation tick.
 ///
 /// `WorldTime.epoch_jd` stays the read interface, so the ~15 `epoch_jd` readers in
 /// `lunco-celestial` are untouched: the clock became the source, the view stayed put.
@@ -1132,14 +1097,9 @@ pub fn write_epoch_from_celestial_clock(
     mut last_epoch: Local<f64>,
     mut last_mission_origin: Local<Option<(u64, u64)>>,
 ) {
-    // A scene epoch is an intentional re-anchor.  The local diagnostic cursor
-    // belongs to the old anchor; comparing the first value from the new anchor
-    // against it turns every twin open into a false 241-day discontinuity.
-    //
-    // `MissionClock` is also the live calendar state and is mutably sampled by
-    // `advance_world_clock` every frame. Resource change detection therefore
-    // cannot distinguish an explicit mission re-anchor from ordinary clock
-    // progression. Compare the stable mission-origin fields instead.
+    // A scene epoch is an intentional re-anchor. Compare the stable mission
+    // origin fields so the first value from a new anchor resets the diagnostic
+    // cursor instead of being reported as a discontinuity.
     let mission_origin = (mission.mission_tick0, mission.mission_epoch0_jd.to_bits());
     if last_mission_origin
         .replace(mission_origin)
@@ -1155,14 +1115,10 @@ pub fn write_epoch_from_celestial_clock(
 
     // The sky is supposed to move CONTINUOUSLY unless something seeks it. A
     // discontinuity here is visible as the sun teleporting across the sky, and
-    // it silently invalidates everything derived from the epoch — a scene
-    // rendered at the wrong date has the wrong sun, the wrong shadows and the
-    // wrong Earth. Measured: a rate change moved the epoch by 80 694 days, and a
-    // twin load left it 81 days BELOW the epoch the scene authors.
-    //
-    // A day per frame is far above any legitimate rate the tree can produce in
-    // one step at ≤100 000× (100 000 × a 0.1 s frame ≈ 0.12 d), so this reports
-    // discontinuities, not fast-forward.
+    // It silently invalidates everything derived from the epoch: a scene
+    // rendered at the wrong date has the wrong sun, shadows, and ephemerides.
+    // A day per frame is far above the expected continuous transport step, so
+    // this reports discontinuities rather than ordinary fast-forward.
     let jump = next - *last_epoch;
     if last_epoch.is_finite() && *last_epoch != 0.0 && jump.abs() > 1.0 {
         let d = q_domain.get(clocks.celestial).ok();
@@ -1225,9 +1181,8 @@ mod tests {
         let mut mission = crate::MissionClock::default();
 
         assert!(!mission_origin_changed(&mut previous, &mission));
-        // `advance_world_clock` mutates this resource every frame, but the
-        // mission origin has not changed and must not reset the detector.
-        mission.regime = crate::TimeRegime::KinematicWarp;
+        // Per-frame derived time does not change the mission origin and must
+        // not reset the detector.
         assert!(!mission_origin_changed(&mut previous, &mission));
 
         mission.mission_epoch0_jd += 10.0;
@@ -1312,26 +1267,26 @@ mod tests {
     }
 
     #[test]
-    fn transport_rate_command_rejects_uncapped_and_nonfinite_rates() {
+    fn transport_rate_command_rejects_rates_above_fixed_step_ceiling() {
         let mut transport = crate::TimeTransport::default();
 
         apply_time_transport(
             &mut transport,
             &SetTimeTransport {
-                rate: Some(crate::MAX_TRANSPORT_RATE),
+                rate: Some(crate::MAX_REALTIME_RATE),
                 ..default()
             },
         );
-        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
+        assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
 
         apply_time_transport(
             &mut transport,
             &SetTimeTransport {
-                rate: Some(crate::MAX_TRANSPORT_RATE + 1.0),
+                rate: Some(crate::MAX_REALTIME_RATE + 1.0),
                 ..default()
             },
         );
-        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
+        assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
 
         apply_time_transport(
             &mut transport,
@@ -1340,7 +1295,7 @@ mod tests {
                 ..default()
             },
         );
-        assert_eq!(transport.rate, crate::MAX_TRANSPORT_RATE);
+        assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
     }
 
     #[test]
@@ -1582,18 +1537,16 @@ mod tests {
         assert!(c[&d].dt.abs() < EPS);
     }
 
-    /// The celestial clock's default root is the EPOCH projection, not the tick — so
-    /// `epoch_jd` reproduces the old tick-derived value exactly, including in
-    /// `KinematicWarp` (where the tick is frozen but the epoch still advances).
+    /// The celestial clock's default root is the epoch projection, which keeps
+    /// calendar-domain consumers independent from mission-elapsed units.
     #[test]
-    fn celestial_defaults_to_the_epoch_projection_so_warp_still_moves_the_sky() {
+    fn celestial_root_reads_the_epoch_projection() {
         let sim = e(1);
         let celestial = e(2);
         let mut m = HashMap::new();
         m.insert(sim, root(ClockRoot::Tick));
         m.insert(celestial, root(ClockRoot::Epoch));
 
-        // Warp: the tick is FROZEN (sim_secs constant) but the epoch advances.
         let r1 = RootTimes {
             sim_secs: 42.0,
             wall_secs: 0.0,
@@ -1608,10 +1561,9 @@ mod tests {
         };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
 
-        assert!(b[&sim].dt.abs() < EPS, "tick frozen in warp");
         assert!(
             (b[&celestial].dt - 2000.0).abs() < EPS,
-            "the sky must keep moving in warp — that is what warp is FOR"
+            "the celestial root should follow epoch seconds"
         );
     }
 

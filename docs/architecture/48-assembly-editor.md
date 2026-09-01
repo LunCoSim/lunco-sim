@@ -48,6 +48,9 @@ listed below; they do not introduce a second authoring model.
   frame-wide cap by default. A view is activated only after its panel publishes
   geometry inside that budget; zero-valued limits are invalid and produce no
   render target rather than an unbounded allocation.
+  A click on a USD file in any open Twin resolves that file at the emitting
+  Twin's path, admits it through the existing async `OpenFile` pipeline, then
+  opens/focuses the stable editor session; it never becomes `LoadScene`.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open session and paint the session

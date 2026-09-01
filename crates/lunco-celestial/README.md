@@ -34,7 +34,7 @@ lunco-celestial/src/
   ├── big_space_setup.rs  # big_space floating-origin world setup
   ├── globe_lod.rs        # Planet/globe level-of-detail
   ├── embedded_assets.rs  # Bundled Earth texture + ephemeris data
-  ├── commands.rs         # Typed celestial commands (time warp, focus, …)
+  ├── commands.rs         # Typed celestial commands (time control, focus, …)
   └── ui/                 # Time panel, body browser (egui)
 ```
 
@@ -43,7 +43,7 @@ lunco-celestial/src/
 | Dependency | Why |
 |---|---|
 | `lunco-core` | `SimTick`, `Command` macros |
-| `lunco-time` | `WorldTime` / `TimeTransport` — the unified time spine (reads epoch/regime; no local clock) |
+| `lunco-time` | `WorldTime` / `TimeTransport` — the unified time spine (reads derived epoch; no local clock) |
 | `lunco-terrain-globe` | Cube-sphere terrain tile implementation used by the celestial globe projector |
 | `lunco-controller` | Avatar input map (used by camera spawning) |
 
