@@ -25,6 +25,7 @@ fn fail(me, message) {
 fn on_start(me) {
     this.elapsed = 0.0;
     this.doc = -1;
+    this.synced = false;
     this.phase = "discover";
     this.asset = "";
     this.socket = "";
@@ -50,8 +51,9 @@ fn array_has(values, expected) {
     false
 }
 
-fn prim_exists(path) {
-    query_ok(query("QueryUsdPrim", #{ path: path }))
+fn prim_exists(doc, path) {
+    let inspection = assembly_edit::inspect(doc, path);
+    query_ok(inspection) && inspection.prim != () && inspection.prim.exists == true
 }
 
 fn find_usd_document() {
@@ -130,6 +132,7 @@ fn compatible_socket(asset, require_empty) {
 }
 
 fn attached_relationships(me) {
+    let component = assembly_edit::inspect(me.doc, COMPONENT);
     let part = query("QueryUsdPrim", #{
         path: COMPONENT,
         rels: ["lunco:mount:attachmentJoint"],
@@ -146,7 +149,8 @@ fn attached_relationships(me) {
     let part_joint = one_relationship(part, "lunco:mount:attachmentJoint");
     let socket_part = one_relationship(socket, "lunco:mount:part");
     let host_sockets = one_relationship(host, "lunco:mount:sockets");
-    if !query_ok(part) || !query_ok(socket) || !query_ok(host)
+    if !query_ok(component) || component.prim == () || component.prim.exists != true
+        || !query_ok(part) || !query_ok(socket) || !query_ok(host)
         || part_joint == () || socket_part == () || host_sockets == ()
         || part_joint.len() != 1 || socket_part.len() != 1
         || part_joint[0] != JOINT || socket_part[0] != COMPONENT
@@ -164,7 +168,7 @@ fn detached_relationships(me) {
         rels: ["lunco:mount:part"],
     });
     let occupied = one_relationship(socket, "lunco:mount:part");
-    !prim_exists(COMPONENT) && !prim_exists(JOINT)
+    !prim_exists(me.doc, COMPONENT) && !prim_exists(me.doc, JOINT)
         && query_ok(socket) && occupied != () && occupied.len() == 0
 }
 
@@ -177,6 +181,20 @@ fn on_tick(me) {
         if this.doc < 0 {
             if this.elapsed > 8.0 { fail(this, "no open USD document was discoverable"); }
             return;
+        }
+
+        if !this.synced {
+            let snapshot = assembly_edit::sync_document(this.doc, ());
+            if !query_ok(snapshot) || snapshot.kind != "snapshot" {
+                fail(this, "assembly_edit sync_document did not return a document snapshot");
+                return;
+            }
+            let description = assembly_edit::describe(this.doc);
+            if !query_ok(description) || description.doc != this.doc {
+                fail(this, "assembly_edit describe did not identify the open document");
+                return;
+            }
+            this.synced = true;
         }
     }
 
@@ -200,7 +218,7 @@ fn on_tick(me) {
             if this.elapsed > 12.0 { fail(this, "document dirty state was not discoverable after reload"); }
             return;
         }
-        if prim_exists(COMPONENT) {
+        if prim_exists(this.doc, COMPONENT) {
             // SaveAs + RestartScene produces a clean saved document. Undo
             // makes that same document dirty again; after redo the component
             // is present while dirty, so the workflow can finish without
@@ -210,7 +228,7 @@ fn on_tick(me) {
             this.phase = "check_undo";
         }
         this.elapsed = 0.0;
-    } else if this.phase == "discover" && prim_exists(COMPONENT) {
+    } else if this.phase == "discover" && prim_exists(this.doc, COMPONENT) {
         this.phase = "check_attached";
         this.elapsed = 0.0;
     }
@@ -230,19 +248,16 @@ fn on_tick(me) {
 
         // The attachment is authored in the persistent root layer so the
         // subsequent SaveAs + RestartScene proves the normal document path.
-        let result = cmd("AttachComponent", #{
-            doc: this.doc,
-            spec: #{
-                edit_target: "@root@",
-                socket_path: this.socket,
-                host_path: HOST,
-                name: "Payload",
-                joint_name: "assembly_joint",
-                asset: this.asset,
-                placement: [0.0, 0.0, 0.0],
-                rotate_deg: [0.0, 0.0, 0.0],
-                joint: "Fixed",
-            },
+        let result = assembly_edit::attach_component(this.doc, #{
+            edit_target: "@root@",
+            socket_path: this.socket,
+            host_path: HOST,
+            name: "Payload",
+            joint_name: "assembly_joint",
+            asset: this.asset,
+            placement: [0.0, 0.0, 0.0],
+            rotate_deg: [0.0, 0.0, 0.0],
+            joint: "Fixed",
         });
         if !result.ok {
             fail(this, "AttachComponent was rejected: " + result.error);
@@ -296,7 +311,7 @@ fn on_tick(me) {
             fail(this, "saved attachment did not survive reload");
             return;
         }
-        let undo = cmd("UndoDocument", #{ doc: this.doc });
+        let undo = assembly_edit::undo(this.doc);
         if !undo.ok {
             fail(this, "UndoDocument was rejected: " + undo.error);
             return;
@@ -313,7 +328,7 @@ fn on_tick(me) {
             fail(this, "one undo did not remove the component, joint, and occupancy");
             return;
         }
-        let redo = cmd("RedoDocument", #{ doc: this.doc });
+        let redo = assembly_edit::redo(this.doc);
         if !redo.ok {
             fail(this, "RedoDocument was rejected: " + redo.error);
             return;

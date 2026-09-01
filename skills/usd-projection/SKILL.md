@@ -90,6 +90,18 @@ validation rather than treating a composed read as permission to move or
 remove a referenced/variant prim. Do not inspect flat layer data as a
 replacement for OpenUSD PCP resolution.
 
+Agents and editor automation should use the built-in `assembly_edit` Rhai
+library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
+`ResolveUsdTarget`, `SyncUsdDocument`, `ApplyUsdOp`/`ApplyUsdOps`,
+`AttachComponent`, `DetachComponent`, and `UndoDocument`/`RedoDocument`; it
+does not create another document registry, resolver, or USDA writer. `open`
+returns the normal asynchronous command acknowledgement and callers discover
+the resulting id through `ListOpenDocuments`. Read helpers require an explicit
+`doc`; authored helpers require `doc`, an edit target, and a USD path. Their
+optional `parent_gen` is the existing stale-write precondition, and `batch` or
+`transform` land as one typed journal/undo group. Use the tool catalog and
+completion query to discover the source and signatures.
+
 A scene loaded from disk and a prim authored at runtime therefore produce
 identical entities without one heavy deferred-command flush monopolising the
 window. The queue marker is the projection ownership fence: one prepared

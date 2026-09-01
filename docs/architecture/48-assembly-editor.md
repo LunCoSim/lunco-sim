@@ -116,6 +116,32 @@ prim supports every operation. Namespace edits still follow the operation's
 typed validation; a composed read is not permission to remove or move a
 referenced or variant-contained prim.
 
+### Agent and automation surface
+
+The built-in `assembly_edit` Rhai tool library is the shared agent/editor
+policy surface for these APIs. It calls `OpenFile`, the three read-only USD
+queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`, `DetachComponent`, and
+the generic document undo/redo commands through `cmd`/`query`; it adds no
+second registry, session, resolver, cache, parser, or persistence format.
+`open(path)` acknowledges the existing asynchronous open lifecycle, so callers
+obtain the resulting `DocumentId` from `ListOpenDocuments` rather than guessing
+one. `describe`, `inspect`, `resolve_target`, and `sync_document` always receive an
+explicit document. Every authored helper receives an explicit `@root@` or
+`@runtime@` target, and `batch` requires each reflected `UsdOp` to carry its
+own target.
+
+The optional `parent_gen` on `add_prim`, `transform`, `attribute`,
+`relationship`, `connection`, `schema`, `variant`, and `batch` is the existing
+revision precondition. A supplied cursor makes stale edits fail atomically
+before authoring or journaling; `()` is reserved for an operation with no
+causal predecessor. `transform` uses one `ApplyUsdOps` change set for its
+translation/rotation pair. Attach and detach helpers pass the complete typed
+specification to the existing mount/socket/joint validators. The library is
+listed by `ListToolLibraries` and completion, and its source is hot-reloadable
+through the standard tool-library loader. It intentionally exposes no direct
+USDA writer, runtime-only setter, guessed target, or unowned preview/review
+operation.
+
 ## Mount and attach contract
 
 A reusable component declares a plug frame. A host applies
