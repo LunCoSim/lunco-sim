@@ -2,13 +2,10 @@
 //!
 //! ## What it shows
 //!
-//! 1. Every Modelica document currently loaded in the
-//!    [`crate::state::ModelicaDocumentRegistry`] — drafts, duplicates from the
-//!    Welcome examples, files opened in earlier sessions. This is the
-//!    workspace's authoritative view of "what Modelica content does
-//!    the user have right now."
-//! 2. *(Future)* Files in the open Twin folder that aren't loaded yet
-//!    — surfaced as a separate group so users can click to load.
+//! 1. Modelica documents in the active Twin scope from the
+//!    [`crate::state::ModelicaDocumentRegistry`] — drafts and files currently
+//!    associated with that Twin.
+//! 2. Shared read-only library roots from the package-tree provider.
 //!
 //! Each row is a Modelica class keyed by its **fully-qualified path**
 //! (e.g. `"AnnotatedRocketStage.RocketStage"`). Click → emits
@@ -135,12 +132,19 @@ impl BrowserSection for ModelicaSection {
         // showing a different label in the browser is just confusing.
         // Falls back to the origin slug while no class exists yet
         // (mid-parse, empty draft).
+        let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
         let workspace_docs: Vec<(DocumentId, String)> = ctx
             .resource::<ModelicaDocumentRegistry>()
             .map(|registry| {
                 registry
                     .iter()
                     .filter_map(|(doc_id, host)| {
+                        if workspace.is_some_and(|ws| {
+                            ws.document(doc_id)
+                                .is_some_and(|entry| !ws.document_is_in_active_scope(entry))
+                        }) {
+                            return None;
+                        }
                         let document = host.document();
                         let origin = document.origin();
                         if !(origin.is_writable() || origin.is_untitled()) {

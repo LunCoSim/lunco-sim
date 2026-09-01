@@ -174,14 +174,6 @@ pub fn handle_package_loading_tasks(mut cache: ResMut<PackageTreeCache>) {
     for result in finished_results {
         find_and_update_node(&mut cache.roots, &result.parent_id, result.children);
     }
-
-    if let Some(mut task) = cache.twin_scan_task.take() {
-        if let Some(scanned) = future::block_on(future::poll_once(&mut task)) {
-            cache.twin = Some(scanned);
-        } else {
-            cache.twin_scan_task = Some(task);
-        }
-    }
 }
 
 fn find_and_update_node(

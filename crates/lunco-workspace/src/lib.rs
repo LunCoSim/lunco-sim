@@ -60,6 +60,29 @@ pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;
 pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode, TwinSettingValue};
 
+/// Whether a workspace document belongs to a Twin root.
+///
+/// This is the lifecycle boundary used after [`Workspace::close_twin`] has
+/// removed the Twin from the workspace. Path ownership remains observable
+/// from the document origin, while an Untitled document is owned by its
+/// explicit context pin. Keeping this predicate here prevents UI and domain
+/// registries from inventing independent path/context rules.
+pub fn document_belongs_to_twin_root(
+    entry: &DocumentEntry,
+    twin: TwinId,
+    root: &std::path::Path,
+) -> bool {
+    entry.origin.canonical_path().is_some_and(|path| {
+        path.strip_prefix(root).is_ok()
+            || path
+                .canonicalize()
+                .ok()
+                .zip(root.canonicalize().ok())
+                .is_some_and(|(path, root)| path.strip_prefix(root).is_ok())
+    }) || matches!(entry.origin, DocumentOrigin::Untitled { .. })
+        && entry.context_twin == Some(twin)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinId
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,9 +250,34 @@ impl Workspace {
     /// entries — a closed Twin just drops the lens, not the docs.
     /// Re-opening the Twin re-associates by path.
     pub fn close_twin(&mut self, id: TwinId) {
+        let closed_root = self.twin(id).map(|twin| twin.root.clone());
+        let active_document_belongs_to_closed_twin = self
+            .active_document
+            .and_then(|doc| self.document(doc))
+            .zip(closed_root.as_deref())
+            .is_some_and(|(entry, root)| document_belongs_to_twin_root(entry, id, root));
         self.twins.retain(|(tid, _)| *tid != id);
         if self.active_twin == Some(id) {
             self.active_twin = self.twins.first().map(|(tid, _)| *tid);
+            if active_document_belongs_to_closed_twin {
+                self.active_document = self.active_twin.and_then(|active| {
+                    self.documents
+                        .iter()
+                        .find(|entry| self.twin_for(entry) == Some(active))
+                        .map(|entry| entry.id)
+                });
+            }
+        }
+    }
+
+    /// Whether a document belongs to the active Twin, or to the loose-file
+    /// scope when no Twin is active. Browser and session readers use this
+    /// predicate so a closed/replaced Twin cannot remain visible through the
+    /// Workspace's intentionally global document registry.
+    pub fn document_is_in_active_scope(&self, entry: &DocumentEntry) -> bool {
+        match self.active_twin {
+            Some(active) => self.twin_for(entry) == Some(active),
+            None => self.twin_for(entry).is_none(),
         }
     }
 
@@ -467,6 +515,86 @@ version = "0.1.0"
         // Untitled with context pin is claimed by that Twin even though
         // it has no filesystem path to match against.
         assert_eq!(ws.twin_for(&ws.documents()[0]), Some(tid));
+    }
+
+    #[test]
+    fn active_scope_excludes_documents_from_another_twin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a_root = tmp.path().join("a");
+        let b_root = tmp.path().join("b");
+        write(&a_root.join("twin.toml"), "name=\"a\"\nversion=\"0.1.0\"\n");
+        write(&b_root.join("twin.toml"), "name=\"b\"\nversion=\"0.1.0\"\n");
+        let a_file = a_root.join("a.mo");
+        let b_file = b_root.join("b.mo");
+        write(&a_file, "");
+        write(&b_file, "");
+
+        let mut ws = Workspace::new();
+        let a = ws.add_twin(load_twin(&a_root));
+        let b = ws.add_twin(load_twin(&b_root));
+        ws.add_document(DocumentEntry {
+            id: DocumentId::new(1),
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::writable_file(&a_file),
+            context_twin: None,
+            title: "a.mo".into(),
+            dirty: false,
+        });
+        ws.add_document(DocumentEntry {
+            id: DocumentId::new(2),
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::writable_file(&b_file),
+            context_twin: None,
+            title: "b.mo".into(),
+            dirty: false,
+        });
+
+        assert_eq!(ws.active_twin, Some(a));
+        assert!(ws.document_is_in_active_scope(&ws.documents()[0]));
+        assert!(!ws.document_is_in_active_scope(&ws.documents()[1]));
+
+        ws.active_twin = Some(b);
+        assert!(!ws.document_is_in_active_scope(&ws.documents()[0]));
+        assert!(ws.document_is_in_active_scope(&ws.documents()[1]));
+    }
+
+    #[test]
+    fn closing_active_twin_drops_old_active_document_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a_root = tmp.path().join("a");
+        let b_root = tmp.path().join("b");
+        write(&a_root.join("twin.toml"), "name=\"a\"\nversion=\"0.1.0\"\n");
+        write(&b_root.join("twin.toml"), "name=\"b\"\nversion=\"0.1.0\"\n");
+        let a_file = a_root.join("a.mo");
+        let b_file = b_root.join("b.mo");
+        write(&a_file, "");
+        write(&b_file, "");
+
+        let mut ws = Workspace::new();
+        let a = ws.add_twin(load_twin(&a_root));
+        let b = ws.add_twin(load_twin(&b_root));
+        ws.add_document(DocumentEntry {
+            id: DocumentId::new(1),
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::writable_file(&a_file),
+            context_twin: None,
+            title: "a.mo".into(),
+            dirty: false,
+        });
+        ws.add_document(DocumentEntry {
+            id: DocumentId::new(2),
+            kind: DocumentKindId::new("modelica"),
+            origin: DocumentOrigin::writable_file(&b_file),
+            context_twin: None,
+            title: "b.mo".into(),
+            dirty: false,
+        });
+        ws.active_document = Some(DocumentId::new(1));
+
+        ws.close_twin(a);
+
+        assert_eq!(ws.active_twin, Some(b));
+        assert_eq!(ws.active_document, Some(DocumentId::new(2)));
     }
 
     #[test]

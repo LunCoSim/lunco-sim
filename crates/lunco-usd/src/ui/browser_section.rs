@@ -1,5 +1,5 @@
-//! `UsdSceneSection` — Twin-browser entry surfacing every loaded USD
-//! stage in the Models scope.
+//! `UsdSceneSection` — Twin-browser entry surfacing the active Twin's loaded
+//! USD stages in the Models scope.
 //!
 //! Under the WP-8 reactive-egui contract the section is a pure reader:
 //! it snapshots the change-gated [`UsdBrowserView`] (built by
@@ -26,6 +26,18 @@ use crate::{
     CommitUsdProposal, LayerId, ReviewUsdProposal, UsdProposalId, UsdProposalReviewAction,
     UsdProposalState, UsdProposalSummary,
 };
+
+fn stage_in_active_scope(
+    row: &UsdStageRow,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> bool {
+    row.doc_id
+        .and_then(|doc_id| workspace.and_then(|workspace| workspace.document(doc_id)))
+        .map(|entry| {
+            workspace.is_some_and(|workspace| workspace.document_is_in_active_scope(entry))
+        })
+        .unwrap_or(true)
+}
 
 /// Twin navigation entry for the composed USD connection graph.
 ///
@@ -63,10 +75,13 @@ impl BrowserSection for ConnectionsSection {
                 id: USD_CONNECTION_CANVAS_PANEL_ID.0.to_string(),
             });
         }
-        if ctx
-            .resource::<UsdBrowserView>()
-            .is_some_and(|view| view.stages.is_empty())
-        {
+        if ctx.resource::<UsdBrowserView>().is_some_and(|view| {
+            let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
+            !view
+                .stages
+                .iter()
+                .any(|row| stage_in_active_scope(row, workspace))
+        }) {
             ui.label(
                 egui::RichText::new("Select a USD document first to populate the graph.")
                     .weak()
@@ -76,8 +91,8 @@ impl BrowserSection for ConnectionsSection {
     }
 }
 
-/// Browser section that lists every loaded USD stage as a sibling row
-/// in the Twin browser's Models scope. Populated by the lifecycle
+/// Browser section that lists the active Twin's loaded USD stages as sibling
+/// rows in the Twin browser's Models scope. Populated by the lifecycle
 /// observers in [`UsdUiPlugin`](crate::ui::UsdUiPlugin) (via
 /// [`LoadedUsdStages`](crate::ui::loaded_stages::LoadedUsdStages)) and
 /// flattened into [`UsdBrowserView`] by the producer system.
@@ -117,11 +132,12 @@ impl BrowserSection for UsdSceneSection {
         // typed commands can be emitted after row painting. Rows
         // are cheap to clone (Arc readers + short strings).
         let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
+        let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
         let rows: Vec<UsdStageRow> = match ctx.resource::<UsdBrowserView>() {
             Some(view) => view
                 .stages
                 .iter()
-                .filter(|row| stage_matches(row, &query))
+                .filter(|row| stage_in_active_scope(row, workspace) && stage_matches(row, &query))
                 .cloned()
                 .collect(),
             None => {

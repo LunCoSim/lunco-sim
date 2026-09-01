@@ -1,10 +1,9 @@
 //! Backend scanning logic for the Package Browser.
 
-use super::cache::TwinState;
-use super::types::{PackageNode, TwinNode};
+use super::types::PackageNode;
 use crate::state::ModelLibrary;
 use bevy::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Canonical tree-node id for an MSL / third-party class, keyed by its dotted
 /// qualified name (`Modelica.Blocks.Examples.PID_Controller`).
@@ -18,74 +17,6 @@ use std::path::{Path, PathBuf};
 /// both backends through one helper keeps them from diverging.
 pub(crate) fn msl_tree_id(qualified: &str) -> String {
     format!("msl_path:{qualified}")
-}
-
-// ─── Twin / Workspace Scanning ───────────────────────────────────────────────
-
-pub fn scan_twin_folder(root: PathBuf) -> TwinState {
-    let root_node = TwinNode {
-        path: root.clone(),
-        name: root
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        children: scan_twin_children(&root),
-        is_modelica: false,
-    };
-    TwinState { root, root_node }
-}
-
-fn scan_twin_children(dir: &Path) -> Vec<TwinNode> {
-    let Ok(iter) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in iter.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if should_skip(&name) {
-            continue;
-        }
-        let path = entry.path();
-        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-        let is_modelica = !is_dir
-            && path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("mo"))
-                .unwrap_or(false);
-
-        if is_dir {
-            let children = scan_twin_children(&path);
-            out.push(TwinNode {
-                path,
-                name,
-                children,
-                is_modelica: false,
-            });
-        } else if is_modelica {
-            let display_name = name.strip_suffix(".mo").unwrap_or(&name).to_string();
-            out.push(TwinNode {
-                path,
-                name: display_name,
-                children: Vec::new(),
-                is_modelica: true,
-            });
-        }
-    }
-    out.sort_by(|a, b| {
-        b.is_modelica
-            .cmp(&a.is_modelica)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    out
-}
-
-fn should_skip(name: &str) -> bool {
-    name.starts_with('.')
-        || matches!(
-            name,
-            "target" | "shared_target" | "node_modules" | "__pycache__"
-        )
 }
 
 // ─── MSL Scanning ────────────────────────────────────────────────────────────

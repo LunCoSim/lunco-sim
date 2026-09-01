@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use lunco_doc::DocumentOrigin;
+use lunco_doc::{DocumentId, DocumentOrigin};
 use serde::{Deserialize, Serialize};
 
 use crate::{PanelId, WorkbenchLayout};
@@ -523,6 +523,18 @@ fn capture_documents(world: &mut World) -> Vec<(u64, DocumentSnapshot)> {
             out.extend(codec.capture(world));
         }
     });
+    // A Workspace intentionally keeps closed-Twin documents as loose session
+    // state. Per-Twin hot-exit must nevertheless persist only the active
+    // scope; otherwise the next Twin restores documents from an unrelated
+    // project and recreates the ownership leak this state is meant to avoid.
+    if let Some(workspace) = world.get_resource::<WorkspaceResource>() {
+        out.retain(|(raw_id, _)| {
+            workspace
+                .document(DocumentId::new(*raw_id))
+                .map(|entry| workspace.document_is_in_active_scope(entry))
+                .unwrap_or(true)
+        });
+    }
     out
 }
 

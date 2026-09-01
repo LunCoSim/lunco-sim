@@ -338,28 +338,68 @@ fn derive_title_from_doc(doc: &crate::document::ModelicaDocument) -> String {
     doc.origin().display_name()
 }
 
-/// React to a Twin being added (Open Folder / Open Twin / promotion)
-/// by spawning a background scan task that builds the package-browser
-/// tree for that Twin's `.mo` content.
+/// Retire Modelica tabs and transient selection state when their Twin closes.
 ///
-/// The scan was previously inlined into the welcome panel's "Open
-/// Folder" button. Hoisting it onto the canonical `TwinAdded` event
-/// means menu / picker / HTTP / scripts all converge on one path —
-/// the welcome button is now just another fire-and-forget caller.
-fn scan_twin_on_added(
-    trigger: On<lunco_workspace::TwinAdded>,
-    ws: Res<lunco_workspace::WorkspaceResource>,
-    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
+/// The document registry intentionally keeps file documents available as loose
+/// documents, but those documents must not remain in the active Twin's editor
+/// surface. Modelica tabs are therefore closed at the Twin lifecycle edge;
+/// the user can explicitly reopen a loose file later.
+fn clear_modelica_state_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut tabs: Option<ResMut<crate::model_tabs::ModelTabs>>,
+    mut canvas: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
+    mut rename: Option<ResMut<browser_section::DocRenameState>>,
+    mut workbench: Option<ResMut<WorkbenchState>>,
+    mut commands: Commands,
 ) {
-    let twin_id = trigger.event().twin;
-    let Some(twin) = ws.twin(twin_id) else {
+    let Some(workspace) = workspace else {
         return;
     };
-    let folder = twin.root.clone();
-    let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let task = pool.spawn(async move { crate::package_tree::scan_twin_folder(folder) });
-    cache.twin = None;
-    cache.twin_scan_task = Some(task);
+    let event = trigger.event();
+    let closed_docs: std::collections::HashSet<lunco_doc::DocumentId> = workspace
+        .documents()
+        .iter()
+        .filter(|entry| {
+            lunco_workspace::document_belongs_to_twin_root(entry, event.twin, &event.root)
+        })
+        .map(|entry| entry.id)
+        .collect();
+
+    if let Some(state) = rename.as_mut() {
+        if state
+            .editing
+            .as_ref()
+            .is_some_and(|(doc, _)| closed_docs.contains(doc))
+        {
+            state.editing = None;
+            state.needs_focus = false;
+        }
+    }
+
+    if let Some(state) = tabs.as_mut() {
+        let tab_ids: Vec<_> = state
+            .iter()
+            .filter_map(|(tab, model)| closed_docs.contains(&model.doc).then_some(tab))
+            .collect();
+        for tab in tab_ids {
+            state.close_tab(tab);
+            commands.trigger(lunco_workbench::CloseTab {
+                kind: MODEL_VIEW_KIND,
+                instance: tab,
+            });
+            if let Some(canvas) = canvas.as_mut() {
+                canvas.drop_tab(tab);
+            }
+        }
+    }
+
+    if event.was_active {
+        if let Some(state) = workbench.as_mut() {
+            state.selected_entity = None;
+            state.editor_buffer.clear();
+        }
+    }
 }
 
 /// Purge per-**entity** state when a `ModelicaModel` entity despawns.
@@ -603,6 +643,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<DocumentDiagnostics>()
             .init_resource::<crate::model_tabs::ModelTabs>()
+            .init_resource::<browser_section::DocRenameState>()
             .init_resource::<crate::sim_default::RunTargetOverrides>()
             .init_resource::<crate::model_tabs_types::TabRenderContext>()
             .init_resource::<panels::code_editor::EditorBufferState>()
@@ -630,6 +671,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::graphs::on_export_graph_requested)
             .add_observer(panels::model_view::on_sync_model_tab_requested)
             .add_observer(panels::model_view::on_fast_run_setup_requested)
+            .add_observer(clear_modelica_state_on_twin_closed)
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
@@ -736,13 +778,6 @@ impl Plugin for ModelicaUiPlugin {
             )
             .init_resource::<DocTitleGenCache>()
             .add_systems(Update, derive_doc_title)
-            // Kick off a background scan whenever the workbench
-            // announces a new Twin (Open Folder / Open Twin / "Save
-            // as Twin" promotion). The scan populates the package
-            // browser's Twin tree; until this lands, opening a Twin
-            // would update WorkspaceResource but the Modelica
-            // sidebar wouldn't reflect it.
-            .add_observer(scan_twin_on_added)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             // Input activity timestamp — read by `drive_engine_sync`
             // to gate edit-debounced reparses (replaces the prior

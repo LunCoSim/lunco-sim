@@ -2,10 +2,9 @@
 //! access to in this session.
 //!
 //! Mirrors the Modelica browser's document registry: a flat registry of
-//! [`crate::ui::loaded_stages::LoadedStage`] entries surfaced as siblings in
-//! the Twin browser's Models scope, regardless of where they came
-//! from. Workspace docs, future bundled stages, future Twin externals
-//! — all show up the same way.
+//! [`crate::ui::loaded_stages::LoadedStage`] entries, with the Twin browser
+//! presenting only entries in the active Workspace scope. Workspace docs,
+//! future bundled stages, and future Twin externals share the same row model.
 //!
 //! ## WP-8 view-model split
 //!

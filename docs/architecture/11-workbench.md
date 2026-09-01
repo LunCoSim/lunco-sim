@@ -333,7 +333,7 @@ or detach them (see § 8).
 
 The two Navigation-slot panels follow a Dymola/OMEdit-style split:
 
-- **Twin panel** — what you browse "by name." One section per
+- **Twin panel** — what you browse "by name" in the active Twin scope. One section per
   domain (`ModelicaSection`, future `UsdSection`, `SysmlSection`,
   `JuliaSection`), each section owning its own internal sub-grouping
   (e.g. Modelica's section nests Modelica Standard Library + Bundled
@@ -341,7 +341,9 @@ The two Navigation-slot panels follow a Dymola/OMEdit-style split:
   domain matches Dymola/OMEdit's Package Browser; nesting under a
   per-domain root scales as more domains land.
 - **Files panel** — raw filesystem view of the active Twin / open
-  Folder. Domain-agnostic.
+  Folder. Domain-agnostic. Documents from another open Twin remain in the
+  global Workspace registry but are outside this panel's scope until that Twin
+  becomes active; loose documents are shown only when no Twin is active.
 
 Sections are pluggable via the `BrowserSection` trait + a registry
 resource:

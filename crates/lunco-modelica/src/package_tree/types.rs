@@ -47,11 +47,3 @@ pub struct InMemoryEntry {
     pub id: String,
     pub doc: lunco_doc::DocumentId,
 }
-
-#[derive(Clone)]
-pub struct TwinNode {
-    pub path: std::path::PathBuf,
-    pub name: String,
-    pub children: Vec<TwinNode>,
-    pub is_modelica: bool,
-}
