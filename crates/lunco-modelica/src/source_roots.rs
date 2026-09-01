@@ -25,7 +25,7 @@
 use bevy::prelude::*;
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use web_time::Instant;
 
 /// Per-source-root state. Mirrors the `MslLoadState` shape, but
@@ -389,24 +389,201 @@ fn is_builtin_root(root: &str) -> bool {
 /// progress entries during source-root loads.
 pub const STATUS_BUS_SOURCE: &str = "source-roots";
 
-/// Load a mounted twin's Modelica packages into the compile session.
+/// One source root admitted from a mounted Twin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TwinSourceRootSpec {
+    id: String,
+    root_dir: PathBuf,
+}
+
+/// Normalize a manifest search path for the `TwinRoots` directory resolver.
+/// `TwinRoots` uses an empty relative path for the root itself, while TOML
+/// authors conventionally spell that path as `"."`.
+fn normalize_twin_source_path(path: &Path) -> Result<PathBuf, String> {
+    if !lunco_twin::is_safe_relative_path(path) {
+        return Err(format!(
+            "Modelica search path `{}` must stay relative to the Twin root",
+            path.display()
+        ));
+    }
+    Ok(lunco_assets::asset_path::normalize(path))
+}
+
+/// Discover the source directories represented by a Twin's indexed `.mo` files.
+/// Package directories are preferred over their nested package members, while
+/// flat files remain grouped by their nearest common indexed directory. This
+/// lets a Twin with no domain-specific path declaration use standard
+/// `package.mo` layout without inventing a second loader.
+fn discover_twin_modelica_paths(twin: &lunco_twin::Twin) -> Vec<PathBuf> {
+    fn is_modelica_file(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+    }
+
+    fn is_under_or_equal(path: &Path, ancestor: &Path) -> bool {
+        ancestor.as_os_str().is_empty() || path == ancestor || path.starts_with(ancestor)
+    }
+
+    let mut candidates: Vec<PathBuf> = twin
+        .files()
+        .iter()
+        .filter(|entry| is_modelica_file(&entry.relative_path))
+        .filter_map(|entry| {
+            let parent = entry.relative_path.parent()?.to_path_buf();
+            Some(parent)
+        })
+        .collect();
+
+    candidates.sort_by_key(|path| {
+        (
+            path.components().count(),
+            lunco_assets::asset_path::slashed(path),
+        )
+    });
+    candidates.dedup();
+
+    let mut roots = Vec::new();
+    for candidate in candidates {
+        if roots
+            .iter()
+            .any(|root: &PathBuf| is_under_or_equal(&candidate, root))
+        {
+            continue;
+        }
+        roots.push(candidate);
+    }
+    roots
+}
+
+fn twin_for_root<'a>(
+    workspace: Option<&'a lunco_workspace::WorkspaceResource>,
+    root: &Path,
+) -> Option<&'a lunco_twin::Twin> {
+    workspace.and_then(|workspace| {
+        workspace.twins().find_map(|(_, twin)| {
+            (twin.root == root
+                || twin
+                    .root
+                    .canonicalize()
+                    .is_ok_and(|candidate| candidate == root))
+            .then_some(twin)
+        })
+    })
+}
+
+/// Resolve one mounted Twin's Modelica source roots from the manifest and the
+/// already-indexed files. The result contains only directories that exist in
+/// the shared Twin asset authority; missing declarations are logged by the
+/// caller rather than replaced with an unrelated fallback path.
+fn twin_source_root_specs(
+    twin_roots: &lunco_assets::twin_source::TwinRoots,
+    name: &str,
+    root: &Path,
+    twin: Option<&lunco_twin::Twin>,
+) -> Result<Vec<TwinSourceRootSpec>, String> {
+    let manifest = if let Some(twin) = twin {
+        twin.manifest.clone()
+    } else {
+        let path = root.join(lunco_twin::MANIFEST_FILENAME);
+        if path.is_file() {
+            Some(
+                lunco_twin::TwinManifest::read(&path)
+                    .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+            )
+        } else {
+            None
+        }
+    };
+    let modelica = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.modelica.as_ref());
+
+    let local_paths = if let Some(modelica) = modelica {
+        modelica.paths.clone()
+    } else if let Some(twin) = twin {
+        discover_twin_modelica_paths(twin)
+    } else {
+        Vec::new()
+    };
+
+    let mut specs = Vec::new();
+    for path in local_paths {
+        let relative = normalize_twin_source_path(&path)?;
+        let Some(root_dir) = twin_roots
+            .resolve_directory(name, &relative)
+            .map_err(|error| format!("Twin `{name}` Modelica path lookup failed: {error}"))?
+        else {
+            log::error!(
+                "[source-roots] Twin `{name}` Modelica path `{}` is not a directory",
+                path.display()
+            );
+            continue;
+        };
+        if specs
+            .iter()
+            .all(|spec: &TwinSourceRootSpec| spec.root_dir != root_dir)
+        {
+            let index = specs.len();
+            specs.push(TwinSourceRootSpec {
+                id: format!("twin:{name}:local:{index}"),
+                root_dir,
+            });
+        }
+    }
+
+    if let Some(modelica) = modelica {
+        for external in &modelica.externals {
+            let path = external.path.to_string_lossy();
+            if path == "@bundled:msl" {
+                continue;
+            }
+            if path.starts_with("@bundled:") {
+                log::error!(
+                    "[source-roots] Twin `{name}` external Modelica library `{}` is unsupported",
+                    external.path.display()
+                );
+                continue;
+            }
+            let root_dir = if external.path.is_absolute() {
+                external.path.clone()
+            } else {
+                root.join(&external.path)
+            };
+            if !root_dir.is_dir() {
+                log::error!(
+                    "[source-roots] Twin `{name}` external Modelica library `{}` is not a directory",
+                    external.path.display()
+                );
+                continue;
+            }
+            if specs
+                .iter()
+                .all(|spec: &TwinSourceRootSpec| spec.root_dir != root_dir)
+            {
+                let index = specs.len();
+                specs.push(TwinSourceRootSpec {
+                    id: format!("twin:{name}:external:{index}"),
+                    root_dir,
+                });
+            }
+        }
+    }
+
+    Ok(specs)
+}
+
+/// Load a mounted Twin's Modelica packages into the compile session.
 ///
-/// A twin is a folder of assets. If it ships Modelica under `<twin>/models` — the
-/// same convention as the engine's own `assets/models` — those packages must reach
-/// the compiler, or a program authored in the twin (and any cosim model the twin
-/// defines) cannot `import` them. This watches [`TwinRoots`] and, for each newly
-/// mounted twin whose `models/` directory exists, sends one `LoadSourceRoot` carrying
-/// rumoca's standard disk-package loader (`load_source_root_tolerant`, which reads
-/// `package.mo`/`package.order` the Modelica-standard way).
-///
-/// Session roots persist across compiles, so once loaded a twin's classes resolve on
-/// both the editor and the cosim compile paths. `Local` tracks what has been sent
-/// (`TwinRoots` mutates
-/// through interior handles and so never triggers `Changed`); a twin with no `models/`
-/// dir is recorded too, so it is not re-probed every frame.
+/// The Twin manifest owns explicit `[modelica].paths` and `externals`. When
+/// that section is absent, this uses the already-indexed `.mo` files to find
+/// package roots and flat source directories. Every result is dispatched to
+/// the existing `LoadSourceRoot` worker command, so editor and runtime keep
+/// one source-root admission path and one dependency/session view.
 pub fn load_twin_source_roots(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     channels: Option<Res<crate::ModelicaChannels>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut seen: Local<HashSet<String>>,
 ) {
     let (Some(twin_roots), Some(channels)) = (twin_roots, channels) else {
@@ -431,24 +608,37 @@ pub fn load_twin_source_roots(
                 return;
             }
         };
-        let models_dir = root.join("models");
-        // Record the twin either way: a `models/`-less twin has nothing to load and
-        // must not be re-probed every frame.
-        seen.insert(name.clone());
-        if !models_dir.is_dir() {
-            continue;
-        }
-        let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
-            id: format!("twin:{name}"),
-            payload: crate::worker::LoadSourceRootPayload::Disk {
-                root_dir: models_dir.clone(),
-            },
+        let twin = twin_for_root(workspace.as_deref(), &root);
+        let specs = match twin_source_root_specs(&twin_roots, &name, &root, twin) {
+            Ok(specs) => specs,
+            Err(error) => {
+                log::error!("[source-roots] Twin `{name}` Modelica configuration failed: {error}");
+                seen.insert(name);
+                continue;
+            }
         };
-        if channels.tx.send(cmd).is_ok() {
-            log::info!(
-                "[source-roots] loading twin `{name}` Modelica packages from {}",
-                models_dir.display()
-            );
+        // Record the twin even when it has no Modelica files. TwinRoots mutates
+        // through interior handles and never triggers `Changed`; one terminal
+        // probe is enough for this mounted root.
+        seen.insert(name.clone());
+        for spec in specs {
+            if seen.contains(&spec.id) {
+                continue;
+            }
+            let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
+                id: spec.id.clone(),
+                payload: crate::worker::LoadSourceRootPayload::Disk {
+                    root_dir: spec.root_dir.clone(),
+                },
+            };
+            if channels.tx.send(cmd).is_ok() {
+                seen.insert(spec.id.clone());
+                log::info!(
+                    "[source-roots] loading Twin `{name}` Modelica source root `{}` from {}",
+                    spec.id,
+                    spec.root_dir.display()
+                );
+            }
         }
     }
 }
@@ -599,6 +789,83 @@ pub fn ensure_loaded(
     // UI observer `ui::core_observers::mirror_source_roots_to_status_bus`. Core
     // sets the state; it no longer touches the status bus.
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn open_twin(root: &Path, manifest: &str) -> lunco_twin::Twin {
+        fs::write(root.join(lunco_twin::MANIFEST_FILENAME), manifest).unwrap();
+        match lunco_twin::TwinMode::open(root).unwrap() {
+            lunco_twin::TwinMode::Twin(twin) => twin,
+            other => panic!("expected a manifest-backed Twin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manifest_roots_use_twin_resolver_and_external_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("models")).unwrap();
+        fs::create_dir(temp.path().join("shared")).unwrap();
+        let twin = open_twin(
+            temp.path(),
+            r#"
+name = "demo"
+version = "0.1.0"
+
+[modelica]
+paths = [".", "models"]
+externals = [{ name = "Shared", path = "shared" }]
+"#,
+        );
+        let roots = lunco_assets::twin_source::TwinRoots::default();
+        let assigned = roots.register("demo", twin.root.clone()).unwrap();
+        let specs = twin_source_root_specs(&roots, &assigned, &twin.root, Some(&twin)).unwrap();
+
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].id, "twin:demo:local:0");
+        assert_eq!(specs[0].root_dir, twin.root);
+        assert_eq!(specs[1].id, "twin:demo:local:1");
+        assert_eq!(specs[1].root_dir, twin.root.join("models"));
+        assert_eq!(specs[2].id, "twin:demo:external:2");
+        assert_eq!(specs[2].root_dir, twin.root.join("shared"));
+    }
+
+    #[test]
+    fn absent_manifest_section_discovers_indexed_package_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("models/Vehicle/Sub")).unwrap();
+        fs::create_dir_all(temp.path().join("examples")).unwrap();
+        fs::write(
+            temp.path().join("models/Vehicle/package.mo"),
+            "within ; package Vehicle end Vehicle;",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("models/Vehicle/Sub/Part.mo"),
+            "within Vehicle.Sub; model Part end Part;",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("examples/Example.mo"),
+            "model Example end Example;",
+        )
+        .unwrap();
+        let twin = open_twin(temp.path(), "name = \"demo\"\nversion = \"0.1.0\"\n");
+        let roots = lunco_assets::twin_source::TwinRoots::default();
+        let assigned = roots.register("demo", twin.root.clone()).unwrap();
+        let specs = twin_source_root_specs(&roots, &assigned, &twin.root, Some(&twin)).unwrap();
+
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.root_dir.clone())
+                .collect::<Vec<_>>(),
+            vec![twin.root.join("examples"), twin.root.join("models/Vehicle")]
+        );
+    }
 }
 
 /// Diagnostic log: walk the given AST, find every source-root

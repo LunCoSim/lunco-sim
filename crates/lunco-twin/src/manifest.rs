@@ -82,6 +82,13 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usd: Option<UsdManifest>,
 
+    /// Modelica domain settings (`[modelica]` section). Holds the Twin's
+    /// Modelica search roots and explicitly declared external libraries.
+    /// Absent means the domain discovers package roots from the indexed Twin
+    /// files without adding a manifest-owned search path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modelica: Option<ModelicaManifest>,
+
     /// Edit-journal settings (`[journal]` section). Absent means the
     /// defaults in [`JournalManifest`] — a session-only journal that
     /// writes nothing to disk.
@@ -164,6 +171,51 @@ pub struct DownloadManifest {
     /// The default is `false`, so a newly opened project offers the prompt.
     #[serde(default)]
     pub suppress_missing_prompt: bool,
+}
+
+/// The `[modelica]` section of `twin.toml`.
+///
+/// `paths` are Twin-relative Modelica search roots. A path may be `"."` to
+/// make the Twin root the search root; the compiler still receives the same
+/// standard source-root load operation used for every other Modelica library.
+/// When omitted from the section, the Twin root is the declared search root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelicaManifest {
+    /// Twin-relative directories containing Modelica files or package roots.
+    #[serde(default = "default_modelica_paths")]
+    pub paths: Vec<PathBuf>,
+
+    /// Additional Modelica libraries. Relative paths are resolved from the
+    /// Twin root; `@bundled:msl` names the application's bundled MSL and is
+    /// already owned by the standard-library source-root pipeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub externals: Vec<ModelicaExternal>,
+}
+
+impl Default for ModelicaManifest {
+    fn default() -> Self {
+        Self {
+            paths: default_modelica_paths(),
+            externals: Vec::new(),
+        }
+    }
+}
+
+fn default_modelica_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from(".")]
+}
+
+/// One entry in `[modelica].externals`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelicaExternal {
+    /// Human-readable library name used in diagnostics and source-root ids.
+    pub name: String,
+
+    /// Absolute path, Twin-relative path, or a supported bundled-library
+    /// identifier such as `@bundled:msl`.
+    pub path: PathBuf,
 }
 
 /// The `[usd]` section of `twin.toml`.
@@ -287,6 +339,7 @@ impl TwinManifest {
             default_perspective: None,
             children: Vec::new(),
             usd: None,
+            modelica: None,
             journal: None,
             downloads: None,
             settings: BTreeMap::new(),
@@ -399,6 +452,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            modelica: None,
             journal: None,
             downloads: None,
             settings: BTreeMap::new(),
@@ -432,6 +486,13 @@ mod tests {
                 default_scene: Some("main_scene.usda".into()),
                 scenes: Some(vec!["scenes/**".into()]),
             }),
+            modelica: Some(ModelicaManifest {
+                paths: vec![".".into()],
+                externals: vec![ModelicaExternal {
+                    name: "MSL".into(),
+                    path: "@bundled:msl".into(),
+                }],
+            }),
             journal: Some(JournalManifest { persist: true }),
             downloads: Some(DownloadManifest {
                 suppress_missing_prompt: true,
@@ -458,6 +519,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            modelica: None,
             journal: None,
             downloads: None,
             settings: BTreeMap::new(),
@@ -492,6 +554,7 @@ version = "0.1.0"
         assert_eq!(parsed.default_perspective, None);
         assert!(parsed.children.is_empty());
         assert_eq!(parsed.usd, None);
+        assert_eq!(parsed.modelica, None);
         assert_eq!(parsed.uuid, None);
         assert_eq!(parsed.downloads, None);
         assert!(parsed.settings.is_empty());
@@ -562,6 +625,38 @@ default_scene = "scenes/main.usda"
     }
 
     #[test]
+    fn modelica_package_paths_and_externals_parse() {
+        let text = r#"
+name = "package-twin"
+version = "0.1.0"
+
+[modelica]
+paths = [".", "models"]
+externals = [{ name = "Shared", path = "../shared-models" }]
+"#;
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        let modelica = parsed.modelica.expect("Modelica section");
+        assert_eq!(
+            modelica.paths,
+            vec![PathBuf::from("."), PathBuf::from("models")]
+        );
+        assert_eq!(
+            modelica.externals,
+            vec![ModelicaExternal {
+                name: "Shared".into(),
+                path: "../shared-models".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn modelica_section_defaults_to_the_twin_root() {
+        let text = "name = \"package-twin\"\nversion = \"0.1.0\"\n\n[modelica]\n";
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        assert_eq!(parsed.modelica.unwrap().paths, vec![PathBuf::from(".")]);
+    }
+
+    #[test]
     fn uuid_round_trips_when_present() {
         let id = Uuid::new_v4();
         let text = format!(
@@ -603,6 +698,7 @@ uuid = "{id}"
             default_perspective: None,
             children: vec![],
             usd: None,
+            modelica: None,
             journal: None,
             downloads: None,
             settings: BTreeMap::new(),

@@ -328,9 +328,11 @@ current default.
 - Keep generated document lifetime tied to the projection entity. Classify it by
   the `generated/` document origin, retire it on removal/despawn, and keep
   authored document cleanup separate. Structured packages under
-  `assets/models/<Root>/package.mo` are ordinary Modelica search-path roots: the
-  compiler/editor discovers the root segment of a qualified reference
-  generically and loads that package through the shared Modelica engine. A
+  `assets/models/<Root>/package.mo` and Twin-declared `[modelica].paths` are
+  ordinary Modelica search-path roots: the compiler/editor discovers the root
+  segment of a qualified reference generically and loads that package through
+  the shared Modelica engine. A Twin without that section derives package roots
+  from its indexed `.mo` files. A
   policy-declared `source_roots` list may prewarm dependencies, but it must not
   be required for class discovery and Rust must not name a particular library.
   Reproject from the generic completion signal.

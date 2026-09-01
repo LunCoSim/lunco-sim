@@ -365,13 +365,18 @@ library-specific installer or root-name branch.
   reprojects when that root is ready. Generated `source_roots` are dependency metadata
   and can prewarm roots, but class discovery does not depend on a generated document
   or on the string `LunCo`.
-- **A twin's own `.mo`** (`<twin>/models`) loads via `source_roots::load_twin_source_roots`,
-  a `lunco-modelica` system watching `TwinRoots`; on mount it sends `LoadSourceRoot { Disk }`
-  (rumoca's `load_source_root_tolerant`). **Why in `lunco-modelica`, not at the USD twin-mount
+- **A Twin's own `.mo`** loads through `[modelica].paths` in `twin.toml`. Paths are relative
+  to the Twin root and may use `"."` for that root. When the section is absent, the
+  Modelica owner derives package roots and flat-source directories from the authoritative
+  indexed Twin files; there is no hard-coded `<twin>/models` convention. Declared
+  `[modelica].externals` add existing relative or absolute library directories, while
+  `@bundled:msl` is already owned by the standard-library inventory. Every admitted root
+  is sent through the existing `LoadSourceRoot { Disk }` worker command, which recursively
+  reads standard `package.mo`/`package.order` trees and uses the same input-default
+  normalization as other disk roots. **Why in `lunco-modelica`, not at the USD twin-mount
   site?** Because `lunco-usd` has no dependency on `lunco-modelica` and should not gain one
   just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
-  "load a twin's Modelica," and it already sees `TwinRoots` through the shared `lunco-assets`
-  dependency.
+  "load a Twin's Modelica," and it already sees the shared Twin asset authority.
 
 **Gotcha worth its own line:** `lunco_assets::models::model_files()` is top-level only
 (`MODELS_DIR.files()`), so a package under a subdirectory is embedded but invisible to it.
