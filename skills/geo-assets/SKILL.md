@@ -136,6 +136,12 @@ The `dem` child layer also owns the physics collider-ring lattice. Author these
 beside `windowM`, `targetRes`, `lodViz`, and `colliderRing` when a Twin needs a
 non-default contract:
 
+For an authored `rocks` layer, `lunco:layer:regionM` is an optional
+half-extent in metres: omit it or leave it at `0` to cover the whole composed
+terrain; author a positive value only when a near-field scope is intentional.
+`lunco:layer:density` is per hectare, and the rendering-quality profile owns
+the total instance cap.
+
 ```usda
 int lunco:layer:colliderDepth = 8
 int lunco:layer:colliderResolution = 49

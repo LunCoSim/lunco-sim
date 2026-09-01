@@ -271,6 +271,40 @@ mod tests {
     }
 
     #[test]
+    fn uniform_sampling_covers_the_requested_region() {
+        let p = sample_layer(
+            17,
+            salt::ROCKS,
+            Pattern::Uniform,
+            100.0,
+            400,
+            spec_size(),
+            0.0,
+        );
+        let mut quadrants = [0usize; 4];
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+        for placement in p {
+            min_x = min_x.min(placement.pos.x);
+            max_x = max_x.max(placement.pos.x);
+            min_z = min_z.min(placement.pos.y);
+            max_z = max_z.max(placement.pos.y);
+            let index = match (placement.pos.x >= 0.0, placement.pos.y >= 0.0) {
+                (false, false) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (true, true) => 3,
+            };
+            quadrants[index] += 1;
+        }
+        assert!(min_x < -90.0 && max_x > 90.0);
+        assert!(min_z < -90.0 && max_z > 90.0);
+        assert!(quadrants.iter().all(|count| *count > 0));
+    }
+
+    #[test]
     fn poisson_respects_spacing() {
         let p = poisson_positions(&mut rng_for(9, salt::ROCKS), 30.0, 4.0, 10_000);
         for i in 0..p.len() {

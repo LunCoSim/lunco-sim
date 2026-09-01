@@ -247,7 +247,7 @@ class "LunCoTerrainLayerAPI" (
         doc = "Deterministic scatter/noise seed."
     )
     float lunco:layer:density = 0 (
-        doc = "Scatter density, instances per square metre."
+        doc = "Scatter density, instances per hectare (10 000 square metres)."
     )
     float lunco:layer:sizeMin = 0 (
         doc = "Minimum scattered instance size, metres."
@@ -277,7 +277,7 @@ class "LunCoTerrainLayerAPI" (
         doc = "Largest generated feature, metres."
     )
     float lunco:layer:regionM = 0 (
-        doc = "Region size the layer covers, metres."
+        doc = "Optional scatter half-extent in metres; zero or omission covers the whole composed terrain."
     )
     float lunco:layer:reliefScale = 0 (
         doc = "Vertical relief scale factor."
