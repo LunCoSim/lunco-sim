@@ -108,9 +108,8 @@ def Xform "SandboxScene" (
             }
         }
 
-        # The night sky. Every `inputs:` the shader declares carries an
-        # `@default` in `starfield.wgsl`, so only the deviations from it are
-        # authored here — the WGSL stays the single source of truth for the sky.
+        # The night sky. The shader's `//!@default` values are the single source
+        # of truth; this scene authors no procedural-sky inputs.
         def Material "Starfield"
         {
             token outputs:surface.connect = </SandboxScene/Looks/Starfield/Shader.outputs:surface>
