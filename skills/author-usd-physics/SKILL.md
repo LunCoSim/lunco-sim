@@ -26,6 +26,13 @@ schedule. Do not duplicate standard fields under `lunco:*`. Missing or invalid
 fields fail projection; they are never replaced by a target, force cap, or
 solver-resolution workaround.
 
+The local avatar is a runtime kinematic camera embodiment, not an authored
+rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
+colliders projected by the Avian bridge in the active BigSpace frame. Do not
+add an avatar collider schema or a second collision representation; see the
+[BigSpace physics boundary](../../docs/architecture/45-big-space-correct-usage.md#physics-boundary)
+for the frame conversion and Twin-scoped traversal policy.
+
 ## 1. A joint is TWO FRAMES, not an axis
 
 This is the single most expensive thing to get wrong, and it fails silently.

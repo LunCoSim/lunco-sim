@@ -203,6 +203,14 @@ nearest non-avatar input surface, and direct `PossessVessel` requests apply the
 same rule before either camera binding or authority claim. Render markers such
 as `SceneCamera` do not participate in this control decision.
 
+Free-flight and surface movement are kinematic camera motion and use the shared
+BigSpace/Avian collision contract described in
+[`45-big-space-correct-usage.md`](45-big-space-correct-usage.md#physics-boundary).
+The avatar is not given a second authored USD body or collider; its capsule
+query consumes the standard stage colliders. Traversal is disabled unless the
+active Twin explicitly sets `avatar.allow_through_soil = true` through the
+existing generic Twin-settings command.
+
 ### 6.7 Vehicle control frame
 
 The controller has one shared input path: persisted `input_bindings` resolve raw

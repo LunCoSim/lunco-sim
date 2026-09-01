@@ -36,7 +36,12 @@ lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
+lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
+
+[dev-dependencies]
+lunco-twin = { path = "../lunco-twin" }
+tempfile = { workspace = true }
 
 [features]
 default = ["ui"]
