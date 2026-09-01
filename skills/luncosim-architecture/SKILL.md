@@ -109,6 +109,14 @@ command to a same-named prim in another document. Always carry the lease's
 explicit `DocumentId`, `LayerId`, and projection generation into a typed USD
 command.
 
+When the work is an agent-driven human asset edit, use the
+[interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md). The
+authoring session is headful and remains visible to the user; every coherent
+change is applied through the existing typed/journal path, inspected through
+the focused preview and a screenshot, and reviewed with the user before the
+next material change or save. This is an operating mode over the existing
+ownership model, not a new assembly API.
+
 The render-side camera binder also owns Bevy's clustered-light policy.
 Use Bevy's `ClusterConfig::Single` for automatic cameras while the ECS topology
 has no point lights, spot lights, light probes, or clustered decals, and follow

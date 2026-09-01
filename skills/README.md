@@ -26,6 +26,7 @@ one directly when doing that kind of task by hand.
 | [**author-usd-component**](author-usd-component/SKILL.md) | Model a reusable `.usda` asset from scratch — geometry, material, physics, parameters, spawn catalog |
 | [**build-vehicle**](build-vehicle/SKILL.md) | Assemble a rover/vehicle from the mobility component library — wheels, tires, suspensions, chassis, variant axes, drive laws, live tuning |
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
+| [**edit-usd-assembly**](edit-usd-assembly/SKILL.md) | Create or modify a reusable rover/lander assembly in a live headful Editor session, with screenshot review and user feedback |
 | [**update-documents**](update-documents/SKILL.md) | Update canonical docs, agent guidance, and skills without duplicating retired contracts |
 | [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid, a vehicle flies apart, or a part falls off it |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |
@@ -139,6 +140,7 @@ only when its contract is needed:
 | Write a reusable USD asset | `author-usd-component` | `author-usd-physics` for detailed physics; `validate-assets` for pre-flight |
 | Assemble existing assets into a scene | `build-usd-scene` | `build-vehicle` for mobility assemblies; `author-scenario` for behavior |
 | Build a vehicle | `build-vehicle` | `authoring-vessel-controllers` for GNC; `compose-multidomain-twin` for the complete Twin |
+| Create or modify a reusable assembly interactively | `edit-usd-assembly` | `usd-projection` for projection internals; `author-usd-physics` for detailed physics; `lunco-ui` for panel implementation |
 | Add or diagnose a controller | `authoring-vessel-controllers` | `run-modelica` for standalone Modelica execution |
 | Add or diagnose USD-to-ECS machinery | `usd-projection` | `luncosim-architecture` for cross-domain ownership |
 | Add or locate an asset | `use-asset-library` | `validate-assets` for file checks |

@@ -11,7 +11,9 @@ description: >
   use the fixed Y-up, right-handed, -Z-forward metre frame, root-qualified
   `lunco://` or `twin://` paths, and catalogued spawnables. Do not use
   `SetDocumentSource` for live edits. Use author-scenario for behavior and
-  authoring-vessel-controllers for GNC.
+  authoring-vessel-controllers for GNC. Use edit-usd-assembly for editing the
+  reusable rover, lander, payload, or sensor assembly itself in a visible
+  Editor session.
 ---
 
 # Build & edit USD scenes
@@ -23,6 +25,11 @@ the API (`--api`, port **4101**; launch per [`test-via-api`](../test-via-api/SKI
 
 Design background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`usd-source-of-truth.md`](../../docs/architecture/usd-source-of-truth.md).
+
+This skill owns mounting and scene placement. For authoring the reusable
+assembly itself, switch to the [interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md),
+which keeps a headful preview visible and routes every edit through the
+document/journal command boundary.
 
 Before assembling a scene, choose its world/time contract. The complete option
 matrix is in [`assets/tutorials/README.md`](../../assets/tutorials/README.md);

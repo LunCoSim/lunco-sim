@@ -395,6 +395,12 @@ A **tool library** is a named bundle of reusable policy, callable as
 Use `assembly_edit` for agent and editor automation over an open USD document.
 It is a thin policy library over the existing typed USD command/query surface;
 it does not parse USDA, maintain a second document/session, or write ECS state.
+For a collaborative human-and-agent asset edit, follow the
+[interactive headful Assembly Editor runbook](../skills/edit-usd-assembly/SKILL.md):
+keep the production window visible, apply one coherent typed change at a time,
+inspect a screenshot, and get user feedback before the next material edit or
+save. The commands below remain the same; the runbook defines the required
+interactive operating mode.
 Open a source with `assembly_edit::open(path)`, then discover its explicit
 `DocumentId` through `ListOpenDocuments`. Read with `describe`, `inspect`,
 `resolve_target`, and `sync_document`. All authored edits require the document,

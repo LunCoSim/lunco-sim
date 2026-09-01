@@ -196,6 +196,26 @@ The browser row reflects modified, review, muted, and conflict state from this
 document-scoped resource. `SaveDocument`/`SaveAsDocument` remain explicit
 persistence commands; proposal commit never writes a file implicitly.
 
+### Interactive headful authoring
+
+The agent-and-human authoring workflow is defined by the
+[`edit-usd-assembly` skill](../../skills/edit-usd-assembly/SKILL.md). Assembly
+edits start in a windowed production `target/debug/luncosim --api PORT`
+session; `--offscreen` and `--no-ui` are not substitutes for this workflow.
+The user sees the focused `UsdPreviewId` while the agent uses the same typed
+commands or the built-in `assembly_edit` Rhai library. After each coherent
+change, the agent checks the command acknowledgement and generation, reads the
+affected composed prim, captures and inspects a screenshot, and presents the
+result for user feedback before another material edit or final save. A missing
+display is an explicit workflow blocker, not a reason to bypass the visible
+preview.
+
+Interactive authoring does not permit direct USDA writes, ECS mutation, guessed
+document/layer/prim identities, or an assembly-specific state path. The existing
+document registry, OpenUSD composition, typed `UsdOp` journal, preview lease,
+mount validators, and explicit `SaveDocument`/`SaveAsDocument` commands remain
+the only owners.
+
 The production acceptance fixture is
 `assets/scenes/tests/assembly_editor_proposal.usda`; its Rhai observer drives
 the same proposal/query/commit surface and verifies non-mutating review,
