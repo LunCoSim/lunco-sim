@@ -401,10 +401,15 @@ keep the production window visible, apply one coherent typed change at a time,
 inspect a screenshot, and get user feedback before the next material edit or
 save. The commands below remain the same; the runbook defines the required
 interactive operating mode.
-Open a source with `assembly_edit::open(path)`, then discover its explicit
-`DocumentId` through `ListOpenDocuments`. Read with `describe`, `inspect`,
-`resolve_target`, and `sync_document`. All authored edits require the document,
-`@root@` or `@runtime@` layer, and the USD path explicitly:
+Create a new assembly with `assembly_edit::new_document()`, fork an existing
+document with `assembly_edit::fork_document(source, name)`, or open a source
+with `assembly_edit::open(path)`. These commands acknowledge the normal
+asynchronous document lifecycle; discover the resulting explicit `DocumentId`
+through `ListOpenDocuments`. Persist or end the session with
+`save_document`, `save_as_document`, `close_document`, and `discard_document`;
+they route through the same lifecycle commands as the human Editor. All
+authored edits require the document, `@root@` or `@runtime@` layer, and the USD
+path explicitly:
 
 ```rhai
 let doc = 3;
