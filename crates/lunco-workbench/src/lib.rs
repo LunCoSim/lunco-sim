@@ -998,6 +998,7 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
+            .add_observer(source_viewer::close_source_state_on_twin_closed)
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_observer(twin_settings::clear_on_twin_closed)
             .add_systems(

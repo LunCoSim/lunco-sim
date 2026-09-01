@@ -157,6 +157,10 @@ pub struct ModelicaEngine {
     /// This is terminal for the current engine lifetime so a resolver does not
     /// spin in `Loading` forever after a malformed packaged asset.
     failed_library_roots: HashMap<String, String>,
+    /// Complete parsed source sets installed through the session source-set
+    /// boundary. This is distinct from class lookup: a single lazily loaded
+    /// document must not masquerade as a complete library installation.
+    installed_source_sets: HashSet<String>,
 }
 
 impl Default for ModelicaEngine {
@@ -179,6 +183,7 @@ impl ModelicaEngine {
             pending_library_roots: HashSet::new(),
             completed_library_roots: Vec::new(),
             failed_library_roots: HashMap::new(),
+            installed_source_sets: HashSet::new(),
         }
     }
 
@@ -268,7 +273,10 @@ impl ModelicaEngine {
     /// while its result was still waiting for the main-thread install.
     pub fn has_parse_work(&self, doc_id: DocumentId) -> bool {
         self.pending.contains(&doc_id)
-            || self.completed.iter().any(|(completed, _)| *completed == doc_id)
+            || self
+                .completed
+                .iter()
+                .any(|(completed, _)| *completed == doc_id)
     }
 
     /// Number of async parses currently in flight. Used by
@@ -478,6 +486,33 @@ impl ModelicaEngine {
             return Err(message);
         }
         Ok(self.load_parsed_library_files(parsed))
+    }
+
+    /// Replace one complete parsed source set in the shared session.
+    ///
+    /// This is the canonical boundary for immutable library batches such as
+    /// MSL. Keeping the invalidation rules here makes the background bootstrap
+    /// and a first class lookup observe the same engine state.
+    pub fn replace_parsed_source_set(
+        &mut self,
+        set_id: &str,
+        kind: rumoca_compile::compile::SourceRootKind,
+        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+    ) -> usize {
+        let count = self
+            .session
+            .replace_parsed_source_set(set_id, kind, files, None);
+        if count > 0 {
+            self.installed_source_sets.insert(set_id.to_string());
+            self.class_uri_misses.clear();
+            crate::icon_memo::invalidate_source_memos();
+        }
+        count
+    }
+
+    /// Whether a complete source set has crossed the shared-session boundary.
+    pub fn source_set_installed(&self, set_id: &str) -> bool {
+        self.installed_source_sets.contains(set_id)
     }
 
     /// Ensure a bundled Modelica package is available to every source-aware
@@ -1240,12 +1275,13 @@ mod tests {
         let mut engine = ModelicaEngine::new();
         let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
             docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
-        engine.session_mut().replace_parsed_source_set(
+        let count = engine.replace_parsed_source_set(
             "msl",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
-            None,
         );
+        assert!(count > 0, "MSL source set must install parsed documents");
+        assert!(engine.source_set_installed("msl"));
 
         let qualified = "Modelica.Thermal.HeatTransfer.Sources.FixedTemperature";
         assert!(engine.has_class(qualified), "class must be in session");
@@ -1266,5 +1302,14 @@ mod tests {
             !icon.graphics.is_empty(),
             "FixedTemperature icon must have graphics, got empty"
         );
+        for dependent in [
+            "Modelica.Blocks.Continuous.Filter",
+            "Modelica.Blocks.Sources.Step",
+        ] {
+            assert!(
+                engine.has_class(dependent),
+                "complete MSL source set must expose dependent class {dependent}"
+            );
+        }
     }
 }

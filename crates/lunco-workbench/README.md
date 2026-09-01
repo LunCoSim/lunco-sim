@@ -129,7 +129,9 @@ cargo run --bin lunica      # Modelica workbench
   continue to persist per Twin.
 - **Twin Browser** — built-in side-panel that renders `BrowserSection`
   impls contributed by domain plugins, reading the active Twin from
-  `WorkspaceResource`.
+  `WorkspaceResource`. Closing or replacing a Twin retires its domain tabs
+  and preview state; its documents remain loose Workspace entries and are
+  not shown in the replacement Twin's browser scope.
 
 The workbench derives `egui::Visuals` once per `Theme` revision and shares
 that snapshot with every panel surface. Panel render paths should consume the

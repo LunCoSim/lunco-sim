@@ -71,7 +71,7 @@ use lunco_workbench::{
     CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRects, PanelScrollPolicy,
     PanelSlot, PendingTabCloses, ScenePickGate, SceneTarget, TabId, WorkbenchAppExt,
 };
-use lunco_workspace::TwinClosed;
+use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdDocument};
 use lunco_doc_bevy::DocumentRegistry;
@@ -1475,16 +1475,42 @@ register_commands!(
 // Document lifecycle observers
 // ─────────────────────────────────────────────────────────────────────
 
-/// A preview may outlive the Twin that originally supplied its `twin://`
-/// authority. Reinstall every affected session after the Twin-close observer
-/// retires that authority, preserving each session's independent root/camera.
-fn on_twin_closed_for_viewport(_trigger: On<TwinClosed>, mut commands: Commands) {
-    commands.queue(|world: &mut World| {
+/// Retire previews whose documents belonged to the closed Twin. A preview is
+/// a user-facing document session, so preserving it after its source Twin has
+/// closed would keep the old project's stage visible in the replacement Twin.
+/// Previews backed by another still-open Twin remain mounted; only those whose
+/// authority disappeared are closed.
+fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) {
+    let event = trigger.event();
+    let closed_twin = event.twin;
+    let closed_root = event.root.clone();
+    commands.queue(move |world: &mut World| {
+        let closed_docs: HashSet<DocumentId> = world
+            .get_resource::<WorkspaceResource>()
+            .map(|workspace| {
+                workspace
+                    .documents()
+                    .iter()
+                    .filter(|entry| document_belongs_to_twin_root(entry, closed_twin, &closed_root))
+                    .map(|entry| entry.id)
+                    .collect()
+            })
+            .unwrap_or_default();
         let docs: Vec<_> = world
             .resource::<UsdViewportState>()
             .preview_docs()
             .collect();
         for doc in docs {
+            if closed_docs.contains(&doc) {
+                let sessions = world
+                    .resource::<UsdViewportState>()
+                    .session_ids_for_doc(doc);
+                for preview in sessions {
+                    let _ = remove_preview_session(world, preview);
+                }
+                release_preview_projection(world, doc);
+                continue;
+            }
             let needs_rehome = world
                 .resource::<crate::twin_projection::DocBackedTwinScenes>()
                 .coords_of(doc)

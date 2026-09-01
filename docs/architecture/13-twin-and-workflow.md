@@ -727,7 +727,7 @@ Dialog shape (Modelica shown, other domains analogous):
 
 - **If a Twin is open:** folder selector defaults to the Twin root; user
   can pick any subfolder. The new file lands there; it's automatically
-  picked up by the Modelica scan path.
+  registered through the active Twin's canonical file index.
 - **If no Twin:** the dialog's Location section shows "Standalone (will
   prompt for location on save)" and a hint: "To organize work, create a
   Twin first."

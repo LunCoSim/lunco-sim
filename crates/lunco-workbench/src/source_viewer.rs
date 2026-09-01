@@ -368,6 +368,58 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
     }
 }
 
+/// Retire source-editor state owned by a Twin as soon as that Twin closes.
+///
+/// `EditorTabs` is intentionally workspace-global so a tab can survive a
+/// preview replacement. A Twin-backed source tab is different: its root is
+/// part of the file identity, so retaining it after `TwinClosed` would leave
+/// an old file editable and visible as the current document. Dropping the tab
+/// also drops its pending read/write handles, which is the cancellation
+/// boundary for the source viewer.
+pub(crate) fn close_source_state_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut tabs: ResMut<EditorTabs<SourceTabState>>,
+    mut pending_requests: ResMut<PendingSourceRequests>,
+    mut pending_reads: ResMut<PendingSourceReads>,
+    mut pending_writes: ResMut<PendingSourceWrites>,
+    mut commands: Commands,
+) {
+    let closed_root = &trigger.event().root;
+    let closed_tabs: Vec<EditorTabId> = tabs
+        .iter()
+        .filter_map(|(id, tab)| source_tab_belongs_to_root(&tab.state, closed_root).then_some(id))
+        .collect();
+
+    for tab in &closed_tabs {
+        if tabs.close(*tab).is_some() {
+            commands.trigger(CloseTab {
+                kind: SOURCE_EDITOR_KIND,
+                instance: *tab,
+            });
+        }
+    }
+
+    pending_requests.opens.retain(|request| {
+        !matches!(request, SourceOpenRequest::Twin { root, .. } if root.as_path() == closed_root.as_path())
+    });
+    pending_requests
+        .saves
+        .retain(|save| Path::new(&save.twin_root) != closed_root.as_path());
+    pending_reads
+        .tasks
+        .retain(|read| !closed_tabs.contains(&read.tab));
+    pending_writes
+        .tasks
+        .retain(|write| !closed_tabs.contains(&write.tab));
+}
+
+fn source_tab_belongs_to_root(state: &SourceTabState, root: &Path) -> bool {
+    state
+        .origin
+        .as_ref()
+        .is_some_and(|origin| origin.twin_root.as_path() == root)
+}
+
 fn open_inline(world: &mut World, uri: String, text: String) {
     let path = PathBuf::from(&uri);
     let existing = world
@@ -730,5 +782,30 @@ mod tests {
         assert!(is_text_view_path(Path::new("scripts/teleop_policy.rhai")));
         assert!(is_text_view_path(Path::new("shaders/terrain_layered.wgsl")));
         assert!(!is_text_view_path(Path::new("textures/ortho.png")));
+    }
+
+    #[test]
+    fn only_twin_owned_source_tabs_are_retired_on_close() {
+        let state = SourceTabState {
+            path: PathBuf::from("/tmp/alpha/scripts/boot.rhai"),
+            text: String::new(),
+            origin: Some(TwinSourceOrigin {
+                twin_root: PathBuf::from("/tmp/alpha"),
+                relative_path: PathBuf::from("scripts/boot.rhai"),
+            }),
+            dirty: false,
+            loading: false,
+            saving: false,
+            error: None,
+            request: 0,
+        };
+        let loose = SourceTabState {
+            origin: None,
+            ..state.clone()
+        };
+
+        assert!(source_tab_belongs_to_root(&state, Path::new("/tmp/alpha")));
+        assert!(!source_tab_belongs_to_root(&state, Path::new("/tmp/beta")));
+        assert!(!source_tab_belongs_to_root(&loose, Path::new("/tmp/alpha")));
     }
 }

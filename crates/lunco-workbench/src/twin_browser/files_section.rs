@@ -148,10 +148,22 @@ impl BrowserSection for FilesSection {
         // plus an italic name; saved docs render plain. Kind badges
         // are intentionally omitted — file extensions in the display
         // name carry that information for the user.
-        let docs: Vec<super::UnsavedDocEntry> = ctx
-            .resource::<super::UnsavedDocs>()
-            .map(|r| r.entries.clone())
-            .unwrap_or_default();
+        let docs: Vec<super::UnsavedDocEntry> = match (
+            ctx.resource::<crate::WorkspaceResource>(),
+            ctx.resource::<super::UnsavedDocs>(),
+        ) {
+            (Some(workspace), Some(entries)) => entries
+                .entries
+                .iter()
+                .filter(|entry| {
+                    workspace
+                        .document(entry.id)
+                        .is_some_and(|doc| workspace.document_is_in_active_scope(doc))
+                })
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
         let warning = ctx
             .resource::<lunco_theme::Theme>()
             .map(|t| t.tokens.warning)
@@ -282,22 +294,16 @@ impl BrowserSection for FilesSection {
             ctx.actions.push(BrowserAction::CloseDoc { doc });
         }
 
-        // Read every open Twin from the workspace resource. Keep the
-        // `(TwinId, &Twin)` pairs so each header can be marked active, and the
-        // active id is comparable. `&Twin` borrows from `ctx` for the render
-        // loop below; the borrow ends before the post-loop dispatch (which
-        // re-borrows `ctx` mutably via `actions`/`trigger`), so NLL keeps both
-        // happy. Twin refs are cheap (just `&Twin`).
-        let ws_state = ctx.resource::<crate::WorkspaceResource>().map(|ws| {
-            (
-                ws.active_twin,
-                ws.twins()
-                    .collect::<Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)>>(),
-            )
+        // Files is the active-Twin lens. Other open Twins remain workspace
+        // state, but their files must not be presented as current or routed
+        // through the active Twin's path resolver.
+        let ws_state = ctx.resource::<crate::WorkspaceResource>().and_then(|ws| {
+            ws.active_twin
+                .and_then(|id| ws.twin(id).map(|twin| (id, twin)))
         });
-        let active_twin = ws_state.as_ref().and_then(|(a, _)| *a);
+        let active_twin = ws_state.as_ref().map(|(id, _)| *id);
         let twins: Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)> =
-            ws_state.map(|(_, ts)| ts).unwrap_or_default();
+            ws_state.into_iter().collect();
 
         // Open-document markers: which on-disk paths have an open editor tab,
         // and which of those are dirty (never-saved this session). A file row
@@ -314,6 +320,9 @@ impl BrowserSection for FilesSection {
             let unsaved_ids: std::collections::HashSet<lunco_doc::DocumentId> =
                 docs.iter().filter(|d| d.is_unsaved).map(|d| d.id).collect();
             for entry in ws.documents() {
+                if !ws.document_is_in_active_scope(entry) {
+                    continue;
+                }
                 if let Some(path) = entry.origin.canonical_path() {
                     open_paths.insert(path.to_path_buf());
                     if unsaved_ids.contains(&entry.id) {
@@ -324,13 +333,12 @@ impl BrowserSection for FilesSection {
         }
 
         if twins.is_empty() {
-            if docs.is_empty() {
-                ui.label(
-                    egui::RichText::new("Open a Twin or folder to browse files.")
-                        .weak()
-                        .italics(),
-                );
-            }
+            let message = if docs.is_empty() {
+                "Open a Twin or folder to browse files."
+            } else {
+                "No active Twin. The files above are loose documents."
+            };
+            ui.label(egui::RichText::new(message).weak().italics());
             return;
         }
 

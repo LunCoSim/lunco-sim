@@ -1746,11 +1746,16 @@ fn sync_workspace_on_doc_opened(
     if workspace.document(id).is_some() {
         return;
     }
+    let context_twin = if origin.is_untitled() {
+        workspace.active_twin
+    } else {
+        None
+    };
     workspace.add_document(lunco_workspace::DocumentEntry {
         id,
         kind: lunco_workspace::DocumentKindId::new("modelica"),
         origin: origin.clone(),
-        context_twin: None,
+        context_twin,
         title: origin.display_name(),
         dirty: document.is_dirty(),
     });

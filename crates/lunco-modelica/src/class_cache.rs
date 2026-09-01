@@ -19,15 +19,13 @@
 //! ## Bootstrap timing
 //!
 //! Web: `engine_resource::drive_msl_bootstrap` calls
-//! `replace_parsed_source_set("msl", DurableExternal, …)` once when
-//! `MslLoadState::Ready` flips and `GLOBAL_PARSED_MSL` is populated.
-//! After that point every MSL class is resolvable without per-class
-//! disk I/O.
+//! `replace_parsed_source_set("msl", DurableExternal, …)` once the parsed
+//! bundle is resident. After that point every MSL class is resolvable without
+//! per-class disk I/O.
 //!
-//! Native: bootstrap stays lazy — the system above logs and idles,
-//! and the helpers below pull individual `.mo` files into the
-//! session via `add_document` on first miss. Same content-hash
-//! cache backs both paths.
+//! Native: bootstrap stays lazy until the first MSL class lookup. That lookup
+//! seats the complete parsed source set through the same engine boundary as
+//! the web bootstrap, so dependent classes observe one shared namespace.
 
 use std::sync::Arc;
 
@@ -191,44 +189,58 @@ pub fn peek_or_load_class_blocking(
     let path = resolve_class_path_indexed(qualified).or_else(|| locate_library_file(qualified))?;
     let uri = lunco_assets::asset_path::slashed(&path);
 
-    // Pre-parsed MSL bundle: AST is parsed by the indexer, no rumoca
-    // work here. `parsed_msl_bundle` lazily materialises it from
-    // `parsed-msl.bin` on native (and reuses the wasm-decoded slot),
-    // so a drill-in is an in-memory lookup on both targets instead of a
-    // per-file parse.
-    let cached_ast = crate::msl_remote::parsed_msl_bundle().and_then(|b| {
-        b.iter()
-            .find(|(k, _)| k == &uri)
-            .map(|(_, ast)| ast.clone())
+    // A pre-parsed MSL document is part of an immutable source set, not an
+    // independent workspace document. Seat the complete bundle through the
+    // shared engine boundary before returning the requested class. Installing
+    // one target AST here leaves sibling types (for example
+    // `Continuous.Filter` and `Sources.Step`) absent from the session, which
+    // makes diagram projection report permanent Loading placeholders.
+    let msl_bundle = crate::msl_remote::parsed_msl_bundle().and_then(|bundle| {
+        bundle
+            .iter()
+            .any(|(candidate, _)| candidate == &uri)
+            .then_some(bundle)
     });
+    if let Some(bundle) = msl_bundle {
+        let mut engine = handle.lock();
+        if !engine.source_set_installed("msl") {
+            let docs = (**bundle).clone();
+            let count = engine.replace_parsed_source_set(
+                "msl",
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                docs,
+            );
+            bevy::log::info!(
+                "[class_cache] installed complete MSL source set into workspace engine: {count} parsed docs"
+            );
+        }
+        return engine.class_def(qualified).map(Arc::new);
+    }
 
-    let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = match cached_ast {
-        Some(ast) => Some(ast),
-        None => {
-            #[cfg(target_arch = "wasm32")]
-            {
-                bevy::log::warn!(
-                    "[class_cache] MSL cache miss for {qualified} (uri={uri}); \
+    let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            bevy::log::warn!(
+                "[class_cache] MSL cache miss for {qualified} (uri={uri}); \
                      wasm refuses sync parse — class remains unresolved until worker fills"
-                );
-                return None;
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let source = read_source_bytes(&path)?;
-                // Parse standalone without holding the engine lock.
-                // `add_document` would do this internally but inside
-                // the lock; the standalone `parse_to_ast` lets us
-                // pay the parse cost off-lock and install via
-                // `add_parsed_batch` (cheap) afterwards.
-                match rumoca_phase_parse::parse_to_ast(&source, &uri) {
-                    Ok(ast) => Some(ast),
-                    Err(e) => {
-                        bevy::log::warn!(
-                            "[class_cache] rumoca parse failed for {qualified} (uri={uri}): {e:?}"
-                        );
-                        return None;
-                    }
+            );
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let source = read_source_bytes(&path)?;
+            // Parse standalone without holding the engine lock.
+            // `add_document` would do this internally but inside
+            // the lock; the standalone `parse_to_ast` lets us
+            // pay the parse cost off-lock and install via
+            // `add_parsed_batch` (cheap) afterwards.
+            match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+                Ok(ast) => Some(ast),
+                Err(e) => {
+                    bevy::log::warn!(
+                        "[class_cache] rumoca parse failed for {qualified} (uri={uri}): {e:?}"
+                    );
+                    return None;
                 }
             }
         }

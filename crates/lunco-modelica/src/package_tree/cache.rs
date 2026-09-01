@@ -1,6 +1,6 @@
 //! Resource state and result types for the Package Browser.
 
-use super::types::{InMemoryEntry, PackageNode, TwinNode};
+use super::types::{InMemoryEntry, PackageNode};
 use crate::state::ModelLibrary;
 use bevy::prelude::*;
 use bevy::tasks::Task;
@@ -22,27 +22,11 @@ pub struct FileLoadResult {
     pub result: Result<crate::document::ModelicaDocument, String>,
 }
 
-#[derive(Clone)]
-pub struct TwinState {
-    pub root: std::path::PathBuf,
-    pub root_node: TwinNode,
-}
-
-#[derive(Default, Clone)]
-pub struct RenameState {
-    pub target: Option<std::path::PathBuf>,
-    pub buffer: String,
-    pub needs_focus: bool,
-}
-
 #[derive(Resource)]
 pub struct PackageTreeCache {
     pub roots: Vec<PackageNode>,
     pub tasks: Vec<Task<ScanResult>>,
     pub in_memory_models: Vec<InMemoryEntry>,
-    pub twin: Option<TwinState>,
-    pub twin_scan_task: Option<Task<TwinState>>,
-    pub rename: RenameState,
     pub bundled_tree_indexed: bool,
     /// Whether the library roots have been reconciled against the provider
     /// after construction. Native is complete at `new()`; web gains its
@@ -82,9 +66,6 @@ impl PackageTreeCache {
             roots,
             tasks: Vec::new(),
             in_memory_models: Vec::new(),
-            twin: None,
-            twin_scan_task: None,
-            rename: RenameState::default(),
             bundled_tree_indexed,
             library_roots_synced: false,
         }
