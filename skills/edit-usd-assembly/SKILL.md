@@ -89,8 +89,9 @@ the active simulation viewport.
    `resolve_target(doc, path, edit_target)` to read composed topology, layer
    ownership, generation, and the legal target. Use `sync_document` when an
    already-known generation can be advanced by a typed delta.
-4. Activate the `editor` perspective and open an isolated preview with
-   `OpenUsdPreview { preview, doc, edit_target }`; use
+4. Select the `Editor` perspective from the title-bar switcher, or activate it
+   through the typed `ActivatePerspective { id: "editor" }` command, then open
+   an isolated preview with `OpenUsdPreview { preview, doc, edit_target }`; use
    `FocusUsdPreview { preview }` when changing the visible document. Every
    panel and selection must remain bound to that `UsdPreviewId`.
 5. For a second 3D view of the same assembly, use

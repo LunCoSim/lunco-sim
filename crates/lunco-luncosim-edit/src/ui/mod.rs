@@ -1032,7 +1032,7 @@ impl Perspective for EditorPerspective {
         "Editor".into()
     }
     fn show_in_switcher(&self) -> bool {
-        false
+        true
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -1100,5 +1100,6 @@ mod tests {
 
         assert_eq!(perspective.id(), PerspectiveId("editor"));
         assert_eq!(perspective.title(), "Editor");
+        assert!(perspective.show_in_switcher());
     }
 }

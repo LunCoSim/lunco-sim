@@ -10,10 +10,11 @@ It does not create a second scene model or a vehicle-specific assembly API.
 
 The workbench exposes this surface through the registered `editor`
 perspective. The registered `terrain_sculpt` perspective exposes the existing
-terrain tools and keeps sculpting separate from object assembly. Both are hidden
-from the default title-bar switcher, but remain available to authored tutorials
-and the typed `ActivatePerspective` command. They are composed from the panels
-listed below; they do not introduce a second authoring model.
+terrain tools and keeps sculpting separate from object assembly. Editor is
+available in the default title-bar switcher; terrain sculpting remains an
+explicit authored mode available through the typed `ActivatePerspective`
+command. They are composed from the panels listed below; they do not
+introduce a second authoring model.
 
 ## Ownership and persistence
 

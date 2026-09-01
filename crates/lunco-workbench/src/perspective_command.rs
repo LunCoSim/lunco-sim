@@ -17,9 +17,9 @@ use lunco_core::{on_command, register_commands, Command};
 
 /// Activate a registered [`Perspective`](crate::Perspective) by its
 /// `PerspectiveId` string. The luncosim registers `sandbox_view`,
-/// `rover_build`, `terrain_sculpt`, and `editor`; the last two are
-/// explicit authoring modes and are hidden from the default title-bar
-/// switcher. Unknown ids produce a user-visible status error.
+/// `rover_build`, `terrain_sculpt`, and `editor`; `editor` is available in
+/// the default title-bar switcher while `terrain_sculpt` remains an explicit
+/// authored mode. Unknown ids produce a user-visible status error.
 #[Command(default)]
 pub struct ActivatePerspective {
     /// The id string of a registered perspective (e.g. `"editor"`).
