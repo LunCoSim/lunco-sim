@@ -340,9 +340,10 @@ impl BrowserSection for FilesSection {
             ui.separator();
         }
 
-        // Per-frame queues. Single-click previews a file, double-click pins
-        // it, and Rename remains available from the row context menu. Enter
-        // on a rename TextEdit queues a `RenameTwinEntry` command. We
+        // Per-frame queues. Single-click previews source-only files and USD
+        // documents; double-click still enters other registered domain
+        // editors, and Rename remains available from the row context menu.
+        // Enter on a rename TextEdit queues a `RenameTwinEntry` command. We
         // accumulate inside the nested egui closures (which can't
         // re-borrow `ctx.world` / `ctx.actions` while the closure
         // borrows `self.rename`), then dispatch in one pass after the
@@ -426,20 +427,25 @@ impl BrowserSection for FilesSection {
         }
 
         // Dispatch queued intents now that the egui closures have
-        // released their borrows on `self` and `ctx`. A single click is a
-        // source preview. A deliberate double-click opens a registered
-        // document kind through the domain-owned `BrowserAction` route
-        // (`.usda` -> USD, `.mo` -> Modelica, ...). If this app does not
-        // provide a domain for that extension -- standalone Lunica is a
-        // valid example for `.usda` -- retain the raw-source behaviour so
-        // the file never becomes a dead row in the browser.
+        // released their borrows on `self` and `ctx`. USD has a native
+        // preview, so one click enters the domain-owned `BrowserAction`
+        // route. Other registered document kinds still require a deliberate
+        // double-click. If this app does not provide a domain for an
+        // extension, retain the raw-source behaviour so the file never
+        // becomes a dead row in the browser.
         for (twin_root, relative_path, pinned) in clicks {
             if should_open_as_document(
                 &relative_path,
                 ctx.resource::<lunco_twin::DocumentKindRegistry>(),
                 pinned,
             ) {
-                ctx.actions.push(BrowserAction::OpenFile { relative_path });
+                // Preserve the Twin that emitted the click. BrowserAction's
+                // absolute form is the existing cross-Twin contract; using
+                // it here prevents the dispatcher from silently anchoring an
+                // inactive Twin's file on the active Twin.
+                ctx.actions.push(BrowserAction::OpenFile {
+                    relative_path: twin_root.join(relative_path),
+                });
             } else {
                 ctx.trigger(crate::OpenTwinSource {
                     twin_root: twin_root.to_string_lossy().into_owned(),
@@ -475,18 +481,28 @@ impl BrowserSection for FilesSection {
     }
 }
 
-/// A deliberate double-click should enter the owning domain editor only when
-/// that domain is actually installed in this host. The browser is shared by
-/// standalone Lunica and USD-capable hosts; sending an unclaimed document
-/// action would otherwise look exactly like a dead click in the former.
+/// A USD file has a native preview and therefore opens on the first click.
+/// Other domain editors still require a deliberate double-click. Every
+/// document route remains gated on the host's registry so standalone Lunica
+/// keeps its source-viewer behaviour for unclaimed files.
 fn should_open_as_document(
     relative_path: &std::path::Path,
     registry: Option<&lunco_twin::DocumentKindRegistry>,
     pinned: bool,
 ) -> bool {
-    pinned
+    let registered = registry.is_some_and(|registry| registry.classify(relative_path).is_some());
+    let is_usd = relative_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "usd" | "usda" | "usdc"
+            )
+        });
+    registered
         && !crate::source_viewer::is_source_only_text_path(relative_path)
-        && registry.is_some_and(|registry| registry.classify(relative_path).is_some())
+        && (pinned || is_usd)
 }
 
 #[cfg(test)]
@@ -509,8 +525,17 @@ mod tests {
     }
 
     #[test]
-    fn single_click_remains_a_source_preview() {
-        assert!(!should_open_as_document(
+    fn double_click_routes_a_registered_usd_document() {
+        assert!(should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&usd_registry()),
+            true,
+        ));
+    }
+
+    #[test]
+    fn single_click_routes_a_registered_usd_document() {
+        assert!(should_open_as_document(
             Path::new("scenes/rover.usda"),
             Some(&usd_registry()),
             false,
@@ -518,11 +543,20 @@ mod tests {
     }
 
     #[test]
-    fn double_click_routes_a_registered_usd_document() {
-        assert!(should_open_as_document(
-            Path::new("scenes/rover.usda"),
-            Some(&usd_registry()),
-            true,
+    fn single_click_keeps_modelica_on_the_source_viewer() {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("modelica"),
+            DocumentKindMeta {
+                display_name: "Modelica".into(),
+                extensions: vec!["mo".into()],
+                ..Default::default()
+            },
+        );
+        assert!(!should_open_as_document(
+            Path::new("models/rover.mo"),
+            Some(&registry),
+            false,
         ));
     }
 

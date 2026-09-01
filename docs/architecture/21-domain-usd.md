@@ -188,17 +188,18 @@ declared starting scene**. Nothing else is inferred.
 
 | Open entry point | Browser | Active stage on open |
 |---|---|---|
-| **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — user double-clicks a `.usda` to load it |
+| **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — clicking a `.usda`/`.usdc` opens its focused editor preview; scene replacement is explicit |
 | **Open Twin** (`twin.toml`) | same folder browser | **auto-loads `[usd] default_scene`** |
 | **Twin** with no `default_scene` | same folder browser | none — behaves like a folder; warn "no starting scene declared" |
 | **Loose `.usda`** (orphan) | owning folder | that file, selected during the folder scan |
 
 Opening a Twin **is** opening its folder — same browser, same file list — with
-the single addition that `default_scene` is loaded automatically. A folder
-loads nothing until the user picks a file; the Twin's manifest *is* that pick,
-pre-declared.
+the single addition that `default_scene` is loaded automatically. A plain
+folder mounts no active scene until an explicit scene transition; clicking a
+USD file opens its document through `OpenFile` and focuses the isolated
+`OpenUsdPreview` lease without replacing the running scene.
 
-Whether loaded automatically (Twin) or by the user's double-click (folder), a
+Whether loaded automatically (Twin) or by an explicit scene transition, a
 scene loads as a **single root** (the typed `SceneTransitionIntent` →
 `LoadScene` path — clear-and-replace, one `UsdPrimPath` root under the Grid).
 Loading another scene re-points that single active stage; it never stacks.

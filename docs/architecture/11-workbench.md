@@ -363,7 +363,9 @@ Domain plugins push their section impls into
 registry per render, filtered by its `BrowserScope`. Sections emit
 user actions (clicks, drags, context-menu choices) into a frame-
 scoped `BrowserActions` outbox; a host system drains it and
-dispatches.
+dispatches. A section that already resolved a file outside the active Twin
+uses the absolute `OpenFile` path form; relative actions are anchored only by
+the active Twin at the owning domain boundary.
 
 This keeps the workbench crate domain-agnostic — `lunco-workbench`
 ships `FilesPanel`, `TwinBrowserPanel`, and `FilesSection`, but

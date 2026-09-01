@@ -774,7 +774,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Open one explicit USD document in an isolated Editor preview session. The
  `preview` identity is caller-owned; opening another identity does not replace
- an existing session. Opening the same identity replaces that session.
+ an existing session. Reopening the same identity for its current document
+ focuses and updates that session in place; another document replaces only
+ that explicit session.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
