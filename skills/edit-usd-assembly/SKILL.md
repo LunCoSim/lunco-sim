@@ -159,6 +159,15 @@ preview helpers are `preview_open`, `preview_view_open`,
 `assembly_ui::select_prim(preview, path, extend, toggle)`
 for selection: it focuses the explicit preview and dispatches `SelectUsdPrim`,
 which resolves the path only inside that preview's stage and hierarchy.
+After a selection or screenshot checkpoint, call
+`assembly_edit::selection_context()` to expose the focused preview's exact
+`DocumentId`/`UsdPreviewId`/prim-path identities, composed USD type and kind,
+parent/assembly paths, primary and Inspector-target paths, and the existing
+typed operation families. Use `selection_context_for(preview)` to inspect a
+hidden open preview without changing the user's visible focus. The response
+marks no-selection, multi-selection, stale entries, and duplicate projected
+paths explicitly. Never use the returned display `name` as an edit key; pass
+the returned exact path and document/edit target to the existing typed helper.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
 `panel_templates(preview, doc, edit_target)` to discover the nine existing

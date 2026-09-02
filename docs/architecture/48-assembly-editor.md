@@ -92,7 +92,8 @@ name convention, or ECS-only grouping state is introduced.
   presentation state, so pan/zoom and image resources cannot leak between
   views or between documents with identical prim paths. The shared ECS
   selection is only the focused-session projection; the editor-owned session
-  selection restores it when focus changes.
+  selection stores canonical prim paths and restores fresh ECS projections when
+  focus changes or a document is reprojected.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -164,6 +165,17 @@ independent view ids. An agent correlates this typed state with
 `CaptureScreenshot` and `view_image` before editing what the user has open;
 the tab label is never treated as document identity.
 
+`InspectUsdSelection` is the read-only authoring-context query for one explicit
+open preview (or the focused preview when `preview` is omitted). It reports
+document/preview/edit-layer identity, selected composed paths, the primary
+selection, the Inspector drill target, composed `type_name`/`kind`, parent and
+USD assembly paths, and the existing typed command/Rhai operation families.
+Multi-selection and no-selection are explicit states; duplicate projected paths
+and stale selection entries are reported instead of being resolved by a name or
+an arbitrary entity. `assembly_edit::selection_context()` reads the focused
+context and `selection_context_for(preview)` reads a hidden open preview
+without changing user-visible focus.
+
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,
@@ -193,8 +205,9 @@ referenced or variant-contained prim.
 
 The built-in `assembly_edit` Rhai tool library is the shared agent/editor
 policy surface for these APIs. It calls `OpenFile`, `NewDocument`,
-`ForkDocument`, the document save/close/discard lifecycle verbs, the five
-read-only USD queries (including `InspectUsdViewport`),
+`ForkDocument`, the document save/close/discard lifecycle verbs, the six
+read-only USD queries (including `InspectUsdViewport` and
+`InspectUsdSelection`),
 `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`, `DetachComponent`,
 `AttachProgram`, and the generic document undo/redo commands through
 `cmd`/`query`; it adds no

@@ -138,6 +138,20 @@ fn viewport() {
     query("InspectUsdViewport", #{})
 }
 
+/// Read the focused Editor preview's canonical selection context. The result
+/// contains document/preview/path identity, composed USD type and kind,
+/// parent/assembly paths, supported typed operations, primary selection, and
+/// any explicit stale or ambiguous state.
+fn selection_context() {
+    query("InspectUsdSelection", #{})
+}
+
+/// Read one explicit open Editor preview's canonical selection context. Use
+/// this for a hidden view without changing which preview the user sees.
+fn selection_context_for(preview) {
+    query("InspectUsdSelection", #{ preview: preview })
+}
+
 /// Resolve one explicit composed prim and authored edit layer.
 fn resolve_target(doc, path, edit_target) {
     query("ResolveUsdTarget", #{

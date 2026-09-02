@@ -585,6 +585,15 @@ leases with their document, edit target, projected generation, independent view
 ids, and each view's projection/orbit state. Pair it with `ListOpenDocuments` and a captured screenshot to
 identify the exact open item before issuing a typed authoring command.
 
+The UI-owned `InspectUsdSelection` query reports the selection context for the
+focused preview, or for an explicit open `preview` lease. Its `selected` and
+`inspector_target` records carry exact `doc`/`preview`/prim-path identity,
+composed `type_name`/`kind`, parent and assembly paths, and the existing typed
+command/Rhai operation families. `selection_mode` is `none`, `single`, or
+`multiple`; `requires_single_target`, `stale_selection_count`, and
+`ambiguous_paths` make invalid targeting visible. It never exposes a display
+name as identity and never mutates selection or authored USD.
+
 The built-in `ReadExposures` query reads the domain-neutral
 `EngineExposures` registry used by runtime HTML/CSS surfaces and other
 clients. Its `revision` is the change-detection boundary; callers can poll
