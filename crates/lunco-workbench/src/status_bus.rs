@@ -17,8 +17,9 @@
 //! ## Two flavours of event
 //!
 //! - **Discrete** events ([`StatusBus::push`]) are appended to `history`
-//!   and shown in Console / Diagnostics. Use for "MSL ready",
-//!   "compile started", "save failed".
+//!   and shown in Console / Diagnostics. Consecutive identical snapshots
+//!   from the same source and level are coalesced at this boundary. Use for
+//!   "MSL ready", "compile started", "save failed".
 //! - **Progress** events ([`StatusBus::set_progress`]) replace the
 //!   most recent progress entry from the same source instead of being
 //!   appended — they would otherwise spam the history during a long
@@ -367,17 +368,23 @@ impl Default for StatusBus {
 }
 
 impl StatusBus {
-    /// Append a discrete event to history.
+    /// Append a discrete event to history, coalescing an unchanged snapshot.
     pub fn push(&mut self, source: &'static str, level: StatusLevel, message: impl Into<String>) {
         debug_assert!(
             level != StatusLevel::Progress,
             "use set_progress or begin for Progress events"
         );
+        let message = message.into();
+        if self.history.back().is_some_and(|previous| {
+            previous.source == source && previous.level == level && previous.message == message
+        }) {
+            return;
+        }
         let ev = StatusEvent {
             scope: BusyScope::Global,
             source,
             level,
-            message: message.into(),
+            message,
             progress: None,
             at: Instant::now(),
             busy_id: None,
@@ -928,6 +935,39 @@ mod tests {
         let shown = bus.display_latest().expect("status bar event");
         assert_eq!(shown.level, StatusLevel::Error);
         assert!(shown.message.contains("missing prim /World/Terrain"));
+    }
+
+    #[test]
+    fn consecutive_identical_discrete_snapshots_are_coalesced() {
+        let mut bus = StatusBus::default();
+        bus.push(
+            "terrain",
+            StatusLevel::Info,
+            "Terrain streaming ready (2/2)",
+        );
+        let seq = bus.seq;
+        let total = bus.history_total;
+
+        bus.push(
+            "terrain",
+            StatusLevel::Info,
+            "Terrain streaming ready (2/2)",
+        );
+        assert_eq!(bus.history().count(), 1);
+        assert_eq!(bus.seq, seq);
+        assert_eq!(bus.history_total, total);
+
+        bus.push(
+            "terrain",
+            StatusLevel::Info,
+            "Terrain streaming ready (3/3)",
+        );
+        bus.push(
+            "terrain",
+            StatusLevel::Info,
+            "Terrain streaming ready (2/2)",
+        );
+        assert_eq!(bus.history().count(), 3);
     }
 
     /// `TelemetryEvent` also carries ordinary simulation traffic (zone

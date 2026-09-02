@@ -131,7 +131,7 @@ the side panels for tabbed dock trees.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
    celestial body, FPS, and the latest status event. Warnings and errors
    identify their level and source in the strip; the history popup keeps
-   events ordered and distinct in one responsive level/source/message/
+   distinct state transitions in one responsive level/source/message/
    progress row inside a compact popup sized to roughly half the parent
    window (clamped to 420–960 logical px); the popup owns a fixed width while
    its vertical history viewport fills that width, and each message column
@@ -141,8 +141,9 @@ the side panels for tabbed dock trees.
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
    action control. Active progress entries are included from the same StatusBus
-   reader. Warning and error rows copy the unmodified message without depending
-   on the window width;
+   reader. Consecutive identical discrete snapshots are coalesced by StatusBus
+   before the renderers read them. Warning and error rows copy the unmodified
+   message without depending on the window width;
    attention rows emit the owning typed action.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
