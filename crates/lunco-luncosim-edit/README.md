@@ -53,6 +53,8 @@ Release gizmo handle → live: TransformEntity; USD: one ApplyUsdOps change set
 The presentation owner is selected by `UsdViewportState` and the workbench's
 measured `PanelRects`: a visible focused USD preview camera receives the
 standard `GizmoCamera` marker and its logical `GizmoOptions::viewport_rect`.
+The maintained gizmo picking backend applies that same rectangle before
+testing handles, so rendered and interactive coordinates stay in one space.
 When no preview owns the editor, `SceneViewport::active_camera` remains the
 live window-camera owner. Singleton and separate preview tabs both publish
 their offscreen scene ownership through `ScenePickGate`, so the global egui

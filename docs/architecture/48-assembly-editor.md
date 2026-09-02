@@ -203,11 +203,13 @@ and `TransformEntity` path.
 The presentation binding is shared with the standard workbench contracts. A
 visible focused preview camera is the sole `GizmoCamera`, and the workbench's
 measured `PanelRects` is converted once into the gizmo frontend's logical
-`viewport_rect`. The singleton and separate preview-tab renderers both record
-`SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves the
-global live-scene egui guard while allowing only a handle drag inside the
-focused preview surface. No second USD gizmo, cursor transform, or panel-local
-input gate is introduced.
+`viewport_rect`. The maintained gizmo picking backend consumes that same
+rectangle before testing handles, keeping the rendered and interactive
+coordinates identical. The singleton and separate preview-tab renderers both
+record `SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves
+the global live-scene egui guard while allowing only a handle drag inside the
+focused preview surface. No second USD gizmo, cursor transform, or
+panel-local input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation

@@ -66,17 +66,17 @@ members = [
     "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
     "crates/lunco-tutorial",
-    # Doc generator. A workspace member so `cargo clippy --workspace` /
-    # `cargo test --workspace` actually cover it — it used to be its own
-    # standalone workspace and was never built by anything.
+    # Doc generator, covered by `cargo clippy --workspace` and
+    # `cargo test --workspace`.
     "tools/gen-command-docs"
 ]
+exclude = ["vendor/mitchty-transform-gizmo"]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
 # no binary reaches — the feature-gated lunco-networking — so default builds don't
 # compile dead weight. Use `--workspace` to include everything (e.g. CI lint/test
-# sweeps). (`lunco-telemetry` used to be listed here as unreached; it is now wired into
-# lunco-luncosim, which is what made `SubscribeTelemetry` able to deliver at all.)
+# sweeps). `lunco-telemetry` is wired into `lunco-luncosim`, including the
+# `SubscribeTelemetry` command path.
 #
 # `lunco-luncosim-server` is intentionally NOT here — for LEANNESS, not
 # correctness: built via `-p lunco-luncosim-server`, Cargo resolves
@@ -115,15 +115,12 @@ resolver = "2"
 # implementation instead of re-deriving USD's binding rules by hand.
 openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 
-# transform-gizmo: NO upstream ref has bevy 0.19 AND egui 0.35 together — the
-# bevy-0.19 port (mitchty/transform-gizmo@d95d069) is on egui 0.34, and the
-# egui-0.35 PRs (transform-gizmo#109/#110) are still on bevy 0.18. Our
-# LunCoSim/mitchty-transform-gizmo `bevy-0.19-egui-0.35` branch is mitchty's
-# bevy-0.19 base + the egui 0.34→0.35 bump (source unchanged — cf. #109 is
-# Cargo.toml-only).
-# TODO(deps): drop this git pin for a crates.io release once upstream
-# transform-gizmo ships bevy-0.19 + egui-0.35 together (tracking #109/#110).
-transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "51abe35ee39655b0b68c6b7727939fde7cabd725" }
+# transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
+# Keep the fork in the repository because its Bevy picking backend must apply
+# the same GizmoOptions::viewport_rect mapping as its renderer for isolated
+# USD previews. The vendored package remains the one gizmo frontend and the
+# application only supplies the existing viewport rectangle.
+transform-gizmo-bevy = { path = "vendor/mitchty-transform-gizmo/crates/transform-gizmo-bevy" }
 
 # [patch."https://github.com/LunCoSim/openusd"]
 # openusd = { path = "../openusd" }
@@ -202,9 +199,8 @@ avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64"
 big_space = { git = "https://github.com/aevyrie/big_space", branch = "bevy-0.19" }
 leafwing-input-manager = "0.21.0"
 # egui 0.35 row. bevy_egui 0.41 = egui 0.35. The whole egui ecosystem must
-# agree on the egui minor or it dual-links. The only in-tree crate without an
-# egui-0.35 *release* is transform-gizmo (bevy-0.19 + egui-0.35 exists on no
-# single upstream ref), pinned to a LunCoSim fork branch in [patch.crates-io].
+# agree on the egui minor or it dual-links. The maintained Bevy 0.19 and egui
+# 0.35 LunCoSim fork is vendored in the workspace for the shared viewport map.
 bevy_egui = { version = "0.41", features = ["serde"] }
 # Runtime-authored View HUD templates. Both target Bevy 0.19; they are optional
 # so the headless luncosim server does not link Bevy UI/text presentation.
@@ -230,7 +226,7 @@ image = { version = "0.25", default-features = false, features = ["tiff", "png",
 # Pure-Rust TIFF container I/O (weezl/flate2 — wasm-safe). The asset processor
 # ENCODES float32 heightmaps that the terrain baker and the geotiff tag layer
 # DECODE; one workspace pin is what keeps writer and readers on the same wire
-# format (previously three separate `"0.11"` pins policed by comments).
+# format used by the terrain baker and geotiff tag layer.
 tiff = "0.11"
 smallvec = "1.13"
 # openusd 0.5.0: real PCP composition engine (variantSets + relationship target
@@ -350,8 +346,8 @@ console_error_panic_hook = "0.1"
 ureq = "3"
 # NB: bincode 3.0.0 on crates.io is a non-functional troll release
 # (`compile_error!("https://xkcd.com/2347/")`); 2.x is the real latest. The
-# `serde` feature gives the `bincode::serde::{encode_to_vec,decode_from_slice}`
-# compat shims we use with `config::standard()`.
+# The `serde` feature exposes `bincode::serde::{encode_to_vec,decode_from_slice}`
+# with `config::standard()`.
 bincode = { version = "2", features = ["serde"] }
 tar = "0.4"
 zstd = "0.13"
