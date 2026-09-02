@@ -88,8 +88,8 @@ focused-session projection restored from editor-owned session selection, not a
 document identity. Panel writes use the session's explicit `DocumentId`,
 `LayerId`, and projection generation.
 
-The Files section sends a USD click through the existing `BrowserAction::OpenFile`
-and async document pipeline. The emitting Twin's resolved absolute path is
+The Files section sends a `.usda`, `.usd`, or `.usdc` click through the existing
+`BrowserAction::OpenFile` and async document pipeline. The emitting Twin's resolved absolute path is
 preserved, so an inactive Twin is not accidentally anchored on the active one.
 Once the document is admitted, the viewport binds it to `EDITOR_PREVIEW_ID`
 with `LayerId::root()` and focuses the USD panel. Pending browser reads are

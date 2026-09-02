@@ -1,5 +1,5 @@
 //! Routes [`lunco_workbench::BrowserAction::OpenFile`] events with USD
-//! extensions (`.usda`, `.usdc`) into the USD document open pipeline.
+//! extensions (`.usda`, `.usd`, `.usdc`) into the USD document open pipeline.
 //!
 //! A browser click means **open and preview this source**, never **replace the
 //! running scene**. A Twin contains reusable vehicle, material, and support
@@ -10,7 +10,7 @@
 //! ## File partitioning
 //!
 //! [`BrowserActions::take_where`] only removes the actions whose path
-//! has a `.usda` / `.usdc` extension, leaving Modelica's `.mo` opens
+//! has a `.usda` / `.usd` / `.usdc` extension, leaving Modelica's `.mo` opens
 //! for the Modelica drain to handle in the same frame. Two crates,
 //! one shared outbox, no ordering coupling.
 //!
@@ -25,23 +25,11 @@ use bevy::prelude::*;
 use lunco_workbench::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
 
-/// Lower-cased extensions this dispatch recognises as USD files.
-/// `.usdc` (binary) is included so users get a *parser failure*
-/// message instead of having the click silently misrouted to another
-/// domain — the openusd 0.2.0 text reader will fail on binary input
-/// and [`crate::ui::viewport`] surfaces the warning.
-const USD_EXTENSIONS: &[&str] = &["usda", "usdc"];
-
 fn is_usd_open_file(action: &BrowserAction) -> bool {
     match action {
-        BrowserAction::OpenFile { relative_path } => relative_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|ext| {
-                let lower = ext.to_ascii_lowercase();
-                USD_EXTENSIONS.iter().any(|e| *e == lower)
-            })
-            .unwrap_or(false),
+        BrowserAction::OpenFile { relative_path } => {
+            crate::commands::is_usd_path(&relative_path.to_string_lossy())
+        }
         _ => false,
     }
 }
@@ -149,5 +137,21 @@ mod tests {
             Some(outside),
             "an already-resolved absolute browser path must not be re-anchored on the active Twin"
         );
+    }
+
+    #[test]
+    fn browser_usd_filter_uses_the_domain_extension_contract() {
+        for path in ["scene.usda", "scene.usd", "scene.USDC"] {
+            assert!(is_usd_open_file(&BrowserAction::OpenFile {
+                relative_path: std::path::PathBuf::from(path),
+            }));
+        }
+        assert!(!is_usd_open_file(&BrowserAction::OpenFile {
+            relative_path: std::path::PathBuf::from("scene.usdz"),
+        }));
+        assert!(!is_usd_open_file(&BrowserAction::OpenModelicaClass {
+            relative_path: std::path::PathBuf::from("scene.usd"),
+            qualified_path: "Scene".to_string(),
+        }));
     }
 }

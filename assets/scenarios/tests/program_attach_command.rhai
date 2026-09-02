@@ -44,21 +44,20 @@ fn on_tick(me) {
             return;
         }
 
-        let result = attach_program(
-            this.doc,
-            "@runtime@",
-            this.host,
-            "Plant",
-            "lunco://models/Balloon.mo",
-            [
-                program_input_connection("height", this.host + ".outputs:position_y"),
-                program_input_connection("velocity", this.host + ".outputs:velocity_y"),
-                program_input_default("rho0", 1.225),
-                program_input_default("gravity", 1.62),
+        let result = assembly_edit::attach_program(this.doc, #{
+            edit_target: "@runtime@",
+            host_path: this.host,
+            name: "Plant",
+            source_asset: "lunco://models/Balloon.mo",
+            inputs: [
+                assembly_edit::program_input_connection("height", this.host + ".outputs:position_y"),
+                assembly_edit::program_input_connection("velocity", this.host + ".outputs:velocity_y"),
+                assembly_edit::program_input_default("rho0", 1.225),
+                assembly_edit::program_input_default("gravity", 1.62),
             ],
-            [program_output("netForce", [this.host + ".inputs:force_y"])],
-            true,
-        );
+            outputs: [assembly_edit::program_output("netForce", [this.host + ".inputs:force_y"])],
+            realtime_safe: true,
+        });
         if !result.ok {
             fail(this, "AttachProgram was rejected: " + result.error);
             return;
@@ -95,16 +94,15 @@ fn on_tick(me) {
             }
         }
         if has_height && has_net_force && running && !this.source_only_sent {
-            let source_only = attach_program(
-                this.doc,
-                "@runtime@",
-                this.host,
-                "SourceOnly",
-                "lunco://models/Balloon.mo",
-                [],
-                [],
-                false,
-            );
+            let source_only = assembly_edit::attach_program(this.doc, #{
+                edit_target: "@runtime@",
+                host_path: this.host,
+                name: "SourceOnly",
+                source_asset: "lunco://models/Balloon.mo",
+                inputs: [],
+                outputs: [],
+                realtime_safe: false,
+            });
             if !source_only.ok {
                 fail(this, "source-only AttachProgram was rejected: " + source_only.error);
                 return;

@@ -110,7 +110,7 @@ impl BrowserSection for UsdSceneSection {
     fn scope(&self) -> BrowserScope {
         // USD belongs in the same Models tab as Modelica — both are
         // typed-domain content of the open Twin. Files-scope rendering
-        // of `.usda` files (raw on-disk view) is handled by the
+        // of `.usda` / `.usd` / `.usdc` files (raw on-disk view) is handled by the
         // built-in FilesSection independently.
         BrowserScope::Models
     }
@@ -118,7 +118,7 @@ impl BrowserSection for UsdSceneSection {
     fn default_open(&self) -> bool {
         // Collapse by default so the USD section renders as a folder
         // entry until the user opens it. Avoids drowning the browser
-        // with stage rows in folders containing many `.usda` files.
+        // with stage rows in folders containing many USD files.
         false
     }
 

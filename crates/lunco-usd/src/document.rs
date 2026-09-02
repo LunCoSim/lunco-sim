@@ -1,5 +1,7 @@
-//! `UsdDocument` — the canonical Document representation of one USD
-//! source file (`.usda` for now; `.usdc` deferred).
+//! `UsdDocument` — the canonical Document representation of one text-based USD
+//! source layer (`.usda` or `.usd`). Binary `.usdc` files are routed by the
+//! document boundary so an unsupported encoding produces an explicit load
+//! diagnostic instead of being silently treated as another file type.
 //!
 //! ## Why data-canonical (Phase C2/C3)
 //!

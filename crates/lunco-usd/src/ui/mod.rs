@@ -105,7 +105,7 @@ impl Plugin for UsdUiPlugin {
         use lunco_workbench::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::UsdSessionCodec);
 
-        // Click-to-open: `.usda` / `.usdc` rows in the Twin browser
+        // Click-to-open: `.usda` / `.usd` / `.usdc` rows in the Twin browser
         // become USD documents. This system only *translates* the
         // browser-panel click into the domain load pipeline owned by
         // `UsdCommandsPlugin` (the file read, registry allocate, and the

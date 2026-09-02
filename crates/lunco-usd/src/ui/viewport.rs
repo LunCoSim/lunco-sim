@@ -2108,7 +2108,7 @@ mod tests {
 
     #[test]
     fn browser_file_action_admits_and_focuses_the_existing_preview_lease() {
-        let path = std::env::temp_dir().join("lunco_usd_browser_preview_test.usda");
+        let path = std::env::temp_dir().join("lunco_usd_browser_preview_test.usd");
         std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
         let mut app = App::new();

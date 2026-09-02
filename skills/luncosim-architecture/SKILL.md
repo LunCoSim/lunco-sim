@@ -58,7 +58,7 @@ USD change set. The spec carries the source asset, explicit scalar inputs and
 outputs, defaults, native USD connections, and the explicit `realtimeSafe`
 promise.
 
-The Models palette, Rhai `attach_program(...)`, HTTP callers, and the Assembly
+The Models palette, Rhai `assembly_edit::attach_program(...)`, HTTP callers, and the Assembly
 editor all use this command. None may insert an ECS marker or maintain a
 second program registry. An empty port contract is a valid source-only
 attachment, but it is not a running scalar cosim participant; the author must

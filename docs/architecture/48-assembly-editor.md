@@ -49,7 +49,7 @@ introduce a second authoring model.
   frame-wide cap by default. A view is activated only after its panel publishes
   geometry inside that budget; zero-valued limits are invalid and produce no
   render target rather than an unbounded allocation.
-  A click on a USD file in any open Twin resolves that file at the emitting
+  A click on a `.usda`, `.usd`, or `.usdc` file in any open Twin resolves that file at the emitting
   Twin's path, admits it through the existing async `OpenFile` pipeline, then
   opens/focuses the stable editor session; it never becomes `LoadScene`.
 - `SelectUsdPrim` is the editor's path-selection command. It requires the
@@ -181,7 +181,7 @@ revision precondition. A supplied cursor makes stale edits fail atomically
 before authoring or journaling; `()` is reserved for an operation with no
 causal predecessor. `transform` uses one `ApplyUsdOps` change set for its
 translation/rotation pair. Attach and detach helpers pass the complete typed
-specification to the existing mount/socket/joint validators. `attach_program`
+specification to the existing mount/socket/joint validators. `assembly_edit::attach_program`
 passes the complete `ProgramAttachSpec` contract to the existing
 `AttachProgram` lowering. The library is
 listed by `ListToolLibraries` and completion, and its source is hot-reloadable
@@ -369,7 +369,7 @@ Program attachment follows the same author-once rule. `AttachProgram` validates 
 complete `ProgramAttachSpec` and lowers it to one USD change set. An empty port
 contract is source-only; it is not silently treated as a running cosim model.
 The author must add explicit scalar ports and connections before expecting live
-value exchange. The palette, Rhai prelude, HTTP API, and Assembly editor all call
+value exchange. The palette, `assembly_edit` tool, HTTP API, and Assembly editor all call
 this same command.
 
 `AttachSpec::from_mount` and `resolve_mount_placement` own the frame math;

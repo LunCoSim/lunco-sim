@@ -124,6 +124,35 @@ fn sync_document(doc, since_generation) {
     }
 }
 
+/// Declare a connected scalar program input for `attach_program`.
+fn program_input_connection(name, source) {
+    #{
+        name: name,
+        type_name: "float",
+        default_value: (),
+        connection: source,
+    }
+}
+
+/// Declare a constant scalar program input for `attach_program`.
+fn program_input_default(name, value) {
+    #{
+        name: name,
+        type_name: "float",
+        default_value: value,
+        connection: (),
+    }
+}
+
+/// Declare a scalar program output and its consuming USD input properties.
+fn program_output(name, connections) {
+    #{
+        name: name,
+        type_name: "float",
+        connections: connections,
+    }
+}
+
 /// Add a prim or reference through the existing typed USD authoring op.
 fn add_prim(doc, edit_target, parent_path, name, type_name, reference, parent_gen) {
     cmd("ApplyUsdOp", #{
@@ -328,9 +357,9 @@ fn detach_component(doc, spec) {
 }
 
 /// Attach a source-backed program through the existing USD program contract.
-/// Build `spec` with the canonical `program_input_*` and `program_output`
-/// helpers from the Rhai prelude; this wrapper only supplies the explicit
-/// document identity and dispatches the typed command.
+/// Build `spec` with the canonical program-input/output constructors in this
+/// library; this wrapper only supplies the explicit document identity and
+/// dispatches the typed command.
 fn attach_program(doc, spec) {
     cmd("AttachProgram", #{ doc: doc, spec: spec })
 }

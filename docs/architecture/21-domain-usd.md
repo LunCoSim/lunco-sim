@@ -152,7 +152,7 @@ startup (spec 14: *"one implicit Twin materialised on workspace open"*).
 | Open entry point | Result |
 |---|---|
 | **Open Twin…** (folder) | real Twin (`root_path`, `twin.toml`, scenarios, runs) → designated stage active → Grid |
-| **Open Scene…** (loose `.usda`) | owning folder is resolved and opened as a folder or manifest-backed Twin → document-first `twin://…` scene becomes active → Grid |
+| **Open Scene…** (loose USD file) | owning folder is resolved and opened as a folder or manifest-backed Twin → document-first `twin://…` scene becomes active → Grid |
 | **New scene** | ephemeral Twin → untitled stage document active → Grid |
 
 For a folder without `twin.toml`, the active stage is the selected file's
@@ -188,10 +188,10 @@ declared starting scene**. Nothing else is inferred.
 
 | Open entry point | Browser | Active stage on open |
 |---|---|---|
-| **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — clicking a `.usda`/`.usdc` opens its focused editor preview; scene replacement is explicit |
+| **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — clicking a `.usda`/`.usd`/`.usdc` opens its focused editor preview; scene replacement is explicit |
 | **Open Twin** (`twin.toml`) | same folder browser | **auto-loads `[usd] default_scene`** |
 | **Twin** with no `default_scene` | same folder browser | none — behaves like a folder; warn "no starting scene declared" |
-| **Loose `.usda`** (orphan) | owning folder | that file, selected during the folder scan |
+| **Loose USD file** (orphan) | owning folder | that file, selected during the folder scan |
 
 Opening a Twin **is** opening its folder — same browser, same file list — with
 the single addition that `default_scene` is loaded automatically. A plain

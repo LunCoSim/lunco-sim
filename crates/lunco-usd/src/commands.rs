@@ -1132,7 +1132,7 @@ pub(crate) struct BrowserUsdDocumentReady {
 }
 
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
-/// `.usd*` paths so HTTP API / MCP / `Open` URI dispatch all route into
+/// `.usda`, `.usd`, and `.usdc` paths so HTTP API / MCP / `Open` URI dispatch all route into
 /// the same async-load pipeline the Twin browser uses. Modelica's
 /// `on_open_file` ignores non-`.mo` paths, so the observers coexist.
 #[on_command(OpenFile)]
@@ -3479,8 +3479,10 @@ mod tests {
     #[test]
     fn is_usd_path_recognises_extensions() {
         assert!(is_usd_path("/tmp/scene.usda"));
+        assert!(is_usd_path("/tmp/scene.usd"));
         assert!(is_usd_path("scene.USD"));
         assert!(is_usd_path("foo/bar.usdc"));
+        assert!(!is_usd_path("foo/bar.usdz"));
         assert!(!is_usd_path("/tmp/model.mo"));
         assert!(!is_usd_path("README.md"));
         assert!(!is_usd_path(""));

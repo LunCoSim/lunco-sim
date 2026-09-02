@@ -2716,7 +2716,7 @@ actually call, with the fields the deserializer actually accepts. See the
  path without any UI.
 
  The actual loading is domain-specific: `lunco-modelica` observes this
- and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
+ and reads `.mo` files; `lunco-usd` observes it for `.usda`, `.usd`, and `.usdc`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
  Lives here (not in the egui workbench) so headless / sandbox / server

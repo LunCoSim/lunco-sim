@@ -337,7 +337,7 @@ impl BrowserActions {
     /// Take only the actions matching `predicate`, leaving the rest in
     /// the outbox for sibling dispatch systems to process the same
     /// frame. Used to partition `OpenFile` by file extension between
-    /// domain crates (Modelica takes `.mo`, USD takes `.usda` / `.usdc`,
+    /// domain crates (Modelica takes `.mo`, USD takes `.usda` / `.usd` / `.usdc`,
     /// …) without coupling the workbench to any domain's filetype list.
     pub fn take_where<F: Fn(&BrowserAction) -> bool>(
         &mut self,

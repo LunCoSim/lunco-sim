@@ -480,14 +480,21 @@ create the runtime participant. Its `info:implementationSource = "sourceAsset"`
 arm selects the runtime adapter by extension; its declared inputs and outputs
 remain USD facts.
 
-Rhai authors can use the prelude without constructing the map by hand:
+Rhai authors can use the `assembly_edit` tool without constructing the map by hand:
 
 ```rhai
-attach_program(doc, "@runtime@", "/Vessel", "Guidance",
-    "lunco://models/Guidance.mo",
-    [program_input_connection("altitude", "/Vessel.outputs:position_y"),
-     program_input_default("gravity", 1.62)],
-    [program_output("thrust", ["/Vessel.inputs:force_y"])], true);
+assembly_edit::attach_program(doc, #{
+    edit_target: "@runtime@",
+    host_path: "/Vessel",
+    name: "Guidance",
+    source_asset: "lunco://models/Guidance.mo",
+    inputs: [
+        assembly_edit::program_input_connection("altitude", "/Vessel.outputs:position_y"),
+        assembly_edit::program_input_default("gravity", 1.62),
+    ],
+    outputs: [assembly_edit::program_output("thrust", ["/Vessel.inputs:force_y"])],
+    realtime_safe: true,
+});
 ```
 
 The palette uses the same command and only offers document-backed scene
