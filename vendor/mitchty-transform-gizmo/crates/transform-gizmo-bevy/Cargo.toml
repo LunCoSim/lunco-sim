@@ -1,0 +1,50 @@
+[package]
+name = "transform-gizmo-bevy"
+description = "bevy integration for transform-gizmo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+categories = ["gui", "game-development", "game-engines"]
+keywords = ["gizmo", "bevy"]
+readme = "../../README.md"
+include = ["../../LICENSE-APACHE", "../../LICENSE-MIT", "**/*.rs", "**/*.wgsl", "Cargo.toml"]
+
+[features]
+default = ["gizmo_picking_backend", "mouse_interaction"]
+gizmo_picking_backend = ["dep:bevy_picking"]
+mouse_interaction = []
+
+[dependencies]
+transform-gizmo.workspace = true
+
+bevy_app.workspace = true
+bevy_core_pipeline.workspace = true
+bevy_reflect.workspace = true
+bevy_math.workspace = true
+bevy_mesh.workspace = true
+bevy_picking = {workspace = true, optional = true}
+bevy_camera.workspace = true
+bevy_render.workspace = true
+bevy_shader.workspace = true
+bevy_input.workspace = true
+bevy_asset.workspace = true
+bevy_utils.workspace = true
+bevy_platform.workspace = true
+bevy_pbr.workspace = true
+bevy_ecs.workspace = true
+bevy_log.workspace = true
+bevy_window.workspace = true
+bevy_transform.workspace = true
+bevy_derive.workspace = true
+bevy_image.workspace = true
+bytemuck.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+bevy = {workspace = true}
+
+[lints]
+workspace = true
