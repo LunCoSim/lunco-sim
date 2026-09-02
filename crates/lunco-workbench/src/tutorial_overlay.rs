@@ -27,6 +27,12 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::{on_command, register_commands, Command};
 
+/// Shared layer for tutorial presentation. Workbench menus and window controls
+/// use egui's `Foreground` order, so tutorial HUDs, scrims, rings, coach cards,
+/// and recovery surfaces remain visible without covering those controls. The
+/// tutorial systems are chained so surfaces in this layer have stable order.
+pub const TUTORIAL_OVERLAY_ORDER: egui::Order = egui::Order::Middle;
+
 /// Persistent tutorial HUD + spotlight state. Always present (headless too) so
 /// the commands never panic on a missing resource; only the draw is ui-gated.
 #[derive(Resource, Default, Clone, Debug)]
@@ -271,9 +277,9 @@ fn register_tutorial_navigation(app: &mut App) {
 // ── Rendering ─────────────────────────────────────────────────────────────
 
 /// Draw the persistent objectives/hint card, top-left, below the menu bar.
-/// Non-interactive and in the foreground layer so it stays visible across
-/// perspectives without eating clicks. Tooltip-order popups and the menu bar
-/// remain higher in the egui hierarchy.
+/// Non-interactive and in the tutorial overlay layer so it stays visible across
+/// perspectives without eating clicks. Workbench menus and window controls are
+/// rendered in the higher egui `Foreground` order.
 fn draw_tutorial_hud(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,
@@ -283,9 +289,9 @@ fn draw_tutorial_hud(
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    // The viewport rect is the full egui viewport. The foreground layer keeps
-    // this non-interactive HUD above ordinary panels while popup surfaces can
-    // still take precedence.
+    // The viewport rect is the full egui viewport. The tutorial layer keeps this
+    // non-interactive HUD above ordinary panels while application menus remain
+    // above all tutorial presentation.
     let screen = ctx.viewport_rect();
     let theme = theme
         .map(|t| t.clone())
@@ -293,7 +299,7 @@ fn draw_tutorial_hud(
     let accent = theme.tokens.accent;
 
     egui::Area::new(egui::Id::new("lunco_tutorial_hud"))
-        .order(egui::Order::Foreground)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(false)
         .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
         .show(ctx, |ui| {
@@ -369,7 +375,7 @@ fn draw_tutorial_recovery(
     // This scrim is interactive so clicks cannot leak into the scene or the
     // underlying workbench while the learner chooses a recovery action.
     egui::Area::new(egui::Id::new("lunco_tutorial_recovery_scrim"))
-        .order(egui::Order::Tooltip)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(true)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -382,7 +388,7 @@ fn draw_tutorial_recovery(
     let mut retry = false;
     let mut stop = false;
     egui::Area::new(egui::Id::new("lunco_tutorial_recovery_card"))
-        .order(egui::Order::Tooltip)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(true)
         .fixed_pos(card_pos)
         .show(ctx, |ui| {
@@ -587,7 +593,7 @@ fn draw_spotlight(
         );
         if let (Some(target), None) = (target, target_in_content) {
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
+                TUTORIAL_OVERLAY_ORDER,
                 egui::Id::new("lunco_spotlight_menu_anchor_ring"),
             ));
             paint_ring(&painter, ctx, target, theme.tokens.accent);
@@ -614,7 +620,7 @@ fn draw_spotlight(
         None => egui::pos2(screen.center().x - card_w * 0.5, screen.center().y - 40.0),
     };
     egui::Area::new(egui::Id::new("lunco_spotlight_caption"))
-        .order(egui::Order::Tooltip)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(false)
         .fixed_pos(pos)
         .show(ctx, |ui| {
@@ -904,7 +910,7 @@ fn draw_tour(
     // itself interactive.
     if let (Some(target), None) = (target, target_in_content) {
         let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
+            TUTORIAL_OVERLAY_ORDER,
             egui::Id::new("lunco_tour_menu_anchor_ring"),
         ));
         paint_ring(&painter, ctx, target, accent);
@@ -919,7 +925,7 @@ fn draw_tour(
     let mut goto: Option<usize> = None;
 
     egui::Area::new(egui::Id::new("lunco_tour_card"))
-        .order(egui::Order::Tooltip)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(true)
         .fixed_pos(card_pos)
         .show(ctx, |ui| {
@@ -1191,11 +1197,13 @@ impl Plugin for TutorialOverlayPlugin {
         // follows the authored track perspective and its anchors are view-local.
         app.add_systems(
             EguiPrimaryContextPass,
-            draw_tutorial_hud.in_set(crate::ApplicationOverlayRenderSet),
-        );
-        app.add_systems(
-            EguiPrimaryContextPass,
-            (draw_spotlight, draw_tour, draw_tutorial_recovery)
+            (
+                draw_tutorial_hud,
+                draw_spotlight,
+                draw_tour,
+                draw_tutorial_recovery,
+            )
+                .chain()
                 .in_set(crate::ApplicationOverlayRenderSet),
         );
     }
@@ -1226,5 +1234,10 @@ mod tests {
             .expect("content target should remain visible");
         assert_eq!(clipped.min, egui::pos2(10.0, 30.0));
         assert_eq!(clipped.max, egui::pos2(20.0, 50.0));
+    }
+
+    #[test]
+    fn tutorial_presentation_stays_below_application_menus() {
+        assert!(TUTORIAL_OVERLAY_ORDER < egui::Order::Foreground);
     }
 }

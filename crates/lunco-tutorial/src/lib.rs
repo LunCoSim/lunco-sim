@@ -45,6 +45,7 @@ use lunco_settings::AppSettingsExt;
 use lunco_workbench::tutorial_overlay::{
     TutorialHud, TutorialNext, TutorialRecovery, TutorialRecoveryContinueRequested,
     TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
+    TUTORIAL_OVERLAY_ORDER,
 };
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
@@ -1407,7 +1408,7 @@ fn draw_advance_prompt(
     // its bar rect, leave out the blocker rather than guessing its bounds.
     if let Some(blocked) = blocked {
         egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
-            .order(egui::Order::Middle)
+            .order(TUTORIAL_OVERLAY_ORDER)
             .fixed_pos(blocked.min)
             .interactable(true)
             .show(ctx, |ui| {
@@ -1415,11 +1416,11 @@ fn draw_advance_prompt(
                 ui.allocate_rect(blocked, egui::Sense::click());
             });
     }
-    // Tooltip is the highest egui order, so the modal controls remain the
-    // topmost interactive surface even though the scrim blocks the rest of
-    // the application.
+    // Keep the completion prompt in the shared tutorial layer so application
+    // menus and window controls remain above it, just like the active coach
+    // card and scrim.
     egui::Area::new(egui::Id::new("tutorial_advance_prompt"))
-        .order(egui::Order::Tooltip)
+        .order(TUTORIAL_OVERLAY_ORDER)
         .interactable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
