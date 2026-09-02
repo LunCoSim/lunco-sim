@@ -14,9 +14,10 @@
 //! - **`FreeFlightCamera`**: Free-moving camera in absolute coordinates (ghost/drone view).
 //!
 //! Transitions use explicit camera-mode transactions: orbit entry stores the
-//! exact return pose, while follow/surface commands install one authoritative
-//! mode and its frame. Every active mode writes the BigSpace `(CellCoord,
-//! Transform)` representation only when its solved value changes.
+//! exact return pose, while the avatar retains each user-controlled orbital
+//! pose by stable body identity. Follow/surface commands install one
+//! authoritative mode and its frame. Every active mode writes the BigSpace
+//! `(CellCoord, Transform)` representation only when its solved value changes.
 
 use avian3d::prelude::{
     Collider, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse, SpatialQueryFilter,
@@ -582,18 +583,102 @@ enum OrbitReturnBehavior {
     FreeFlight(FreeFlightCamera),
 }
 
-/// Marks an `OrbitCamera` that should re-aim onto the SUNLIT side of its
-/// (celestial) target before the first orbit step. The orbit writer resolves
-/// the Sun and target from their authoritative BigSpace cell chains.
+/// One settled user-controlled pose for a celestial body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OrbitPose {
+    yaw: f32,
+    pitch: f32,
+    distance: f64,
+    damping: Option<f32>,
+    vertical_offset: f32,
+}
+
+impl OrbitPose {
+    fn from_camera(camera: &OrbitCamera) -> Option<Self> {
+        let pose = Self {
+            yaw: camera.yaw,
+            pitch: camera.pitch,
+            distance: camera.distance,
+            damping: camera.damping,
+            vertical_offset: camera.vertical_offset,
+        };
+        (pose.yaw.is_finite()
+            && pose.pitch.is_finite()
+            && pose.distance.is_finite()
+            && pose.distance > 0.0
+            && pose.vertical_offset.is_finite()
+            && pose.damping.is_none_or(f32::is_finite))
+        .then_some(pose)
+    }
+}
+
+/// Per-avatar orbital presentation history, keyed by the body's stable
+/// ephemeris identity. It is deliberately local to the avatar: orbital poses
+/// are user presentation state, not a scene-wide celestial fact.
+#[derive(Component, Clone, Debug, Default)]
+pub struct OrbitViewHistory {
+    poses: Vec<(i32, OrbitPose)>,
+}
+
+impl OrbitViewHistory {
+    fn pose(&self, body: i32) -> Option<OrbitPose> {
+        self.poses
+            .iter()
+            .find_map(|(id, pose)| (*id == body).then_some(*pose))
+    }
+
+    fn remember(&mut self, body: i32, pose: OrbitPose) {
+        if let Some((_, stored)) = self.poses.iter_mut().find(|(id, _)| *id == body) {
+            *stored = pose;
+        } else {
+            self.poses.push((body, pose));
+        }
+    }
+}
+
+fn remember_user_orbit_pose(
+    history: &mut OrbitViewHistory,
+    camera: &OrbitCamera,
+    q_bodies: &Query<&CelestialBody>,
+) {
+    let Ok(body) = q_bodies.get(camera.target) else {
+        return;
+    };
+    remember_orbit_pose_for_body(history, camera, body.ephemeris_id);
+}
+
+fn remember_orbit_pose_for_body(
+    history: &mut OrbitViewHistory,
+    camera: &OrbitCamera,
+    body_id: i32,
+) {
+    let Some(pose) = OrbitPose::from_camera(camera) else {
+        warn!(
+            target: "avatar",
+            body = body_id,
+            "discarding non-finite user orbit pose"
+        );
+        return;
+    };
+    history.remember(body_id, pose);
+}
+
+/// Marks an orbit pose that was changed by local user input. The marker lets
+/// the orbit-mode removal hook distinguish a settled user pose from a
+/// one-shot arrival pose that was never inspected by the user.
+#[derive(Component, Debug, Clone, Copy, Default)]
+struct OrbitUserInput;
+
+/// Marks an `OrbitCamera` whose first pose must face the body's current region.
+/// The orbit writer resolves that direction from the current camera and body
+/// poses in the target's explicit inertial BigSpace grid.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct SunlitArrival;
+pub struct CurrentRegionArrival;
 
 /// Marks an `OrbitCamera` whose arm should be derived from the camera's
 /// CURRENT position — the pose-preserving arrival of the surface→orbital
-/// scroll-out transit (`scroll_out_to_orbit_system`), vs [`SunlitArrival`]
-/// which re-aims at the sunlit side. The orbit writer resolves the body and
-/// camera through the authoritative BigSpace cell chain into the selected
-/// inertial view grid;
+/// scroll-out transit (`scroll_out_to_orbit_system`). The orbit writer resolves
+/// the body and camera through the authoritative BigSpace cell chain into the selected inertial view grid;
 /// the body→camera direction becomes the arm's yaw/pitch and the true range
 /// becomes the arm length, so the camera does not move on mode entry.
 #[derive(Component, Debug, Clone, Copy)]
@@ -664,6 +749,31 @@ fn orbit_camera_added(mut world: DeferredWorld, context: HookContext) {
     });
 }
 
+/// Retain a user-controlled orbit pose at the single ownership boundary where
+/// an orbit mode ends. Every transition that removes or replaces
+/// `OrbitCamera` therefore shares the same history write; no command path can
+/// accidentally forget one exit route.
+fn remember_orbit_camera_on_remove(mut world: DeferredWorld, context: HookContext) {
+    let entity = context.entity;
+    if world.get::<OrbitUserInput>(entity).is_none() {
+        return;
+    }
+    let Some(camera) = world.get::<OrbitCamera>(entity).cloned() else {
+        return;
+    };
+    let Some(body_id) = world
+        .get::<CelestialBody>(camera.target)
+        .map(|body| body.ephemeris_id)
+    else {
+        return;
+    };
+    let Some(mut history) = world.get_mut::<OrbitViewHistory>(entity) else {
+        return;
+    };
+    remember_orbit_pose_for_body(&mut history, &camera, body_id);
+    world.commands().entity(entity).remove::<OrbitUserInput>();
+}
+
 fn register_camera_mode_hooks(app: &mut App) {
     app.world_mut()
         .register_component_hooks::<FreeFlightCamera>()
@@ -676,7 +786,8 @@ fn register_camera_mode_hooks(app: &mut App) {
         .on_insert(spring_arm_camera_added);
     app.world_mut()
         .register_component_hooks::<OrbitCamera>()
-        .on_insert(orbit_camera_added);
+        .on_insert(orbit_camera_added)
+        .on_remove(remember_orbit_camera_on_remove);
 }
 
 /// Surface camera: heading + pitch relative to the local surface normal.
@@ -998,6 +1109,7 @@ impl Plugin for LunCoAvatarPlugin {
         // surface + control binding so the shared `drive_from_bindings` path moves it.
         app.add_observer(stamp_avatar_controls);
         app.add_observer(demote_former_avatar);
+        app.add_observer(clear_orbit_view_history_on_twin_closed);
         // Register all commands (generated by register_commands! macro at module scope)
         register_all_commands(app);
 
@@ -1583,6 +1695,7 @@ pub fn spawn_avatar_camera(
             CellCoord::default(),
             Avatar,
             LocalAvatar,
+            OrbitViewHistory::default(),
             IntentAnalogState::default(),
             ActionState::<lunco_core::UserIntent>::default(),
             input_map,
@@ -1635,6 +1748,9 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
         OrbitCamera,
         SpringArmCamera,
         SurfaceRelativeMode,
+        OrbitViewHistory,
+        OrbitUserInput,
+        CurrentRegionArrival,
         lunco_controller::ControllerLink,
         IntentAnalogState,
     )>();
@@ -1664,6 +1780,23 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
     commands
         .entity(entity)
         .try_remove::<lunco_render::SceneCamera>();
+}
+
+/// Retire per-avatar orbital presentation state with the active Twin. A
+/// non-active Twin closing must not disturb the live camera's history.
+fn clear_orbit_view_history_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut commands: Commands,
+    q_avatar: Query<Entity, With<OrbitViewHistory>>,
+) {
+    if !trigger.event().was_active {
+        return;
+    }
+    for entity in &q_avatar {
+        commands
+            .entity(entity)
+            .remove::<(OrbitViewHistory, OrbitUserInput, CurrentRegionArrival)>();
+    }
 }
 
 fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) {
@@ -2535,6 +2668,28 @@ fn orbit_angles_from_arm(direction: DVec3) -> (f32, f32) {
     )
 }
 
+/// Resolve a first body-view pose from the camera's current physical region.
+/// The direction is measured in the target's inertial grid, then the camera is
+/// placed at the normal body-view distance along that same radial line.
+fn apply_current_region_arrival(
+    orbit: &mut OrbitCamera,
+    target_orbit: DVec3,
+    camera_orbit: DVec3,
+    body_radius: f64,
+) -> bool {
+    let arm = camera_orbit - target_orbit;
+    if !arm.is_finite() || arm.length_squared() <= 1.0 || !body_radius.is_finite() {
+        return false;
+    }
+    let distance = body_radius * 3.0;
+    if distance <= 0.0 || !distance.is_finite() {
+        return false;
+    }
+    (orbit.yaw, orbit.pitch) = orbit_angles_from_arm(arm);
+    orbit.distance = distance;
+    true
+}
+
 fn orbit_system(
     // Wall-rooted render clock: orbit is presentation and must neither rate-scale
     // with simulation time nor be quantized to the fixed interaction cadence.
@@ -2547,7 +2702,7 @@ fn orbit_system(
             &mut OrbitCamera,
             &ChildOf,
             &mut CameraZoomInput,
-            Has<SunlitArrival>,
+            Has<CurrentRegionArrival>,
             Has<RadialArrival>,
         ),
         (
@@ -2583,8 +2738,16 @@ fn orbit_system(
     };
     let dt = time.delta_secs();
 
-    for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom, wants_sunlit, wants_radial) in
-        q_avatar.iter_mut()
+    for (
+        avatar_ent,
+        mut tf,
+        mut cell,
+        mut orbit,
+        child_of,
+        mut zoom,
+        wants_current_region,
+        wants_radial,
+    ) in q_avatar.iter_mut()
     {
         if q_dragging.get(orbit.target).is_ok() {
             continue;
@@ -2655,28 +2818,22 @@ fn orbit_system(
                 );
             }
             commands.entity(avatar_ent).remove::<RadialArrival>();
-        } else if wants_sunlit {
-            if let Some((sun_entity, _)) = q_bodies.iter().find(|(entity, body)| {
-                body.ephemeris_id == lunco_celestial::ephemeris_id::SUN
-                    && *entity != physical_target
-            }) {
-                if let Some((sun_orbit, _)) = lunco_core::coords::pose_in_grid(
-                    sun_entity, orbit_grid, &q_parents, &q_grids, &q_spatial,
-                ) {
-                    let arm = sun_orbit - target_orbit;
-                    if arm.length_squared() > 1.0 {
-                        (orbit.yaw, orbit.pitch) = orbit_angles_from_arm(arm);
-                        // Keep the terminator visible instead of arriving on
-                        // the exact, visually flat full-body line.
-                        orbit.yaw += 0.4;
-                        info!(
-                            "ORBIT ARRIVAL: sunlit yaw={:.2} pitch={:.2}",
-                            orbit.yaw, orbit.pitch
-                        );
-                    }
+        } else if wants_current_region {
+            if let Some(body) = body {
+                if apply_current_region_arrival(&mut orbit, target_orbit, cam_orbit, body.radius_m)
+                {
+                    info!(
+                        "ORBIT ARRIVAL: current region yaw={:.2} pitch={:.2} dist={:.3e}",
+                        orbit.yaw, orbit.pitch, orbit.distance
+                    );
+                } else {
+                    warn!(
+                        target = ?orbit.target,
+                        "ORBIT ARRIVAL: current camera region is not finite; refusing arrival"
+                    );
                 }
             }
-            commands.entity(avatar_ent).remove::<SunlitArrival>();
+            commands.entity(avatar_ent).remove::<CurrentRegionArrival>();
         }
 
         let min_dist = if let Some(body) = body {
@@ -2703,6 +2860,7 @@ fn orbit_system(
             continue;
         }
 
+        let zoomed = zoom.delta != 0.0;
         apply_scroll_zoom(
             &mut orbit.distance,
             &mut zoom.delta,
@@ -2710,6 +2868,9 @@ fn orbit_system(
             min_dist,
             1.0e11,
         );
+        if zoomed {
+            commands.entity(avatar_ent).try_insert(OrbitUserInput);
+        }
 
         if let (Some(body), Some(pin)) = (body, orbital_pin.as_mut()) {
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
@@ -2843,7 +3004,7 @@ fn freeflight_system(
 /// look at". Once a scroll-OUT carries the camera past the orbital zoom
 /// floor, the avatar hands over to the celestial `OrbitCamera` AT ITS
 /// CURRENT POSE: [`RadialArrival`] derives the arm from the camera's present
-/// position (no `SunlitArrival` re-aim), and because the handover altitude
+/// position (preserving the current pose), and because the handover altitude
 /// equals the orbital floor the arm is already legal — no clamp jump, one
 /// continuous gesture from ground to orbit. The descent mirrors it:
 /// scroll-through at the floor releases back to free flight (pose parked in
@@ -2993,9 +3154,8 @@ fn freeflight_scroll_transit_system(
 
         // Past the orbital floor going OUT → hand over to the celestial
         // OrbitCamera. Same mode swap as `on_focus_command`, with ONE
-        // deliberate difference: `RadialArrival` instead of `SunlitArrival`
-        // (preserve the pose; `distance` below is a fallback that only
-        // survives if the arrival cannot resolve).
+        // deliberate difference: `RadialArrival` preserves the exact transit
+        // pose; a direct body focus uses `CurrentRegionArrival` instead.
         if scroll_out && (next - center).length() - radius_m > SCROLL_EXIT_ALTITUDE_M {
             let behavior = surface_camera
                 .cloned()
@@ -3463,7 +3623,7 @@ fn avatar_behavior_input_system(
         ),
     >,
     mut q_orbit: Query<
-        &mut OrbitCamera,
+        (Entity, &mut OrbitCamera),
         (
             With<Avatar>,
             With<LocalAvatar>,
@@ -3503,6 +3663,7 @@ fn avatar_behavior_input_system(
     q_bodies: Query<(Entity, &CelestialBody)>,
     q_children: Query<&Children>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
+    mut commands: Commands,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
@@ -3551,13 +3712,14 @@ fn avatar_behavior_input_system(
         if let Some(mut arm) = q_spring.iter_mut().next() {
             (arm.yaw, arm.pitch) = look_angles(arm.yaw, arm.pitch, look_delta, &settings, 1.0);
         }
-        if let Some(mut orbit) = q_orbit.iter_mut().next() {
+        if let Some((entity, mut orbit)) = q_orbit.iter_mut().next() {
             let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
             let scale = q_bodies.get(physical_target).map_or(1.0, |(_, body)| {
                 body_orbit_look_scale(orbit.distance, body.radius_m, &settings)
             }) as f32;
             (orbit.yaw, orbit.pitch) =
                 look_angles(orbit.yaw, orbit.pitch, look_delta, &settings, scale as f32);
+            commands.entity(entity).try_insert(OrbitUserInput);
         }
         if let Some(mut ff) = q_freeflight.iter_mut().next() {
             (ff.yaw, ff.pitch) = look_angles(ff.yaw, ff.pitch, look_delta, &settings, 1.0);
@@ -3939,8 +4101,9 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitViewReturn>()
-        .remove::<SunlitArrival>()
-        .remove::<RadialArrival>();
+        .remove::<RadialArrival>()
+        .remove::<CurrentRegionArrival>()
+        .remove::<OrbitUserInput>();
 
     match &state.behavior {
         OrbitReturnBehavior::SpringArm(spring_arm) => {
@@ -3980,20 +4143,37 @@ fn on_return_from_orbit(
             &mut CellCoord,
             &ChildOf,
             &OrbitViewReturn,
+            Option<&OrbitCamera>,
+            Option<&mut OrbitViewHistory>,
+            Has<OrbitUserInput>,
             Has<lunco_core::CinematicCameraLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
+    q_bodies: Query<&CelestialBody>,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
     let avatar = trigger.event().target;
-    let Ok((mut transform, mut cell, child_of, return_state, cinematic_lock)) =
-        q_avatar.get_mut(avatar)
+    let Ok((
+        mut transform,
+        mut cell,
+        child_of,
+        return_state,
+        current_orbit,
+        mut orbit_history,
+        orbit_user_input,
+        cinematic_lock,
+    )) = q_avatar.get_mut(avatar)
     else {
         return;
     };
     if cinematic_lock {
         return;
+    }
+    if orbit_user_input {
+        if let (Some(camera), Some(history)) = (current_orbit, orbit_history.as_deref_mut()) {
+            remember_user_orbit_pose(history, camera, &q_bodies);
+        }
     }
     let return_state = return_state.clone();
 
@@ -4034,6 +4214,9 @@ fn on_release_command(
             Option<&SurfaceRelativeMode>,
             &ChildOf,
             Option<&OrbitViewReturn>,
+            Option<&OrbitCamera>,
+            Option<&mut OrbitViewHistory>,
+            Has<OrbitUserInput>,
             Has<lunco_core::CinematicCameraLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
@@ -4043,6 +4226,7 @@ fn on_release_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
 ) {
@@ -4066,75 +4250,89 @@ fn on_release_command(
     }
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
-    let (yaw, pitch, opt_vessel, is_surface, local_translation, return_state) =
-        if let Ok((mut tf, mut cell, link, surface, child_of, return_state, cinematic_lock)) =
-            q_avatar.get_mut(avatar_ent)
-        {
-            let opt_vessel = link.map(|link| link.vessel_entity);
-            if cinematic_lock {
-                if let Some(vessel_entity) = opt_vessel {
-                    commands.trigger(lunco_cosim::SetPorts {
-                        target: vessel_entity,
-                        writes: vec![
-                            ("throttle".into(), 0.0),
-                            ("steer".into(), 0.0),
-                            ("brake".into(), 1.0),
-                        ],
-                        seq: 0,
-                        tick: 0,
-                    });
-                }
-                commands.entity(avatar_ent).remove::<ControllerLink>();
-                return;
+    let (yaw, pitch, opt_vessel, is_surface, local_translation, return_state) = if let Ok((
+        mut tf,
+        mut cell,
+        link,
+        surface,
+        child_of,
+        return_state,
+        current_orbit,
+        mut orbit_history,
+        orbit_user_input,
+        cinematic_lock,
+    )) =
+        q_avatar.get_mut(avatar_ent)
+    {
+        let opt_vessel = link.map(|link| link.vessel_entity);
+        if cinematic_lock {
+            if let Some(vessel_entity) = opt_vessel {
+                commands.trigger(lunco_cosim::SetPorts {
+                    target: vessel_entity,
+                    writes: vec![
+                        ("throttle".into(), 0.0),
+                        ("steer".into(), 0.0),
+                        ("brake".into(), 1.0),
+                    ],
+                    seq: 0,
+                    tick: 0,
+                });
             }
-            let return_state = return_state.cloned();
-            if let Some(state) = &return_state {
-                if child_of.parent() == state.parent_grid {
-                    cell.set_if_neq(state.cell);
-                    tf.set_if_neq(state.transform);
-                } else {
-                    migrate_to_grid(
-                        &mut commands,
-                        avatar_ent,
-                        state.parent_grid,
-                        state.cell,
-                        state.transform,
-                    );
-                }
+            commands.entity(avatar_ent).remove::<ControllerLink>();
+            return;
+        }
+        if orbit_user_input {
+            if let (Some(camera), Some(history)) = (current_orbit, orbit_history.as_deref_mut()) {
+                remember_user_orbit_pose(history, camera, &q_bodies);
             }
-            let rot = return_state
-                .as_ref()
-                .map(|state| state.transform.rotation)
-                .unwrap_or(tf.rotation);
-            let returning_surface = return_state
-                .as_ref()
-                .is_some_and(|state| matches!(state.behavior, OrbitReturnBehavior::Surface(_)));
-            let (y, p) = if surface.is_some() {
-                let axes =
-                    surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
-                axes.map(|(east, north, up)| surface_camera_angles(east, north, up, rot))
-                    .unwrap_or_else(|| {
-                        let (y, p, _) = rot.to_euler(EulerRot::YXZ);
-                        (y, p)
-                    })
+        }
+        let return_state = return_state.cloned();
+        if let Some(state) = &return_state {
+            if child_of.parent() == state.parent_grid {
+                cell.set_if_neq(state.cell);
+                tf.set_if_neq(state.transform);
             } else {
-                let (y, p, _) = rot.to_euler(EulerRot::YXZ);
-                (y, p)
-            };
-            (
-                y,
-                p,
-                opt_vessel,
-                returning_surface || surface.is_some(),
-                return_state
-                    .as_ref()
-                    .map(|state| state.transform.translation)
-                    .unwrap_or(tf.translation),
-                return_state,
-            )
+                migrate_to_grid(
+                    &mut commands,
+                    avatar_ent,
+                    state.parent_grid,
+                    state.cell,
+                    state.transform,
+                );
+            }
+        }
+        let rot = return_state
+            .as_ref()
+            .map(|state| state.transform.rotation)
+            .unwrap_or(tf.rotation);
+        let returning_surface = return_state
+            .as_ref()
+            .is_some_and(|state| matches!(state.behavior, OrbitReturnBehavior::Surface(_)));
+        let (y, p) = if surface.is_some() {
+            let axes = surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
+            axes.map(|(east, north, up)| surface_camera_angles(east, north, up, rot))
+                .unwrap_or_else(|| {
+                    let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+                    (y, p)
+                })
         } else {
-            (0.0, 0.0, None, false, Vec3::ZERO, None)
+            let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+            (y, p)
         };
+        (
+            y,
+            p,
+            opt_vessel,
+            returning_surface || surface.is_some(),
+            return_state
+                .as_ref()
+                .map(|state| state.transform.translation)
+                .unwrap_or(tf.translation),
+            return_state,
+        )
+    } else {
+        (0.0, 0.0, None, false, Vec3::ZERO, None)
+    };
 
     // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
     if let Some(vessel_entity) = opt_vessel {
@@ -4164,8 +4362,9 @@ fn on_release_command(
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitViewReturn>()
-        .remove::<SunlitArrival>()
-        .remove::<RadialArrival>();
+        .remove::<RadialArrival>()
+        .remove::<CurrentRegionArrival>()
+        .remove::<OrbitUserInput>();
 
     if let Some(state) = return_state {
         let mut entity = commands.entity(avatar_ent);
@@ -4744,6 +4943,8 @@ fn on_focus_command(
             &ChildOf,
             Option<&Camera>,
             Option<&OrbitCamera>,
+            Option<&OrbitViewHistory>,
+            Has<OrbitUserInput>,
             Option<&OrbitViewReturn>,
             Option<&SpringArmCamera>,
             Option<&SurfaceCamera>,
@@ -4778,6 +4979,8 @@ fn on_focus_command(
         cam_parent,
         _,
         current_orbit,
+        orbit_history,
+        orbit_user_input,
         return_state,
         spring_arm,
         surface_camera,
@@ -4809,8 +5012,7 @@ fn on_focus_command(
 
     // Already orbiting this very body (clicking the focused globe, re-clicking
     // its view pill): a repeat focus must be a NO-OP. Re-running the swap
-    // re-arms `SunlitArrival`, which snaps the camera back to the arrival
-    // pose — "I jump to the original position".
+    // would discard the current interactive pose and restart its arrival.
     if let Some(orbit) = current_orbit {
         if resolve_declared_body(orbit.target, &q_body_decls, &q_body_entities)
             .unwrap_or_else(|| get_physical_body(orbit.target, &q_children, &q_body_entities))
@@ -4826,8 +5028,30 @@ fn on_focus_command(
     }
 
     let (yaw, pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);
+    let mut next_history = orbit_history.cloned();
+    if orbit_user_input {
+        if let Some(orbit) = current_orbit {
+            let current_target =
+                resolve_declared_body(orbit.target, &q_body_decls, &q_body_entities)
+                    .unwrap_or_else(|| {
+                        get_physical_body(orbit.target, &q_children, &q_body_entities)
+                    });
+            if let Ok(body) = q_bodies.get(current_target) {
+                let history = next_history.get_or_insert_with(OrbitViewHistory::default);
+                remember_orbit_pose_for_body(history, orbit, body.ephemeris_id);
+            }
+        }
+    }
+    let saved_pose = q_bodies.get(physical_target).ok().and_then(|body| {
+        next_history
+            .as_ref()
+            .and_then(|history| history.pose(body.ephemeris_id))
+    });
 
     let mut ent = commands.entity(avatar_ent);
+    if let Some(history) = next_history {
+        ent.try_insert(history);
+    }
     // First body focus opens one orbit-view transaction. A Moon → Earth switch
     // keeps the original surface snapshot instead of replacing it with the
     // current orbital pose.
@@ -4865,20 +5089,23 @@ fn on_focus_command(
         .remove::<GravityBody>()
         .try_insert(OrbitCamera {
             target: physical_target,
-            distance,
-            yaw,
-            pitch,
-            damping: None,
-            vertical_offset: 0.0,
+            distance: saved_pose.map_or(distance, |pose| pose.distance),
+            yaw: saved_pose.map_or(yaw, |pose| pose.yaw),
+            pitch: saved_pose.map_or(pitch, |pose| pose.pitch),
+            damping: saved_pose.and_then(|pose| pose.damping),
+            vertical_offset: saved_pose.map_or(0.0, |pose| pose.vertical_offset),
         });
-    // Celestial bodies arrive on their sunlit side. The orbit writer resolves
-    // this from the same root-grid cell poses it uses for steady-state motion.
-    if is_body {
-        ent.try_insert(SunlitArrival);
+    ent.remove::<OrbitUserInput>();
+    if is_body && saved_pose.is_none() {
+        ent.try_insert(CurrentRegionArrival);
+    } else {
+        ent.remove::<CurrentRegionArrival>();
     }
     info!(
-        "FOCUS: avatar={avatar_ent:?} target={:?} (physical {physical_target:?}) body={is_body} distance={distance:.3e}",
+        "FOCUS: avatar={avatar_ent:?} target={:?} (physical {physical_target:?}) body={is_body} distance={:.3e} restored={}",
         cmd.target,
+        saved_pose.map_or(distance, |pose| pose.distance),
+        saved_pose.is_some(),
     );
 }
 
@@ -4893,7 +5120,7 @@ fn on_focus_command(
 fn avatar_init_system(
     mut commands: Commands,
     q_avatar: Query<
-        (Entity, &Transform),
+        (Entity, &Transform, Option<&OrbitViewHistory>),
         (
             With<Avatar>,
             With<LocalAvatar>,
@@ -4917,7 +5144,12 @@ fn avatar_init_system(
         ),
     >,
 ) {
-    for (entity, tf) in q_avatar.iter() {
+    for (entity, tf, history) in q_avatar.iter() {
+        if history.is_none() {
+            commands
+                .entity(entity)
+                .try_insert(OrbitViewHistory::default());
+        }
         let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
         commands.entity(entity).try_insert(FreeFlightCamera {
             yaw,
@@ -6052,6 +6284,10 @@ mod tests {
             first_snapshot.behavior,
             OrbitReturnBehavior::Surface(_)
         ));
+        assert!(
+            app.world().get::<CurrentRegionArrival>(avatar).is_some(),
+            "surface-to-body focus must resolve the current region instead of using a fixed arrival"
+        );
 
         app.world_mut().trigger(FocusTarget {
             avatar: Some(avatar),
@@ -6068,6 +6304,10 @@ mod tests {
         assert_eq!(
             app.world().get::<OrbitCamera>(avatar).unwrap().target,
             earth
+        );
+        assert!(
+            app.world().get::<CurrentRegionArrival>(avatar).is_some(),
+            "a body without saved user pose must resolve from the current region"
         );
 
         app.world_mut().trigger(ReturnFromOrbit { target: avatar });
@@ -6088,6 +6328,199 @@ mod tests {
         );
         assert_eq!(world.get::<GravityBody>(avatar).unwrap().body_entity, moon);
         assert!(world.get::<SurfaceRelativeMode>(avatar).is_some());
+    }
+
+    #[test]
+    fn user_orbit_pose_is_restored_per_body_after_switching_targets() {
+        let mut app = App::new();
+        register_camera_mode_hooks(&mut app);
+        app.add_observer(on_focus_command);
+
+        let grid = app
+            .world_mut()
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+            ))
+            .id();
+        let moon = app
+            .world_mut()
+            .spawn(CelestialBody {
+                name: "Moon".into(),
+                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                radius_m: 1_737_400.0,
+            })
+            .id();
+        let earth = app
+            .world_mut()
+            .spawn(CelestialBody {
+                name: "Earth".into(),
+                ephemeris_id: lunco_celestial::ephemeris_id::EARTH,
+                radius_m: 6_371_000.0,
+            })
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                LocalAvatar,
+                CellCoord::ZERO,
+                Transform::from_xyz(0.0, 0.0, 100.0),
+                ChildOf(grid),
+                OrbitCamera {
+                    target: moon,
+                    distance: 8_000.0,
+                    yaw: 0.7,
+                    pitch: -0.3,
+                    damping: Some(0.2),
+                    vertical_offset: 4.0,
+                },
+                OrbitViewHistory::default(),
+                OrbitUserInput,
+            ))
+            .id();
+
+        app.world_mut().trigger(FocusTarget {
+            avatar: Some(avatar),
+            target: earth,
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().get::<OrbitCamera>(avatar).unwrap().target,
+            earth,
+            "body switch must replace the active orbit target"
+        );
+
+        let stored = app
+            .world()
+            .get::<OrbitViewHistory>(avatar)
+            .expect("orbit history remains avatar-owned")
+            .pose(lunco_celestial::ephemeris_id::MOON)
+            .expect("leaving Moon orbit stores the user-controlled pose");
+        assert_eq!(
+            stored,
+            OrbitPose {
+                yaw: 0.7,
+                pitch: -0.3,
+                distance: 8_000.0,
+                damping: Some(0.2),
+                vertical_offset: 4.0,
+            }
+        );
+
+        app.world_mut().trigger(FocusTarget {
+            avatar: Some(avatar),
+            target: moon,
+        });
+        app.world_mut().flush();
+        let restored = app.world().get::<OrbitCamera>(avatar).unwrap();
+        assert_eq!(restored.target, moon);
+        assert_eq!(restored.yaw, 0.7);
+        assert_eq!(restored.pitch, -0.3);
+        assert_eq!(restored.distance, 8_000.0);
+        assert_eq!(restored.damping, Some(0.2));
+        assert_eq!(restored.vertical_offset, 4.0);
+        assert!(
+            app.world().get::<CurrentRegionArrival>(avatar).is_none(),
+            "a saved body pose must not be replaced by a new arrival"
+        );
+    }
+
+    #[test]
+    fn direct_orbit_mode_removal_records_and_clears_user_pose() {
+        let mut app = App::new();
+        register_camera_mode_hooks(&mut app);
+
+        let body = app
+            .world_mut()
+            .spawn(CelestialBody {
+                name: "Moon".into(),
+                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
+            })
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                LocalAvatar,
+                OrbitCamera {
+                    target: body,
+                    distance: 12_000.0,
+                    yaw: 1.1,
+                    pitch: -0.25,
+                    damping: Some(0.15),
+                    vertical_offset: 7.0,
+                },
+                OrbitViewHistory::default(),
+                OrbitUserInput,
+            ))
+            .id();
+
+        app.world_mut().entity_mut(avatar).remove::<OrbitCamera>();
+        app.world_mut().flush();
+
+        let history = app.world().get::<OrbitViewHistory>(avatar).unwrap();
+        assert_eq!(
+            history.pose(lunco_celestial::ephemeris_id::MOON),
+            Some(OrbitPose {
+                yaw: 1.1,
+                pitch: -0.25,
+                distance: 12_000.0,
+                damping: Some(0.15),
+                vertical_offset: 7.0,
+            })
+        );
+        assert!(app.world().get::<OrbitUserInput>(avatar).is_none());
+    }
+
+    #[test]
+    fn current_region_arrival_uses_the_resolved_radial_direction() {
+        let mut orbit = OrbitCamera {
+            target: Entity::PLACEHOLDER,
+            distance: 1.0,
+            yaw: 0.25,
+            pitch: 0.5,
+            damping: None,
+            vertical_offset: 0.0,
+        };
+
+        assert!(apply_current_region_arrival(
+            &mut orbit,
+            DVec3::ZERO,
+            DVec3::new(0.0, 10.0, 0.0),
+            100.0,
+        ));
+        assert!((orbit.yaw - 0.0).abs() < 1.0e-6);
+        assert!((orbit.pitch + std::f32::consts::FRAC_PI_2).abs() < 1.0e-6);
+        assert_eq!(orbit.distance, 300.0);
+    }
+
+    #[test]
+    fn active_twin_close_clears_orbit_history_without_touching_inactive_close() {
+        let mut app = App::new();
+        app.add_observer(clear_orbit_view_history_on_twin_closed);
+        let avatar = app
+            .world_mut()
+            .spawn((Avatar, LocalAvatar, OrbitViewHistory::default()))
+            .id();
+
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: std::path::PathBuf::from("/inactive"),
+            was_active: false,
+        });
+        app.world_mut().flush();
+        assert!(app.world().get::<OrbitViewHistory>(avatar).is_some());
+
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(2),
+            root: std::path::PathBuf::from("/active"),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(app.world().get::<OrbitViewHistory>(avatar).is_none());
     }
 
     #[test]
