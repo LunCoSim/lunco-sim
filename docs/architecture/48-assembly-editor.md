@@ -172,10 +172,17 @@ always receive an explicit document. Every authored helper receives an
 explicit `@root@` or `@runtime@` target, and `batch` requires each reflected
 `UsdOp` to carry its own target.
 
+Structural helpers `add_prim`, `remove_prim`, `move_prim`, `payload`, and
+`active` expose the existing typed USD operations for composition changes,
+namespace moves, payload arcs, and non-destructive activation. They do not
+expose raw source replacement; a caller must inspect the exact path and pass
+the returned generation.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
-`parent_gen` on `add_prim`, `transform`, `attribute`, `keyframe`,
-`remove_keyframe`, `relationship`, `connection`, `schema`, `variant`, and
+`parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,
+`attribute`, `keyframe`, `remove_keyframe`, `relationship`, `connection`,
+`schema`, `variant`, `payload`, `active`, and
 `batch` is the existing
 revision precondition. A supplied cursor makes stale edits fail atomically
 before authoring or journaling; `()` is reserved for an operation with no
@@ -189,17 +196,27 @@ through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
 The companion `assembly_ui` tool library is presentation policy over the same
-typed boundary. Its panel templates use the registered `editor` perspective,
+typed boundary. Its templates describe the registered `editor` perspective,
 Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and
-Environment panel ids. `open_session` takes an explicit
-`UsdPreviewId`/`DocumentId`/`LayerId`, then uses `ActivatePerspective`,
+Environment panel ids, plus the existing animation, mount, review, and
+persistence sections/workflows. `open_session` takes an explicit
+`UsdPreviewId`/`DocumentId`/edit target, then uses `ActivatePerspective`,
 `OpenUsdPreview`, and `FocusPanel`; opening the preview already selects its
-session lease. It does not create a
-second layout, document binding, selection store, or editor state. Inspector
-sections such as mount and review remain one existing panel, and the
-Environment panel remains the owner of animation transport. Agent workflows
+session lease. It does not create a second layout, document binding, selection
+store, or editor state. Mount and review remain Inspector sections, animation
+remains an Environment section, and persistence remains the existing lifecycle
+commands and File menu rather than a fabricated panel. Agent workflows
 therefore use the same presentation and authoring surfaces as a human without
 introducing another UI runtime.
+
+`assembly_ui::panel_templates(preview, doc, edit_target)` returns nine
+descriptors. Each contains the explicit session handles and a capability list;
+section descriptors identify their owning panel, while the persistence
+descriptor contains no panel id because save, Save-As, discard, and close are
+document commands. `open_mount`, `open_review`, and `open_animation` focus the
+owning existing panel. `assembly_ui::open_session` returns these descriptors as
+`templates` so an agent can choose the next human-visible surface without
+guessing panel ownership.
 
 For a lander edit, open the lunar-base Twin, take the USD `DocumentId` from
 `ListOpenDocuments`, inspect the composed lander and resolve its legal authored

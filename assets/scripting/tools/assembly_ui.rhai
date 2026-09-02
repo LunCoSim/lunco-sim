@@ -4,34 +4,83 @@
 // preview session. It owns no document, selection, layout, or edit state:
 // `assembly_edit` and the typed command/query owners remain authoritative.
 
-// Stable panel templates are data for agents and authored workflows. The
-// workbench resolves these registered panel ids; no Rust layout is generated
-// and no panel state is copied into Rhai.
+// Stable surface templates are data for agents and authored workflows. The
+// workbench resolves the registered panel ids; section/workflow entries point
+// at the existing owner and do not pretend to be independent panels.
+fn panel_roles() {
+    [
+        "browser",
+        "structure",
+        "preview",
+        "inspector",
+        "connections",
+        "animation",
+        "mount",
+        "review",
+        "persistence",
+    ]
+}
+
+fn surface_kind(role) {
+    if role == "animation" || role == "mount" || role == "review" {
+        "section"
+    } else if role == "persistence" {
+        "workflow"
+    } else {
+        "panel"
+    }
+}
+
+fn surface_section(role) {
+    if role == "animation" { "animation" }
+    else if role == "mount" { "mount" }
+    else if role == "review" { "review" }
+    else { () }
+}
+
+fn surface_capabilities(role) {
+    if role == "browser" { ["open_usd"] }
+    else if role == "structure" { ["inspect_prim", "select_prim"] }
+    else if role == "preview" { ["visual_checkpoint", "open_views"] }
+    else if role == "inspector" {
+        ["transform", "attribute", "variant", "joint", "animation"]
+    } else if role == "connections" { ["connection"] }
+    else if role == "animation" { ["transport", "keyframe"] }
+    else if role == "mount" { ["attach_component", "detach_component"] }
+    else if role == "review" { ["propose", "review", "commit"] }
+    else if role == "persistence" { ["save", "save_as", "discard", "close"] }
+    else { [] }
+}
+
 fn panel_template(role, preview, doc, edit_target) {
+    let panel = panel_id(role);
+    if panel == () && role != "persistence" {
+        return #{ ok: false, error: "unknown assembly editor surface role", role: role };
+    }
     let template = #{
         role: role,
-        panel: panel_id(role),
+        kind: surface_kind(role),
         preview: preview,
         doc: doc,
         edit_target: edit_target,
+        capabilities: surface_capabilities(role),
     };
-    if role == "inspector" {
-        template.sections = ["selection", "mount", "review"];
-    } else if role == "environment" {
-        template.sections = ["animation"];
+    if panel != () {
+        template.panel = panel;
+    }
+    let section = surface_section(role);
+    if section != () {
+        template.section = section;
     }
     template
 }
 
 fn panel_templates(preview, doc, edit_target) {
-    [
-        panel_template("browser", preview, doc, edit_target),
-        panel_template("structure", preview, doc, edit_target),
-        panel_template("preview", preview, doc, edit_target),
-        panel_template("inspector", preview, doc, edit_target),
-        panel_template("connections", preview, doc, edit_target),
-        panel_template("environment", preview, doc, edit_target),
-    ]
+    let templates = [];
+    for role in panel_roles() {
+        templates.push(panel_template(role, preview, doc, edit_target));
+    }
+    templates
 }
 
 fn panel_id(role) {
@@ -40,7 +89,8 @@ fn panel_id(role) {
     else if role == "preview" { "usd::viewport" }
     else if role == "inspector" { "sandbox_inspector" }
     else if role == "connections" { "usd_connection_canvas" }
-    else if role == "environment" { "sandbox_environment" }
+    else if role == "animation" { "sandbox_environment" }
+    else if role == "mount" || role == "review" { "sandbox_inspector" }
     else { () }
 }
 
@@ -72,7 +122,7 @@ fn open_session(preview, doc, edit_target) {
     #{ ok: viewport.ok,
        preview: preview, doc: doc, edit_target: edit_target,
        perspective: perspective,
-       viewport: viewport, panels: panel_templates(preview, doc, edit_target),
+       viewport: viewport, templates: panel_templates(preview, doc, edit_target),
        note: "Preview admission is complete; panel view-models populate from the explicit session." }
 }
 
@@ -93,7 +143,15 @@ fn open_connections(preview, doc, edit_target) {
 }
 
 fn open_animation(preview, doc, edit_target) {
-    focus("environment", preview, doc, edit_target)
+    focus("animation", preview, doc, edit_target)
+}
+
+fn open_mount(preview, doc, edit_target) {
+    focus("mount", preview, doc, edit_target)
+}
+
+fn open_review(preview, doc, edit_target) {
+    focus("review", preview, doc, edit_target)
 }
 
 /// Select one prim in the focused preview through the shared typed selection

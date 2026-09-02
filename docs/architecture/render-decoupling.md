@@ -169,8 +169,8 @@ Not everything visual is *appearance*. Three things had no honest intent represe
   `lunco-environment`). Not a look; a data pump. The horizon **maths** stayed behind — it was already
   render-free, and `lunco-luncosim` imports exactly that half.
 - **`env_light`** — the `bloom` arm of `SetEnvironmentLight`.
-- **`terrain_maps`** — the derived-layer bind onto the terrain material that `lunco-usd-sim` authors
-  asynchronously (no component to restate).
+- **Terrain map source reconciliation** remains a render-free `ShaderLook` update in
+  `lunco-terrain-surface`; this crate only turns that intent into a GPU material.
 
 Screenshots do **not** live there either.
 `CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a

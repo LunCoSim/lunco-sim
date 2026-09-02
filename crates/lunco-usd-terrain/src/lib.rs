@@ -4,7 +4,7 @@
 //! `lunco-terrain-surface`'s domain types — a [`DemTerrainRequest`] (the ground DEM:
 //! source, window, resolution, streaming knobs) plus the composable
 //! [`TerrainLayerStack`] built from the prim's child LAYER prims (craters / rocks /
-//! shader / edits / …). It also carries the authoring tier back: a hand edit (brush,
+//! edits / …). It also carries the authoring tier back: a hand edit (brush,
 //! flatten, crater, rock) on a doc-backed terrain becomes USD ops on the document's
 //! **runtime** layer — journaled, undoable, non-destructive — and the re-projection
 //! is what makes it visible. An edit that does not go through here escapes save,
@@ -48,7 +48,6 @@ const TERRAIN_SCHEMA_PROPERTIES: &[&str] = &[
     "lunco:layer:targetRes",
     "lunco:layer:lodViz",
     "lunco:layer:colliderRing",
-    "lunco:layer:mode",
     "lunco:layer:x",
     "lunco:layer:z",
     "lunco:layer:size",
@@ -310,7 +309,7 @@ impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
         })
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        // Textual USD types only — `lunco:layer:mode` is a `token`. A file reference
+        // Textual USD types only — layer parser strings use the canonical namespace. A file reference
         // (`demSource`) is `asset`-typed and read via `get_asset`, not here.
         // `scalar::<String>` would read only `string`; `text` also reads `token`.
         self.reader.text(&self.sdf, &self.attr(name))
@@ -347,7 +346,7 @@ fn sorted_terrain_children(
     children
 }
 
-/// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
+/// Parse the non-ground child layer prims (`craters`/`rocks`/…) into the
 /// composable [`TerrainLayerStack`](lunco_terrain_surface::TerrainLayerStack) via the
 /// registry. Shared by the bridge (initial build) and the live-edit refresh.
 fn parse_terrain_layer_stack(
@@ -525,7 +524,7 @@ fn sync_obstacle_spec_from_usd(
 /// Inspector / via `SetObjectProperty`), re-parse the composable stack of every
 /// layered terrain on that stage and re-insert it. The change is picked up by
 /// `regenerate_dem_layers` (it re-stamps off the retained base grid + re-scatters —
-/// no GeoTIFF re-read), so crater/rock/shader tuning applies live.
+/// no GeoTIFF re-read), so terrain-layer tuning applies live.
 ///
 /// **Document-free terrains only** (`Without<DocBackedTerrain>`). A doc-backed
 /// terrain re-bakes from its registry document instead
@@ -1691,7 +1690,7 @@ fn bridge_dem_prim_read(
 
     // A DEM-backed terrain: `lunco:assetMode = "dem"` (or "layered"). Its surface
     // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
-    // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
+    // "rocks" | …`) — add a layer by adding a prim. The `dem` (ground)
     // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
     let asset_mode = reader.text(sdf, "lunco:assetMode");
     let has_terrain_api = reader.has_api_schema(sdf, "LunCoTerrainAPI");
@@ -1726,7 +1725,7 @@ fn bridge_dem_prim_read(
         return;
     }
 
-    // The ground (`dem`) layer + the composable stack (craters/rocks/shader/…),
+    // The ground (`dem`) layer + the composable stack (craters/rocks/…),
     // parsed from the child layer prims (helpers shared with the live-edit refresh).
     let dem_layer_sdf = find_dem_layer(reader, sdf);
     let stack = parse_terrain_layer_stack(reader, sdf, registry);
@@ -1961,7 +1960,6 @@ fn bridge_dem_prim_read(
             lod_viz,
             collider_ring,
             collider,
-            with_default_material: false,
         },
         stack,
         lunco_terrain_surface::DemTerrainSurface,

@@ -168,6 +168,33 @@ fn add_prim(doc, edit_target, parent_path, name, type_name, reference, parent_ge
     })
 }
 
+/// Remove one exact prim subtree through the existing typed USD authoring op.
+/// The caller chooses the authored layer and supplies the inspected path.
+fn remove_prim(doc, edit_target, path, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ RemovePrim: #{
+            edit_target: edit_target,
+            path: path,
+        }},
+    })
+}
+
+/// Rename or reparent one exact prim through the reversible namespace op.
+/// The destination parent must already exist in the authored USD layer.
+fn move_prim(doc, edit_target, from_path, to_path, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ MovePrim: #{
+            edit_target: edit_target,
+            from_path: from_path,
+            to_path: to_path,
+        }},
+    })
+}
+
 /// Apply translation and/or Euler XYZ rotation as one journaled edit.
 /// `translation` and `rotation` may be `()` independently, but not both.
 fn transform(doc, edit_target, path, translation, rotation, parent_gen) {
@@ -297,6 +324,33 @@ fn variant(doc, edit_target, path, variant_set, selection, parent_gen) {
             path: path,
             variant_set: variant_set,
             variant: selection,
+        }},
+    })
+}
+
+/// Set the payload list on one exact prim through the standard USD payload op.
+/// An empty list explicitly clears that layer's payload opinion.
+fn payload(doc, edit_target, path, asset_paths, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ SetPayload: #{
+            edit_target: edit_target,
+            path: path,
+            asset_paths: asset_paths,
+        }},
+    })
+}
+
+/// Activate or deactivate one exact prim without deleting its authored subtree.
+fn active(doc, edit_target, path, is_active, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc: doc,
+        parent_gen: parent_gen,
+        op: #{ SetActive: #{
+            edit_target: edit_target,
+            path: path,
+            active: is_active,
         }},
     })
 }

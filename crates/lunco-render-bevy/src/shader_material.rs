@@ -473,7 +473,7 @@ pub struct TerrainSurfaceModule(#[allow(dead_code)] Handle<bevy::shader::Shader>
 /// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
 /// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
 /// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
-/// so an analysis overlay and the legend explaining it cannot disagree.
+/// so the terrain diagnostic material and the legend explaining it cannot disagree.
 #[derive(Resource)]
 pub struct TransferModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 

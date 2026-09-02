@@ -1,11 +1,10 @@
-//! Terrain **analysis overlay** — the render VIEW of a [`SurfaceField`], the
-//! in-material shading plane of `Data → Transfer → Blend`.
+//! Terrain **analysis diagnostic** — the render VIEW of a [`SurfaceField`].
 //!
 //! A [`SurfaceField`](lunco_terrain_core::SurfaceField) is data (headless, queried by
 //! [`TerrainField`](crate::query)); this module is ONE consumer of it — the on-screen
-//! colourised overlay painted over the lit regolith on the streamed LOD tiles. The
-//! slope-hazard transfer (green ≤ safe angle → red ≥ cliff angle) is evaluated **in
-//! the tile shader**, running the SAME smoothstep + ramp as
+//! colourised diagnostic material used by the streamed LOD tiles. The slope-hazard
+//! transfer (green ≤ safe angle → red ≥ cliff angle) is evaluated **in the separate
+//! diagnostic shader**, running the SAME smoothstep + ramp as
 //! [`lunco_terrain_core::transfer`] (one definition, shared via the `lunco::transfer`
 //! WGSL module), so the colour RAMP matches the legend swatch.
 //!
@@ -19,28 +18,29 @@
 //! for querying the field: a headless `TerrainField`/`SlopeField` read (un-band-limited
 //! oracle, `eps = cell size`) is the authority a traversability decision must use.
 //!
-//! Everything is **uniform-driven**: [`TerrainOverlayParams`] flows into the tile
-//! materials as a handful of floats ([`OverlayUniforms`]), so re-tuning the critical
-//! angle is a uniform write — no re-bake, no pipeline permutation. New tiles pick up
-//! the current params at build ([`OverlayUniforms::apply`] in `build_tile_material`);
-//! a live edit to the params is pushed onto the already-resident materials by
-//! [`sync_terrain_overlay`]. See `docs/architecture/terrain-layered-rendering.md`.
+//! Everything is **uniform-driven**: [`TerrainOverlayParams`] flows into the separate
+//! diagnostic material as a handful of floats ([`OverlayUniforms`]), so re-tuning the
+//! critical angle is a uniform write — no re-bake and no production-pipeline
+//! permutation. New tiles and live edits use [`sync_terrain_overlay`]. See
+//! `docs/architecture/terrain-layered-rendering.md`.
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
-use lunco_materials::{ParamValue, ShaderLook};
+use lunco_materials::ShaderLook;
 
-use crate::stream_viz::{LodTiles, TerrainShaderMode};
+use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
+use crate::oracle::DemHeightField;
+use crate::stream_viz::LodTiles;
+use crate::stream_viz::TileShadowCache;
 
-/// The overlay's shader uniforms — the compact, per-material form of
-/// [`TerrainOverlayParams`]. `Copy` so it threads cheaply through the tile-spawn path.
-/// Only the Lit terrain shaders (`terrain_geomorph`/`_web`) declare these params; the
-/// flat/debug shader simply doesn't, and the by-name writes are ignored there.
+/// The diagnostic tool's controls. `Copy` so they thread cheaply through the
+/// tile replacement path. They are consumed only by `terrain_debug.wgsl`; the
+/// production terrain material does not declare diagnostic inputs.
 #[derive(Clone, Copy)]
 pub struct OverlayUniforms {
-    /// `0` = no overlay, `1` = slope hazard, `2` = LOD depth.
+    /// `0` = production material, `1` = slope hazard, `2` = LOD depth.
     pub mode: f32,
-    /// Blend weight of the overlay colour over the lit surface (`0..1`).
+    /// Blend weight of the diagnostic colour over its diagnostic base (`0..1`).
     pub opacity: f32,
     /// Slope (radians) at/below which ground is fully traversable (green).
     pub safe_rad: f32,
@@ -48,16 +48,28 @@ pub struct OverlayUniforms {
     pub cliff_rad: f32,
 }
 
-/// `overlay_mode` values, mirrored by the `mat.overlay_mode` branches in
-/// `terrain_geomorph.wgsl`. Named here so the two languages do not
-/// drift on a bare float: adding a mode means adding a constant and one shader
-/// branch, not hunting literals.
+/// The authored shader intent used by the terrain diagnostic tool.
+///
+/// This is configuration, not terrain production policy. The tool can replace
+/// the look at runtime through `SetTerrainOverlay`; the tile streamer only
+/// receives the selected intent and never names a diagnostic asset.
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct TerrainDiagnosticLook(pub ShaderLook);
+
+impl Default for TerrainDiagnosticLook {
+    fn default() -> Self {
+        let shader = lunco_assets::engine_asset_uri("shaders/terrain_debug.wgsl");
+        Self(ShaderLook::new(shader.clone()).with_vertex_shader(shader))
+    }
+}
+
+/// Diagnostic modes consumed by `terrain_debug.wgsl`.
 pub mod overlay_mode {
-    /// No overlay — the lit surface is untouched.
+    /// Production material — the diagnostic tool is inactive.
     pub const OFF: f32 = 0.0;
     /// Slope-hazard traversability colouring.
     pub const SLOPE_HAZARD: f32 = 1.0;
-    /// CDLOD tile depth, composited over the production shading.
+    /// CDLOD tile depth diagnostic.
     pub const LOD_DEPTH: f32 = 2.0;
 }
 
@@ -69,22 +81,6 @@ impl OverlayUniforms {
         safe_rad: 0.0,
         cliff_rad: 0.0,
     };
-
-    /// Write the four params onto a tile's [`ShaderLook`] as **live** params — the
-    /// overlay is a *uniform*, not a re-bake (`D2`).
-    ///
-    /// Live, not keyed: these four are global (one resource drives every tile), so
-    /// they carry no per-tile identity and have no business in the sharing key.
-    /// Keyed, each slider tick re-keyed every tile onto a freshly-minted material
-    /// whose bind group was not prepared yet — the terrain flickered for the whole
-    /// drag. Outside the key, all tiles stay on ONE material and the binder writes
-    /// the new angles into it in place.
-    pub fn apply(&self, look: &mut ShaderLook) {
-        look.set_live("overlay_mode", ParamValue::F32(self.mode));
-        look.set_live("overlay_opacity", ParamValue::F32(self.opacity));
-        look.set_live("overlay_safe_rad", ParamValue::F32(self.safe_rad));
-        look.set_live("overlay_cliff_rad", ParamValue::F32(self.cliff_rad));
-    }
 }
 
 /// Live-tunable terrain analysis-overlay state (global across terrains; Inspector /
@@ -93,19 +89,17 @@ impl OverlayUniforms {
 #[derive(Resource, Clone, Copy, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct TerrainOverlayParams {
-    /// Whether the slope-hazard overlay is drawn at all.
+    /// Whether the separate terrain diagnostic material is active.
     pub enabled: bool,
     /// Slope (degrees) up to which ground is coloured green (safe).
     pub safe_deg: f32,
     /// Slope (degrees) at/beyond which ground is coloured red (cliff) — the
     /// **critical angle**, the headline live knob.
     pub cliff_deg: f32,
-    /// Overlay blend opacity over the lit regolith (`0..1`).
+    /// Diagnostic colour blend opacity (`0..1`).
     pub opacity: f32,
-    /// Draw the LOD-depth view instead of slope hazard. Composited over the real
-    /// lit surface (unlike [`TerrainShaderMode::DebugLod`], which swaps in the flat
-    /// shader and so cannot show where a detail boundary sits relative to the
-    /// production look). Still requires `enabled`.
+    /// Select the LOD-depth diagnostic instead of slope hazard. Still requires
+    /// `enabled`.
     pub lod_depth: bool,
 }
 
@@ -161,15 +155,38 @@ pub struct SetTerrainOverlay {
     pub opacity: Option<f32>,
     /// Switch the overlay to the LOD-depth view (still needs `enabled`).
     pub lod_depth: Option<bool>,
+    /// Replace the diagnostic fragment shader asset. Omitted keeps the current
+    /// diagnostic material.
+    pub shader: Option<String>,
+    /// Replace the diagnostic vertex shader asset. Omitted keeps the current
+    /// diagnostic vertex stage.
+    pub vertex_shader: Option<String>,
 }
 
 #[on_command(SetTerrainOverlay)]
 fn on_set_terrain_overlay(
     trigger: On<SetTerrainOverlay>,
     mut params: ResMut<TerrainOverlayParams>,
+    mut diagnostic: ResMut<TerrainDiagnosticLook>,
 ) {
     let before = *params;
     let ev = trigger.event();
+    if ev
+        .shader
+        .as_deref()
+        .is_some_and(|shader| shader.trim().is_empty())
+    {
+        warn!("[terrain-overlay] diagnostic shader source cannot be empty; request ignored");
+        return;
+    }
+    if ev
+        .vertex_shader
+        .as_deref()
+        .is_some_and(|shader| shader.trim().is_empty())
+    {
+        warn!("[terrain-overlay] diagnostic vertex shader source cannot be empty; request ignored");
+        return;
+    }
     if let Some(lod_depth) = ev.lod_depth {
         params.lod_depth = lod_depth;
     }
@@ -185,13 +202,19 @@ fn on_set_terrain_overlay(
     if let Some(opacity) = ev.opacity {
         params.opacity = opacity.clamp(0.0, 1.0);
     }
+    if let Some(shader) = ev.shader.as_deref() {
+        diagnostic.0.shader = lunco_assets::engine_asset_uri(shader.trim());
+    }
+    if let Some(vertex_shader) = ev.vertex_shader.as_deref() {
+        diagnostic.0.vertex_shader = Some(lunco_assets::engine_asset_uri(vertex_shader.trim()));
+    }
     debug!(
         "[terrain-overlay] enabled={} lod_depth={} safe={}° cliff={}° opacity={}",
         params.enabled, params.lod_depth, params.safe_deg, params.cliff_deg, params.opacity
     );
     if before.enabled != params.enabled || before.lod_depth != params.lod_depth {
         info!(
-            "[seminar] terrain overlay toggle: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
+            "[seminar] terrain diagnostic toggle: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
             params.enabled,
             if params.lod_depth { "lod" } else { "slope" },
             params.safe_deg,
@@ -203,30 +226,52 @@ fn on_set_terrain_overlay(
 
 register_commands!(on_set_terrain_overlay);
 
-/// Push the current overlay params onto every resident tile's look when they change
-/// — the live-tuning path (freshly-built tiles already read the current params at
-/// build). Change-driven: no-op on unchanged frames, so a still overlay costs
-/// nothing; a slider drag re-states N looks that all collapse back onto ONE material
-/// in the binder's cache.
+/// Switch resident tiles between the production material and the separate
+/// diagnostic material when the tool changes. This is a material replacement,
+/// not a branch or uniform in the production shader.
 pub fn sync_terrain_overlay(
+    mut commands: Commands,
     params: Res<TerrainOverlayParams>,
-    terrains: Query<&LodTiles>,
-    mut looks: Query<&mut ShaderLook>,
+    diagnostic: Res<TerrainDiagnosticLook>,
+    terrains: Query<(
+        &LodTiles,
+        &DemHeightField,
+        Option<&TerrainDerivedMaps>,
+        Option<&TerrainAuthoredMaps>,
+        Option<&TileShadowCache>,
+        &ShaderLook,
+    )>,
+    mut looks: Query<&mut ShaderLook, Without<crate::terrain::DemTerrainSurface>>,
 ) {
-    if !params.is_changed() {
+    if !params.is_changed() && !diagnostic.is_changed() {
         return;
     }
     let u = params.uniforms();
-    // D8 — Lit tiles ONLY: the flat/debug shader declares no `overlay_*` params, so
-    // writing them there would only insert dead keys and mint a pointless material
-    // variant per band (`tile_look` gates the same way).
-    for tiles in &terrains {
-        if tiles.shader_mode() != TerrainShaderMode::Lit {
-            continue;
-        }
-        for entity in tiles.tile_entities() {
+    let diagnostic = diagnostic.0.clone();
+    for (tiles, height_field, maps, authored, shadow, template) in &terrains {
+        for (entity, depth, morph_start, morph_end) in tiles.tile_material_specs() {
             if let Ok(mut look) = looks.get_mut(entity) {
-                u.apply(&mut look);
+                *look = crate::stream_viz::tile_look(
+                    template,
+                    depth,
+                    morph_start,
+                    morph_end,
+                    maps,
+                    height_field.0.half_extent(),
+                    authored,
+                    shadow,
+                    &diagnostic,
+                    u,
+                );
+                if u.mode > 0.5 {
+                    commands
+                        .entity(entity)
+                        .try_insert(crate::stream_viz::TerrainDiagnosticTile);
+                } else {
+                    commands
+                        .entity(entity)
+                        .try_remove::<crate::stream_viz::TerrainDiagnosticTile>();
+                }
             }
         }
     }
@@ -235,7 +280,8 @@ pub fn sync_terrain_overlay(
 /// Register the overlay resource, the `SetTerrainOverlay` command, and the live-sync
 /// system. Idempotent resource init so plugin ordering doesn't matter.
 pub fn register(app: &mut App) {
-    app.init_resource::<TerrainOverlayParams>();
+    app.init_resource::<TerrainOverlayParams>()
+        .init_resource::<TerrainDiagnosticLook>();
     app.register_type::<TerrainOverlayParams>();
     app.add_systems(Update, sync_terrain_overlay);
     register_all_commands(app);
@@ -248,6 +294,7 @@ mod tests {
     fn test_app() -> App {
         let mut app = App::new();
         app.init_resource::<TerrainOverlayParams>();
+        app.init_resource::<TerrainDiagnosticLook>();
         app.add_observer(on_set_terrain_overlay);
         app
     }
@@ -300,5 +347,23 @@ mod tests {
         });
         app.world_mut().flush();
         assert!(!app.world().resource::<TerrainOverlayParams>().enabled);
+    }
+
+    #[test]
+    fn diagnostic_shader_sources_are_runtime_configurable() {
+        let mut app = test_app();
+        app.world_mut().trigger(SetTerrainOverlay {
+            shader: Some("shaders/custom_diagnostic.wgsl".into()),
+            vertex_shader: Some("shaders/custom_diagnostic.wgsl".into()),
+            ..default()
+        });
+        app.world_mut().flush();
+
+        let look = &app.world().resource::<TerrainDiagnosticLook>().0;
+        assert_eq!(look.shader, "lunco://shaders/custom_diagnostic.wgsl");
+        assert_eq!(
+            look.vertex_shader.as_deref(),
+            Some("lunco://shaders/custom_diagnostic.wgsl")
+        );
     }
 }

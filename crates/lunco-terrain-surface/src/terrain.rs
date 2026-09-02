@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
 use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
+use lunco_materials::ShaderLook;
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
 use lunco_obstacle_field::sampler::{salt, sample_layer};
 use lunco_obstacle_field::spec::{CraterLayer, Pattern};
@@ -131,7 +132,7 @@ pub fn resolve_dem_request_parameters(
 /// The driveable DEM surface: the bake fills **this** entity with a heightfield
 /// collider (+ visual mesh when rendering). Put on a command-spawned entity by
 /// [`SpawnDemTerrain`], or on a USD terrain prim by the USD→DEM bridge so the
-/// universal `materialType="shader"` path supplies the material.
+/// universal USD `UsdShade` binding supplies the material.
 #[derive(Component)]
 pub struct DemTerrainSurface;
 
@@ -224,8 +225,8 @@ pub struct DemTerrainRequest {
     /// or analytic waypoint heights.
     pub target_res: usize,
     /// Suppress the static visual mesh and instead stream camera-driven CDLOD
-    /// tiles (procedural-regolith geomorph; see [`crate::stream_viz`]). The
-    /// heightfield COLLIDER still spawns, so physics is unchanged. This is the
+    /// tiles using the authored terrain material (see [`crate::stream_viz`]).
+    /// The heightfield COLLIDER still spawns, so physics is unchanged. This is the
     /// production visual path (default ON from the USD bridge); `false` = the
     /// single static mesh.
     pub lod_viz: bool,
@@ -238,10 +239,6 @@ pub struct DemTerrainRequest {
     /// Physics-only collider-ring lattice. This value is authored by the
     /// terrain generator and is independent of every visual-quality setting.
     pub collider: crate::collider_ring::TerrainColliderSettings,
-    /// Apply a plain `StandardMaterial` when the bake finishes. `true` for the
-    /// standalone command path; `false` for the USD path, where the prim's
-    /// `materialType` authors the material (don't clobber it).
-    pub with_default_material: bool,
 }
 
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
@@ -515,13 +512,19 @@ fn update_terrain_gen_status(
 #[Command(default)]
 pub struct SpawnDemTerrain {
     pub uri: String,
+    /// Fragment shader source for the terrain material. The path is resolved by
+    /// the normal asset-source rules; it is not selected by the terrain engine.
+    pub shader: String,
+    /// CDLOD vertex shader source. Required when `lod_viz` is enabled; omitted
+    /// for a static mesh that uses the shader's standard Bevy vertex stage.
+    pub vertex_shader: Option<String>,
     pub window_m: f32,
     /// Visual-quality downsample target (samples per side). `0` = native (no
     /// decimation). Re-issue the command with a different value to rebuild the
     /// same site at another quality and compare.
     pub target_res: u32,
-    /// Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of
-    /// one static mesh; collider/physics unchanged. Production visual path.
+    /// Stream camera-driven CDLOD tiles using the authored terrain material
+    /// instead of one static mesh; collider/physics unchanged. Production visual path.
     pub lod_viz: bool,
     /// Stream a canonical-res collider ring around runtime physical support
     /// footprints instead of one static full-DEM collider (replaces it — physics
@@ -545,6 +548,25 @@ fn on_spawn_dem_terrain(
     let ev = trigger.event();
     if ev.uri.is_empty() {
         warn!("[dem-terrain] SpawnDemTerrain with empty uri ignored");
+        return;
+    }
+    if ev.shader.trim().is_empty() {
+        warn!(
+            "[dem-terrain] SpawnDemTerrain for '{}' has no shader source; author a UsdShade material or provide `shader`",
+            ev.uri
+        );
+        return;
+    }
+    if ev.lod_viz
+        && ev
+            .vertex_shader
+            .as_deref()
+            .is_none_or(|source| source.trim().is_empty())
+    {
+        warn!(
+            "[dem-terrain] SpawnDemTerrain for '{}' enables lod_viz without a CDLOD vertex shader source",
+            ev.uri
+        );
         return;
     }
     // Compose the layer stack: just a crater layer when requested. (The USD path
@@ -577,9 +599,15 @@ fn on_spawn_dem_terrain(
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
+    let mut material = ShaderLook::new(lunco_assets::engine_asset_uri(&ev.shader));
+    material.vertex_shader = ev
+        .vertex_shader
+        .as_deref()
+        .map(lunco_assets::engine_asset_uri);
     let mut e = commands.spawn((
         DemTerrainSurface,
         Name::new("DemTerrain"),
+        material,
         DemTerrainRequest {
             uri: ev.uri.clone(),
             half_window,
@@ -587,7 +615,6 @@ fn on_spawn_dem_terrain(
             lod_viz: ev.lod_viz,
             collider_ring: ev.collider_ring,
             collider: ev.collider,
-            with_default_material: true,
         },
         stack,
         Transform::IDENTITY,
@@ -952,7 +979,6 @@ pub struct DemWorkerJob {
     collider_ring: bool,
     collider: crate::collider_ring::TerrainColliderSettings,
     lod_viz: bool,
-    with_default_material: bool,
     target_res: usize,
     #[cfg(target_arch = "wasm32")]
     pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
@@ -1239,7 +1265,6 @@ fn start_dem_builds(
                 collider_ring,
                 collider,
                 lod_viz,
-                with_default_material: req.with_default_material,
                 target_res: req.target_res,
                 download_progress: download_progress.clone(),
                 cache_key: cache_key.clone(),
@@ -1461,9 +1486,9 @@ fn finish_dem_builds(
     mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
     // Optional so the headless server (no render assets) still builds colliders.
     //
-    // There is no `Assets<StandardMaterial>` here any more: the default surface is
-    // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
-    // this crate names no material and links no `bevy_pbr`.
+    // There is no material store here: the terrain owner already carries its
+    // `ShaderLook` intent and `lunco-render-bevy` performs the GPU bind, so this
+    // crate names no concrete material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -1506,7 +1531,6 @@ fn finish_dem_builds(
             req.collider_ring,
             req.collider,
             req.lod_viz,
-            req.with_default_material,
             built,
             meshes.as_deref_mut(),
         );
@@ -1524,7 +1548,6 @@ fn assemble_dem_build(
     collider_ring: bool,
     collider: crate::collider_ring::TerrainColliderSettings,
     lod_viz: bool,
-    with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
 ) {
@@ -1564,8 +1587,6 @@ fn assemble_dem_build(
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
                     crate::stream_viz::TerrainNodeErrors::default(),
-                    // Default Lit; switchable live in the Inspector (Terrain Shader).
-                    crate::stream_viz::TerrainShaderMode::default(),
                 ));
             }
             if collider_ring {
@@ -1607,17 +1628,10 @@ fn assemble_dem_build(
             bevy::asset::RenderAssetUsages::default(),
         ));
         commands.entity(entity).try_insert(Mesh3d(handle));
-        // Default surface only for the standalone command path; the USD path authors
-        // its own via `materialType` (don't clobber it). Stated as INTENT —
-        // `lunco-render-bevy` turns it into a `StandardMaterial`, and a headless
-        // build simply keeps the data and binds nothing.
-        if with_default_material {
-            commands
-                .entity(entity)
-                .try_insert(lunco_render::PbrLook::matte(
-                    Color::srgb(0.30, 0.29, 0.27).into(),
-                ));
-        }
+        // The request/command path places a `ShaderLook` on the terrain owner before
+        // this mesh is assembled. The generic render binder therefore supplies the
+        // concrete material; this assembly code never chooses a shader or creates a
+        // second material intent.
     }
     let mode = match (lod_viz, collider_ring) {
         (true, true) => " [lod-viz + collider-ring]",
@@ -1682,8 +1696,8 @@ fn finish_dem_worker(
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     // `materials: Assets<StandardMaterial>` is GONE (render decoupling): `assemble_dem_build`
-    // no longer binds a material here — it states a `PbrLook` intent and `lunco-render-bevy`
-    // does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
+    // no longer binds a material here — the terrain owner carries a `ShaderLook` intent and
+    // `lunco-render-bevy` does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
     // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
@@ -1777,7 +1791,6 @@ fn finish_dem_worker(
                     job.collider_ring,
                     job.collider,
                     job.lod_viz,
-                    job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
                 );
@@ -1875,7 +1888,6 @@ fn finish_dem_worker(
                         job.collider_ring,
                         job.collider,
                         job.lod_viz,
-                        job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
                     );
@@ -2938,7 +2950,6 @@ mod visual_product_tests {
             lod_viz: false,
             collider_ring: false,
             collider: crate::collider_ring::TerrainColliderSettings::default(),
-            with_default_material: false,
         });
 
         app.update();
@@ -2977,7 +2988,6 @@ mod visual_product_tests {
                 lod_viz: false,
                 collider_ring: false,
                 collider: crate::collider_ring::TerrainColliderSettings::default(),
-                with_default_material: false,
             })
             .id();
 
