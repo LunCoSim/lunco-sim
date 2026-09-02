@@ -168,6 +168,17 @@ hidden open preview without changing the user's visible focus. The response
 marks no-selection, multi-selection, stale entries, and duplicate projected
 paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
+For numeric part transforms, use the focused preview's Inspector Transform
+section or call the existing `assembly_edit::transform(doc, edit_target, path,
+translation, rotation, parent_gen)` helper with the exact selection context.
+Preview values are local canonical metres and Euler XYZ degrees; the Inspector
+commits changed translation and/or rotation fields as one journaled
+`ApplyUsdOps` edit.
+Do not send a preview entity through `MoveEntity`: that command owns live
+BigSpace/physics identities, while the preview owns only the explicit USD
+document lease. Commit after a coherent value entry so one gesture creates one
+change set, then inspect the returned generation and screenshot the projected
+result.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
 `panel_templates(preview, doc, edit_target)` to discover the nine existing

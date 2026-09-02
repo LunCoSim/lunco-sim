@@ -176,6 +176,17 @@ an arbitrary entity. `assembly_edit::selection_context()` reads the focused
 context and `selection_context_for(preview)` reads a hidden open preview
 without changing user-visible focus.
 
+The Inspector uses that same lease boundary for numeric transform edits. A
+selected entity under the focused preview root is edited as its composed USD
+prim's local canonical transform: the controls display metres and Euler XYZ
+degrees and submit one `ApplyUsdOps` change set containing the changed existing
+`SetTranslate` and/or `SetRotate` operation after a value is committed. The command
+uses the preview's explicit document, edit target, and projected generation, so
+stale edits are rejected and the USD projector remains the only preview update
+owner. Live simulation entities continue to use `MoveEntity`, which owns
+BigSpace/physics seating; a preview entity is never sent through that live
+identity path.
+
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,
