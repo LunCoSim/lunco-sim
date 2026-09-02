@@ -113,6 +113,9 @@ cargo run --bin lunica      # Modelica workbench
 - Slot-setter DSL (`set_side_browser` / `set_center` /
   `set_right_inspector` / `set_bottom`) — convenience for Perspective
   presets.
+- Multi-instance tabs can be seeded by a perspective with
+  `WorkbenchLayout::open_instance`; the instance panel's `default_slot()`
+  determines the insertion region and cached user layouts remain authoritative.
 - **Perspectives** (renamed from the earlier `Workspace` trait — the
   latter is now taken for the editor session concept). Register any
   number; registered perspectives are API/tutorial-available, and those
