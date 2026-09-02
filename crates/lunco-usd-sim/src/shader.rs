@@ -73,14 +73,12 @@ pub fn apply_usd_shader_materials(
     // loader. Later authored generations read the canonical live stage.
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
-    settings: Option<Res<lunco_settings::TerrainSettings>>,
     // For `asset`-typed shader inputs (texture layers): root-relative paths
     // resolve against the SCENE's own source root and load through the asset
     // server — the same authority rule as the sandbox layer binder (the scene
     // the material came from decides the root, never a guessed twin).
     asset_server: Res<AssetServer>,
 ) {
-    let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     for (entity, prim_path, visual_target, procedural_skybox, instance_projection) in q.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -98,7 +96,6 @@ pub fn apply_usd_shader_materials(
             prim_path,
             &sdf_path,
             &mut commands,
-            enable_shaders,
             &asset_server,
             visual_target.map(|target| target.0),
             procedural_skybox,
@@ -117,7 +114,6 @@ fn apply_usd_shader_material_read(
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
     commands: &mut Commands,
-    enable_shaders: bool,
     asset_server: &AssetServer,
     visual_target: Option<Entity>,
     procedural_skybox: bool,
@@ -125,14 +121,14 @@ fn apply_usd_shader_material_read(
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
 
-    // TERRAIN prims are excluded: a DEM terrain's material is authored by the
-    // terrain pipeline (engine-filled height/shadow params, derived maps), and
-    // its bound Material network is consumed by the terrain layer binder
-    // (`lunco-luncosim::bind_terrain_layers`) instead. Minting a ShaderLook
-    // here would hand the terrain entity a SECOND material that replaces the
-    // engine-authored one — losing the heightfield binding and every engine
-    // param the moment a scene binds a Material to its Terrain prim.
-    if reader.text(sdf_path, "lunco:assetMode").is_some() {
+    // Asset-backed scene payloads own their visual material in the payload and
+    // are not terrain surfaces. A DEM terrain is different: its standard
+    // UsdShade binding is the authoritative production material template for
+    // both the static mesh and streamed CDLOD tiles. The terrain systems add
+    // only their engine-owned geometry/map inputs to that intent.
+    if reader.text(sdf_path, "lunco:assetMode").is_some()
+        && !reader.has_api_schema(sdf_path, "LunCoTerrainAPI")
+    {
         return;
     }
 
@@ -155,12 +151,6 @@ fn apply_usd_shader_material_read(
     // and `engine_asset_uri` re-adding the scheme for the loader. A `twin://` custom
     // shader is left schemed and passes through untouched.
     let shader_path = lunco_assets::engine_asset_rel(&raw_shader_path).to_string();
-
-    if !enable_shaders
-        && (shader_path == "shaders/regolith.wgsl" || shader_path == "shaders/terrain_layered.wgsl")
-    {
-        return;
-    }
 
     // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
     // library (`#define_import_path`, meant to be `#import`ed — e.g.

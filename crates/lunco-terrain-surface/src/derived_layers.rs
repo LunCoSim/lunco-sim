@@ -15,12 +15,10 @@
 //!   texture layers of an LOD tile only when the corresponding USD role is absent.
 //!   The initial Lit tile set waits for this product, so publishing it cannot
 //!   rewrite a visible terrain's materials in one frame;
-//! - the **static-mesh path** binds them onto the terrain's own `ShaderMaterial`
-//!   (`terrain_layered.wgsl` slots). That semantic material is created by
-//!   `lunco-render-bevy`, so there is no intent component to restate — filling its
-//!   slots means naming `MeshMaterial3d`, and that lives in `lunco-render-bevy`
-//!   (`terrain_maps.rs`), the one crate allowed to. It is why this crate can publish
-//!   the maps without linking `bevy_pbr`.
+//! - the **static-mesh path** consumes them through the terrain owner's existing
+//!   [`ShaderLook`](lunco_materials::ShaderLook) intent, using the same source
+//!   reconciler as streamed tiles. No concrete material is created or mutated here;
+//!   `lunco-render-bevy` remains only the generic intent binder.
 //!
 //! Render-gated by data, not `cfg`: the bake only starts when `Assets<Image>`
 //! exists, so the headless server (no render assets) never bakes — it needs only
@@ -42,6 +40,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_materials::{ParamValue, ShaderLook, TextureLayer};
 // `wgpu-types`, not `bevy::render` — these are plain POD texture descriptors
 // (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
 // no naga. `bevy::render::render_resource` merely re-exports them, and importing it
@@ -88,12 +87,6 @@ fn raster_texel_size_m(half_extent: f64, res: usize) -> f64 {
     texel_size_m
 }
 
-/// One-shot marker: this terrain's derived layers are bound onto its own
-/// static-mesh `ShaderMaterial`. Stops re-scanning. Streamed tiles don't use
-/// this — they read [`TerrainDerivedMaps`] directly.
-#[derive(Component)]
-pub struct DerivedLayersBuilt;
-
 /// The published derived maps for a terrain — GPU handles every terrain render
 /// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=unused;
 /// `normal` packs the DEM-local ENU meso normal in RGB and the albedo scalar in A. Removed
@@ -120,10 +113,10 @@ pub struct TerrainDerivedMaps {
 /// same USD layer roles and weights; the streamed path chooses an engine-derived
 /// product only for a role that USD did not author.
 ///
-/// The reader (`bind_terrain_layers`) lives in the editor crate because it
-/// needs the composed stage; it publishes here so the streaming path can
-/// consume the result without depending on the editor.
-#[derive(Component, Clone, Default)]
+/// The generic USD shader projection already resolves the material network into
+/// `ShaderLook`. This component is the terrain-specific view of those same
+/// fixed texture roles; it is derived from the look rather than parsed again.
+#[derive(Component, Clone, Default, PartialEq)]
 pub struct TerrainAuthoredMaps {
     /// `inputs:albedo_map` — the site's real colour mosaic.
     pub albedo: Option<Handle<Image>>,
@@ -147,6 +140,34 @@ pub struct TerrainAuthoredMaps {
 }
 
 impl TerrainAuthoredMaps {
+    /// Project the terrain roles already present in a generic `ShaderLook`.
+    ///
+    /// USD owns the material-network read. This conversion only gives the terrain
+    /// stream a typed view of the existing texture handles and weights, so static
+    /// and streamed terrain use the same source without a second USD reader.
+    pub(crate) fn from_shader_look(look: &ShaderLook) -> Self {
+        let weight = |name: &str, map_present: bool| match look.values.get(name) {
+            Some(ParamValue::F32(value)) => *value,
+            _ if map_present => 1.0,
+            _ => 0.0,
+        };
+        let albedo = look.textures.get(&TextureLayer::Albedo).cloned();
+        let mineral = look.textures.get(&TextureLayer::Mineral).cloned();
+        let surface = look.textures.get(&TextureLayer::Surface).cloned();
+        let normal = look.textures.get(&TextureLayer::Normal).cloned();
+        Self {
+            weight_albedo: weight("weight_albedo", albedo.is_some()),
+            weight_mineral: weight("weight_mineral", mineral.is_some()),
+            weight_rough: weight("weight_rough", surface.is_some()),
+            weight_ao: weight("weight_ao", surface.is_some()),
+            weight_normal: weight("weight_normal", normal.is_some()),
+            albedo,
+            mineral,
+            surface,
+            normal,
+        }
+    }
+
     /// Whether USD's surface map is an active material source. A zero-weight
     /// authored map is intentionally inactive, so the engine-derived product
     /// remains available for that role.
@@ -295,7 +316,7 @@ fn mark_derived_stale(
         let bounded = region.is_some_and(|r| r.bounded);
         let mut e = commands.entity(entity);
         if !bounded {
-            e.try_remove::<(TerrainDerivedMaps, DerivedLayersBuilt)>();
+            e.try_remove::<TerrainDerivedMaps>();
         }
         e.try_remove::<DerivedDirtyRegion>()
             .try_insert(DerivedMapsStale {
@@ -413,7 +434,7 @@ fn profile_for_terrain(
 /// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
 /// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
 /// v6: surface-map alpha is no longer a baked slope hazard (nothing sampled it;
-/// hazard is a live per-pixel view off the `overlay_*` uniforms). The frozen
+/// hazard is evaluated by the separate terrain diagnostic material). The frozen
 /// safe/cliff angles left the key with it.
 /// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
 /// band-limited to 6 texels, so full-res sampling was resolving detail the
@@ -732,7 +753,6 @@ fn cancel_derived_bakes_on_scene_teardown(
             With<DerivedDirtyRegion>,
             With<TerrainDerivedMaps>,
             With<TerrainAuthoredMaps>,
-            With<DerivedLayersBuilt>,
         )>,
     >,
     mut status: ResMut<TerrainDerivedStatus>,
@@ -744,7 +764,6 @@ fn cancel_derived_bakes_on_scene_teardown(
             DerivedDirtyRegion,
             TerrainDerivedMaps,
             TerrainAuthoredMaps,
-            DerivedLayersBuilt,
         )>();
     }
     *status = TerrainDerivedStatus::default();
@@ -891,9 +910,6 @@ pub(crate) fn register(app: &mut App) {
         );
     app.add_systems(
         Update,
-        // The static-mesh bind (`lunco-render-bevy`'s `apply_derived_layers`) is no
-        // longer in this chain: it names a material, so it lives on the render side.
-        // It retries until the async USD material exists, so it needs no ordering.
         (
             mark_derived_stale_on_quality_change
                 .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
@@ -1008,7 +1024,7 @@ mod tests {
             lunco_core::SceneTeardown,
             cancel_derived_bakes_on_scene_teardown,
         );
-        let entity = app.world_mut().spawn(DerivedLayersBuilt).id();
+        let entity = app.world_mut().spawn_empty().id();
         *app.world_mut().resource_mut::<TerrainDerivedStatus>() = TerrainDerivedStatus {
             active: true,
             ready: 0,
@@ -1018,10 +1034,7 @@ mod tests {
 
         lunco_core::run_scene_teardown(app.world_mut());
 
-        assert!(app
-            .world()
-            .get_entity(entity)
-            .is_ok_and(|entity| !entity.contains::<DerivedLayersBuilt>()));
+        assert!(app.world().get_entity(entity).is_ok());
         assert_eq!(
             *app.world().resource::<TerrainDerivedStatus>(),
             TerrainDerivedStatus::default()

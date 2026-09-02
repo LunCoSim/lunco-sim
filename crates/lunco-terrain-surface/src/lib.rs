@@ -4,7 +4,7 @@
 //! cell at 5 cm detail is ~1.6 billion samples). This crate streams the surface
 //! as a grid of **tiles** around the viewer, each built from a **DEM /
 //! heightfield source**, with dynamic level-of-detail. It is the streaming
-//! counterpart to the procedural look in `lunco-materials` and the scatter in
+//! counterpart to the authored USD material intent and the scatter in
 //! `lunco-obstacle-field`.
 //!
 //! Design constraints (see `docs/architecture/terrain-layered-rendering.md` Parts F–G
@@ -62,9 +62,7 @@ pub use collider_ring::{
     TerrainColliderSettings, MAX_COLLIDER_DEPTH, MAX_COLLIDER_RESOLUTION, MIN_COLLIDER_DEPTH,
     MIN_COLLIDER_RESOLUTION,
 };
-pub use derived_layers::{
-    DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus,
-};
+pub use derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus};
 pub use georef::{FlatSiteSurface, TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
@@ -85,8 +83,7 @@ pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
     LodFrozen, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
-    TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus,
-    TileShadowCache,
+    TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus, TileShadowCache,
 };
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{

@@ -103,6 +103,13 @@ let moon = ShaderLook::new("shaders/terrain_geomorph.wgsl")
     .with("dust_scale", ParamValue::F32(0.004));
 ```
 
+This constructor is the generic intent API, not terrain material ownership. In
+production, the terrain's standard USD `UsdShade` network authors the shader
+source and its texture/parameter inputs; the USD projection publishes the same
+`ShaderLook` consumed by the render binder. A command may supply an explicit
+look for a tool-created terrain, but the streamed terrain path never selects a
+shader in Rust.
+
 The shader merges them. A shader that does not declare a binding is unaffected by
 that layer being set (`None` binds Bevy's fallback image), so **one slot set serves
 every shader** — you do not get a new material type per look.

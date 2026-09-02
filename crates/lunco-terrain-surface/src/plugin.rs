@@ -34,7 +34,6 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::georef::FlatSiteSurface>();
-        app.register_type::<crate::stream_viz::TerrainShaderMode>();
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
         // The streamed mesh cache and LOD controls are rendering-quality resources even when
         // this plugin runs headless: the CPU-side cache still needs the same
@@ -69,9 +68,10 @@ impl Plugin for TerrainSurfacePlugin {
             PreUpdate,
             crate::surface_query::update_terrain_physics_frame_poses,
         );
-        // Analysis-overlay VIEW: the `TerrainOverlayParams` resource + `SetTerrainOverlay`
-        // command + live-sync system that paints the slope-hazard transfer over the lit
-        // tiles (in-material shading plane of Data→Transfer→Blend). See `crate::overlay`.
+        // Analysis diagnostic VIEW: the `TerrainOverlayParams` resource +
+        // `SetTerrainOverlay` command + live-sync system that replaces resident
+        // production tile materials with the separate diagnostic material. See
+        // `crate::overlay`.
         crate::overlay::register(app);
         // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
         // main thread and publish them as `TerrainDerivedMaps`. Inert headless
@@ -117,8 +117,8 @@ impl Plugin for TerrainSurfacePlugin {
                 // Reconcile one complete terrain material source selection when
                 // USD-authored or engine-derived maps publish. This keeps the
                 // two source owners from racing through separate late binders.
-                crate::stream_viz::bind_terrain_maps_to_tiles,
-                crate::stream_viz::sync_removed_terrain_maps_to_tiles,
+                crate::stream_viz::bind_terrain_maps_to_materials,
+                crate::stream_viz::sync_removed_terrain_maps_to_materials,
                 crate::stream_viz::bind_shadow_cache_to_tiles,
                 // Change-driven: early-outs unless a `TerrainLodViz` removal
                 // event fired this frame (stays in `Update` so its

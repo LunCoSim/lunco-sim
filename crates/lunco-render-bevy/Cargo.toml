@@ -35,11 +35,8 @@ lunco-render = { path = "../lunco-render" }
 # to). `lunco-materials` is render-only by nature — it owns the `AsBindGroup` — so
 # it belongs on THIS side of the boundary, not in a domain crate.
 lunco-materials = { path = "../lunco-materials" }
-# The static-mesh terrain's derived-layer bind (`terrain_maps.rs`). Its material is
-# authored asynchronously by `lunco-usd-sim`, so there is no intent component to
-# edit — filling its map slots means naming `MeshMaterial3d<ShaderMaterial>`, which
-# only this crate may do. Moving that one system here is what let
-# `lunco-terrain-surface` stop naming a material at all.
+# Terrain-derived map selection is kept on the render-free `ShaderLook` intent in
+# `lunco-terrain-surface`; this dependency lets the generic binder consume it.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 # The horizon heightfield/shadow-cache BAKES (render-free, they stay there) plus
 # `SetEnvironmentLight`. The two render-bound halves — the per-frame uniform feed

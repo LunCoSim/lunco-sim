@@ -149,10 +149,10 @@ class "LunCoTerrainLayerAPI" (
 {
     uniform token lunco:layer = "" (
         doc = """Which layer kind this prim is: `dem`, `craters`, `rocks`,
-        `overzoom`, `shader` (the registered composable layers), plus `rock` (one
+        `overzoom`, plus `rock` (one
         hand-placed boulder) and `edit` (one brush edit). Uniform: a layer cannot
         change kind over time."""
-        allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "shader", "edit"]
+        allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "edit"]
     )
     asset lunco:layer:demSource = @@ (
         doc = """Path to the DEM source, resolved against the open document —
@@ -161,8 +161,7 @@ class "LunCoTerrainLayerAPI" (
         `asset`, not `string`. A DEM source is a genuine asset reference: only an
         `asset` is seen by USD's resolver and discoverable by anything that walks a
         layer for the files a scene depends on — asset-sync's reference closure,
-        packaging, `usdzip`. Held as a `string` the DEM travelled nowhere; the same
-        reasoning that moved `lunco:material:shader` to `asset` applies here."""
+        packaging, `usdzip`. Held as a `string` the DEM travelled nowhere."""
     )
     float lunco:layer:windowM = 0 (
         doc = "Side length of the DEM patch, in metres; zero means the whole map."
@@ -182,9 +181,6 @@ class "LunCoTerrainLayerAPI" (
     bool lunco:layer:colliderRing = true (
         doc = """Build colliders only in a ring around the origin rather than
         across the whole patch."""
-    )
-    token lunco:layer:mode = "" (
-        doc = "Sub-mode of a layer kind (the `shader` layer's variant)."
     )
     float lunco:layer:x = 0 (
         doc = "Terrain-local X (metres) — hand-placed instance layers."

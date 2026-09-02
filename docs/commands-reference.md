@@ -3072,7 +3072,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetTerrainOverlay`
 
- Arm / re-tune the terrain analysis overlay at runtime (MCP / scripting / UI).
+ Arm / re-tune the terrain analysis diagnostic at runtime (MCP / scripting / UI).
 
  **Every field is optional: an OMITTED field keeps its current value.** So
  `{ "enabled": true }` arms the overlay with the existing angles/opacity, and
@@ -3092,6 +3092,8 @@ actually call, with the fields the deserializer actually accepts. See the
 | `cliff_deg` | `Option < f32 >` |   |
 | `opacity` | `Option < f32 >` |   |
 | `lod_depth` | `Option < bool >` |  Switch the overlay to the LOD-depth view (still needs `enabled`). |
+| `shader` | `Option < String >` |  Replace the diagnostic fragment shader asset. |
+| `vertex_shader` | `Option < String >` |  Replace the diagnostic vertex shader asset. |
 
 #### `SetTerrainRenderingQuality`
 
@@ -3128,14 +3130,21 @@ actually call, with the fields the deserializer actually accepts. See the
  16 km map is ~10 M verts; prefer tiled streaming). Detail is **never**
  decimated.
 
+ The command path requires an explicit material source. Prefer a USD terrain
+ prim with a standard `UsdShade` `material:binding`; for this standalone command,
+ `shader` names the fragment source and `vertex_shader` names the CDLOD vertex
+ source when `lod_viz` is enabled. The terrain engine does not select a shader.
+
 - *defined in:* `crates/lunco-terrain-surface/src/terrain.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `uri` | `String` |   |
+| `shader` | `String` | Explicit fragment WGSL asset path for the terrain material. Empty is rejected. |
+| `vertex_shader` | `Option < String >` | Explicit CDLOD vertex WGSL asset path; required when `lod_viz` is enabled. |
 | `window_m` | `f32` |   |
 | `target_res` | `u32` |  Visual-quality downsample target (samples per side). `0` = native (no  decimation). Re-issue the command with a different value to rebuild the  same site at another quality and compare. |
-| `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of  one static mesh; collider/physics unchanged. Production visual path. |
+| `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles using the authored terrain material instead of  one static mesh; collider/physics unchanged. Production visual path. |
 | `collider_ring` | `bool` |  Stream a canonical-res collider ring around runtime physical support  footprints instead of one static full-DEM collider (replaces it — physics  rides the streamed tiles). |
 | `collider` | `crate :: collider_ring :: TerrainColliderSettings` |  Physics-only collider-ring lattice. Omitted command fields use the  documented terrain-physics defaults and never read graphics quality. |
 | `crater_density` | `f32` |  Convenience: add a crater layer at this density (craters per hectare). `0`  (default) = no craters. The USD path instead composes layers as child prims  (see [`crate::terrain_layers`]); this is for the quick command path. |

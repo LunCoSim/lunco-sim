@@ -139,7 +139,7 @@ both feed the runtime oracle, and must not be conflated:
    This is where authored values live and how edits compose across peers.
 
 2. **Terrain content layers** (`lunco:layer = "dem" | "craters" | "rocks" |
-   "shader"` child prims under a `lunco:assetMode="layered"` terrain prim) — the
+   material-bound terrain prim under a `lunco:assetMode="layered"` terrain prim) — the
    *domain* stack. After USD composition resolves the stage, the bridge walks the
    composed `lunco:layer` child prims **in prim order** and folds each into the
    runtime source stack (`TerrainLayerStack` in
@@ -308,7 +308,7 @@ it is three planes over the *one* Stage:
 
 | Plane | Terrain content | Mechanism |
 |---|---|---|
-| **Authoring** (USD Stage) | terrain root + `lunco:layer` child prims (dem / craters / carve / rocks / shader) + georef / anchor | edits = `UsdOp` on an EditTarget; composition, reference-arc cascade, RBAC, journal, cross-peer sync all **free** from the canonical machinery |
+| **Authoring** (USD Stage) | terrain root + standard `UsdShade` material + `lunco:layer` child prims (dem / craters / carve / rocks) + georef / anchor | edits = `UsdOp` on an EditTarget; composition, reference-arc cascade, RBAC, journal, cross-peer sync all **free** from the canonical machinery |
 | **Projection membrane** (StageSink → ECS) | `TerrainLayerStack`, `TerrainGeoref`, `DemTerrainRequest` components | a terrain `UsdAttrProjection`; change-driven — only the prims that resynced re-project |
 | **Derived runtime** (oracle → geometry) | `HeightSource` stack → CDLOD tiles + collider ring | sampled on demand; content-addressed via `lunco-precompute`; regen = an atomic activation unit |
 

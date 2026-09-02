@@ -455,8 +455,8 @@ pub fn hazard_from_slope(slope_rad: f32, safe_rad: f32, cliff_rad: f32) -> f32 {
 /// be empty (→ 0) until a rock-density layer feeds it.
 ///
 /// `A` once carried a slope-hazard bake. Hazard is now a *view*, not baked data:
-/// the shader evaluates it per-pixel from the geometric normal against the live
-/// `overlay_*` uniforms ([`crate::transfer::TransferFn::SlopeHazard`]), so the
+/// the separate diagnostic shader evaluates it per-pixel from the geometric normal
+/// against its live uniforms ([`crate::transfer::TransferFn::SlopeHazard`]), so the
 /// critical angle re-tunes with no re-bake. Nothing sampled `A`, and baking it
 /// pinned a second, frozen copy of the safe/cliff angles into the cache key.
 pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32]) -> Vec<u8> {

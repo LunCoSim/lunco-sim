@@ -31,7 +31,7 @@
 //! **`lunco-render-bevy::horizon_shade`**. It is a per-frame *uniform feed*,
 //! not appearance intent, so `PbrLook`/`ShaderLook` cannot express it; the
 //! binder crate (the only one allowed to name a material) hosts it instead —
-//! the same move `terrain_maps.rs` made for `lunco-terrain-surface`. See
+//! the same render-boundary split used by terrain map source reconciliation. See
 //! `docs/architecture/render-decoupling.md`.
 //!
 //! ## Pipeline
@@ -42,10 +42,10 @@
 //!    via the [`HorizonShadowTerrain`] marker (USD:
 //!    `custom bool lunco:terrain:horizonShadows`).
 //! 2. **Material wiring** (idempotent, RENDER-SIDE): the heightfield
-//!    (R32Float texture) and sun uniforms are written into the terrain's
-//!    `ShaderMaterial` — the authored one (e.g. regolith) if present, else a
-//!    default `terrain_layered.wgsl` is applied, keeping the prim's
-//!    `displayColor` as albedo. The mesh gets planar UVs (done here, in
+//!    (R32Float texture) and sun uniforms are written into an already-bound
+//!    terrain `ShaderMaterial`. Its appearance comes from the standard USD
+//!    `UsdShade` network or an explicit command-owned look; missing material
+//!    intent remains unbound. The mesh gets planar UVs (done here, in
 //!    [`install_horizon_map`]) so shaders can address the heightfield.
 //!
 //!    The terrain stays a **CSM caster**: within the sun's cascade range the

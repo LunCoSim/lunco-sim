@@ -1,7 +1,7 @@
 //! Composable **terrain layer stack**.
 //!
 //! A DEM terrain is built from a *stack of layers*, authored as composable USD child
-//! prims (`lunco:layer = "dem" | "craters" | "rocks" | "shader" | …`). Each non-ground
+//! prims (`lunco:layer = "dem" | "craters" | "rocks" | …`). Each non-ground
 //! layer contributes in one of these ways:
 //! - **height_modifier** — an ANALYTIC [`HeightModifier`](lunco_terrain_core::HeightModifier)
 //!   folded into the terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle)
@@ -10,11 +10,10 @@
 //! - **stamp** height deltas into the working raster `HeightGrid` — only for layers
 //!   that genuinely rasterise; prefer `height_modifier`;
 //! - **scatter** entities onto the built surface (rocks, props, …) — main thread;
-//! - **configure** the terrain's render material (the surface shader IS a layer).
 //!
 //! The build / scatter / regenerate systems iterate the per-terrain [`TerrainLayerStack`]
 //! uniformly, so **adding a new layer type needs no changes to them**: drop a new file
-//! next to [`craters`] / [`rocks`] / [`shader`], implement [`TerrainLayer`], write a
+//! next to [`craters`] / [`rocks`], implement [`TerrainLayer`], write a
 //! `fn(&dyn LayerAttrSource)` parser, and register it under a `lunco:layer` type with
 //! [`TerrainLayerAppExt::add_terrain_layer`]. One layer = one file.
 //!
@@ -27,7 +26,6 @@ mod craters;
 mod edits;
 mod overzoom;
 mod rocks;
-mod shader;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,7 +66,7 @@ pub enum TerrainLayerParams {
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
 /// (the Inspector's editable model), preserving every other layer (the surface
-/// shader, the ground `dem`, …). Mutating the stack through this trips
+/// material intent, the ground `dem`, …). Mutating the stack through this trips
 /// `Changed<TerrainLayerStack>`, so the terrain's off-thread `start_dem_restamp`
 /// re-bakes — NO full scene reload, so the live world is never duplicated. This is
 /// how the obstacle-field Inspector panel drives the composable USD-layer terrain.
@@ -148,7 +146,7 @@ pub struct LayerEntry {
 pub const EDITS_LAYER_ID: &str = "edits";
 
 /// The composed, ordered layers of a DEM terrain (the non-ground stamp / scatter /
-/// shader layers; the `dem` ground layer drives the build itself). Authored as USD
+/// scatter layers; the `dem` ground layer drives the build itself). Authored as USD
 /// child prims; consumed by the build/scatter/regenerate systems. Each entry carries
 /// a stable [`LayerId`] so a specific layer can be addressed (edited / removed /
 /// reordered) — several same-kind layers coexist.
@@ -339,7 +337,7 @@ pub trait LayerAttrSource {
     /// Full precision — terrain-local metres, where `f32` would quantise a centre.
     fn get_f64(&self, name: &str) -> Option<f64>;
     fn get_i64(&self, name: &str) -> Option<i64>;
-    /// A `string`- or `token`-typed textual value (`lunco:layer:mode`). NOT for a
+    /// A `string`- or `token`-typed textual value. NOT for a
     /// file reference — a DEM/asset path is `asset`-typed, read via [`Self::get_asset`].
     fn get_string(&self, name: &str) -> Option<String>;
     /// The authored path of an `asset`-typed reference (`lunco:layer:demSource`), as a
@@ -364,9 +362,8 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     pub oracle: &'a crate::oracle::SurfaceOracle,
     pub commands: &'a mut Commands<'w, 's>,
     /// `None` headless — and "are we a render build?" is now exactly "is this
-    /// `Some`?". There is no material store here: a layer states its surface as
-    /// appearance INTENT (`lunco_render::PbrLook`, or a `ShaderLook` for a custom
-    /// shader) next to its `Mesh3d`, and `lunco-render-bevy` binds it.
+    /// `Some`?". Terrain appearance is owned by the streamed terrain material;
+    /// this context is only for terrain layer scattering.
     pub meshes: Option<&'a mut Assets<Mesh>>,
     pub asset_server: &'a AssetServer,
     /// Boulder meshes shared across ALL rock layers on ALL terrains — a handful of
@@ -495,17 +492,13 @@ pub trait TerrainLayer: Send + Sync + 'static {
     /// The **serializable** form of this layer's stamp, when it has one — so the SAME
     /// stamp drives the wasm DEM Web Worker (which can't hold a `dyn TerrainLayer`) AND
     /// the native bake, deterministic from the seed. A stamp layer overrides this to
-    /// return its spec; non-stamp (scatter/shader) layers keep the `None` default and
+    /// return its spec; non-stamp (scatter) layers keep the `None` default and
     /// simply aren't applied in the off-thread bake. Keep in sync with [`Self::stamp`].
     fn stamp_spec(&self) -> Option<lunco_terrain_bake::StampSpec> {
         None
     }
     /// Scatter entities onto the built surface. Default: scatters nothing.
     fn scatter(&self, _cx: &mut LayerScatterCx) {}
-    /// Configure the terrain entity itself — its render material / shader. Runs on the
-    /// main thread once the height field + streaming components exist. Default: no-op.
-    fn configure(&self, _terrain: Entity, _commands: &mut Commands) {}
-
     /// Downcast hook — `Some(self)` for layers whose concrete type a caller needs to
     /// read back (e.g. the consolidated [`EditsLayer`]). Default: opaque.
     fn as_any(&self) -> Option<&dyn core::any::Any> {
@@ -549,7 +542,7 @@ pub fn terrain_layer_params(
 }
 
 /// Maps a `lunco:layer` type string → its parser. The USD bridge looks up each child
-/// layer prim's type here. Defaults to the built-ins (`craters`, `rocks`, `shader`);
+/// layer prim's type here. Defaults to the built-ins (`craters`, `rocks`);
 /// register more with [`TerrainLayerAppExt::add_terrain_layer`].
 #[derive(Resource, Clone)]
 pub struct TerrainLayerParserRegistry {
@@ -575,9 +568,6 @@ impl Default for TerrainLayerParserRegistry {
             "rock".to_string(),
             rocks::parse_rock_instance as TerrainLayerParser,
         );
-        parsers.insert("shader".to_string(), |attrs| {
-            Some(shader::parse_shader_layer(attrs))
-        });
         Self { parsers }
     }
 }
@@ -671,11 +661,7 @@ pub(crate) fn scatter_terrain_layers(
         commands
             .entity(entity)
             .try_remove::<TerrainScatterRefresh>();
-        // Material/shader layers configure the terrain entity first…
-        for entry in &stack.0 {
-            entry.layer.configure(entity, &mut commands);
-        }
-        // …then scatter layers spawn their entities.
+        // Scatter layers spawn their entities after the terrain oracle is ready.
         let mut cx = LayerScatterCx {
             terrain: entity,
             quality,

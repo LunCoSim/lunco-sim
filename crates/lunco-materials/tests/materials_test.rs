@@ -162,10 +162,11 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
     }
 }
 
-/// BOTH terrain render paths must reflect the authored-layer weights under the
-/// SAME names, because one authored scene feeds both: `terrain_layered.wgsl`
-/// draws a static-mesh site and `terrain_geomorph.wgsl` draws a streamed
-/// (`lodViz = true`) one.
+/// Each production terrain render path must reflect the authored-layer weights
+/// that it actually consumes. `terrain_layered.wgsl` draws a static-mesh site;
+/// `terrain_geomorph.wgsl` draws a streamed (`lodViz = true`) one and deliberately
+/// has no mineral slot because mineral classification is not part of its physical
+/// material contract.
 ///
 /// This is a silent-failure guard, not a formality. The binder sets these by
 /// name (`set_param(look, "weight_albedo", …)`); a name that does not exist in
@@ -175,7 +176,28 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
 /// which is exactly the bug step 4 existed to fix.
 #[test]
 fn both_terrain_paths_reflect_the_authored_layer_weights() {
-    for name in ["terrain_layered.wgsl", "terrain_geomorph.wgsl"] {
+    for (name, fields) in [
+        (
+            "terrain_layered.wgsl",
+            [
+                "weight_albedo",
+                "weight_mineral",
+                "weight_rough",
+                "weight_ao",
+                "weight_normal",
+            ],
+        ),
+        (
+            "terrain_geomorph.wgsl",
+            [
+                "weight_albedo",
+                "weight_rough",
+                "weight_ao",
+                "weight_normal",
+                "",
+            ],
+        ),
+    ] {
         let wgsl = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../assets/shaders")
@@ -184,7 +206,7 @@ fn both_terrain_paths_reflect_the_authored_layer_weights() {
         .unwrap_or_else(|_| panic!("{name} present"));
         let schema =
             ParamSchema::parse(&wgsl).unwrap_or_else(|| panic!("{name} Material struct reflects"));
-        for field in ["weight_albedo", "weight_mineral"] {
+        for field in fields.into_iter().filter(|field| !field.is_empty()) {
             assert_eq!(
                 schema.field(field).map(|f| f.ty),
                 Some(ParamType::F32),
