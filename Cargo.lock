@@ -13134,7 +13134,6 @@ dependencies = [
 [[package]]
 name = "transform-gizmo"
 version = "0.9.0"
-source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=51abe35ee39655b0b68c6b7727939fde7cabd725#51abe35ee39655b0b68c6b7727939fde7cabd725"
 dependencies = [
  "ahash",
  "ecolor 0.35.0",
@@ -13149,7 +13148,6 @@ dependencies = [
 [[package]]
 name = "transform-gizmo-bevy"
 version = "0.9.0"
-source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=51abe35ee39655b0b68c6b7727939fde7cabd725#51abe35ee39655b0b68c6b7727939fde7cabd725"
 dependencies = [
  "bevy_app",
  "bevy_asset",
