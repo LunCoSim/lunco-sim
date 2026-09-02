@@ -79,6 +79,7 @@
 //!   target; wasm performs the explicit work inline because it has no worker
 //!   thread pool.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::SunRenderState;
@@ -442,6 +443,73 @@ impl HorizonShadowCache {
     }
 }
 
+/// Change-gated world-to-terrain sun projection shared by cache and material
+/// consumers. BigSpace's finalized `GlobalTransform` and the render sun
+/// revision are the only inputs that can invalidate a terrain-local direction;
+/// stationary terrain and sun therefore do no per-frame reprojection.
+#[derive(Default)]
+pub struct TerrainSunProjectionCache {
+    entries: HashMap<Entity, TerrainSunProjection>,
+}
+
+struct TerrainSunProjection {
+    inverse: Affine3A,
+    sun_world: Vec3,
+    sun_local: Vec3,
+    sun_revision: u64,
+}
+
+impl TerrainSunProjectionCache {
+    /// Remove projection state for a terrain that left the world.
+    pub fn remove(&mut self, entity: Entity) {
+        self.entries.remove(&entity);
+    }
+
+    /// Project the render sun through a finalized terrain transform, reusing
+    /// the previous result until one of the projection inputs changes.
+    pub fn project_sun_local(
+        &mut self,
+        entity: Entity,
+        terrain_gt: &Ref<GlobalTransform>,
+        sun_world: Vec3,
+        sun_revision: u64,
+    ) -> Vec3 {
+        let transform_changed = terrain_gt.is_changed();
+        match self.entries.entry(entity) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let projection = entry.get_mut();
+                if transform_changed {
+                    projection.inverse = terrain_gt.affine().inverse();
+                }
+                if transform_changed
+                    || projection.sun_revision != sun_revision
+                    || projection.sun_world != sun_world
+                {
+                    projection.sun_world = sun_world;
+                    projection.sun_local = projection
+                        .inverse
+                        .transform_vector3(sun_world)
+                        .normalize_or_zero();
+                    projection.sun_revision = sun_revision;
+                }
+                projection.sun_local
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let inverse = terrain_gt.affine().inverse();
+                let sun_local = inverse.transform_vector3(sun_world).normalize_or_zero();
+                entry
+                    .insert(TerrainSunProjection {
+                        inverse,
+                        sun_world,
+                        sun_local,
+                        sun_revision,
+                    })
+                    .sun_local
+            }
+        }
+    }
+}
+
 /// In-flight async visibility-cache bake for a terrain entity (native only).
 #[derive(Component)]
 pub struct ShadowCacheBakeTask(Task<ShadowCacheResult>);
@@ -794,11 +862,11 @@ pub fn start_shadow_cache_bake(
         ),
         (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
     >,
-    mut inverse_cache: Local<std::collections::HashMap<Entity, Affine3A>>,
+    mut sun_projection_cache: Local<TerrainSunProjectionCache>,
     mut removed_maps: RemovedComponents<HorizonMap>,
 ) {
     for entity in removed_maps.read() {
-        inverse_cache.remove(&entity);
+        sun_projection_cache.remove(entity);
     }
     if !cfg.enabled {
         return;
@@ -813,10 +881,10 @@ pub fn start_shadow_cache_bake(
     let Some((_, tan_r, _csm_far)) = pick_sun(&sun) else {
         return;
     };
-    let Some(to_sun_world) = render_sun
-        .as_deref()
-        .and_then(|state| state.direction_to_sun_world)
-    else {
+    let Some(render_sun) = render_sun.as_deref() else {
+        return;
+    };
+    let Some(to_sun_world) = render_sun.direction_to_sun_world else {
         return;
     };
     let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
@@ -830,22 +898,12 @@ pub fn start_shadow_cache_bake(
             );
             continue;
         }
-        // The finalized render transform is the coordinate-frame boundary,
-        // but its inverse is stable while the terrain is stationary. Keep the
-        // expensive matrix inversion change-driven; only the vector projection
-        // and angular validity check run for a moving sun.
-        let inverse = match inverse_cache.entry(entity) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                if terrain_gt.is_changed() {
-                    *entry.get_mut() = terrain_gt.affine().inverse();
-                }
-                *entry.get()
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                *entry.insert(terrain_gt.affine().inverse())
-            }
-        };
-        let sun_local = inverse.transform_vector3(to_sun_world).normalize_or_zero();
+        let sun_local = sun_projection_cache.project_sun_local(
+            entity,
+            &terrain_gt,
+            to_sun_world,
+            render_sun.revision,
+        );
         // No sun / sun below horizon → the march handles it cheaply; no bake.
         if sun_local.y <= 1e-4 {
             continue;
