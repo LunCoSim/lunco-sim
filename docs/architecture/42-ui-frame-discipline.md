@@ -118,6 +118,11 @@ the physics solver empties. Never block that queue:
   Native MSL source readiness installs the source root immediately; the large
   generated palette index is decoded off-thread and publishes one readiness
   event for the browser to enrich its already-available bundled-model view.
+- The shared Modelica engine sync is revision- and completion-driven. Its
+  document-generation cursor scans the registry only after a document change,
+  an async parse/library completion, or an expired edit-debounce deadline;
+  completion workers use a mutex-ordered wake latch, so bounded drains do not
+  lose queued work and idle frames do not poll the engine.
 - **Frame-rate-independent animation.** Anything using time must
   take `dt` from `ui.ctx().input(|i| i.unstable_dt)` (egui) or
   `Time::delta` (bevy). Never assume 60 Hz.

@@ -26,12 +26,13 @@
 //!
 //! ## Sync semantics
 //!
-//! [`drive_engine_sync`] runs every `Update` tick. For each document
-//! in the registry it compares the document's generation against the
-//! per-doc cursor in [`EngineSyncCursor`]; on a delta it re-upserts
-//! the document's current source via
-//! [`crate::engine::ModelicaEngine::upsert_document`] (which feeds rumoca's
-//! content-hash artifact cache, so unchanged source between two
+//! [`drive_engine_sync`] runs when the registry revision changes, the engine's
+//! completion latch is set, or an edit-debounce deadline expires. For each
+//! document in the registry it compares
+//! the document's generation against the per-doc cursor in
+//! [`EngineSyncCursor`]; on a delta it re-upserts the document's current
+//! source via [`crate::engine::ModelicaEngine::upsert_document`] (which feeds
+//! rumoca's content-hash artifact cache, so unchanged source between two
 //! generations is a hashmap hit). Removed documents are flushed via
 //! [`ModelicaEngine::close_document`].
 //!
@@ -41,6 +42,7 @@
 
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::engine::ModelicaEngine;
@@ -62,14 +64,24 @@ pub fn global_engine_handle() -> Option<&'static ModelicaEngineHandle> {
 
 /// Process-wide handle to the workbench's [`ModelicaEngine`].
 ///
-/// `Clone` is cheap (Arc bump) so callers needing to hand a handle
+/// `Clone` is cheap (Arc bumps) so callers needing to hand a handle
 /// to an async task can do so without holding a Bevy resource borrow.
 #[derive(Resource, Clone)]
-pub struct ModelicaEngineHandle(Arc<Mutex<ModelicaEngine>>);
+pub struct ModelicaEngineHandle {
+    engine: Arc<Mutex<ModelicaEngine>>,
+    /// Set by a worker while it publishes a completion into `engine`.
+    /// Cleared only while holding the same mutex after the adapter has
+    /// observed all completion queues empty. This ordering prevents a
+    /// completion racing with the clear from being lost.
+    sync_wakeup: Arc<AtomicBool>,
+}
 
 impl Default for ModelicaEngineHandle {
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(ModelicaEngine::new())))
+        Self {
+            engine: Arc::new(Mutex::new(ModelicaEngine::new())),
+            sync_wakeup: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -78,7 +90,7 @@ impl ModelicaEngineHandle {
     /// (would mean a previous panic happened while holding the lock —
     /// the engine state is then suspect anyway).
     pub fn lock(&self) -> MutexGuard<'_, ModelicaEngine> {
-        self.0.lock().expect("modelica engine mutex poisoned")
+        self.engine.lock().expect("modelica engine mutex poisoned")
     }
 
     /// Attempt a short engine read without waiting.
@@ -88,7 +100,34 @@ impl ModelicaEngineHandle {
     /// normal retry signal for the next update; it is not a fabricated model
     /// result.
     pub fn try_lock(&self) -> Option<MutexGuard<'_, ModelicaEngine>> {
-        self.0.try_lock().ok()
+        self.engine.try_lock().ok()
+    }
+
+    /// Whether a worker has published engine work that the Bevy adapter has
+    /// not yet fully drained.
+    #[inline]
+    fn sync_wakeup_pending(&self) -> bool {
+        self.sync_wakeup.load(Ordering::Acquire)
+    }
+
+    /// Publish a wakeup after changing one of the engine completion queues.
+    /// Callers hold the engine mutex while invoking this method.
+    #[inline]
+    fn wake_sync(&self) {
+        self.sync_wakeup.store(true, Ordering::Release);
+    }
+
+    /// Clear the wakeup only when every completion queue is empty while the
+    /// engine mutex is held. A worker cannot publish between that observation
+    /// and the atomic clear; a worker that publishes afterward sets the latch
+    /// again before the next run-condition check.
+    fn clear_sync_wakeup_if_idle(&self) {
+        let Some(engine) = self.try_lock() else {
+            return;
+        };
+        if !engine.has_completed_work() {
+            self.sync_wakeup.store(false, Ordering::Release);
+        }
     }
 
     /// Nonblocking UI read of a completed merged icon.
@@ -99,7 +138,7 @@ impl ModelicaEngineHandle {
     /// background projection task, and the caller can use a local AST icon
     /// until that task requests a repaint.
     pub fn try_cached_icon_for(&self, qualified: &str) -> Option<crate::annotations::Icon> {
-        let mut engine = self.0.try_lock().ok()?;
+        let mut engine = self.engine.try_lock().ok()?;
         engine.cached_icon_for(qualified).flatten()
     }
 
@@ -145,6 +184,7 @@ impl ModelicaEngineHandle {
                 }
                 let mut engine = handle.lock();
                 let count = engine.finish_library_root_load(&root, parsed, diagnostics);
+                handle.wake_sync();
                 bevy::log::info!(
                     "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)",
                 );
@@ -197,6 +237,7 @@ impl ModelicaEngineHandle {
         let mut engine = self.lock();
         engine.install_parsed_ast(doc_id, ast);
         engine.finish_parse(doc_id, gen);
+        self.wake_sync();
     }
 
     /// Drop the pending slot without installing anything — used when
@@ -205,6 +246,7 @@ impl ModelicaEngineHandle {
     pub fn finish_pending_failed(&self, doc_id: DocumentId, gen: u64) {
         let mut engine = self.lock();
         engine.finish_parse(doc_id, gen);
+        self.wake_sync();
     }
 
     /// Record a terminal worker parse failure and clear the in-flight slot.
@@ -214,6 +256,7 @@ impl ModelicaEngineHandle {
         let mut engine = self.lock();
         engine.set_parse_diags(doc_id, vec![lunco_doc::Diagnostic::message_only(error)]);
         engine.finish_parse(doc_id, gen);
+        self.wake_sync();
     }
 
     /// Clear all pending parses. Used when a worker crashes to unwedge the
@@ -221,6 +264,7 @@ impl ModelicaEngineHandle {
     pub fn clear_all_pending(&self) {
         let mut engine = self.lock();
         engine.clear_all_pending();
+        self.wake_sync();
     }
 
     pub fn upsert_document_async<F>(
@@ -242,7 +286,7 @@ impl ModelicaEngineHandle {
             }
             engine.uri_for(doc_id)
         };
-        let me = ModelicaEngineHandle(Arc::clone(&self.0));
+        let me = self.clone();
         let bytes = source.len();
         spawn_fn(Box::new(move || {
             let t_total = web_time::Instant::now();
@@ -266,6 +310,7 @@ impl ModelicaEngineHandle {
             engine.install_parsed_ast(doc_id, ast);
             engine.set_parse_diags(doc_id, diags);
             engine.finish_parse(doc_id, gen);
+            me.wake_sync();
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
                 "[engine] async parse doc={} gen={} bytes={} parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
@@ -293,6 +338,10 @@ pub struct EngineSyncCursor {
     /// completions advance the registry revision through `mark_changed`, so
     /// stale completions also reopen the scan.
     registry_revision: u64,
+    /// Earliest time at which a debounced edit may be reparsed. Keeping this
+    /// deadline in the cursor lets the run condition sleep between the edit
+    /// and the debounce boundary instead of polling the whole registry.
+    next_debounce_at: Option<web_time::Instant>,
 }
 
 /// Pacing controls for the async parse scheduler in [`drive_engine_sync`].
@@ -336,8 +385,8 @@ impl Default for ParsePacing {
 /// since last tick are dropped from the engine session via
 /// [`ModelicaEngine::close_document`].
 ///
-/// Runs every `Update`. Reads `ModelicaDocumentRegistry`, mutates the
-/// engine and the cursor.
+/// Runs only when `ModelicaDocumentRegistry` or an async engine completion
+/// changes. Reads the registry, mutates the engine, and advances the cursor.
 /// Edit-debounce window before re-parsing a document that was
 /// previously parsed. New docs (never parsed) spawn immediately —
 /// only the edit path is debounced. Mirrors the prior `ast_refresh`
@@ -362,6 +411,29 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
     } else {
         AST_DEBOUNCE_MS
     }
+}
+
+fn engine_sync_is_due(
+    handle: &ModelicaEngineHandle,
+    registry: &crate::state::ModelicaDocumentRegistry,
+    cursor: &EngineSyncCursor,
+    pacing: &ParsePacing,
+) -> bool {
+    registry.revision() != cursor.registry_revision
+        || handle.sync_wakeup_pending()
+        || (!pacing.input_active
+            && cursor
+                .next_debounce_at
+                .is_some_and(|deadline| web_time::Instant::now() >= deadline))
+}
+
+fn engine_sync_due(
+    handle: Res<ModelicaEngineHandle>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    cursor: Res<EngineSyncCursor>,
+    pacing: Res<ParsePacing>,
+) -> bool {
+    engine_sync_is_due(&handle, &registry, &cursor, &pacing)
 }
 
 pub fn drive_engine_sync(
@@ -509,6 +581,7 @@ pub fn drive_engine_sync(
     // overhead on the render path.
     let registry_revision = registry.revision();
     if registry_revision == cursor.registry_revision {
+        handle.clear_sync_wakeup_if_idle();
         return;
     }
 
@@ -558,6 +631,7 @@ pub fn drive_engine_sync(
 
     if to_upsert.is_empty() && removed.is_empty() {
         cursor.registry_revision = registry_revision;
+        handle.clear_sync_wakeup_if_idle();
         return;
     }
 
@@ -614,6 +688,7 @@ pub fn drive_engine_sync(
         async_only.sort_by_key(|(doc_id, _, _)| if *doc_id == active { 0 } else { 1 });
     }
     let max_in_flight = pacing.max_in_flight.max(1);
+    let mut next_debounce_at: Option<web_time::Instant> = None;
 
     for (doc_id, gen, source) in async_only {
         let pending_count = {
@@ -654,11 +729,18 @@ pub fn drive_engine_sync(
         };
         if was_parsed {
             let debounce_ms = ast_debounce_for_size(source.len());
+            let deadline = last_edit
+                .map(|edited| edited + std::time::Duration::from_millis(debounce_ms as u64));
             let elapsed_ok = match last_edit {
                 Some(t) => now.duration_since(t).as_millis() >= debounce_ms,
                 None => true,
             };
             if !elapsed_ok || pacing.input_active {
+                let wake_at = deadline.unwrap_or(now);
+                next_debounce_at = Some(match next_debounce_at {
+                    Some(current) => current.min(wake_at),
+                    None => wake_at,
+                });
                 continue;
             }
         }
@@ -786,6 +868,8 @@ pub fn drive_engine_sync(
         );
     }
     cursor.registry_revision = registry.revision();
+    cursor.next_debounce_at = next_debounce_at;
+    handle.clear_sync_wakeup_if_idle();
 }
 
 /// Drain parse-done envelopes from the off-thread Web Worker and
@@ -798,68 +882,55 @@ pub fn drive_engine_sync(
 /// through [`ModelicaEngineHandle::install_worker_parsed_ast`] (success)
 /// or [`ModelicaEngineHandle::finish_pending_failed`] (parse error).
 ///
-/// Native: still registered but always sees an empty queue (worker
-/// never runs there), so the system is a per-tick HashMap miss —
-/// negligible.
-// `registry` is mutated only in the wasm worker-parse path below; on native
-// the queue is always empty and the cfg block is excluded, so the `mut` reads as
-// unused there. Allow it on native only — wasm genuinely needs it.
-#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+#[cfg(target_arch = "wasm32")]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
     mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
 ) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use crate::document::SyntaxCache;
-        use std::sync::Arc;
-        while let Some(env) = crate::worker_transport::try_recv_parse_failed() {
-            handle.finish_worker_parse_failed(env.doc_id, env.gen, env.error.clone());
-            bevy::log::error!(
-                "[EngineSync] worker parse failed doc={} gen={}: {}",
+    use crate::document::SyntaxCache;
+    use std::sync::Arc;
+    while let Some(env) = crate::worker_transport::try_recv_parse_failed() {
+        handle.finish_worker_parse_failed(env.doc_id, env.gen, env.error.clone());
+        bevy::log::error!(
+            "[EngineSync] worker parse failed doc={} gen={}: {}",
+            env.doc_id.raw(),
+            env.gen,
+            env.error,
+        );
+    }
+    while let Some(env) = crate::worker_transport::try_recv_parse_done() {
+        // Lenient parser always returns an AST. `errors` carries
+        // any recovery diagnostics; `is_empty()` means source was
+        // well-formed. Both fields land in the doc's single
+        // `SyntaxCache` and the engine session adopts the AST as
+        // its canonical view.
+        let ast_arc = Arc::new(env.ast);
+        handle.install_worker_parsed_ast(env.doc_id, env.gen, (*ast_arc).clone());
+        if let Some(host) = registry.host_mut(env.doc_id) {
+            let syntax = SyntaxCache {
+                generation: env.gen,
+                ast: ast_arc,
+                errors: env.errors.clone(),
+            };
+            host.document_mut().install_parse_results(syntax);
+        }
+        // Wake the watermark observer for the class-diff changes the
+        // rebuild may have just pushed.
+        registry.mark_changed(env.doc_id);
+        if env.errors.is_empty() {
+            bevy::log::info!(
+                "[EngineSync] worker-parsed install doc={} gen={}",
                 env.doc_id.raw(),
                 env.gen,
-                env.error,
+            );
+        } else {
+            bevy::log::warn!(
+                "[EngineSync] worker-parsed install doc={} gen={} with {} parse error(s)",
+                env.doc_id.raw(),
+                env.gen,
+                env.errors.len(),
             );
         }
-        while let Some(env) = crate::worker_transport::try_recv_parse_done() {
-            // Lenient parser always returns an AST. `errors` carries
-            // any recovery diagnostics; `is_empty()` ⇒ source was
-            // well-formed. Both fields land in the doc's single
-            // `SyntaxCache` and the engine session adopts the AST as
-            // its canonical view.
-            let ast_arc = Arc::new(env.ast);
-            handle.install_worker_parsed_ast(env.doc_id, env.gen, (*ast_arc).clone());
-            if let Some(host) = registry.host_mut(env.doc_id) {
-                let syntax = SyntaxCache {
-                    generation: env.gen,
-                    ast: ast_arc,
-                    errors: env.errors.clone(),
-                };
-                host.document_mut().install_parse_results(syntax);
-            }
-            // Wake the watermark observer for the class-diff
-            // changes the rebuild may have just pushed.
-            registry.mark_changed(env.doc_id);
-            if env.errors.is_empty() {
-                bevy::log::info!(
-                    "[EngineSync] worker-parsed install doc={} gen={}",
-                    env.doc_id.raw(),
-                    env.gen,
-                );
-            } else {
-                bevy::log::warn!(
-                    "[EngineSync] worker-parsed install doc={} gen={} with {} parse error(s)",
-                    env.doc_id.raw(),
-                    env.gen,
-                    env.errors.len(),
-                );
-            }
-        }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (handle, registry);
     }
 }
 
@@ -884,11 +955,77 @@ impl Plugin for ModelicaEnginePlugin {
             .add_systems(
                 Update,
                 (
-                    drive_engine_sync,
+                    drive_engine_sync.run_if(engine_sync_due),
                     drive_msl_bootstrap,
-                    drain_worker_parse_results,
                 ),
             );
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, drain_worker_parse_results);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_sync_wakeup_stays_set_until_completion_queue_is_empty() {
+        let handle = ModelicaEngineHandle::default();
+        assert!(!handle.sync_wakeup_pending());
+
+        {
+            let mut engine = handle.lock();
+            engine.finish_parse(DocumentId::new(1), 1);
+            handle.wake_sync();
+        }
+
+        assert!(handle.sync_wakeup_pending());
+        handle.clear_sync_wakeup_if_idle();
+        assert!(handle.sync_wakeup_pending());
+
+        handle.lock().drain_completed_up_to(1);
+        handle.clear_sync_wakeup_if_idle();
+        assert!(!handle.sync_wakeup_pending());
+    }
+
+    #[test]
+    fn engine_sync_due_waits_for_registry_or_engine_work() {
+        let handle = ModelicaEngineHandle::default();
+        let mut registry = crate::state::ModelicaDocumentRegistry::default();
+        let mut cursor = EngineSyncCursor::default();
+        let pacing = ParsePacing::default();
+
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+
+        registry.allocate("model A end A;".to_string());
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        cursor.registry_revision = registry.revision();
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+
+        {
+            let mut engine = handle.lock();
+            engine.finish_parse(DocumentId::new(1), 1);
+            handle.wake_sync();
+        }
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+    }
+
+    #[test]
+    fn engine_sync_due_wakes_after_edit_debounce() {
+        let handle = ModelicaEngineHandle::default();
+        let registry = crate::state::ModelicaDocumentRegistry::default();
+        let mut cursor = EngineSyncCursor::default();
+        cursor.next_debounce_at =
+            Some(web_time::Instant::now() - std::time::Duration::from_millis(1));
+        let pacing = ParsePacing::default();
+
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+
+        let pacing = ParsePacing {
+            input_active: true,
+            ..ParsePacing::default()
+        };
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
     }
 }
 
