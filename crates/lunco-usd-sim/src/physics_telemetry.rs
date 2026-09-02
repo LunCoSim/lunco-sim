@@ -17,7 +17,7 @@ use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::UsdPrimPath;
 
@@ -141,12 +141,10 @@ pub fn retain_physics_telemetry(
         retire(entity);
     }
 
-    let mut retained_any = HashSet::new();
     let sample_interval = 1.0 / settings.default_rate_hz;
     // The registry owns the channel catalog. Snapshot its size once per fixed
-    // pass; checking it by walking every signal for every body sample turns
-    // telemetry overhead into an avoidable quadratic scan.
-    let mut channel_count = signals.iter_scalar().count();
+    // pass without walking every retained history.
+    let mut channel_count = signals.scalar_count();
 
     for (entity, prim, linear, angular) in &bodies {
         let metadata_dirty = state
@@ -455,7 +453,7 @@ pub fn retain_physics_telemetry(
             &mut state.metadata,
             metadata_dirty,
         ) {
-            retained_any.insert(entity);
+            commands.entity(entity).try_insert(SignalSource);
         }
         state.last_sample_times.insert(entity, time);
     }
@@ -531,10 +529,6 @@ pub fn retain_physics_telemetry(
             commands.entity(entity).try_insert(SignalSource);
         }
         state.last_sample_times.insert(entity, time);
-    }
-
-    for entity in retained_any {
-        commands.entity(entity).try_insert(SignalSource);
     }
 }
 

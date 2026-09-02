@@ -182,9 +182,8 @@ pub fn retain_modelica_runtime_state(
     };
 
     // The registry owns the channel catalog. Snapshot its size once per pass;
-    // recounting it inside the variable loop made a model with N variables
-    // perform N full catalog walks every frame.
-    let mut channel_count = signals.iter_scalar().count();
+    // the registry provides this count without walking every retained history.
+    let mut channel_count = signals.scalar_count();
 
     for (entity, model, layout) in &models {
         let document = documents.as_ref().and_then(|documents| {
