@@ -16,6 +16,10 @@ fn close_vec(actual, expected) {
     true
 }
 
+fn close_scalar(actual, expected) {
+    actual != () && (actual - expected).abs() <= EPS
+}
+
 fn authored_rotation_ok(path, expected) {
     let record = query("QueryUsdPrim", #{
         path: path,
@@ -36,6 +40,20 @@ fn authored_translate_ok(path, expected) {
         return false;
     }
     close_vec(record.attrs["xformOp:translate"], expected)
+}
+
+fn authored_cylinder_ok(path, expected_axis, expected_radius, expected_height, expected_translate) {
+    let record = query("QueryUsdPrim", #{
+        path: path,
+        attrs: ["axis", "radius", "height", "xformOp:translate"],
+    });
+    if record == () || record.ok == false || record.attrs == () {
+        return false;
+    }
+    record.attrs["axis"] == expected_axis
+        && close_scalar(record.attrs["radius"], expected_radius)
+        && close_scalar(record.attrs["height"], expected_height)
+        && close_vec(record.attrs["xformOp:translate"], expected_translate)
 }
 
 fn authored_feed_pose_ok() {
@@ -93,21 +111,56 @@ fn on_tick(me) {
     failures.push(t_true(
         authored_feed_pose_ok(),
         "the shared feed indicator is not centered on the LinkAperture bore axis"));
-    // A positive X rotation puts a Z-axis cylinder's front endpoint above its
-    // wheel. These authored negative angles are the geometry contract: they
-    // bring each forward link's lower endpoint to the wheel hub. The rear links
-    // retain their positive slopes and are deliberately not asserted here.
+    // Every link and axle is checked as a composed USD cylinder. The endpoint
+    // contract is represented by the shared link/axle translations, lengths,
+    // and axis declarations; checking all eight links catches either side's
+    // front and rear assembly rather than only the previously visible links.
     let links = [
-        ["RockerL/FrontLink", -18.43],
-        ["RockerR/FrontLink", -18.43],
-        ["BogieL/FrontLink", -26.57],
-        ["BogieR/FrontLink", -26.57],
+        ["RockerL/FrontLink", -18.43, 0.06, 1.265, [0.0, -0.2, -0.6]],
+        ["RockerL/RearLink", 18.43, 0.06, 0.632, [0.0, -0.1, 0.3]],
+        ["RockerR/FrontLink", -18.43, 0.06, 1.265, [0.0, -0.2, -0.6]],
+        ["RockerR/RearLink", 18.43, 0.06, 0.632, [0.0, -0.1, 0.3]],
+        ["BogieL/FrontLink", -26.57, 0.05, 0.447, [0.0, -0.1, -0.2]],
+        ["BogieL/RearLink", 18.43, 0.05, 0.632, [0.0, -0.1, 0.3]],
+        ["BogieR/FrontLink", -26.57, 0.05, 0.447, [0.0, -0.1, -0.2]],
+        ["BogieR/RearLink", 18.43, 0.05, 0.632, [0.0, -0.1, 0.3]],
     ];
     for link in links {
         let path = ROOT + "/" + link[0];
         failures.push(t_true(
+            authored_cylinder_ok(path, "Z", link[2], link[3], link[4]),
+            path + " has an invalid composed cylinder contract"));
+        failures.push(t_true(
             authored_rotation_ok(path, [link[1], 0.0, 0.0]),
-            path + " has a detached forward-link pose; expected rotateXYZ=" + link[1]));
+            path + " has a detached link pose; expected rotateXYZ=" + link[1]));
+    }
+    let axles = [
+        ["RockerL/Axle", 0.04, 0.25, [-0.125, -0.4, -1.2]],
+        ["RockerR/Axle", 0.04, 0.25, [0.125, -0.4, -1.2]],
+        ["BogieL/MiddleAxle", 0.035, 0.25, [-0.125, -0.2, -0.4]],
+        ["BogieL/RearAxle", 0.035, 0.25, [-0.125, -0.2, 0.6]],
+        ["BogieR/MiddleAxle", 0.035, 0.25, [0.125, -0.2, -0.4]],
+        ["BogieR/RearAxle", 0.035, 0.25, [0.125, -0.2, 0.6]],
+    ];
+    for axle in axles {
+        let path = ROOT + "/" + axle[0];
+        failures.push(t_true(
+            authored_cylinder_ok(path, "X", axle[1], axle[2], axle[3]),
+            path + " has an invalid composed axle contract"));
+    }
+    let bearings = [
+        ["RockerL/FrontAxleBearing", 0.085, [0.0, -0.4, -1.2]],
+        ["RockerR/FrontAxleBearing", 0.085, [0.0, -0.4, -1.2]],
+        ["BogieL/MiddleAxleBearing", 0.075, [0.0, -0.2, -0.4]],
+        ["BogieL/RearAxleBearing", 0.075, [0.0, -0.2, 0.6]],
+        ["BogieR/MiddleAxleBearing", 0.075, [0.0, -0.2, -0.4]],
+        ["BogieR/RearAxleBearing", 0.075, [0.0, -0.2, 0.6]],
+    ];
+    for bearing in bearings {
+        let path = ROOT + "/" + bearing[0];
+        failures.push(t_true(
+            authored_cylinder_ok(path, "X", bearing[1], 0.16, bearing[2]),
+            path + " is missing its authored axle-bearing seat"));
     }
     let wheels = [
         "RockerL/Wheel_FL",
