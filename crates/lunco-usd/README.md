@@ -91,9 +91,18 @@ open session retains its own prim tree, connection canvas, parameter/variant/
 mount view, joint and animation view, authored layer, and projection
 generation; the dock paints the session selected by the focused view. The
 shared ECS selection is the focused-session projection and is restored from
-the editor session selection when focus changes. Panel edits resolve the
+the editor session's canonical prim-path selection when focus changes. Panel edits resolve the
 session's explicit `DocumentId`, `LayerId`, and generation before dispatching
 typed USD commands.
+
+The editor selection is exposed separately by the UI-owned
+`InspectUsdSelection` query. It reports canonical `DocumentId`/`UsdPreviewId`/
+prim-path identity, composed type and kind, parent/assembly paths, the primary
+and Inspector-target paths, explicit multi/no-selection state, and the existing
+typed operation families. Its session cache stores paths rather than Bevy
+entities, so a USD reprojection can resolve fresh runtime projections and drop
+deleted paths. Use `assembly_edit::selection_context()` for the focused preview
+or `selection_context_for(preview)` for a hidden open preview.
 
 ## Document model
 
