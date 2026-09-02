@@ -564,6 +564,12 @@ impl SignalRegistry {
         self.scalar_history.iter()
     }
 
+    /// Number of scalar channels currently retained by the registry.
+    #[inline]
+    pub fn scalar_count(&self) -> usize {
+        self.scalar_history.len()
+    }
+
     pub fn signal_type(&self, sig: &SignalRef) -> Option<SignalType> {
         self.types.get(sig).copied()
     }
