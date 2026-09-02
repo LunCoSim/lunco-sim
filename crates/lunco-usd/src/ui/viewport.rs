@@ -771,11 +771,12 @@ struct UsdViewportMeasured {
 }
 
 /// Measurement emitted by an instance preview panel. The workbench owns the
-/// chrome pick gate; this event only records the view-specific render target
-/// footprint and marks that camera visible for the current frame.
+/// chrome pick gate; this event records the view-specific scene hit and render
+/// target footprint, then marks that camera visible for the current frame.
 #[derive(Event, Clone, Copy, Debug)]
 struct UsdPreviewViewMeasured {
     view: UsdPreviewViewId,
+    over_scene: bool,
 }
 
 /// Pointer input emitted by the viewport panel. Camera state and the camera
@@ -818,11 +819,16 @@ fn on_preview_view_measured(
     trigger: On<UsdPreviewViewMeasured>,
     rects: Res<PanelRects>,
     state: Res<UsdViewportState>,
+    mut gate: ResMut<ScenePickGate>,
     mut visibility: ResMut<UsdPreviewFrameVisibility>,
     budget: Res<UsdPreviewRenderBudget>,
     mut cameras: Query<&mut Camera>,
 ) {
     let event = trigger.event();
+    gate.record_scene_leaf(
+        SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
+        event.over_scene,
+    );
     if let Some(rect) = rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0) {
         mark_view_visible(
             &state,
@@ -2403,7 +2409,10 @@ fn render_preview_view(
             over_scene,
         });
     } else {
-        ctx.trigger(UsdPreviewViewMeasured { view: view_id });
+        ctx.trigger(UsdPreviewViewMeasured {
+            view: view_id,
+            over_scene,
+        });
         // Selecting a dock tab is a view-focus action. The instance renderer
         // publishes that choice so all native editor panels follow the same
         // view/session binding.
