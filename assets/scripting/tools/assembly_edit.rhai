@@ -102,6 +102,13 @@ fn inspect(doc, path) {
     query("InspectUsdDocument", #{ doc: doc, path: path })
 }
 
+/// Inspect the exact USD previews and presentation views currently open in
+/// the Editor. This is the source of truth for correlating a screenshot with
+/// its explicit document and view handles.
+fn viewport() {
+    query("InspectUsdViewport", #{})
+}
+
 /// Resolve one explicit composed prim and authored edit layer.
 fn resolve_target(doc, path, edit_target) {
     query("ResolveUsdTarget", #{

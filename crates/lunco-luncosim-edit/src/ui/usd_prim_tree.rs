@@ -1,7 +1,7 @@
 //! USD **prim tree** panel — the scene's authoring hierarchy.
 //!
-//! Where the Entity list (`entity_list.rs`) shows the simulation ECS, this shows
-//! the faithful **USD prim hierarchy** of each open Editor preview
+//! Where the Entity list (`entity_list.rs`) shows the live simulation ECS, this
+//! shows the faithful **USD prim hierarchy** of each open Editor preview
 //! — `/Assembly → Chassis → Wheel_FL`. It is reconstructed from each
 //! document's isolated preview projection; intermediate xforms that carry no
 //! entity of their own are synthesized from the path so the structure is complete.
@@ -303,7 +303,9 @@ impl Panel for UsdPrimTreePanel {
 }
 
 fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    ui.label("The scene's USD structure. Expand > to reach sub-parts; click a part to select it.");
+    ui.label(
+        "Focused assembly's USD structure. Expand > to reach sub-parts; click a part to select it.",
+    );
     ui.separator();
 
     let selected = ctx

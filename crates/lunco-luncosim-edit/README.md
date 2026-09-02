@@ -19,6 +19,12 @@ USD commands. Scripted selection uses `SelectUsdPrim` with that same explicit
 preview lease; a USD path is never resolved globally across the live scene and
 open documents.
 
+The workbench separates assembly authoring from live base composition. Editor
+opens one explicit USD document at a time, such as a rover or lander, and its
+prim tree is the document's authored hierarchy. Build owns the mounted Twin's
+general composition tools; a USD compound rigid-body root is one selectable
+assembly element there, while its internal parts are edited in Editor.
+
 ## Gizmo System
 
 The transform gizmo follows `lunco_celestial::OrbitalViewPin.active`, the

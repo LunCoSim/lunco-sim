@@ -25,6 +25,7 @@ or the `mcp__lunco__*` tools if wired.
 | `list_entities` (`ListEntities`) | every registered entity → `{api_id, name, type, pos}`. **Start here** — most reads need an `api_id`. |
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
 | `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. |
+| `InspectUsdViewport` | the explicit focused USD preview/view handles, document IDs, edit targets, and projection generations; use this to identify the exact editor item visible in a screenshot. |
 | `read_ports` | **live telemetry.** With `api_id`: that entity's ports `[{name,value,direction,kind}]`. Without: EVERY port-bearing entity (large — pass `name_filter` substring and/or `ports:[…]` to narrow). One-shot. |
 | `read_port` `{api_id, port}` | a single named port value. |
 | `watch_ports` `{api_id, …}` | a **time-series** of ports (use when you need change over time, not a single sample). |
@@ -62,6 +63,12 @@ projection and any required off-thread derived surface/normal product before
 exposing the initial tile set; observe the live `terrain-derived` status entry
 during startup rather than treating a historical terrain event as proof that
 materials are settled.
+
+For an interactive USD edit, query `InspectUsdViewport` before describing or
+changing the visible item, then correlate its explicit view/preview handle with
+`CaptureScreenshot` and `ListOpenDocuments`. Use the returned document ID,
+edit target, and projected generation in typed USD commands; do not infer the
+target from a tab title, file name, or entity name.
 
 ### Fixed-panel rover readout
 

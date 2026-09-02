@@ -16,6 +16,23 @@ explicit authored mode available through the typed `ActivatePerspective`
 command. They are composed from the panels listed below; they do not
 introduce a second authoring model.
 
+## Assembly Editor and Builder boundaries
+
+Editor is the focused authoring workspace for one explicit USD document at a
+time. Open a rover, lander, or other assembly from the Twin Browser, then use
+its isolated `UsdPreviewId` and USD prim tree to inspect and edit the authored
+parts. The Editor layout does not expose the live Entity list or spawn palette,
+so a mounted scene entity cannot be mistaken for the document being authored.
+
+Build is the general live-Twin composition workspace. It owns the scene entity
+tree, catalog, placement, and base-level composition of multiple assets. A
+compound assembly is one selectable element there because the existing USD
+`PhysicsRigidBodyAPI`/`SelectableRoot` projection gives the authored assembly
+root ownership of its descendant colliders and selection. The existing
+`MobilityRoot` takes precedence for a vehicle. Nested parts remain available by
+drilling into the assembly's USD document in Editor; no second group registry,
+name convention, or ECS-only grouping state is introduced.
+
 ## Ownership and persistence
 
 - USD owns prim identity, hierarchy, references, variants, transforms, ports,
@@ -128,6 +145,13 @@ authored layers and revisions, local composed prim topology, dependency arcs
 from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
 active document or constructs another resolver/cache.
 
+`InspectUsdViewport` is the read-only presentation query for the same
+headful session. It reports the focused preview/view pair and every explicit
+preview lease with its document, edit target, projected generation, and
+independent view ids. An agent correlates this typed state with
+`CaptureScreenshot` and `view_image` before editing what the user has open;
+the tab label is never treated as document identity.
+
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,
@@ -157,9 +181,10 @@ referenced or variant-contained prim.
 
 The built-in `assembly_edit` Rhai tool library is the shared agent/editor
 policy surface for these APIs. It calls `OpenFile`, `NewDocument`,
-`ForkDocument`, the document save/close/discard lifecycle verbs, the four
-read-only USD queries, `ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`,
-`DetachComponent`, `AttachProgram`, and the generic document undo/redo commands through
+`ForkDocument`, the document save/close/discard lifecycle verbs, the five
+read-only USD queries (including `InspectUsdViewport`),
+`ApplyUsdOp`/`ApplyUsdOps`, `AttachComponent`, `DetachComponent`,
+`AttachProgram`, and the generic document undo/redo commands through
 `cmd`/`query`; it adds no
 second registry, resolver, cache, parser, operation log, or persistence format.
 `open(path)`, `new_document()`, and `fork_document(source, name)` acknowledge

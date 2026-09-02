@@ -99,6 +99,7 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
         runtime_exposure::RuntimeUiManifestPlugin,
     ))
     .init_resource::<runtime_exposure::RuntimeUiRenderState>()
+    .init_resource::<runtime_exposure::RuntimeUiPresentationGeneration>()
     .init_resource::<runtime_exposure::RuntimeUiGates>()
     .init_resource::<runtime_exposure::RuntimeUiSurfaceRects>()
     .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)

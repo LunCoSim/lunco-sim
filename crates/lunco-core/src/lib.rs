@@ -618,9 +618,10 @@ pub struct SpawnToolActive(pub bool);
 /// This resource relays egui's `wants_keyboard_input()` / `wants_pointer_input()`
 /// (from the primary egui context) into the ECS so scene-input systems can gate
 /// on it without depending on `bevy_egui`. Populated once per frame by
-/// `lunco-workbench` (the crate that owns the `PrimaryEguiContext`); on a
-/// headless server nothing writes it, so both flags stay `false` and every gate
-/// is a no-op.
+/// `lunco-workbench` (the crate that owns the `PrimaryEguiContext`); a press in
+/// the main scene explicitly surrenders stale editor focus before this resource
+/// is published. On a headless server nothing writes it, so both flags stay
+/// `false` and every gate is a no-op.
 ///
 /// Discrete scene *picks* (click-to-select / click-to-spawn) do NOT need this —
 /// they flow through `bevy_picking`, where egui occlusion is already handled by

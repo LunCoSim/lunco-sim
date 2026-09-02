@@ -184,6 +184,14 @@ A vessel is **possessable + drivable** when it carries two things:
    input does nothing** — `drive_from_bindings` skips a bindingless vessel. (API /
    `set_input` / rhai can still drive it by port name — that path needs only the surface.)
 
+For desktop manual control, the workbench owns the UI-to-simulation focus
+boundary. A press resolved to the main 3D scene surrenders retained egui
+`TextEdit` focus before it publishes `EguiFocus`, so a possessed vessel can
+receive the shared input map after a perspective switch. Active text fields
+continue to capture keyboard input until that explicit scene press. The
+controller must consume this published focus state; it must not read raw keys
+again, clear focus itself, or add a vehicle-specific input path.
+
 The local `Avatar` is a separate domain role. It also has an `InputPorts` surface and
 binding, but those ports are its free-flight embodiment and are not a vessel
 possession target. Click resolution and `PossessVessel` enforce this boundary by

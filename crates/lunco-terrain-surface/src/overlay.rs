@@ -233,48 +233,64 @@ pub fn sync_terrain_overlay(
     mut commands: Commands,
     params: Res<TerrainOverlayParams>,
     diagnostic: Res<TerrainDiagnosticLook>,
-    terrains: Query<
-        (
-            &LodTiles,
-            &DemHeightField,
-            Option<&TerrainDerivedMaps>,
-            Option<&TerrainAuthoredMaps>,
-            Option<&TileShadowCache>,
-            &ShaderLook,
-        ),
-        With<crate::terrain::DemTerrainSurface>,
-    >,
-    mut looks: Query<&mut ShaderLook, Without<crate::terrain::DemTerrainSurface>>,
+    mut look_queries: ParamSet<(
+        Query<
+            (
+                &LodTiles,
+                &DemHeightField,
+                Option<&TerrainDerivedMaps>,
+                Option<&TerrainAuthoredMaps>,
+                Option<&TileShadowCache>,
+                &ShaderLook,
+            ),
+            With<crate::terrain::DemTerrainSurface>,
+        >,
+        Query<&mut ShaderLook, Without<crate::terrain::DemTerrainSurface>>,
+    )>,
 ) {
     if !params.is_changed() && !diagnostic.is_changed() {
         return;
     }
     let u = params.uniforms();
     let diagnostic = diagnostic.0.clone();
-    for (tiles, height_field, maps, authored, shadow, template) in &terrains {
-        for (entity, depth, morph_start, morph_end) in tiles.tile_material_specs() {
-            if let Ok(mut look) = looks.get_mut(entity) {
-                *look = crate::stream_viz::tile_look(
-                    template,
-                    depth,
-                    morph_start,
-                    morph_end,
-                    maps,
-                    height_field.0.half_extent(),
-                    authored,
-                    shadow,
-                    &diagnostic,
-                    u,
-                );
-                if u.mode > 0.5 {
-                    commands
-                        .entity(entity)
-                        .try_insert(crate::stream_viz::TerrainDiagnosticTile);
-                } else {
-                    commands
-                        .entity(entity)
-                        .try_remove::<crate::stream_viz::TerrainDiagnosticTile>();
-                }
+    let updates = {
+        let terrains = look_queries.p0();
+        let mut updates = Vec::new();
+        for (tiles, height_field, maps, authored, shadow, template) in terrains.iter() {
+            for (entity, depth, morph_start, morph_end) in tiles.tile_material_specs() {
+                updates.push((
+                    entity,
+                    crate::stream_viz::tile_look(
+                        template,
+                        depth,
+                        morph_start,
+                        morph_end,
+                        maps,
+                        height_field.0.half_extent(),
+                        authored,
+                        shadow,
+                        &diagnostic,
+                        u,
+                    ),
+                    u.mode > 0.5,
+                ));
+            }
+        }
+        updates
+    };
+
+    let mut looks = look_queries.p1();
+    for (entity, replacement, diagnostic_active) in updates {
+        if let Ok(mut look) = looks.get_mut(entity) {
+            *look = replacement;
+            if diagnostic_active {
+                commands
+                    .entity(entity)
+                    .try_insert(crate::stream_viz::TerrainDiagnosticTile);
+            } else {
+                commands
+                    .entity(entity)
+                    .try_remove::<crate::stream_viz::TerrainDiagnosticTile>();
             }
         }
     }
@@ -368,5 +384,15 @@ mod tests {
             look.vertex_shader.as_deref(),
             Some("lunco://shaders/custom_diagnostic.wgsl")
         );
+    }
+
+    #[test]
+    fn overlay_sync_allows_terrain_templates_and_tile_looks_to_share_shader_look() {
+        let mut app = App::new();
+        app.init_resource::<TerrainOverlayParams>()
+            .init_resource::<TerrainDiagnosticLook>()
+            .add_systems(Update, sync_terrain_overlay);
+
+        app.update();
     }
 }

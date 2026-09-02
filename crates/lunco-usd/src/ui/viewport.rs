@@ -60,12 +60,18 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
+use lunco_api::queries::ApiQueryProvider;
+use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentClosed;
-use lunco_render::{GraphicsCameraDefaults, SceneCamera};
-use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
+#[cfg(test)]
+use lunco_render::SceneCamera;
+use lunco_render::{
+    scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
+    RenderQualityProfile, RenderingQualitySettings,
+};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_workbench::{
     CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRects, PanelScrollPolicy,
@@ -84,6 +90,73 @@ pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
 /// Instance-panel kind for additional views over an existing USD preview
 /// session. The instance value is [`UsdPreviewViewId::0`].
 pub const USD_PREVIEW_VIEW_PANEL_ID: PanelId = PanelId("usd::preview_view");
+
+/// Read-only query for the exact USD presentation state currently open in the
+/// Assembly Editor.
+///
+/// Unlike document inspection, this query is session-scoped: it reports every
+/// explicit preview lease and its independent presentation views, plus the
+/// focused preview/view pair. It never infers a document from a tab title, a
+/// filesystem name, or the live simulation scene.
+pub struct InspectUsdViewportProvider;
+
+impl ApiQueryProvider for InspectUsdViewportProvider {
+    fn name(&self) -> &'static str {
+        "InspectUsdViewport"
+    }
+
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+        let Some(viewport) = world.get_resource::<UsdViewportState>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "InspectUsdViewport requires UsdViewportPlugin",
+            );
+        };
+
+        let mut previews: Vec<_> = viewport
+            .sessions()
+            .map(|session| {
+                let mut views: Vec<_> = viewport
+                    .views()
+                    .filter(|view| view.preview() == session.id())
+                    .map(|view| {
+                        serde_json::json!({
+                            "view": view.id().0,
+                            "focused": viewport.focused_view_id() == Some(view.id()),
+                        })
+                    })
+                    .collect();
+                views.sort_by_key(|view| {
+                    view.get("view")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_default()
+                });
+                serde_json::json!({
+                    "preview": session.id().0,
+                    "doc": session.doc(),
+                    "edit_target": session.edit_target().as_str(),
+                    "projected_generation": session.projected_generation(),
+                    "focused": viewport.focused_preview_id() == Some(session.id()),
+                    "views": views,
+                })
+            })
+            .collect();
+        previews.sort_by_key(|preview| {
+            preview
+                .get("preview")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        });
+
+        ApiResponse::ok(serde_json::json!({
+            "focused_preview": viewport.focused_preview_id().map(|id| id.0),
+            "focused_view": viewport.focused_view_id().map(|id| id.0),
+            "previews": previews,
+            "preview_count": viewport.session_count(),
+            "view_count": viewport.view_count(),
+        }))
+    }
+}
 
 /// Initial placeholder dimensions for the offscreen render target.
 /// Tiny on purpose: `resize_viewport_image` resizes the asset to the
@@ -789,7 +862,7 @@ fn create_preview_view(
     preview: UsdPreviewId,
     view: UsdPreviewViewId,
     render_layer: usize,
-    preview_illuminance: f32,
+    profile: RenderQualityProfile,
 ) -> Option<UsdPreviewView> {
     if view.0 == 0 || !world.contains_resource::<Assets<Image>>() {
         return None;
@@ -803,10 +876,16 @@ fn create_preview_view(
         .get_resource_mut::<EguiUserTextures>()
         .map(|mut tex| tex.add_image(EguiTextureHandle::Strong(image.clone())));
     let preview_layers = RenderLayers::layer(render_layer);
+    // Preview cameras use the same renderer-owned look as an unauthored scene
+    // camera. The explicit profile supplies the exposure that matches the
+    // graphics light; relying on Bevy's implicit exposure against the canonical
+    // lunar sun overexposes the USD assembly before any authored camera opinion.
+    let (camera_intent, exposure) = scene_camera_look_with_profile(None, profile);
     let mut commands = world.commands();
     let camera = commands
         .spawn((
-            SceneCamera::default(),
+            camera_intent,
+            exposure,
             GraphicsCameraDefaults,
             Camera3d::default(),
             Camera {
@@ -827,7 +906,7 @@ fn create_preview_view(
     let light = commands
         .spawn((
             DirectionalLight {
-                illuminance: preview_illuminance,
+                illuminance: profile.distant_light_default_illuminance,
                 shadow_maps_enabled: false,
                 ..default()
             },
@@ -1136,7 +1215,7 @@ fn make_target_image(width: u32, height: u32) -> Image {
     Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None)
 }
 
-fn validated_preview_illuminance(world: &World) -> Result<f32, String> {
+fn validated_preview_profile(world: &World) -> Result<RenderQualityProfile, String> {
     if !world.contains_resource::<Assets<Image>>() {
         return Err("USD preview rendering is unavailable in this host".to_string());
     }
@@ -1145,7 +1224,6 @@ fn validated_preview_illuminance(world: &World) -> Result<f32, String> {
         .ok_or_else(|| "Graphics quality settings are unavailable in this host".to_string())?;
     settings
         .validated_profile()
-        .map(|profile| profile.distant_light_default_illuminance)
         .map_err(|reason| format!("invalid Graphics quality: {reason}"))
 }
 
@@ -1249,8 +1327,8 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             state.focus(preview);
             return;
         }
-        let preview_illuminance = match validated_preview_illuminance(world) {
-            Ok(illuminance) => illuminance,
+        let preview_profile = match validated_preview_profile(world) {
+            Ok(profile) => profile,
             Err(detail) => {
                 report_preview_error(world, "usd-preview-open-failed", detail);
                 return;
@@ -1311,13 +1389,9 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             return;
         };
         world.resource_mut::<UsdViewportState>().insert(session);
-        let Some(view) = create_preview_view(
-            world,
-            preview,
-            primary_view,
-            render_layer,
-            preview_illuminance,
-        ) else {
+        let Some(view) =
+            create_preview_view(world, preview, primary_view, render_layer, preview_profile)
+        else {
             let _ = remove_preview_session(world, preview);
             report_preview_error(
                 world,
@@ -1375,14 +1449,14 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
             return;
         }
         let render_layer = session.render_layer();
-        let illuminance = match validated_preview_illuminance(world) {
-            Ok(value) => value,
+        let profile = match validated_preview_profile(world) {
+            Ok(profile) => profile,
             Err(detail) => {
                 report_preview_error(world, "usd-preview-view-open-failed", detail);
                 return;
             }
         };
-        let Some(view_state) = create_preview_view(world, preview, view, render_layer, illuminance)
+        let Some(view_state) = create_preview_view(world, preview, view, render_layer, profile)
         else {
             report_preview_error(
                 world,
@@ -2159,7 +2233,7 @@ mod tests {
         settings.distant_light_default_illuminance = 42_000.0;
         app.insert_resource(settings);
 
-        let illuminance = validated_preview_illuminance(app.world()).expect("quality is valid");
+        let profile = validated_preview_profile(app.world()).expect("quality is valid");
         let _session = create_preview_session(
             app.world_mut(),
             UsdPreviewId(1),
@@ -2175,7 +2249,7 @@ mod tests {
             UsdPreviewId(1),
             UsdPreviewViewId(1),
             FIRST_PREVIEW_RENDER_LAYER,
-            illuminance,
+            profile,
         )
         .expect("preview view resources are available");
 
@@ -2195,6 +2269,77 @@ mod tests {
             .expect("preview session creates its camera");
         assert!(camera.contains::<SceneCamera>());
         assert!(camera.contains::<GraphicsCameraDefaults>());
+        assert_eq!(
+            camera
+                .get::<bevy::camera::Exposure>()
+                .expect("preview camera uses the graphics exposure")
+                .ev100,
+            profile.camera_exposure_ev100
+        );
+    }
+
+    #[test]
+    fn viewport_query_reports_explicit_focus_and_view_handles() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        let session = create_preview_session(
+            app.world_mut(),
+            UsdPreviewId(1),
+            DocumentId::new(7),
+            LayerId::root(),
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            UsdPreviewViewId(1),
+        )
+        .expect("session resources are available");
+        let layer = session.render_layer();
+        let profile = RenderingQualitySettings::default()
+            .validated_profile()
+            .expect("default quality is valid");
+        let first_view = create_preview_view(
+            app.world_mut(),
+            UsdPreviewId(1),
+            UsdPreviewViewId(1),
+            layer,
+            profile,
+        )
+        .expect("first view resources are available");
+        let second_view = create_preview_view(
+            app.world_mut(),
+            UsdPreviewId(1),
+            UsdPreviewViewId(2),
+            layer,
+            profile,
+        )
+        .expect("second view resources are available");
+        let mut state = UsdViewportState::default();
+        state.insert(session);
+        assert!(state.insert_view(first_view).is_ok());
+        assert!(state.insert_view(second_view).is_ok());
+        assert!(state.focus_view(UsdPreviewViewId(2)));
+        app.insert_resource(state);
+
+        let response = InspectUsdViewportProvider.execute(app.world(), &serde_json::json!({}));
+        let ApiResponse::Ok { data: Some(data) } = response else {
+            panic!("viewport query must return presentation data");
+        };
+        assert_eq!(data["focused_preview"], serde_json::json!(1));
+        assert_eq!(data["focused_view"], serde_json::json!(2));
+        assert_eq!(data["preview_count"], serde_json::json!(1));
+        assert_eq!(data["view_count"], serde_json::json!(2));
+        assert_eq!(data["previews"][0]["doc"], serde_json::json!(7));
+        assert_eq!(
+            data["previews"][0]["views"][0]["view"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            data["previews"][0]["views"][1]["view"],
+            serde_json::json!(2)
+        );
+        assert_eq!(
+            data["previews"][0]["views"][1]["focused"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]
@@ -2234,12 +2379,15 @@ mod tests {
         let layer = first.render_layer();
         let mut state = UsdViewportState::default();
         state.insert(first);
+        let profile = RenderingQualitySettings::default()
+            .validated_profile()
+            .expect("default quality is valid");
         let first_view = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(1),
             layer,
-            1_000.0,
+            profile,
         )
         .expect("first view resources are available");
         let second_view = create_preview_view(
@@ -2247,7 +2395,7 @@ mod tests {
             UsdPreviewId(1),
             UsdPreviewViewId(2),
             layer,
-            1_000.0,
+            profile,
         )
         .expect("second view resources are available");
         let first_camera = first_view.camera();
