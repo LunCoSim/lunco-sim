@@ -27,12 +27,11 @@ assembly element there, while its internal parts are edited in Editor.
 
 ## Gizmo System
 
-The transform gizmo follows `lunco_celestial::OrbitalViewPin.active`, the
-existing planetary presentation fact. While it is active, the editor clears
-the maintained transform-gizmo modes so the frontend produces no handles or
-picking hits, then restores the user's modes when local scene editing returns.
-Selection remains intact; no second planetary-mode flag or proxy visibility
-path is introduced.
+The transform gizmo respects `lunco_celestial::OrbitalViewPin.active` only for
+the live scene presentation. A focused isolated USD preview owns its own
+camera and remains editable while the mounted simulation uses orbital
+presentation. Selection remains intact; no second planetary-mode flag or proxy
+visibility path is introduced.
 
 ### How It Works
 
@@ -50,6 +49,15 @@ Drag gizmo handle → Capture the owner pose → proxy proposes render pose
 Release gizmo handle → live: TransformEntity; USD: one ApplyUsdOps change set
                      → owner state restored or projected, then the session ends
 ```
+
+The presentation owner is selected by `UsdViewportState` and the workbench's
+measured `PanelRects`: a visible focused USD preview camera receives the
+standard `GizmoCamera` marker and its logical `GizmoOptions::viewport_rect`.
+When no preview owns the editor, `SceneViewport::active_camera` remains the
+live window-camera owner. Singleton and separate preview tabs both publish
+their offscreen scene ownership through `ScenePickGate`, so the global egui
+focus gate cannot suppress a valid preview-handle drag or leak it into the live
+scene.
 
 ### Coordinate and ownership contract
 

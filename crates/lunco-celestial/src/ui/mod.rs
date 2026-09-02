@@ -9,7 +9,8 @@ use lunco_workbench::{
 use crate::commands::TeleportToSurface;
 use lunco_core::CelestialBody;
 use lunco_time::{
-    SetTimeTransport, TimeTransport, TransportMode, WorldTime, REALTIME_RATE_OPTIONS,
+    realtime_rate_label, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
+    REALTIME_RATE_OPTIONS,
 };
 
 /// Celestial time control panel.
@@ -67,7 +68,10 @@ impl Panel for CelestialTimePanel {
         ui.label(egui::RichText::new("Physics realtime").weak().small());
         ui.horizontal_wrapped(|ui| {
             for &m in REALTIME_RATE_OPTIONS {
-                if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
+                if ui
+                    .selectable_label(speed == m, realtime_rate_label(m))
+                    .clicked()
+                {
                     ctx.trigger(SetTimeTransport {
                         playing: Some(true),
                         rate: Some(m),

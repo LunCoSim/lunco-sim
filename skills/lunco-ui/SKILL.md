@@ -50,6 +50,22 @@ do not create level-specific row layouts or source-specific styling. StatusBus
 coalesces consecutive identical discrete snapshots before this shared reader;
 do not hide producer floods in a renderer-specific filter.
 
+Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
+`lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER` (`egui::Order::Middle`);
+their scrims use the shared `TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`).
+Workbench menus and window controls are egui `Foreground` surfaces and therefore
+remain above both tutorial layers visually and for input. Keep this one shared
+layer contract; do not rely on system execution order or give a tutorial surface
+a `Foreground`/`Tooltip` order that can cover application controls. The tutorial
+draw systems are chained within their shared layer, so their relative paint order
+is deterministic as well.
+
+Tutorial catalogs must let egui size the menu to its content, bounded by the
+current viewport, and must let short lists shrink instead of reserving an empty
+scroll region. Completion state uses the shared vector `UiIcon::Check` and
+`UiIcon::Pending` with accessible status text; do not render status words or
+font-dependent glyphs as a second status system.
+
 For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing

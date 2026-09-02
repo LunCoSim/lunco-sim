@@ -263,11 +263,41 @@ impl Plugin for UsdViewportPlugin {
 /// repeated clicks reuse the same `EDITOR_PREVIEW_ID` by the lease contract.
 fn on_browser_usd_document_ready(
     trigger: On<crate::commands::BrowserUsdDocumentReady>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
+    let doc = trigger.event().doc;
+    // Keep USD's two editor surfaces paired: the native 3D preview is the
+    // composed/edit-target view, while the source tab is the lossless USDA
+    // text view used for inspection and explicit text edits. Resolve the
+    // source tab from the document's canonical origin instead of from a tab
+    // title or the active scene path.
+    if let (Some(path), Some(workspace)) = (
+        registry
+            .host(doc)
+            .and_then(|host| host.document().origin().canonical_path())
+            .map(std::path::Path::to_path_buf),
+        workspace.as_deref(),
+    ) {
+        if let Some(root) = workspace
+            .twins()
+            .map(|(_, twin)| &twin.root)
+            .filter(|root| path.strip_prefix(root).is_ok())
+            .max_by_key(|root| root.components().count())
+        {
+            if let Ok(relative) = path.strip_prefix(root) {
+                commands.trigger(lunco_workbench::OpenTwinSource {
+                    twin_root: root.to_string_lossy().into_owned(),
+                    relative_path: relative.to_string_lossy().into_owned(),
+                    pinned: false,
+                });
+            }
+        }
+    }
     commands.trigger(OpenUsdPreview {
         preview: EDITOR_PREVIEW_ID,
-        doc: trigger.event().doc,
+        doc,
         edit_target: LayerId::root(),
     });
     commands.trigger(lunco_workbench::FocusPanel {
@@ -741,11 +771,12 @@ struct UsdViewportMeasured {
 }
 
 /// Measurement emitted by an instance preview panel. The workbench owns the
-/// chrome pick gate; this event only records the view-specific render target
-/// footprint and marks that camera visible for the current frame.
+/// chrome pick gate; this event records the view-specific scene hit and render
+/// target footprint, then marks that camera visible for the current frame.
 #[derive(Event, Clone, Copy, Debug)]
 struct UsdPreviewViewMeasured {
     view: UsdPreviewViewId,
+    over_scene: bool,
 }
 
 /// Pointer input emitted by the viewport panel. Camera state and the camera
@@ -788,11 +819,16 @@ fn on_preview_view_measured(
     trigger: On<UsdPreviewViewMeasured>,
     rects: Res<PanelRects>,
     state: Res<UsdViewportState>,
+    mut gate: ResMut<ScenePickGate>,
     mut visibility: ResMut<UsdPreviewFrameVisibility>,
     budget: Res<UsdPreviewRenderBudget>,
     mut cameras: Query<&mut Camera>,
 ) {
     let event = trigger.event();
+    gate.record_scene_leaf(
+        SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
+        event.over_scene,
+    );
     if let Some(rect) = rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0) {
         mark_view_visible(
             &state,
@@ -2373,7 +2409,10 @@ fn render_preview_view(
             over_scene,
         });
     } else {
-        ctx.trigger(UsdPreviewViewMeasured { view: view_id });
+        ctx.trigger(UsdPreviewViewMeasured {
+            view: view_id,
+            over_scene,
+        });
         // Selecting a dock tab is a view-focus action. The instance renderer
         // publishes that choice so all native editor panels follow the same
         // view/session binding.

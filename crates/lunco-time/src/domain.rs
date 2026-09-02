@@ -709,8 +709,9 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
 /// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
 /// `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
-/// 64×. Higher rates are rejected. Use `SetClock` for a presentation-only
-/// celestial rate when a detached clock is explicitly needed. This is THE pause command:
+/// 64×. Rates below 0.1× or above 64× are rejected. Use `SetClock` for a
+/// presentation-only celestial rate when a detached clock is explicitly needed.
+/// This is THE pause command:
 /// exposed on the API/MCP and wrapped by the rhai prelude verbs
 /// `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
 /// one-liner can freeze the world.
@@ -720,8 +721,8 @@ pub struct SetTimeTransport {
     #[serde(default)]
     #[reflect(default)]
     pub playing: Option<bool>,
-    /// Speed multiplier vs realtime (1.0 = realtime, bounded to 64.0 for the
-    /// causal live transport); `None` leaves it.
+    /// Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for
+    /// the causal live transport); `None` leaves it.
     #[serde(default)]
     #[reflect(default)]
     pub rate: Option<f64>,
@@ -751,11 +752,13 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
         };
     }
     if let Some(rate) = cmd.rate {
-        if rate.is_finite() && (0.0..=crate::MAX_REALTIME_RATE).contains(&rate) {
+        if rate.is_finite() && (crate::MIN_REALTIME_RATE..=crate::MAX_REALTIME_RATE).contains(&rate)
+        {
             transport.rate = rate;
         } else {
             bevy::log::warn!(
-                "[time] rejected live transport rate {rate:?}; supported range is 0..={}x",
+                "[time] rejected live transport rate {rate:?}; supported range is {}..={}x",
+                crate::MIN_REALTIME_RATE,
                 crate::MAX_REALTIME_RATE
             );
         }
@@ -1267,8 +1270,26 @@ mod tests {
     }
 
     #[test]
-    fn transport_rate_command_rejects_rates_above_fixed_step_ceiling() {
+    fn transport_rate_command_rejects_rates_outside_supported_range() {
         let mut transport = crate::TimeTransport::default();
+
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                rate: Some(crate::MIN_REALTIME_RATE),
+                ..default()
+            },
+        );
+        assert_eq!(transport.rate, crate::MIN_REALTIME_RATE);
+
+        apply_time_transport(
+            &mut transport,
+            &SetTimeTransport {
+                rate: Some(crate::MIN_REALTIME_RATE / 2.0),
+                ..default()
+            },
+        );
+        assert_eq!(transport.rate, crate::MIN_REALTIME_RATE);
 
         apply_time_transport(
             &mut transport,

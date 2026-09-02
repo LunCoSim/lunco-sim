@@ -179,6 +179,19 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
+Tutorial presentation uses the shared
+`lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER`
+(`egui::Order::Middle`) for its HUD, ring, coach/recovery card, and completion
+prompt. Its painter/input scrims use the shared
+`TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`). Workbench menus and window
+controls use egui's `Foreground` order, so opening a menu has deterministic
+visual and input precedence over both tutorial layers. The tutorial content region
+still starts
+below the measured menu-bar rect; no duplicate title-bar offset or layer-order
+heuristic is allowed. The tutorial draw systems are chained within that layer,
+so HUD, spotlight, coach, and recovery surfaces do not depend on scheduler
+interleaving.
+
 ### 3.2 Render-time resource ownership
 
 `WorkbenchLayout` is the owner of the dock tree, but `render_workbench` removes

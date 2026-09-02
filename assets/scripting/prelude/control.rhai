@@ -86,7 +86,7 @@ fn follow(target)              { cmd("FollowTarget", #{ target: target }) }
 fn photo()                    { cmd("CaptureFromCamera") }
 
 // World-time transport — pause/resume the WHOLE simulation (tick + physics) and
-// set its speed. The live transport supports 1×–64×, and every listed rate
+// set its speed. The live transport supports 0.1×–64×, and every listed rate
 // advances causal fixed-step physics. `pause()` freezes everything (great right
 // after restart_scene() to inspect a scene without it running away);
 // `set_rate(4.0)` = 4× realtime. For a faster

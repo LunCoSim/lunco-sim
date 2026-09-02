@@ -188,6 +188,14 @@ BigSpace/physics identities, while the preview owns only the explicit USD
 document lease. Commit after a coherent value entry so one gesture creates one
 change set, then inspect the returned generation and screenshot the projected
 result.
+
+The standard gizmo is bound to the presentation owner. A visible focused
+preview camera receives `GizmoCamera`, and the measured workbench `PanelRects`
+becomes its logical `GizmoOptions::viewport_rect`. Both the singleton preview
+and separate preview tabs publish `SceneTarget::Offscreen` through the shared
+`ScenePickGate`; this is what admits a handle drag despite the global egui
+focus flag while keeping live-scene input excluded. Do not add panel-specific
+cursor math or a second gizmo driver.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
 `panel_templates(preview, doc, edit_target)` to discover the nine existing

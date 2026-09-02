@@ -4498,7 +4498,7 @@ fn render_layout(
                     for &m in lunco_time::REALTIME_RATE_OPTIONS {
                         let on = !paused && (rate - m).abs() < f64::EPSILON;
                         if ui
-                            .selectable_label(on, format!("{m:.0}x"))
+                            .selectable_label(on, lunco_time::realtime_rate_label(m))
                             .on_hover_text("Run the simulation (physics included) at this rate")
                             .clicked()
                         {
