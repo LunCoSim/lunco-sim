@@ -263,11 +263,41 @@ impl Plugin for UsdViewportPlugin {
 /// repeated clicks reuse the same `EDITOR_PREVIEW_ID` by the lease contract.
 fn on_browser_usd_document_ready(
     trigger: On<crate::commands::BrowserUsdDocumentReady>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
+    let doc = trigger.event().doc;
+    // Keep USD's two editor surfaces paired: the native 3D preview is the
+    // composed/edit-target view, while the source tab is the lossless USDA
+    // text view used for inspection and explicit text edits. Resolve the
+    // source tab from the document's canonical origin instead of from a tab
+    // title or the active scene path.
+    if let (Some(path), Some(workspace)) = (
+        registry
+            .host(doc)
+            .and_then(|host| host.document().origin().canonical_path())
+            .map(std::path::Path::to_path_buf),
+        workspace.as_deref(),
+    ) {
+        if let Some(root) = workspace
+            .twins()
+            .map(|(_, twin)| &twin.root)
+            .filter(|root| path.strip_prefix(root).is_ok())
+            .max_by_key(|root| root.components().count())
+        {
+            if let Ok(relative) = path.strip_prefix(root) {
+                commands.trigger(lunco_workbench::OpenTwinSource {
+                    twin_root: root.to_string_lossy().into_owned(),
+                    relative_path: relative.to_string_lossy().into_owned(),
+                    pinned: false,
+                });
+            }
+        }
+    }
     commands.trigger(OpenUsdPreview {
         preview: EDITOR_PREVIEW_ID,
-        doc: trigger.event().doc,
+        doc,
         edit_target: LayerId::root(),
     });
     commands.trigger(lunco_workbench::FocusPanel {
