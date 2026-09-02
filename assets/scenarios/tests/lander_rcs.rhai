@@ -41,24 +41,24 @@ fn on_start(me) {
     this.elapsed = 0.0;
     this.done = false;
     this.mounts = [
-        ["RcsPitchPos", [0.0, 0.0, 2.4], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsPitchNeg", [0.0, 0.0, -2.4], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsRollPos", [2.4, 0.0, 0.0], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsRollNeg", [-2.4, 0.0, 0.0], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsYawPos", [2.4, 0.0, 0.0], [90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsYawNeg", [-2.4, 0.0, 0.0], [90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsPitchPosB", [0.0, 0.0, -2.4], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsPitchNegB", [0.0, 0.0, 2.4], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsRollPosB", [-2.4, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsRollNegB", [2.4, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsYawPosB", [-2.4, 0.0, 0.0], [-90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
-        ["RcsYawNegB", [2.4, 0.0, 0.0], [-90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsPitchPos", [-1.8, 0.65, 1.8], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsPitchNeg", [1.8, 0.65, 1.8], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsRollPos", [1.8, 0.65, -1.8], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsRollNeg", [-1.8, 0.65, 1.8], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsYawPos", [1.8, 0.65, -1.8], [90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsYawNeg", [-1.8, 0.65, 1.8], [90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsPitchPosB", [-1.8, 0.65, -1.8], [180.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsPitchNegB", [1.8, 0.65, -1.8], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsRollPosB", [-1.8, 0.65, -1.8], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsRollNegB", [1.8, 0.65, 1.8], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsYawPosB", [-1.8, 0.65, -1.8], [-90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        ["RcsYawNegB", [1.8, 0.65, 1.8], [-90.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
     ];
     this.quads = [
-        ["RcsQuadPXPZ", [1.8, 0.0, 1.8]],
-        ["RcsQuadNXPZ", [-1.8, 0.0, 1.8]],
-        ["RcsQuadPXNZ", [1.8, 0.0, -1.8]],
-        ["RcsQuadNXNZ", [-1.8, 0.0, -1.8]],
+        ["RcsQuadPXPZ", [1.8, 0.65, 1.8]],
+        ["RcsQuadNXPZ", [-1.8, 0.65, 1.8]],
+        ["RcsQuadPXNZ", [1.8, 0.65, -1.8]],
+        ["RcsQuadNXNZ", [-1.8, 0.65, -1.8]],
     ];
 }
 
@@ -94,16 +94,23 @@ fn on_tick(me) {
         failures.push(t_true(ok, path + " is not seated at its diagonal hardpoint"));
     }
 
-    // In the six-row body wrench, the four yaw columns are columns 9..12.
-    // With yaw mounts in the y=0 body plane, their row-4 (pitch) contribution
-    // is zero. This pins the actual generated geometry/torque matrix, not just
-    // the source attributes. The string is stable generated Modelica output;
-    // the authored pose checks above provide the readable per-prim diagnostics.
+    // The diagonal corner layout is a physical four-pod arrangement, not a
+    // visual remap. Its vertical force pairs cancel translation while their
+    // separated moment arms produce pitch/roll; its horizontal yaw pairs cancel
+    // translation and produce yaw. This pins the generated geometry/torque
+    // matrix, not just the source attributes. The string is stable generated
+    // Modelica output; the authored pose checks provide the per-prim diagnostics.
     let source = generated.networks[0].source;
-    let yaw_pitch_free = source.contains(
-        "3000.0001192092896, 3000.0001192092896, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; 0.0");
-    failures.push(t_true(yaw_pitch_free,
-                         "generated yaw jets still contribute a pitch moment"));
+    let diagonal_wrench = source.contains(
+        "1250.0, -1250.0, -1250.0, 1250.0, 1250.0, -1250.0, 1250.0, -1250.0, 0.0, 0.0, 0.0, 0.0")
+        && source.contains(
+            "-1250.0, 1250.0, -1250.0, 1250.0;")
+        && source.contains(
+            "-2249.999940395355, -2249.999940395355, 2249.999940395355, 2249.999940395355, -2249.999940395355, 2249.999940395355, 2249.999940395355, -2249.999940395355")
+        && source.contains(
+            "2249.999940395355, -2249.999940395355, 2249.999940395355, -2249.999940395355, -2249.999940395355, -2249.999940395355, 2249.999940395355, 2249.999940395355");
+    failures.push(t_true(diagonal_wrench,
+                         "generated wrench does not match the diagonal pod layout"));
 
     this.done = true;
     report_verdict(failures, "LANDER RCS", "LANDER_RCS");

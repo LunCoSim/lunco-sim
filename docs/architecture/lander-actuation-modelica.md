@@ -59,6 +59,17 @@ The lander model does not instantiate an RCS cluster and does not calculate a
 world-frame wrench. The controller sees local sensors and asks for local body
 torque. USD decides which physical devices provide that authority.
 
+The production lander uses four physical RCS pods at the diagonal body-frame
+hardpoints `(±1.8, 0.65, ±1.8)`, between the four raked landing-leg rails. The
+pod height remains within the hull's body envelope while its diagonal radius
+keeps the hardware outside the hull and inside the leg clearance envelope.
+Each pod contains one member of each pitch, roll, and yaw actuator pair. The
+actuator transforms and force directions are therefore the complete physical
+input to the generated wrench matrix: vertical pairs cancel net force while
+their moment arms provide pitch and roll, and the horizontal pairs cancel net
+force while providing yaw. No second matrix or vehicle-specific remap is
+authoritative.
+
 The accepted `landing_handoff` input is the single landed-state boundary at the
 airframe actuator owner. `landing_engine_cutoff` closes the main-engine request
 when the target-qualified contact event is accepted; the airframe retains only
