@@ -133,8 +133,10 @@ the side panels for tabbed dock trees.
    identify their level and source in the strip; the history popup keeps
    events ordered and distinct in one responsive level/source/message/
    progress row inside a compact popup sized to roughly half the parent
-   window (clamped to 420–960 logical px); each message column uses the
-   remaining inner width after present progress and action controls; diagnostic
+   window (clamped to 420–960 logical px); the popup owns a fixed width while
+   its vertical history viewport fills that width, and each message column
+   uses the remaining inner width after present progress and action controls;
+   diagnostic
    rows expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
