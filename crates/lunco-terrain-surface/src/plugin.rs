@@ -21,6 +21,9 @@ use bevy::prelude::*;
 pub enum TerrainSurfaceSet {
     /// Project changed Avian bodies/colliders/joints into terrain support data.
     PhysicsSupportCache,
+    /// Apply streamed-tile shadow intent after the finalized BigSpace render
+    /// frame has been published and any terrain-local cache decision is ready.
+    RenderShadowBinding,
 }
 
 /// Streamed-terrain plugin — registers the DEM build, streaming, layer, and
@@ -94,6 +97,11 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
         app.configure_sets(Update, TerrainSurfaceSet::PhysicsSupportCache);
+        app.configure_sets(
+            PostUpdate,
+            TerrainSurfaceSet::RenderShadowBinding
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision),
+        );
         // Physics owns the support contract; this cache turns Avian's change
         // events into a stable assembly projection. Ring selection and the
         // readiness hold both consume that projection instead of rebuilding the
@@ -119,12 +127,19 @@ impl Plugin for TerrainSurfacePlugin {
                 // two source owners from racing through separate late binders.
                 crate::stream_viz::bind_terrain_maps_to_materials,
                 crate::stream_viz::sync_removed_terrain_maps_to_materials,
-                crate::stream_viz::bind_shadow_cache_to_tiles,
                 // Change-driven: early-outs unless a `TerrainLodViz` removal
                 // event fired this frame (stays in `Update` so its
                 // `RemovedComponents` reader drains every frame).
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
+        );
+        // Tile shadow intent is a render-frame consumer. It must see the final
+        // floating-origin transforms, and is kept in a public phase so the
+        // streamed-terrain cache producer can publish immediately before it.
+        app.add_systems(
+            PostUpdate,
+            crate::stream_viz::bind_shadow_cache_to_tiles
+                .in_set(TerrainSurfaceSet::RenderShadowBinding),
         );
         // Composable TERRAIN LAYER stack (authored as USD child layer prims; craters
         // stamp into the grid, rocks scatter on the surface). The parser registry maps

@@ -69,10 +69,13 @@ When a camera, body, rover, trajectory, or line jitters:
    `ActivePhysicsFrame` to the intended `WorldGrid` or site grid, then verify
    the bridge path, not the
    rendered `GlobalTransform`.
-7. For a terrain-attached periodic line or grid, verify the shader receives the
-   current `WorldGrid` cell offset plus the active frame's render-space origin
-   and inverse rotation before computing the pattern; render-relative global X/Z
-   alone is not an authored coordinate.
+7. For terrain-attached rendering, verify the shader receives the current
+   `WorldGrid` cell offset plus the active frame's render-space origin and
+   inverse rotation before computing a periodic pattern. Verify that every
+   terrain-local sun direction, horizon-cache bake decision, and streamed-tile
+   shadow binding runs after `BigSpaceSystems::PropagateLowPrecision` and uses
+   the same finalized `GlobalTransform`; render-relative global X/Z alone is
+   not an authored coordinate.
 8. For a scene replacement, verify the old root was invalidated before
    deferred despawn and that projection only accepts the active root.
 9. For physics admission, verify the bridge's frame diagnostic and

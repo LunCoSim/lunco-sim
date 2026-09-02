@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use bevy::camera::visibility::RenderLayers;
+use bevy::math::Affine3A;
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
@@ -232,14 +233,19 @@ pub(crate) fn wire_tile_shadow_cache(
     terrains: Query<
         (
             Entity,
-            &GlobalTransform,
+            Ref<GlobalTransform>,
             Option<&HorizonShadowCache>,
             Option<&TileShadowCache>,
         ),
         (With<TerrainLodViz>, With<HorizonShadowTerrain>),
     >,
     sun: SunQuery,
+    mut inverse_cache: Local<std::collections::HashMap<Entity, Affine3A>>,
+    mut removed_terrains: RemovedComponents<TerrainLodViz>,
 ) {
+    for entity in removed_terrains.read() {
+        inverse_cache.remove(&entity);
+    }
     // The same "one sun" rule as the environment's wiring, and the same
     // STRUCTURAL basis: a body's reflected fill is authored under that body's
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
@@ -255,11 +261,18 @@ pub(crate) fn wire_tile_shadow_cache(
             Some(c) => {
                 let on = sun.is_some()
                     && sun_world.is_some_and(|to_sun_world| {
-                        let sun_local = terrain_gt
-                            .affine()
-                            .inverse()
-                            .transform_vector3(to_sun_world)
-                            .normalize_or_zero();
+                        let inverse = match inverse_cache.entry(entity) {
+                            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                                if terrain_gt.is_changed() {
+                                    *entry.get_mut() = terrain_gt.affine().inverse();
+                                }
+                                *entry.get()
+                            }
+                            std::collections::hash_map::Entry::Vacant(entry) => {
+                                *entry.insert(terrain_gt.affine().inverse())
+                            }
+                        };
+                        let sun_local = inverse.transform_vector3(to_sun_world).normalize_or_zero();
                         cache_quality_valid
                             && cfg.enabled
                             && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
@@ -290,8 +303,16 @@ pub(crate) fn register(app: &mut App) {
             mark_streamed_horizon_stale,
             start_streamed_horizon_bakes,
             finish_streamed_horizon_bakes,
-            wire_tile_shadow_cache,
         )
             .chain(),
+    );
+    // The cache validity test converts the semantic sun into terrain-local
+    // render space. Run it only after BigSpace has finalized GlobalTransform,
+    // then publish before the terrain-surface tile binder consumes the result.
+    app.add_systems(
+        PostUpdate,
+        wire_tile_shadow_cache
+            .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+            .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding),
     );
 }

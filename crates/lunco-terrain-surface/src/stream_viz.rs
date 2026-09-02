@@ -3745,7 +3745,7 @@ mod draw_partition_tests {
     #[test]
     fn late_shadow_cache_keeps_terrain_caster_for_dynamic_shadow_occlusion() {
         let mut app = App::new();
-        app.add_systems(Update, bind_shadow_cache_to_tiles);
+        app.add_systems(PostUpdate, bind_shadow_cache_to_tiles);
 
         let tile = app
             .world_mut()
