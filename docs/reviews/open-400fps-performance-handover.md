@@ -16,8 +16,11 @@ existing `GlobeTiles` state records the settled camera identity and position;
 the run condition wakes only for unfinished residency, material readiness,
 LOD/handoff/grid changes, active-camera hierarchy changes, or camera motion.
 The camera reconciler's mutable resource access is not used as a change signal.
-No second propagation implementation, quality reduction, fallback, or local
-BigSpace fork is part of the implementation.
+The runtime exposure publisher is also change-driven: separate invalidation
+domains skip unrelated surfaces, and authored control-root membership is cached
+against the existing `UsdStageRevision`. No second propagation implementation,
+quality reduction, fallback, duplicate cache, or local BigSpace fork is part of
+the implementation.
 
 ## Verification
 
@@ -29,6 +32,10 @@ BigSpace fork is part of the implementation.
   `--no-vsync --no-throttle --log-diag`, API 4366, and the authored
   `traverse_apollo15.usda` scene. `/api/ready` returned
   `ready=true`, `world_hold=false`, `faulted=false`, `pending_count=0`.
+- Current optimization build: focused `cargo check` and exposure/core tests
+  pass. Apollo reached `/api/ready` in 4.1 s from process start; its settled
+  diagnostic tail was 92–147 FPS with 7.3–10.9 ms frame samples. The sandbox
+  reached readiness in 2.8 s. These runs remain non-acceptance evidence.
 - Settled diagnostics reported 4100 entities and approximately 33–79 FPS with
   approximately 12.6–30.3 ms samples in the captured window. The API `Exit`
   command was accepted and port 4366 was verified closed.

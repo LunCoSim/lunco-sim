@@ -82,6 +82,10 @@ Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
 `EngineExposures.revision` changes only when a value or visibility flag changes;
 it is not a frame counter. Do not use JSON to detect internal changes.
+When one producer owns several surfaces, keep invalidation domains separate so
+continuous motion does not rebuild static authored topology. Use the existing
+authoritative stage revision for USD-derived membership and cache only that
+derived membership; do not rescan all prims or add a second source registry.
 
 For camera status, Rust publishes the current camera fact and compact label
 through the generic exposure namespace. The shared

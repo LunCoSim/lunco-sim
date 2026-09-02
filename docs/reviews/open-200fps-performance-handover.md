@@ -475,19 +475,17 @@ Those launches are therefore not FPS acceptance data. No performance gain is
 claimed until a settled Apollo run can be repeated; the UI change only removes
 known per-extraction work at its owning render acknowledgement boundary.
 
-#### 2026-08-30 exposure publisher cadence gating
+#### Current exposure publisher cadence and invalidation gating
 
 Tracy attributed approximately **0.93 ms** of mean work to
-`runtime_exposures::publish_exposure`. The publisher already emitted snapshots at
-20 Hz, but Bevy entered the system every render frame to tick a private timer
-and construct its large query parameter set before returning. The cadence is
-now an existing Bevy scheduler condition shared by the change detector and
-publisher. The first publication remains immediate, and `ExposureRefresh` still
-captures changes between cadence ticks; stable frames skip the publisher
-entirely.
+`runtime_exposures::publish_exposure`. The cadence is an existing Bevy scheduler
+condition, and `ExposureRefresh` retains changes between cadence ticks. Its
+invalidation domains are separate for the driven vessel, authored controls,
+schema, celestial capability, and overlays; stable frames skip the publisher
+entirely, and authored control-root membership is cached by `UsdStageRevision`.
 
-The condition has a focused regression test for immediate startup and the
-20-Hz interval. The production binary was rebuilt in `usd/target` and Apollo
+Focused tests cover the refresh contract and 20-Hz interval. The production
+binary was rebuilt in `target/debug` and Apollo
 was exercised on API port 4221. The run produced no fault and reached the
 `scene participants ready` lifecycle log after the existing admission warning;
 its final `/api/ready` response remained false because the same ten authored

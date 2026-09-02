@@ -55,10 +55,22 @@ impl Default for EngineExposures {
 
 /// Shared invalidation state for exposure producers. Individual producers own
 /// their dependency/change queries; this resource coalesces them to a bounded
-/// update cadence.
+/// update cadence and keeps unrelated surfaces out of a publication.
 #[derive(Resource, Debug)]
 pub struct ExposureRefresh {
-    pub dirty: bool,
+    /// The driven-vessel surface depends on continuous pose, vehicle, and
+    /// telemetry inputs.
+    pub driven_vessel_dirty: bool,
+    /// Authored control cards contain live vehicle/modelica values and their
+    /// authored root topology.
+    pub control_dirty: bool,
+    /// The schema surface depends on selection and authored USD topology.
+    pub schema_dirty: bool,
+    /// The celestial capability surface depends on authored bodies and the
+    /// orbital-view pin.
+    pub celestial_dirty: bool,
+    /// Progress/overlay surfaces depend only on their own producer resources.
+    pub overlay_dirty: bool,
     pub first_update: bool,
 }
 
@@ -71,9 +83,32 @@ impl Default for ExposureRefresh {
 impl ExposureRefresh {
     pub fn new() -> Self {
         Self {
-            dirty: true,
+            driven_vessel_dirty: true,
+            control_dirty: true,
+            schema_dirty: true,
+            celestial_dirty: true,
+            overlay_dirty: true,
             first_update: true,
         }
+    }
+
+    /// Whether any publication domain has pending work.
+    pub fn any_dirty(&self) -> bool {
+        self.driven_vessel_dirty
+            || self.control_dirty
+            || self.schema_dirty
+            || self.celestial_dirty
+            || self.overlay_dirty
+    }
+
+    /// Clear all domain invalidation bits after the scheduler admits a
+    /// publication. The producer may set them again on a later update.
+    pub fn clear_dirty(&mut self) {
+        self.driven_vessel_dirty = false;
+        self.control_dirty = false;
+        self.schema_dirty = false;
+        self.celestial_dirty = false;
+        self.overlay_dirty = false;
     }
 }
 
@@ -158,5 +193,22 @@ mod tests {
             writer.property("speed", 2.0_f64);
         }
         assert_eq!(exposures.revision, changed);
+    }
+
+    #[test]
+    fn refresh_clears_coalesced_domain_invalidations() {
+        let mut refresh = ExposureRefresh::new();
+        assert!(refresh.first_update);
+        assert!(refresh.any_dirty());
+
+        refresh.clear_dirty();
+        refresh.first_update = false;
+        assert!(!refresh.any_dirty());
+
+        refresh.schema_dirty = true;
+        refresh.overlay_dirty = true;
+        assert!(refresh.any_dirty());
+        refresh.clear_dirty();
+        assert!(!refresh.any_dirty());
     }
 }

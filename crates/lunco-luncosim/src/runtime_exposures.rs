@@ -646,22 +646,14 @@ mod exposure_schedule_tests {
     use super::*;
 
     #[test]
-    fn publisher_is_immediate_once_then_runs_at_the_exposure_cadence() {
+    fn publisher_timer_runs_at_the_exposure_cadence() {
         let mut timer = None;
 
-        assert!(exposure_publish_due_at(true, &mut timer, Duration::ZERO));
-        assert!(
-            timer.is_none(),
-            "the first update should not consume cadence"
-        );
-
         assert!(!exposure_publish_due_at(
-            false,
             &mut timer,
             Duration::from_millis(49)
         ));
         assert!(exposure_publish_due_at(
-            false,
             &mut timer,
             Duration::from_millis(2)
         ));
@@ -839,20 +831,22 @@ pub(crate) fn mark_exposure_dirty(
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
+    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
 ) {
-    let changed = !q_avatar.is_empty()
+    let driven_changed = !q_avatar.is_empty()
         || !q_velocity.is_empty()
         || !q_spatial.is_empty()
         || !q_links.is_empty()
         || !q_wheels.is_empty()
         || !q_com.is_empty()
         || !q_sim.is_empty()
-        || !q_autopilot.is_empty()
-        || !q_bodies.is_empty()
-        || selected.is_changed()
-        || orbital_pin.is_some_and(|pin| pin.is_changed());
+        || !q_autopilot.is_empty();
+
+    let schema_changed = selected.is_changed();
+    let celestial_changed = !q_bodies.is_empty() || orbital_pin.is_some_and(|pin| pin.is_changed());
+    let authored_changed = stage_revision.is_some_and(|revision| revision.is_changed());
 
     let overlay_changed = overlays
         .terrain
@@ -870,8 +864,21 @@ pub(crate) fn mark_exposure_dirty(
             .as_ref()
             .is_some_and(|status| status.is_changed());
 
-    if changed || overlay_changed {
-        refresh.dirty = true;
+    if driven_changed {
+        refresh.driven_vessel_dirty = true;
+        refresh.control_dirty = true;
+    }
+    if schema_changed || authored_changed {
+        refresh.schema_dirty = true;
+    }
+    if authored_changed {
+        refresh.control_dirty = true;
+    }
+    if celestial_changed {
+        refresh.celestial_dirty = true;
+    }
+    if overlay_changed {
+        refresh.overlay_dirty = true;
     }
 }
 
@@ -884,13 +891,13 @@ pub(crate) fn exposure_publish_due(
     refresh: Res<ExposureRefresh>,
     mut timer: Local<Option<Timer>>,
 ) -> bool {
-    exposure_publish_due_at(refresh.first_update, &mut timer, time.delta())
-}
-
-fn exposure_publish_due_at(first_update: bool, timer: &mut Option<Timer>, delta: Duration) -> bool {
-    if first_update {
+    if refresh.first_update {
         return true;
     }
+    exposure_publish_due_at(&mut timer, time.delta()) && refresh.any_dirty()
+}
+
+fn exposure_publish_due_at(timer: &mut Option<Timer>, delta: Duration) -> bool {
     timer
         .get_or_insert_with(|| Timer::from_seconds(1.0 / EXPOSURE_UPDATE_HZ, TimerMode::Repeating))
         .tick(delta)
@@ -957,6 +964,8 @@ pub(crate) fn publish_exposure(
     overlays: RuntimeOverlayInputs,
     trace_inputs: SeminarTraceInputs,
     mut seminar: Local<SeminarExposureTrace>,
+    mut control_roots: Local<ControlRootCache>,
+    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
 ) {
     if let Some(overlay) = overlays.overlay.as_deref() {
         if seminar.overlay != Some(*overlay) {
@@ -972,40 +981,130 @@ pub(crate) fn publish_exposure(
         }
     }
 
-    if !runtime.refresh.dirty && !runtime.refresh.first_update {
+    if !runtime.refresh.any_dirty() && !runtime.refresh.first_update {
         return;
     }
-    runtime.refresh.dirty = false;
+    let first_update = runtime.refresh.first_update;
+    let update_driven = first_update || runtime.refresh.driven_vessel_dirty;
+    let update_control = first_update || runtime.refresh.control_dirty;
+    let update_schema = first_update || runtime.refresh.schema_dirty;
+    let update_celestial = first_update || runtime.refresh.celestial_dirty;
+    let update_overlay = first_update || runtime.refresh.overlay_dirty;
+    runtime.refresh.clear_dirty();
     runtime.refresh.first_update = false;
 
-    let Some(vessel) = resolve_driven(
-        &runtime.local_avatar,
-        &queries.avatar,
-        &queries.name,
-        &queries.callsign,
-        &queries.catalog_id,
-        &queries.gid,
-        &queries.velocity,
-        &queries.parents,
-        &queries.grids,
-        &queries.spatial,
-        &queries.links,
-        &queries.ids,
-        &queries.wheels,
-        &queries.com,
-        &geo.surface_pose,
-    ) else {
-        seminar.current_vessel = None;
-        seminar.last_label = None;
-        seminar.tipped = false;
-        seminar.max_slope_deg = None;
-        {
+    if update_driven {
+        let vessel = resolve_driven(
+            &runtime.local_avatar,
+            &queries.avatar,
+            &queries.name,
+            &queries.callsign,
+            &queries.catalog_id,
+            &queries.gid,
+            &queries.velocity,
+            &queries.parents,
+            &queries.grids,
+            &queries.spatial,
+            &queries.links,
+            &queries.ids,
+            &queries.wheels,
+            &queries.com,
+            &geo.surface_pose,
+        );
+
+        if let Some(vessel) = vessel {
+            if seminar.current_vessel != Some(vessel.entity) {
+                seminar.current_vessel = Some(vessel.entity);
+                seminar.last_label = Some(vessel.label.clone());
+                seminar.tipped = false;
+                seminar.max_slope_deg = None;
+                let prim = trace_inputs
+                    .prims
+                    .get(vessel.entity)
+                    .map(|prim| prim.path.as_str())
+                    .unwrap_or("<no USD prim>");
+                let provenance = trace_inputs
+                    .provenance
+                    .get(vessel.entity)
+                    .map(|value| format!("{value:?}"))
+                    .unwrap_or_else(|_| "<no provenance>".to_owned());
+                info!(
+                    "[seminar] driven vessel resolved: label={} prim={} provenance={}",
+                    vessel.label, prim, provenance
+                );
+            }
+
+            let tip_over = vessel.tilt_deg >= vessel.danger_deg;
+            if tip_over != seminar.tipped {
+                if tip_over {
+                    warn!(
+                        "[seminar] tip-over threshold crossed: vessel={} tilt={:.1}° limit={:.1}°",
+                        vessel.label, vessel.tilt_deg, vessel.danger_deg
+                    );
+                } else {
+                    info!(
+                        "[seminar] tip-over threshold cleared: vessel={} tilt={:.1}° limit={:.1}°",
+                        vessel.label, vessel.tilt_deg, vessel.danger_deg
+                    );
+                }
+                seminar.tipped = tip_over;
+            }
+
+            if let Some(slope_deg) = trace_inputs
+                .surface
+                .slope_at(
+                    lunco_core::coords::GridPos(vessel.pose.display_position()),
+                    1.0,
+                )
+                .map(|slope| slope.to_degrees() as f32)
+            {
+                let new_max = seminar
+                    .max_slope_deg
+                    .is_none_or(|previous| slope_deg > previous + 0.5);
+                if new_max {
+                    seminar.max_slope_deg = Some(slope_deg);
+                    info!(
+                        "[seminar] terrain slope: vessel={} instantaneous={:.1}° maximum={:.1}°",
+                        vessel.label, slope_deg, slope_deg
+                    );
+                }
+            }
+
+            let autopilot = geo
+                .autopilots
+                .iter()
+                .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
             let mut ui = runtime.exposures.writer("driven-vessel");
-            ui.visible(false);
+            ui.visible(true);
+            let telemetry = resolve_authored_telemetry(
+                vessel.entity,
+                &runtime.signals,
+                &queries.parents,
+                &queries.channels,
+            );
+            publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
+        } else {
+            seminar.current_vessel = None;
+            seminar.last_label = None;
+            seminar.tipped = false;
+            seminar.max_slope_deg = None;
+            runtime.exposures.writer("driven-vessel").visible(false);
         }
+    }
+
+    if update_schema {
         publish_lunica_schema_exposure(
             &mut runtime.exposures,
             &runtime.selected,
+            &queries.usd_paths,
+            &runtime.stages,
+            &runtime.canonical,
+        );
+    }
+    if update_control {
+        let revision = stage_revision.as_deref().map(|revision| revision.0);
+        control_roots.refresh(
+            revision,
             &queries.usd_paths,
             &runtime.stages,
             &runtime.canonical,
@@ -1028,120 +1127,19 @@ pub(crate) fn publish_exposure(
             &queries.usd_paths,
             &runtime.stages,
             &runtime.canonical,
+            &control_roots.roots,
         );
+    }
+    if update_celestial {
         publish_celestial_capability(
             &mut runtime.exposures,
             &runtime.bodies,
             runtime.orbital_pin.as_deref(),
         );
+    }
+    if update_overlay {
         publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
-        return;
-    };
-
-    if seminar.current_vessel != Some(vessel.entity) {
-        seminar.current_vessel = Some(vessel.entity);
-        seminar.last_label = Some(vessel.label.clone());
-        seminar.tipped = false;
-        seminar.max_slope_deg = None;
-        let prim = trace_inputs
-            .prims
-            .get(vessel.entity)
-            .map(|prim| prim.path.as_str())
-            .unwrap_or("<no USD prim>");
-        let provenance = trace_inputs
-            .provenance
-            .get(vessel.entity)
-            .map(|value| format!("{value:?}"))
-            .unwrap_or_else(|_| "<no provenance>".to_owned());
-        info!(
-            "[seminar] driven vessel resolved: label={} prim={} provenance={}",
-            vessel.label, prim, provenance
-        );
     }
-
-    let tip_over = vessel.tilt_deg >= vessel.danger_deg;
-    if tip_over != seminar.tipped {
-        if tip_over {
-            warn!(
-                "[seminar] tip-over threshold crossed: vessel={} tilt={:.1}° limit={:.1}°",
-                vessel.label, vessel.tilt_deg, vessel.danger_deg
-            );
-        } else {
-            info!(
-                "[seminar] tip-over threshold cleared: vessel={} tilt={:.1}° limit={:.1}°",
-                vessel.label, vessel.tilt_deg, vessel.danger_deg
-            );
-        }
-        seminar.tipped = tip_over;
-    }
-
-    if let Some(slope_deg) = trace_inputs
-        .surface
-        .slope_at(
-            lunco_core::coords::GridPos(vessel.pose.display_position()),
-            1.0,
-        )
-        .map(|slope| slope.to_degrees() as f32)
-    {
-        let new_max = seminar
-            .max_slope_deg
-            .is_none_or(|previous| slope_deg > previous + 0.5);
-        if new_max {
-            seminar.max_slope_deg = Some(slope_deg);
-            info!(
-                "[seminar] terrain slope: vessel={} instantaneous={:.1}° maximum={:.1}°",
-                vessel.label, slope_deg, slope_deg
-            );
-        }
-    }
-
-    let autopilot = geo
-        .autopilots
-        .iter()
-        .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
-    {
-        let mut ui = runtime.exposures.writer("driven-vessel");
-        ui.visible(true);
-        let telemetry = resolve_authored_telemetry(
-            vessel.entity,
-            &runtime.signals,
-            &queries.parents,
-            &queries.channels,
-        );
-        publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
-    }
-    publish_lunica_schema_exposure(
-        &mut runtime.exposures,
-        &runtime.selected,
-        &queries.usd_paths,
-        &runtime.stages,
-        &runtime.canonical,
-    );
-    publish_control_exposures(
-        &mut runtime.exposures,
-        &queries.name,
-        &queries.callsign,
-        &queries.catalog_id,
-        &queries.sim,
-        &queries.models,
-        &runtime.signals,
-        &queries.channels,
-        &queries.parents,
-        &queries.grids,
-        &queries.velocity,
-        &runtime.angular_velocity,
-        &runtime.rotation,
-        &queries.spatial,
-        &queries.usd_paths,
-        &runtime.stages,
-        &runtime.canonical,
-    );
-    publish_celestial_capability(
-        &mut runtime.exposures,
-        &runtime.bodies,
-        runtime.orbital_pin.as_deref(),
-    );
-    publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
 }
 
 fn publish_celestial_capability(
@@ -1319,6 +1317,34 @@ fn publish_lunica_schema_exposure(
     true
 }
 
+/// Cached authored control-root topology. The USD revision is the authoritative
+/// invalidation boundary; entity IDs remain valid until that same projection
+/// changes, so a motion-only publication never scans every USD prim again.
+#[derive(Default)]
+pub(crate) struct ControlRootCache {
+    revision: Option<u64>,
+    initialized: bool,
+    roots: Vec<(Option<Entity>, i32)>,
+}
+
+impl ControlRootCache {
+    fn refresh(
+        &mut self,
+        revision: Option<u64>,
+        q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+        stages: &Assets<UsdStageAsset>,
+        canonical: &CanonicalStages,
+    ) {
+        if self.initialized && self.revision == revision {
+            return;
+        }
+        self.roots = authored_control_roots(q_paths, stages, canonical);
+        self.roots.sort_by_key(|(_, column)| *column);
+        self.revision = revision;
+        self.initialized = true;
+    }
+}
+
 /// Publish control responses for explicitly authored runtime surfaces.
 ///
 /// A selected entity is not enough to opt into the compact lander card: the
@@ -1346,10 +1372,8 @@ fn publish_control_exposures(
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
+    roots: &[(Option<Entity>, i32)],
 ) {
-    let mut roots = authored_control_roots(q_paths, stages, canonical);
-    roots.sort_by_key(|(_, column)| *column);
-
     let first_root = roots.first().and_then(|(entity, _)| *entity);
     let first_telemetry = first_root
         .map(|root| resolve_authored_telemetry(root, signals, q_parents, q_channels))

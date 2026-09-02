@@ -175,12 +175,15 @@ pure desired leaf selection separately from readiness and bounded tile
 streaming. These are owner-local cursors, not compatibility stores or alternate
 sources of truth.
 
-The engine exposure producer has one shared 20 Hz cadence gate for both its
-change detector and publisher. The first publication is immediate; subsequent
+The engine exposure producer has one shared 20 Hz cadence gate for its change
+detector and publisher. The first publication is immediate; subsequent stable
 frames do not even enter the publisher's large query set. `ExposureRefresh`
-still records input changes between cadence ticks, so change detection remains
-lossless without paying the publisher's system-parameter setup every render
-frame.
+records separate invalidation domains for the driven vessel, authored control
+cards, schema, celestial capability, and progress overlays. A rover motion
+therefore does not re-read static schema or celestial USD data. Authored
+control-root topology is resolved through the existing `UsdStageRevision` and
+cached until that revision changes; it is not discovered by rescanning every
+USD prim on every telemetry publication.
 
 State mirrors must keep the live progress entry as the authoritative UI state
 for an in-flight operation and publish one current terminal event when that
