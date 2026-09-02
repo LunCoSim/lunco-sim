@@ -174,6 +174,15 @@ translation, rotation, parent_gen)` helper with the exact selection context.
 Preview values are local canonical metres and Euler XYZ degrees; the Inspector
 commits changed translation and/or rotation fields as one journaled
 `ApplyUsdOps` edit.
+The standard transform gizmo is also available for the focused preview: select
+the exact prim, drag its unparented proxy, and release to commit the changed
+local translation and/or Euler XYZ rotation as one generation-checked
+`ApplyUsdOps` change set. Preview gizmo drags use Bevy's parent-local
+`GlobalTransform::reparented_to` conversion and never create a live physics
+identity or hold. Escape cancels; if the preview generation changes or the
+session closes, the stale transaction is discarded and the newer USD projection
+is left authoritative. Live simulation entities continue to use the BigSpace
+gizmo path and `MoveEntity`/`TransformEntity` boundary.
 Do not send a preview entity through `MoveEntity`: that command owns live
 BigSpace/physics identities, while the preview owns only the explicit USD
 document lease. Commit after a coherent value entry so one gesture creates one

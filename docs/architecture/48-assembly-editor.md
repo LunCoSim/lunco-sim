@@ -187,6 +187,19 @@ owner. Live simulation entities continue to use `MoveEntity`, which owns
 BigSpace/physics seating; a preview entity is never sent through that live
 identity path.
 
+The standard transform gizmo uses the same unparented proxy frontend for both
+owners. At drag start, a focused preview target is identified by its exact
+preview root, stage handle, document, edit target, generation, and `UsdPrimPath`;
+its local composed Bevy `Transform` becomes the transaction snapshot. During the
+drag, the proxy's render pose is converted to parent-local space with Bevy's
+`GlobalTransform::reparented_to`. Release authors only the changed local
+translation and/or Euler XYZ rotation as one generation-checked `ApplyUsdOps`
+change set. Escape restores the local snapshot, while a changed preview
+generation or closed session discards the transaction without restoring stale
+state. Preview drags never create `RigidBody`, `KinematicDrive`, or a physics
+hold. Live targets keep the existing BigSpace/Avian capture, rebranch, restore,
+and `TransformEntity` path.
+
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,
