@@ -28,10 +28,15 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::{on_command, register_commands, Command};
 
 /// Shared layer for tutorial presentation. Workbench menus and window controls
-/// use egui's `Foreground` order, so tutorial HUDs, scrims, rings, coach cards,
-/// and recovery surfaces remain visible without covering those controls. The
+/// use egui's `Foreground` order, so tutorial HUDs, rings, coach cards, and
+/// recovery surfaces remain visible without covering those controls. The
 /// tutorial systems are chained so surfaces in this layer have stable order.
 pub const TUTORIAL_OVERLAY_ORDER: egui::Order = egui::Order::Middle;
+
+/// Painter/input layer for tutorial scrims. Keeping scrims below the tutorial
+/// surfaces prevents a later scrim paint from dimming their content; application
+/// menus and window controls remain above both layers in `Foreground`.
+pub const TUTORIAL_SCRIM_ORDER: egui::Order = egui::Order::Background;
 
 /// Persistent tutorial HUD + spotlight state. Always present (headless too) so
 /// the commands never panic on a missing resource; only the draw is ui-gated.
@@ -375,7 +380,7 @@ fn draw_tutorial_recovery(
     // This scrim is interactive so clicks cannot leak into the scene or the
     // underlying workbench while the learner chooses a recovery action.
     egui::Area::new(egui::Id::new("lunco_tutorial_recovery_scrim"))
-        .order(TUTORIAL_OVERLAY_ORDER)
+        .order(TUTORIAL_SCRIM_ORDER)
         .interactable(true)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -580,7 +585,7 @@ fn draw_spotlight(
         // painter-only layer has no widget, rect, or Sense, so it can never
         // intercept menu, tab, or window-control input.
         let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Middle,
+            TUTORIAL_SCRIM_ORDER,
             egui::Id::new("lunco_spotlight_scrim"),
         ));
         paint_scrim(
@@ -877,7 +882,7 @@ fn draw_tour(
         // without becoming an input surface: the title bar and dock chrome
         // remain usable while the coach card owns its own buttons.
         let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Middle,
+            TUTORIAL_SCRIM_ORDER,
             egui::Id::new("lunco_tour_scrim"),
         ));
         if show_scrim {
@@ -906,7 +911,7 @@ fn draw_tour(
     }
 
     // Menu targets sit above `screen`, so they cannot be ringed by the content
-    // scrim. Paint their ring in a foreground layer while leaving the title bar
+    // scrim. Paint their ring in the tutorial layer while leaving the title bar
     // itself interactive.
     if let (Some(target), None) = (target, target_in_content) {
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -1238,6 +1243,7 @@ mod tests {
 
     #[test]
     fn tutorial_presentation_stays_below_application_menus() {
+        assert!(TUTORIAL_SCRIM_ORDER < TUTORIAL_OVERLAY_ORDER);
         assert!(TUTORIAL_OVERLAY_ORDER < egui::Order::Foreground);
     }
 }

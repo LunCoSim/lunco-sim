@@ -29,6 +29,8 @@ pub enum UiIcon {
     Forward,
     /// Mark a completed item.
     Check,
+    /// Item is available but not completed.
+    Pending,
     /// Warning state.
     Warning,
     /// Error state.
@@ -202,6 +204,9 @@ pub fn paint_icon(painter: &egui::Painter, icon: UiIcon, rect: egui::Rect, color
                 ],
                 stroke,
             );
+        }
+        UiIcon::Pending => {
+            painter.circle_stroke(center, rect.width() * 0.3, stroke);
         }
         UiIcon::Warning => {
             painter.add(egui::Shape::convex_polygon(

@@ -45,7 +45,7 @@ use lunco_settings::AppSettingsExt;
 use lunco_workbench::tutorial_overlay::{
     TutorialHud, TutorialNext, TutorialRecovery, TutorialRecoveryContinueRequested,
     TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
-    TUTORIAL_OVERLAY_ORDER,
+    TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER,
 };
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
@@ -1401,14 +1401,14 @@ fn draw_advance_prompt(
         })
         .filter(|rect| rect.height() > 0.0);
 
-    // Keep the blocking scrim above the workbench background but below
-    // foreground menus and the prompt. The prompt is the only surface that
-    // should own clicks in the blocked content area; menu popups remain usable
-    // because egui renders them at Foreground. Until the workbench publishes
-    // its bar rect, leave out the blocker rather than guessing its bounds.
+    // Keep the blocking scrim below the prompt and foreground menus. The prompt
+    // is the only tutorial surface that should own clicks in the blocked content
+    // area; menu popups remain usable because egui renders them at Foreground.
+    // Until the workbench publishes its bar rect, leave out the blocker rather
+    // than guessing its bounds.
     if let Some(blocked) = blocked {
         egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
-            .order(TUTORIAL_OVERLAY_ORDER)
+            .order(TUTORIAL_SCRIM_ORDER)
             .fixed_pos(blocked.min)
             .interactable(true)
             .show(ctx, |ui| {
@@ -1643,13 +1643,36 @@ fn sync_twin_curriculum_root(
 
 // ── Menu + launcher panel ───────────────────────────────────────────────────
 
+#[cfg(feature = "ui")]
+fn paint_completion_status(
+    ui: &mut egui::Ui,
+    done: bool,
+    theme: &lunco_theme::Theme,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    lunco_workbench::paint_icon(
+        ui.painter(),
+        if done {
+            lunco_workbench::UiIcon::Check
+        } else {
+            lunco_workbench::UiIcon::Pending
+        },
+        rect,
+        if done {
+            theme.tokens.success
+        } else {
+            theme.tokens.text_subdued
+        },
+    );
+    response.on_hover_text(if done { "Completed" } else { "Not completed" })
+}
+
 /// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
 /// a completion tick; clicking starts one. Shared by every workbench app.
 #[cfg(feature = "ui")]
 fn register_tutorials_menu(world: &mut World) {
-    const MENU_MIN_WIDTH: f32 = 320.0;
     const MENU_MAX_WIDTH: f32 = 420.0;
-    const MENU_HEIGHT: f32 = 360.0;
+    const MENU_MAX_HEIGHT: f32 = 360.0;
 
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
@@ -1668,8 +1691,8 @@ fn register_tutorials_menu(world: &mut World) {
         }
     });
     layout.register_custom_menu("Tutorials", |ui, ctx| {
-        ui.set_min_width(MENU_MIN_WIDTH);
-        ui.set_max_width(MENU_MAX_WIDTH);
+        let menu_max_width = (ui.ctx().viewport_rect().width() - 32.0).clamp(180.0, MENU_MAX_WIDTH);
+        ui.set_max_width(menu_max_width);
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1678,6 +1701,13 @@ fn register_tutorials_menu(world: &mut World) {
             .resource::<TutorialProgress>()
             .cloned()
             .unwrap_or_default();
+        let Some(theme) = ctx.resource::<lunco_theme::Theme>().cloned() else {
+            ui.colored_label(
+                egui::Color32::RED,
+                "Tutorial menu unavailable: theme resource is missing",
+            );
+            return;
+        };
         if registry.tutorials.is_empty() {
             ui.label(
                 egui::RichText::new("(no tutorials registered)")
@@ -1722,34 +1752,32 @@ fn register_tutorials_menu(world: &mut World) {
                 .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
-                ui.set_min_width(MENU_MIN_WIDTH);
-                ui.set_max_width(MENU_MAX_WIDTH);
+                let menu_max_width =
+                    (ui.ctx().viewport_rect().width() - 32.0).clamp(180.0, MENU_MAX_WIDTH);
+                let menu_max_height =
+                    (ui.ctx().viewport_rect().height() - 96.0).clamp(160.0, MENU_MAX_HEIGHT);
+                ui.set_max_width(menu_max_width);
                 egui::ScrollArea::vertical()
-                    .max_height(MENU_HEIGHT)
-                    .auto_shrink([false, false])
+                    .max_height(menu_max_height)
                     .show(ui, |ui| {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
-                            let glyph = if done {
-                                "Done"
-                            } else if meta.format == curriculum::LessonFormat::Tour {
-                                "Tour"
-                            } else {
-                                "Exercise"
-                            };
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 0.0],
-                                    egui::Button::new(format!(
-                                        "{glyph}  {}  · {}",
-                                        meta.title,
-                                        meta.format.label()
-                                    ))
-                                    .wrap(),
-                                )
-                                .on_hover_text(meta.blurb.as_str())
-                                .clicked()
-                            {
+                            let clicked = ui
+                                .horizontal(|ui| {
+                                    paint_completion_status(ui, done, &theme);
+                                    ui.add(
+                                        egui::Button::new(format!(
+                                            "{} · {}",
+                                            meta.title,
+                                            meta.format.label()
+                                        ))
+                                        .wrap(),
+                                    )
+                                    .on_hover_text(meta.blurb.as_str())
+                                    .clicked()
+                                })
+                                .inner;
+                            if clicked {
                                 ctx.trigger(StartTutorial {
                                     id: meta.id.to_string(),
                                 });
@@ -1870,16 +1898,7 @@ impl Panel for TutorialsPanel {
                 let done = progress.is_completed(&meta.id);
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if done {
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            lunco_workbench::paint_icon(
-                                ui.painter(),
-                                lunco_workbench::UiIcon::Check,
-                                rect,
-                                theme.tokens.success,
-                            );
-                        }
+                        paint_completion_status(ui, done, &theme);
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
                         ui.label(egui::RichText::new(meta.format.label()).weak().small());
                         ui.label(egui::RichText::new(meta.difficulty.as_str()).weak().small());

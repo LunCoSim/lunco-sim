@@ -11,6 +11,11 @@ it with this one.
   Avian, Bevy, or a maintained crate before adding a schema, resolver, field, or
   duplicate mechanism. When renaming/removing an API, crate, type, or binary,
   search all docs and callers and update/remove old references in the same change.
+- Apply DRY as a required discovery step: before adding a feature, helper, API,
+  parser, setting, or library dependency, search the repository and maintained
+  dependencies for an existing capability and its authoritative owner. Reuse
+  that mechanism or extend it minimally; add a new mechanism only when no
+  suitable owner exists, and record the reason in the change review.
 - Do not reinvent the wheel. First check whether an existing mechanism can cover
   the feature with a small extension or composition. Add a new feature or
   refactor only when it is necessary and the outcome is materially better.
@@ -76,6 +81,11 @@ it with this one.
   in the same change. Never add a compatibility alias or a test that preserves
   obsolete behavior, and do not carry the retired path forward in migration or
   history documentation as an alternate implementation.
+- API replacement is complete only when every caller, public export, example,
+  fixture, test, comment, runbook, and history entry uses the new contract.
+  Remove compatibility shims, aliases, fallbacks, old-behavior tests, and
+  migration/history descriptions of the retired behavior; never preserve both
+  generations behind a conditional or fallback path.
 
 ## Coding guide
 
