@@ -9,7 +9,8 @@ use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
 use lunco_controller::{resolved_input_label, InputBindingsSettings};
 use lunco_core::{Avatar, ControlBinding, Spacecraft, UserIntent};
 use lunco_time::{
-    SetTimeTransport, TimeTransport, TransportMode, WorldTime, REALTIME_RATE_OPTIONS,
+    realtime_rate_label, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
+    REALTIME_RATE_OPTIONS,
 };
 
 /// Change the host's possession arbitration policy from Mission Control.
@@ -200,7 +201,7 @@ impl Panel for MissionControl {
                     .show(ui, |ui| {
                         for (i, &m) in REALTIME_RATE_OPTIONS.iter().enumerate() {
                             if ui
-                                .selectable_label(speed == m, format!("{}x", m))
+                                .selectable_label(speed == m, realtime_rate_label(m))
                                 .on_hover_text("Physics runs at this rate")
                                 .clicked()
                             {

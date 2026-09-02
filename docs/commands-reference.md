@@ -2901,8 +2901,8 @@ actually call, with the fields the deserializer actually accepts. See the
  one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
  `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
- 64×. Higher rates are rejected. Use `SetClock` for a presentation-only
- celestial rate when a detached celestial clock needs a different scale. This is THE pause command:
+ 64×. Rates below 0.1× or above 64× are rejected. Use `SetClock` for a
+ presentation-only celestial rate when a detached celestial clock needs a different scale. This is THE pause command:
  exposed on the API/MCP and wrapped by the rhai prelude verbs
  `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
  one-liner can freeze the world.
@@ -2912,7 +2912,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it. |
-| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 100.0 for the  live transport); `None` leaves it. |
+| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for the live transport); `None` leaves it. |
 
 ## Celestial, environment & comms
 

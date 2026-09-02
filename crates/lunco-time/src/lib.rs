@@ -45,12 +45,34 @@ pub const SECS_PER_DAY: f64 = 86_400.0;
 /// accepted live rate advances the causal simulation.
 pub const MAX_REALTIME_RATE: f64 = 64.0;
 
+/// The slowest selectable live transport rate. Pause is represented by
+/// [`TransportMode::Paused`], so an accepted rate is always positive.
+pub const MIN_REALTIME_RATE: f64 = 0.1;
+
 /// User-selectable rates for the causal fixed-step transport.
 ///
 /// Every UI that offers simulation rates must use this list. Keeping it beside
-/// [`MAX_REALTIME_RATE`] prevents a control surface from advertising a rate that
-/// the clock would interpret differently.
-pub const REALTIME_RATE_OPTIONS: &[f64] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
+/// [`MIN_REALTIME_RATE`] and [`MAX_REALTIME_RATE`] prevents a control surface
+/// from advertising a rate that the clock would interpret differently.
+pub const REALTIME_RATE_OPTIONS: &[f64] = &[
+    MIN_REALTIME_RATE,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    MAX_REALTIME_RATE,
+];
+
+/// Format a shared live transport rate for UI labels and command-facing help.
+/// Keeping the spelling beside the canonical ladder preserves the fractional
+/// slow-rate labels across every control surface.
+pub fn realtime_rate_label(rate: f64) -> String {
+    format!("{rate}x")
+}
 
 /// Maximum number of fixed simulation steps a rendered frame may drain while
 /// running a realtime transport rate. This is a catch-up guard, not a rate cap:
@@ -270,7 +292,11 @@ pub fn advance_clock(rate: f64, paused: bool) -> f64 {
     } else {
         0.0
     };
-    if paused || rate == 0.0 { 0.0 } else { rate }
+    if paused || rate == 0.0 {
+        0.0
+    } else {
+        rate
+    }
 }
 
 /// The derived, read-only time view every consumer reads. Written each frame by
@@ -476,6 +502,10 @@ mod tests {
     #[test]
     fn realtime_rate_options_stay_inside_the_causal_transport() {
         assert!(!REALTIME_RATE_OPTIONS.is_empty());
+        assert_eq!(
+            REALTIME_RATE_OPTIONS.first().copied(),
+            Some(MIN_REALTIME_RATE)
+        );
         assert!(REALTIME_RATE_OPTIONS
             .windows(2)
             .all(|rates| rates[0] < rates[1]));
@@ -486,6 +516,8 @@ mod tests {
         assert!(REALTIME_RATE_OPTIONS
             .iter()
             .all(|&rate| advance_clock(rate, false) > 0.0));
+        assert_eq!(realtime_rate_label(0.1), "0.1x");
+        assert_eq!(realtime_rate_label(1.0), "1x");
     }
 
     #[derive(Resource, Default)]
@@ -518,14 +550,29 @@ mod tests {
     #[test]
     fn realtime_transport_rate_scales_the_real_fixed_schedule() {
         let one_x = fixed_runs_after_manual_frames(1.0);
+        let slow = fixed_runs_after_manual_frames(MIN_REALTIME_RATE);
+        let four_x = fixed_runs_after_manual_frames(4.0);
         let eight_x = fixed_runs_after_manual_frames(8.0);
+        let sixteen_x = fixed_runs_after_manual_frames(16.0);
         let thirty_two_x = fixed_runs_after_manual_frames(32.0);
-        let sixty_four_x = fixed_runs_after_manual_frames(64.0);
+        let sixty_four_x = fixed_runs_after_manual_frames(MAX_REALTIME_RATE);
 
         assert!(one_x > 0, "1x never entered FixedUpdate");
         assert!(
+            slow <= one_x / 5,
+            "0.1x fixed schedule ran {slow} ticks versus {one_x} at 1x"
+        );
+        assert!(
+            four_x >= one_x * 3,
+            "4x fixed schedule ran {four_x} ticks versus {one_x} at 1x"
+        );
+        assert!(
             eight_x >= one_x * 7,
             "8x fixed schedule ran {eight_x} ticks versus {one_x} at 1x"
+        );
+        assert!(
+            sixteen_x >= one_x * 14,
+            "16x fixed schedule ran {sixteen_x} ticks versus {one_x} at 1x"
         );
         assert!(
             thirty_two_x >= one_x * 28,

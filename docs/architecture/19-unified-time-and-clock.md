@@ -13,9 +13,10 @@ is the single internal authority for play/pause and rate; UI, API, and input
 surfaces dispatch its typed command rather than maintaining another pause or rate
 state.
 
-The live transport exposes one bounded causal ladder: `1x, 2x, 4x, 8x, 16x,
-32x, 64x`. Every accepted rate advances the deterministic fixed-step world;
-higher rates are rejected. The fixed timestep remains unchanged, so 32x and 64x
+The live transport exposes one bounded causal ladder: `0.1x, 0.25x, 0.5x, 1x,
+2x, 4x, 8x, 16x, 32x, 64x`. Every accepted positive rate advances the
+deterministic fixed-step world; pause is a separate transport mode and higher or
+lower rates are rejected. The fixed timestep remains unchanged, so 32x and 64x
 perform more solver iterations per render frame rather than switching to a
 second time meaning. A presentation-only celestial clock can use its own
 `SetClock` scale when a larger rate is useful.
@@ -27,6 +28,8 @@ host-authoritative in a networked run.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.
+The canonical labels are supplied by `lunco-time` so fractional slow-motion
+rates are rendered consistently by every UI.
 
 ## 2. Clock tree
 
