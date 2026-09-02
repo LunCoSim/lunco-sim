@@ -19,7 +19,7 @@ to `lunco-terrain-globe` (orbit scale).
 | `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`) using the owning USD `ShaderLook` |
 | `terrain_layers` | composable USD-prim layer stack (`TerrainLayerStack`, `TerrainLayer`, parser registry) — craters / rocks |
 | `derived_layers` | off-thread surface/normal map bake from the DEM |
-| `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` plus `FlatSiteSurface` derived from an explicitly designated standard USD site cube |
+| `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` plus `FlatSiteSurface` derived from an explicitly designated standard USD site plane |
 | `terrain` | the DEM terrain surface + spawn requests (`DemTerrainSurface`, `DemTerrainRequest`, `SpawnDemTerrain`) |
 | `query` | terrain-height queries (`TerrainHeightProvider`, `register_terrain_queries`) |
 | `plugin` | `TerrainSurfacePlugin` (wires the full DEM → streaming → collider pipeline) |

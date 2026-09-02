@@ -66,13 +66,15 @@ def Xform "DrivetrainParity" (
     # drivetrains differently (the raycast body force and the joint motor torque
     # do not fight gravity through the same path), turning a parity test into a
     # gradeability test.
-    def Cube "Ground" (
+    def Plane "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
-        double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double width = 1.0
+        double length = 1.0
+        token axis = "Y"
+        double3 xformOp:translate = (0, 0, 0)
         double3 xformOp:scale = (500.0, 1.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]

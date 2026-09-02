@@ -202,17 +202,20 @@ def Xform "SandboxScene" (
     }
 
     # --- Ground plane (static terrain surface) ---
-    # Spec-compliant Cube: `double size = 1` + `xformOp:scale` for
-    # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
-    def Cube "Ground"
+    # Spec-compliant finite UsdGeomPlane. The terrain collider is the plane's
+    # thin standard support shape; unlike a Cube it has no vertical side wall
+    # to occlude the globe at the horizon. The site is 4 km × 4 km.
+    def Plane "Ground"
     (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
-        double size = 1.0
-        double3 xformOp:translate = (0, -0.1, 0)
-        double3 xformOp:scale = (4000.0, 0.2, 4000.0)
+        double width = 1.0
+        double length = 1.0
+        token axis = "Y"
+        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:scale = (4000.0, 1.0, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         rel material:binding = </SandboxScene/Looks/Blueprint_Ground>
         bool physics:collisionEnabled = true

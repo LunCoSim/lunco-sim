@@ -1782,7 +1782,7 @@ pub fn settle_grounded_assemblies(
             let placement_up = if let Some(terrain_up) = terrain_up {
                 terrain_up
             } else if !flat_sites.is_empty() {
-                // `FlatSiteSurface` is an authored ENU-aligned Cube, so its
+                // `FlatSiteSurface` is an authored ENU-aligned Plane, so its
                 // support normal is the scene +Y axis. This is the surface
                 // contract for static flat ground; the rover need not carry a
                 // per-body LocalGravity component for initial placement.

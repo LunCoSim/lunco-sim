@@ -2,84 +2,44 @@
 
 > Status: Design · Audience: contributors on terrain curvature and gravity
 >
-> Written out of a live defect on the Summer Space
-> School twin, where a 1 km site rendered as kilometre-tall spikes. The diagnosis
-below is measured and confirmed; the terrain edge fix is now shipped, while the
-gravity work remains design-stage.
+> The terrain contract is implemented and measured; the gravity work remains
+> design-stage.
 
 Companion to [`57-dem-georeferencing.md`](57-dem-georeferencing.md) (where a
 raster's extent comes from) and
 [`59-georeferenced-rasters-as-assets.md`](59-georeferenced-rasters-as-assets.md).
 
-## 1. The measured defect: the edge feather replaced measured relief
+## 1. Curvature and terrain ownership
 
 `BodyCurvature::apply` (`lunco-terrain-core/src/modifier.rs`) folds the
-tangent-plane DEM onto the body sphere. The old implementation additionally
-replaced the outer part of the authored crop with a synthetic apron:
-
-```rust
-sag + h_in * f + self.edge_lift_m * (1.0 - f)   // f: 1 interior → 0 at edge
-```
-
-That interior feather made every crop boundary a level cap, erasing real canyon
-and rille walls. The authoritative implementation is now only:
+tangent-plane DEM onto the body sphere. Its authoritative height is:
 
 ```rust
 h_in + sag
 ```
 
-It preserves every DEM sample and applies only the physical body-curvature
-transform. The DEM square is a hard data boundary: the terrain renderer emits
-no fabricated outer wall, and the globe renderer owns the surface outside it.
+This preserves every DEM sample and applies only the physical body-curvature
+transform. The DEM square is a hard data boundary: the terrain renderer emits no
+fabricated outer wall, and the globe renderer owns the surface outside it. The
+boundary continuation preserves the measured one-sided edge slope over one
+raster posting before the source blend reaches the globe.
 
-This is required for absolute DEMs as well as relative DEMs. An absolute Apollo
-15 sample near −1917 m must not be blended toward zero or toward a guessed apron.
+This applies to absolute and relative DEMs. An absolute sample near −1917 m
+remains at its authored datum; it is not blended toward zero or another guessed
+elevation.
 
-Measured against predicted on the live twin before the fix (half_extent 498 m,
-with the former interior feather band):
-
-| x (z = 0) | predicted | measured |
-|---|---|---|
-| −400 | −960 | −934 |
-| −450 | −314 | −280 |
-| −480 | −48 | −43 |
-| −495 | ≈ −1 | −0.41 |
-
-The model reproduces the numbers, so the mechanism is not in doubt.
-
-### 1a. The feather is RADIAL; the DEM is SQUARE
-
-`f` is computed from `√(x² + z²)` against `half_extent_m`, which is a half-SIDE.
-Everything outside the inscribed circle — the four corners, ≈ 21 % of the patch —
-falls beyond the feather end and is flattened to `edge_lift_m`.
-
-This is what made the defect user-visible: the school twin authors its rover at
-`(−382, −384)`, i.e. radius **541 m** against a 498 m half-extent. The rover is in
-a corner, so the ground beneath it reads ≈ 1 m while the vehicle sits at −1918 m.
-
-Scale hides it elsewhere. Moonbase is a ±4000 m patch, so the same ~1.9 km
-descent is spread over a 1600 m band and reads as a distant rim rather than a wall.
-
-### Rejected alternatives
-
-1. **Chebyshev feather** — drove `f` from `max(|x|, |z|)` so the band followed
-   the square boundary, but still replaced measured rows.
-2. **Edge-elevation apron** — kept the site datum instead of zero, but still
-   invented values outside the authored raster.
-3. **Exact crop plus globe ownership** — the shipped implementation. The site
-   DEM owns its authored square; the globe owns the outside surface. The boundary
-   continuation preserves the measured one-sided edge slope, fades only edge
-   relief over one raster posting, and keeps the body's analytic curvature in the
-   datum surface before the source blend reaches the globe.
+The authored data and body radius are the only inputs to the composed surface.
+The tangent-plane footprint and the globe are separate ownership regions, joined
+by the measured boundary source.
 
 ### Authoring guidance
 
 The authored DEM square is preserved through its boundary. Do not place
 scene-owned terrain content outside the measured raster unless a separate,
 authored globe/site composition provides the surface there. A non-DEM site
-must explicitly mark its standard, ENU-aligned ground Cube with
+must explicitly mark its standard, ENU-aligned finite Plane with
 `lunco:terrain:surfaceRole = "flat-site"`; the same handoff then derives the
-finite footprint from `UsdGeomCube::size` and its authored xform. Ramps and
+finite footprint from `UsdGeomPlane` width/length and its authored xform. Ramps and
 other terrain-tagged solids are not implicitly treated as the site datum.
 Missing, ambiguous, rotated, or non-square flat-site geometry is a runtime
 contract error.

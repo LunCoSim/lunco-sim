@@ -55,14 +55,16 @@ def Xform "CommsDemoScene" (
     # defaults to "now", which can land in lunar polar night (pitch-black).
     double lunco:time:epochJd = 2461395.5
 
-    def Cube "Ground" (
+    def Plane "Ground" (
         prepend apiSchemas = ["LunCoTerrainAPI"]
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
-        double size = 1.0
-        double3 xformOp:translate = (0, -0.1, 0)
-        double3 xformOp:scale = (400, 0.2, 400)
+        double width = 1.0
+        double length = 1.0
+        token axis = "Y"
+        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:scale = (400, 1.0, 400)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.42, 0.4, 0.38)]
         bool physics:collisionEnabled = true

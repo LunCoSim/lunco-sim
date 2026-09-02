@@ -28,7 +28,9 @@ use bevy::prelude::*;
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{read_shape_dims, read_transform_from_usd, ShapeDims, StageView, UsdRead};
+use lunco_usd_bevy::{
+    read_primitive_axis, read_shape_dims, read_transform_from_usd, ShapeDims, StageView, UsdRead,
+};
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
 /// edits back onto the backing document's runtime layer.
@@ -2033,6 +2035,12 @@ fn bridge_dem_prim_read(
 /// surface. This is the only source of the local globe cutout for non-DEM
 /// terrain. The role is required because ramps, pads, and test solids can also
 /// carry `LunCoTerrainAPI` but are not the scene's terrain datum.
+///
+/// A flat site is a finite `UsdGeomPlane`, not a box. A box has vertical side
+/// faces, so using it as the render surface creates an authored wall at the
+/// globe handoff and makes the physical horizon look like a straight tile edge.
+/// `UsdGeomPlane` supplies exactly the one surface that is rendered and the
+/// terrain physics bridge gives it the corresponding thin support collider.
 fn project_flat_site_surface(
     reader: &StageView<'_>,
     entity: Entity,
@@ -2047,9 +2055,9 @@ fn project_flat_site_surface(
         );
         return;
     };
-    let Some(ShapeDims::Cube { size }) = read_shape_dims(reader, sdf, &type_name) else {
+    let Some(ShapeDims::Plane { width, length }) = read_shape_dims(reader, sdf, &type_name) else {
         warn!(
-            "[usd-dem] flat-site prim {} must be a valid UsdGeomCube",
+            "[usd-dem] flat-site prim {} must be a valid UsdGeomPlane",
             prim_path.path
         );
         return;
@@ -2069,24 +2077,31 @@ fn project_flat_site_surface(
         );
         return;
     }
+    if read_primitive_axis(reader, sdf, "Plane").as_deref() != Some("Y") {
+        warn!(
+            "[usd-dem] flat-site prim {} must author UsdGeomPlane axis=\"Y\"",
+            prim_path.path
+        );
+        return;
+    }
     let east = transform.rotation * bevy::math::Vec3::X;
     let up = transform.rotation * bevy::math::Vec3::Y;
-    // The role's frame contract is the scene ENU frame. A yawed or tilted box
+    // The role's frame contract is the scene ENU frame. A yawed or tilted plane
     // is a different authored surface type and must be modelled explicitly,
     // rather than silently changing the globe clip axes.
     if east.dot(bevy::math::Vec3::X) < 1.0 - 1.0e-5 || up.dot(bevy::math::Vec3::Y) < 1.0 - 1.0e-5 {
         warn!(
-            "[usd-dem] flat-site prim {} must be an ENU-aligned, unrotated Cube",
+            "[usd-dem] flat-site prim {} must be an ENU-aligned, unrotated Plane",
             prim_path.path
         );
         return;
     }
     let surface = lunco_terrain_surface::FlatSiteSurface {
-        half_extent_x_m: size * 0.5 * scale.x as f64,
-        half_extent_z_m: size * 0.5 * scale.z as f64,
+        half_extent_x_m: width * 0.5 * scale.x as f64,
+        half_extent_z_m: length * 0.5 * scale.z as f64,
         center_x_m: transform.translation.x as f64,
         center_z_m: transform.translation.z as f64,
-        top_y_m: transform.translation.y as f64 + size * 0.5 * scale.y as f64,
+        top_y_m: transform.translation.y as f64,
     };
     if !surface.is_valid() {
         warn!(
@@ -2097,7 +2112,7 @@ fn project_flat_site_surface(
     }
     commands.entity(entity).try_insert(surface);
     info!(
-        "[usd-dem] flat-site {} → authored Cube footprint ±{:.1} x ±{:.1} m at ({:.1}, {:.1}, {:.1})",
+        "[usd-dem] flat-site {} → authored Plane footprint ±{:.1} x ±{:.1} m at ({:.1}, {:.1}, {:.1})",
         prim_path.path,
         surface.half_extent_x_m,
         surface.half_extent_z_m,
@@ -2660,19 +2675,21 @@ def Xform \"Traverse\"\n{\n}\n"
     }
 
     #[test]
-    fn flat_site_cube_projects_standard_geometry_into_surface_footprint() {
+    fn flat_site_plane_projects_standard_geometry_into_surface_footprint() {
         let scene = r#"#usda 1.0
 (
     defaultPrim = "Terrain"
     metersPerUnit = 1
 )
-def Cube "Terrain" (
+def Plane "Terrain" (
     prepend apiSchemas = ["LunCoTerrainAPI"]
 )
 {
     token lunco:terrain:surfaceRole = "flat-site"
-    double size = 2.0
-    double3 xformOp:translate = (0, -1, 0)
+    double width = 2.0
+    double length = 2.0
+    token axis = "Y"
+    double3 xformOp:translate = (0, 0, 0)
     double3 xformOp:scale = (50, 1, 50)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 }

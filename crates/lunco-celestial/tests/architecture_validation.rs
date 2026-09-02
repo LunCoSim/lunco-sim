@@ -278,15 +278,16 @@ fn test_stationary_nested_grid_rotation() {
         ))
         .id();
 
-    let root = app
-        .world_mut()
-        .spawn(BigSpaceRootBundle::default())
-        .id();
+    let root = app.world_mut().spawn(BigSpaceRootBundle::default()).id();
     app.world_mut()
         .entity_mut(root)
         .add_children(&[inertial_grid, floating_origin]);
-    app.world_mut().entity_mut(inertial_grid).add_child(body_grid);
-    app.world_mut().entity_mut(body_grid).add_child(surface_grid);
+    app.world_mut()
+        .entity_mut(inertial_grid)
+        .add_child(body_grid);
+    app.world_mut()
+        .entity_mut(body_grid)
+        .add_child(surface_grid);
     app.world_mut().entity_mut(surface_grid).add_child(tile);
 
     app.update();

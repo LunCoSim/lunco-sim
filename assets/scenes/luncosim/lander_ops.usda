@@ -62,13 +62,15 @@ def Xform "LanderTest" (
     {
     }
 
-    def Cube "Ground" (
+    def Plane "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
-        double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double width = 1.0
+        double length = 1.0
+        token axis = "Y"
+        double3 xformOp:translate = (0, 0, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         # Bond albedo of mature mare regolith, ~0.12 (Apollo returned-sample

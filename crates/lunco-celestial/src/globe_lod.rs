@@ -1,13 +1,10 @@
 //! Camera-driven cube-sphere **live LOD** for celestial bodies (globe scale).
 //!
-//! Replaces the old fixed 24-tile shell (6 faces × 2×2 at level 1) with a
-//! recursive quadtree subdivision per face: tiles refine near the camera and
-//! coarsen far away, so a body shows planetary curvature from orbit and finer
-//! relief as you approach. The selection is the globe crate's sphere-correct
-//! `subdivide_face` (camera distance vs tile arc-size) — kept there as the pure
-//! spine; this module is the scene integration (spawn/despawn + appearance intent),
-//! which lives in `lunco-celestial` because that's what owns the bodies, textures,
-//! grids and the blueprint look.
+//! Recursive quadtree subdivision per face refines near the camera and coarsens
+//! far away, so a body shows planetary curvature from orbit and finer relief as
+//! you approach. The selection is the globe crate's sphere-correct
+//! `subdivide_face` (camera distance vs tile arc-size); this module integrates
+//! the selection with body-owned textures, grids, and appearance intent.
 //!
 //! Per body, [`GlobeLod`] carries the params + the surface grid + look;
 //! [`GlobeTiles`] tracks residency, the bounded mesh cache, and the cached
@@ -33,8 +30,8 @@ use lunco_terrain_globe::{
 };
 use lunco_terrain_surface::SurfaceOracle;
 
-/// Per-body live-LOD context. Inserted on a celestial body entity in place of the
-/// old fixed tile loop; [`update_globe_lod`] reads it to stream cube-sphere tiles.
+/// Per-body live-LOD context read by [`update_globe_lod`] to stream cube-sphere
+/// tiles.
 #[derive(Component)]
 pub struct GlobeLod {
     /// Body radius (m) — tile vertices ride this sphere.
@@ -42,9 +39,8 @@ pub struct GlobeLod {
     /// The surface grid the tiles anchor into (its own `CellCoord` per tile).
     pub surface_grid: Entity,
     /// Appearance intent applied to every tile (the body's blueprint look). Cloned
-    /// onto each tile; the binder's content-keyed cache collapses them back to ONE
-    /// `ShaderMaterial` per body — the same single-handle batching the old
-    /// `Handle<ShaderMaterial>` field guaranteed by hand.
+    /// onto each tile; the binder's content-keyed cache shares one
+    /// `ShaderMaterial` per body.
     pub look: ShaderLook,
     /// Vertices per tile side.
     pub res: u32,
@@ -295,7 +291,7 @@ impl GlobeHandoff {
         }
     }
 
-    /// Compose an authored flat site cube with the mean-body sphere. The
+    /// Compose an authored flat site plane with the mean-body sphere. The
     /// footprint is deliberately square because the globe clip contract is a
     /// square tangent-plane cutout; non-square authored geometry is rejected by
     /// the USD terrain projection before it reaches this constructor.
@@ -359,7 +355,7 @@ pub struct GlobeTiles {
     /// Hidden tiles retained briefly after an atomic draw-cover handoff.
     ///
     /// Material-ready parent/child coverage is exchanged through visibility;
-    /// the old entity is then kept hidden for two render extraction turns so
+    /// retiring entities remain hidden for two render extraction turns so
     /// removal cannot race the extracted render world. Parent and child are
     /// never drawable together.
     pub retiring: Vec<(Entity, u8, TileCoord)>,
@@ -988,15 +984,10 @@ pub(crate) fn update_globe_lod(
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
             let tile_body_local = tile_center_dir * lod.radius_m;
             let (tile_cell, tile_local_pos) = sg_grid.translation_to_grid(tile_body_local);
-            // Build the mesh RELATIVE to the tile centre (pass `tile_body_local`,
-            // not `DVec3::ZERO`): the entity is placed at the tile centre via the
-            // grid, so the mesh must carry only the small offset of each vertex
-            // FROM that centre. Passing ZERO leaves vertices at full body-local
-            // magnitude (~radius) which then *adds* to the entity's ~radius
-            // placement → every tile rendered at ≈2× radius, a broken offset
-            // shell (the long-standing "globe invisible" bug). Centre-relative
-            // coords also keep vertex magnitudes small (≪ radius), avoiding f32
-            // precision loss at 6.4e6 m.
+            // Build the mesh relative to the tile centre: the entity is placed at
+            // that centre via the grid, so the mesh carries only each vertex's
+            // small offset from it. Keeping vertex magnitudes small avoids f32
+            // precision loss at planetary radii.
             tiles.cache_clock = tiles.cache_clock.wrapping_add(1);
             let cache_clock = tiles.cache_clock;
             let mesh_handle = if let Some(cached) = tiles.mesh_cache.get_mut(&coord) {

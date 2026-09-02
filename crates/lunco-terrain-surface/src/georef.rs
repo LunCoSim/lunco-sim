@@ -74,8 +74,8 @@ impl TerrainGeoref {
 ///
 /// This is projected only when the terrain prim explicitly authors
 /// `lunco:terrain:surfaceRole = "flat-site"`. The dimensions come from the
-/// prim's `UsdGeomCube::size` and local xform, so the globe handoff never
-/// guesses a footprint or applies a render-only depth bias.
+/// prim's finite `UsdGeomPlane` width/length and local xform, so the globe
+/// handoff never guesses a footprint or applies a render-only depth bias.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq)]
 #[reflect(Component)]
 pub struct FlatSiteSurface {

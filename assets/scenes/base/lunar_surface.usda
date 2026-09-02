@@ -17,7 +17,12 @@
 #     )
 #     {
 #         over "Sun" { double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0) }
-#         def Cube "Ground" { ... }
+#         def Plane "Ground" {
+#             double width = 1
+#             double length = 1
+#             token axis = "Y"
+#             token lunco:terrain:surfaceRole = "flat-site"
+#         }
 #         def Xform "Avatar" { ... }
 #     }
 #

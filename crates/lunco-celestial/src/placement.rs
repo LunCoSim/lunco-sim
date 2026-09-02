@@ -656,7 +656,7 @@ pub fn sync_terrain_body_curvature(
                                 severity: lunco_core::DiagnosticSeverity::Error,
                                 producer: "celestial-terrain".to_string(),
                                 subject: "FlatSiteSurface".to_string(),
-                                message: "flat-site surface must be a square Cube centered at the site ENU origin".to_string(),
+                                message: "flat-site surface must be a square Plane centered at the site ENU origin".to_string(),
                             }],
                         );
                     }

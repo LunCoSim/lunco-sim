@@ -20,10 +20,6 @@
 //! The globe↔surface handover is supplied by `lunco-celestial`: authored local
 //! DEM footprints clip the globe mesh at the exact tangent-plane square.
 //!
-//! (An older version of this header claimed the crate was "VESTIGIAL — not wired".
-//! That was wrong and would have cost someone the orbital view: the plugin having
-//! no systems is not the same as the code having no callers.)
-//!
 //! [`lunco_celestial::globe_lod`]: https://docs.rs/lunco-celestial
 
 use bevy::prelude::*;
