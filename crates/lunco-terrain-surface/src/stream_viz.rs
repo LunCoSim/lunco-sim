@@ -2003,6 +2003,14 @@ pub struct StreamScratch {
     sel: Vec<Selected>,
     /// Candidate collections for `evolve_cover_for_foci_with_retention`.
     cover_scratch: CoverScratch,
+    /// Tile material updates collected while the terrain query is borrowed.
+    /// Applying them after the terrain pass keeps the two mutable ECS views in
+    /// one explicit `ParamSet` without weakening either ownership filter.
+    stitch_updates: Vec<(Entity, [f32; 4])>,
+    /// Stitch state successfully published to a tile look this pass. Slot
+    /// state is committed only after the material write succeeds, so a tile
+    /// whose render binding arrives later is retried on the next frame.
+    stitch_applied: HashMap<Entity, [f32; 4]>,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -2028,22 +2036,25 @@ pub struct LodFrozen;
 pub fn update_lod_tiles(
     mut commands: Commands,
     demands: Res<TerrainDetailDemands>,
-    mut terrains: Query<
-        (
-            Entity,
-            &DemHeightField,
-            &TerrainLodViz,
-            &mut LodTiles,
-            &mut PendingTileBakes,
-            &mut TerrainNodeErrors,
-            Option<&TerrainDerivedMaps>,
-            Option<&TerrainAuthoredMaps>,
-            Option<&TileShadowCache>,
-            Option<&ShaderLook>,
-            Has<LodFrozen>,
-        ),
-        With<DemTerrainSurface>,
-    >,
+    mut terrain_queries: ParamSet<(
+        Query<
+            (
+                Entity,
+                &DemHeightField,
+                &TerrainLodViz,
+                &mut LodTiles,
+                &mut PendingTileBakes,
+                &mut TerrainNodeErrors,
+                Option<&TerrainDerivedMaps>,
+                Option<&TerrainAuthoredMaps>,
+                Option<&TileShadowCache>,
+                Option<&ShaderLook>,
+                Has<LodFrozen>,
+            ),
+            With<DemTerrainSurface>,
+        >,
+        Query<&mut ShaderLook, With<LodTileOf>>,
+    )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
     quality: Res<lunco_render::RenderingQualitySettings>,
@@ -2056,7 +2067,6 @@ pub fn update_lod_tiles(
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
     material_bound: Query<(), With<ShaderLookReady>>,
-    mut looks: Query<&mut ShaderLook, With<LodTileOf>>,
     mut scratch: Local<StreamScratch>,
 ) {
     let profile = match quality.validated_profile() {
@@ -2084,7 +2094,11 @@ pub fn update_lod_tiles(
         focus_metric,
         sel,
         cover_scratch,
+        stitch_updates,
+        stitch_applied,
     } = &mut *scratch;
+    stitch_updates.clear();
+    stitch_applied.clear();
     if demands.visual.is_empty() {
         return;
     }
@@ -2108,8 +2122,9 @@ pub fn update_lod_tiles(
     // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
     // coord)`), so its cap must scale with them or two terrains would fight over
     // one terrain's worth of entries and thrash each other every frame.
-    let terrain_count = terrains.iter().count().max(1);
+    let terrain_count = terrain_queries.p0().iter().count().max(1);
 
+    let mut terrains = terrain_queries.p0();
     for (
         terrain,
         hf,
@@ -2974,10 +2989,7 @@ pub fn update_lod_tiles(
             if edges == slot.stitch_edges {
                 continue;
             }
-            if let Ok(mut look) = looks.get_mut(slot.entity) {
-                set_param(&mut look, "stitch_edges", ParamValue::Vec4(edges));
-                slot.stitch_edges = edges;
-            }
+            stitch_updates.push((slot.entity, edges));
         }
 
         // Retain + visibility. The coarse cover is never despawned; everything
@@ -3090,6 +3102,27 @@ pub fn update_lod_tiles(
                         || is_coarse_fallback(*c))
             },
         );
+    }
+    drop(terrains);
+
+    let mut looks = terrain_queries.p1();
+    for &(entity, edges) in stitch_updates.iter() {
+        if let Ok(mut look) = looks.get_mut(entity) {
+            set_param(&mut look, "stitch_edges", ParamValue::Vec4(edges));
+            stitch_applied.insert(entity, edges);
+        }
+    }
+    drop(looks);
+
+    if !stitch_applied.is_empty() {
+        let mut terrains = terrain_queries.p0();
+        for (_, _, _, mut tiles, _, _, _, _, _, _, _) in &mut terrains {
+            for slot in tiles.tiles.values_mut() {
+                if let Some(edges) = stitch_applied.get(&slot.entity) {
+                    slot.stitch_edges = *edges;
+                }
+            }
+        }
     }
 }
 

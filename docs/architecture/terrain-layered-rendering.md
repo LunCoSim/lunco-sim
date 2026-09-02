@@ -42,6 +42,14 @@ material replacement and GPU upload spike after the scene is already visible.
 Subsequent source changes use the same single reconciliation path for all
 resident tiles.
 
+The streamed runtime keeps this ownership explicit at the ECS boundary. The
+terrain pass reads and mutates only entities marked `DemTerrainSurface`; tile
+look updates target only entities marked `LodTileOf`. Bevy cannot prove those
+markers are mutually exclusive from filters alone, so the pass exposes the
+two views through one `ParamSet` and applies the collected tile-look changes
+after the terrain state pass. This preserves one authoritative terrain reader
+and one tile writer without allowing an ambiguous overlapping query.
+
 ## Fields are data; render is one consumer
 
 The single most important rule: **an analysis layer's field is computed CPU-side as
