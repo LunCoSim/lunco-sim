@@ -98,8 +98,10 @@ For a multi-domain run, use the shared `AttachProgram { doc, spec }` command
 instead of writing marker components or maintaining a separate binding table.
 The spec authors the `LunCoProgramAPI` child, explicit scalar inputs and
 outputs, and native USD connections in one journaled change set. In Rhai the
-same surface is `attach_program(...)` with `program_input_connection(...)`,
-`program_input_default(...)`, and `program_output(...)` helpers. Verify the
+same surface is `assembly_edit::attach_program(...)` with
+`assembly_edit::program_input_connection(...)`,
+`assembly_edit::program_input_default(...)`, and
+`assembly_edit::program_output(...)` helpers. Verify the
 result with `ListPorts`, `CosimStatus`, and `GetBrokenConnections`; a source
 without declared ports is reported as source-only and does not step.
 

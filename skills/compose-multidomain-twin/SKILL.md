@@ -115,14 +115,20 @@ per-tick work in rhai — except in a rhai *test*, where stepping is the point.
 Use `AttachProgram { doc, spec }` for a new Modelica or Python participant.
 The command validates the source path and explicit scalar interface, then
 authors the `LunCoProgramAPI` child, defaults, and native USD connections as one
-journal/undo change set. The Models palette and Rhai prelude call this same
-command; do not add a marker component or a source-specific Rust path.
+journal/undo change set. The Models palette and the `assembly_edit` Rhai tool
+call this same command; do not add a marker component or a source-specific Rust
+path.
 
 ```rhai
-attach_program(doc, "@root@", "/Lander", "Guidance",
-    "lunco://models/DescentGuidance.mo",
-    [program_input_connection("altitude", "/Lander.outputs:position_y")],
-    [program_output("force_y", ["/Lander.inputs:force_y"])], true);
+assembly_edit::attach_program(doc, #{
+    edit_target: "@root@",
+    host_path: "/Lander",
+    name: "Guidance",
+    source_asset: "lunco://models/DescentGuidance.mo",
+    inputs: [assembly_edit::program_input_connection("altitude", "/Lander.outputs:position_y")],
+    outputs: [assembly_edit::program_output("force_y", ["/Lander.inputs:force_y"])],
+    realtime_safe: true,
+});
 ```
 
 Every input has one authored default or one USD connection. Every output names

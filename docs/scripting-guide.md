@@ -317,10 +317,13 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`);
   common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
   `value` are validated against that operation at the command boundary.
-- **Script-first authoring:** explicit-document `usd_apply` / `usd_apply_ops` /
-  `usd_add_prim`, `attach_fixed` / `attach_revolute` / `attach_prismatic`,
-  `detach_component`, `attach_program`, and `modelica_apply`, plus typed
-  Modelica op constructors in
+- **Script-first authoring:** the namespaced `assembly_edit` tool owns
+  explicit-document USD editing (`add_prim`, `transform`, `attribute`,
+  `schema`, `variant`, `relationship`, `connection`, `batch`,
+  `assembly_edit::attach_component`, `assembly_edit::detach_component`, and
+  `assembly_edit::attach_program`) plus its `program_input_*`/`program_output`
+  constructors. `modelica_apply` and its
+  typed operation constructors remain in
   [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
   These are policy wrappers over the existing journaled command surfaces. The
   attachment and detach helpers require an explicit edit target and exact
@@ -440,12 +443,14 @@ Pass `()` for a missing causal predecessor. A generation from `InspectUsdDocumen
 `SyncUsdDocument`, or a command acknowledgement rejects stale writes before any
 operation or journal entry is applied. `transform` batches translation and
 rotation into one undo unit; `batch` accepts the existing reflected `UsdOp`
-variants. `attach_component` and `detach_component` use the existing mount,
-socket, joint, and topology validators. `attach_program(doc, spec)` passes the
-complete source, port, connection, and realtime-safety contract to the typed
-`AttachProgram` command; build its port maps with the canonical
-`program_input_connection`, `program_input_default`, and `program_output`
-prelude helpers. Use `undo`/`redo` on the same explicit
+variants. `assembly_edit::attach_component` and
+`assembly_edit::detach_component` use the existing mount, socket, joint, and
+topology validators. `assembly_edit::attach_program(doc,
+spec)` passes the complete source, port, connection, and realtime-safety
+contract to the typed `AttachProgram` command; build its port maps with the
+namespaced `assembly_edit::program_input_connection`,
+`assembly_edit::program_input_default`, and `assembly_edit::program_output`
+helpers. Use `undo`/`redo` on the same explicit
 document. `keyframe` and `remove_keyframe` author or remove one USD time sample
 through the same journaled operations used by the Editor Inspector; `time` is
 a USD time code and `value` is the literal for its explicit `type_name`.

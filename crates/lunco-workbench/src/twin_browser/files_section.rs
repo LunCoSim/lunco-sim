@@ -543,11 +543,13 @@ mod tests {
 
     #[test]
     fn single_click_routes_a_registered_usd_document() {
-        assert!(should_open_as_document(
-            Path::new("scenes/rover.usda"),
-            Some(&usd_registry()),
-            false,
-        ));
+        for path in ["scenes/rover.usda", "scenes/rover.usd", "scenes/rover.usdc"] {
+            assert!(should_open_as_document(
+                Path::new(path),
+                Some(&usd_registry()),
+                false,
+            ));
+        }
     }
 
     #[test]

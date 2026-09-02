@@ -14,7 +14,7 @@ the simulation.
 ## 1. Start with a real Twin
 
 Open an existing Twin or create one with [00 — Create your first Twin](00-create-a-twin.md).
-A loose `.usda` can be inspected, but the Models palette only edits a
+A loose USD file can be inspected, but the Models palette only edits a
 document-backed scene. Promote a loose scene with `SaveAsTwin` first so the
 authoring change has a USD layer to journal and save.
 
@@ -39,19 +39,23 @@ contract explicitly before expecting ports or force/torque exchange.
 
 ## 3. Author an arbitrary contract with Rhai
 
-The same typed command is exposed by the authoring prelude. Obtain the USD
+The same typed command is exposed by the `assembly_edit` tool. Obtain the USD
 document id from `ListOpenDocuments`, then choose the edit layer deliberately:
 
 ```rhai
 let doc = /* the id of the open USD document */;
-attach_program(doc, "@root@", "/Vessel", "Guidance",
-    "lunco://models/Guidance.mo",
-    [
-        program_input_connection("altitude", "/Vessel.outputs:position_y"),
-        program_input_default("gravity", 1.62),
+assembly_edit::attach_program(doc, #{
+    edit_target: "@root@",
+    host_path: "/Vessel",
+    name: "Guidance",
+    source_asset: "lunco://models/Guidance.mo",
+    inputs: [
+        assembly_edit::program_input_connection("altitude", "/Vessel.outputs:position_y"),
+        assembly_edit::program_input_default("gravity", 1.62),
     ],
-    [program_output("thrust", ["/Vessel.inputs:force_y"])],
-    true);
+    outputs: [assembly_edit::program_output("thrust", ["/Vessel.inputs:force_y"])],
+    realtime_safe: true,
+});
 ```
 
 `@root@` persists authored scene content. `@runtime@` is for a live test or a

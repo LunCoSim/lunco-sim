@@ -55,7 +55,8 @@ use crate::document::UsdDocument;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SceneFileKind {
     /// A USD layer (`.usda`/`.usd`/`.usdc`) — the scene itself and everything it
-    /// references.
+    /// references. Other package formats remain assets until their document
+    /// loader is supported by the USD domain.
     Layer,
     /// A Modelica model bound by `info:sourceAsset`. Opens as a diagram.
     Modelica,
@@ -69,13 +70,15 @@ pub enum SceneFileKind {
 
 impl SceneFileKind {
     fn of(path: &Path) -> Self {
+        if crate::commands::is_usd_path(&path.to_string_lossy()) {
+            return Self::Layer;
+        }
         match path
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .as_deref()
         {
-            Some("usda" | "usd" | "usdc" | "usdz") => Self::Layer,
             Some("mo") => Self::Modelica,
             Some("rhai") => Self::Script,
             Some("wgsl") => Self::Shader,
@@ -467,6 +470,14 @@ mod tests {
         assert_eq!(
             SceneFileKind::of(Path::new("/a/scene.usda")),
             SceneFileKind::Layer
+        );
+        assert_eq!(
+            SceneFileKind::of(Path::new("/a/scene.usd")),
+            SceneFileKind::Layer
+        );
+        assert_eq!(
+            SceneFileKind::of(Path::new("/a/package.usdz")),
+            SceneFileKind::Asset
         );
         assert_eq!(
             SceneFileKind::of(Path::new("/a/Drive.mo")),

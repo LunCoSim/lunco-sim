@@ -59,7 +59,9 @@ fn saved_phase(doc) {
 }
 
 fn save_phase(doc, phase) {
-    let result = usd_set_attribute(doc, "@runtime@", HOST, STATE_ATTR, "string", phase);
+    let result = assembly_edit::attribute(
+        doc, "@runtime@", HOST, STATE_ATTR, "string", phase, ()
+    );
     result.ok == true
 }
 
@@ -78,19 +80,16 @@ fn on_tick(me) {
     if this.phase == "discover" || this.phase == "wait_reload" {
         let saved = saved_phase(this.doc);
         if saved == "" {
-            let result = cmd("AttachComponent", #{
-                doc: this.doc,
-                spec: #{
-                    edit_target: "@runtime@",
-                    socket_path: SOCKET,
-                    host_path: HOST,
-                    name: "PayloadA",
-                    joint_name: "constraint_47",
-                    asset: "lunco://components/mounting/demo_probe.usda",
-                    placement: [0.0, 0.0, 0.0],
-                    rotate_deg: [0.0, 0.0, 0.0],
-                    joint: "Fixed",
-                },
+            let result = assembly_edit::attach_component(this.doc, #{
+                edit_target: "@runtime@",
+                socket_path: SOCKET,
+                host_path: HOST,
+                name: "PayloadA",
+                joint_name: "constraint_47",
+                asset: "lunco://components/mounting/demo_probe.usda",
+                placement: [0.0, 0.0, 0.0],
+                rotate_deg: [0.0, 0.0, 0.0],
+                joint: "Fixed",
             });
             if !result.ok {
                 fail(this, "AttachComponent was rejected: " + result.error);
@@ -107,13 +106,14 @@ fn on_tick(me) {
         if saved == "attach_done" {
             this.phase = "check_attached";
         } else if saved == "connection_ready" {
-            let result = usd_set_connection(
+            let result = assembly_edit::connection(
                 this.doc,
                 "@runtime@",
                 HOST,
                 "inputs:throttle",
                 "float",
                 [COMPONENT + ".outputs:position_y"],
+                (),
             );
             if !result.ok {
                 fail(this, "SetConnection was rejected: " + result.error);
@@ -126,24 +126,27 @@ fn on_tick(me) {
             this.phase = "wait_reload";
             return;
         } else if saved == "connection_added" {
-            let result = detach_component(
+            let result = assembly_edit::detach_component(
                 this.doc,
-                "@runtime@",
-                COMPONENT,
-                JOINT,
-                SOCKET,
+                #{
+                    edit_target: "@runtime@",
+                    component_path: COMPONENT,
+                    joint_path: JOINT,
+                    socket_path: SOCKET,
+                },
             );
             if result.ok {
                 fail(this, "DetachComponent ignored an incoming USD connection");
                 return;
             }
-            let clear = usd_set_connection(
+            let clear = assembly_edit::connection(
                 this.doc,
                 "@runtime@",
                 HOST,
                 "inputs:throttle",
                 "float",
                 [],
+                (),
             );
             if !clear.ok {
                 fail(this, "could not clear the incoming test connection: " + clear.error);
@@ -156,12 +159,14 @@ fn on_tick(me) {
             this.phase = "wait_reload";
             return;
         } else if saved == "detach_ready" {
-            let result = detach_component(
+            let result = assembly_edit::detach_component(
                 this.doc,
-                "@runtime@",
-                COMPONENT,
-                JOINT,
-                SOCKET,
+                #{
+                    edit_target: "@runtime@",
+                    component_path: COMPONENT,
+                    joint_path: JOINT,
+                    socket_path: SOCKET,
+                },
             );
             if !result.ok {
                 fail(this, "DetachComponent was rejected: " + result.error);
