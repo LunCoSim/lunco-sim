@@ -83,7 +83,7 @@ pub fn update_status_bar(
     }
     *last_status = Some(text.clone());
     bus.push(
-        lunco_workbench::status_bus::MODELICA_SOURCE,
+        lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE,
         lunco_workbench::status_bus::StatusLevel::Info,
         text,
     );
@@ -167,6 +167,10 @@ mod tests {
         assert_eq!(
             bus.history().last().map(|event| event.message.as_str()),
             Some("ready — lander.mo")
+        );
+        assert_eq!(
+            bus.history().last().map(|event| event.source),
+            Some(lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE)
         );
 
         app.update();
