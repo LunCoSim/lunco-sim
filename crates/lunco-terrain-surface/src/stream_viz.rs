@@ -2042,7 +2042,7 @@ pub fn update_lod_tiles(
             Option<&ShaderLook>,
             Has<LodFrozen>,
         ),
-        Without<LodTileOf>,
+        With<DemTerrainSurface>,
     >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,

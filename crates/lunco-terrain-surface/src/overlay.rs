@@ -234,14 +234,17 @@ pub fn sync_terrain_overlay(
     params: Res<TerrainOverlayParams>,
     diagnostic: Res<TerrainDiagnosticLook>,
     mut look_queries: ParamSet<(
-        Query<(
-            &LodTiles,
-            &DemHeightField,
-            Option<&TerrainDerivedMaps>,
-            Option<&TerrainAuthoredMaps>,
-            Option<&TileShadowCache>,
-            &ShaderLook,
-        )>,
+        Query<
+            (
+                &LodTiles,
+                &DemHeightField,
+                Option<&TerrainDerivedMaps>,
+                Option<&TerrainAuthoredMaps>,
+                Option<&TileShadowCache>,
+                &ShaderLook,
+            ),
+            With<crate::terrain::DemTerrainSurface>,
+        >,
         Query<&mut ShaderLook, Without<crate::terrain::DemTerrainSurface>>,
     )>,
 ) {

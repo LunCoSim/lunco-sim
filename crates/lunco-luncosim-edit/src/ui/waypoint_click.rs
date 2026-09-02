@@ -2465,8 +2465,8 @@ mod tests {
             .expect("waypoint marker must author a trigger after the dome");
 
         assert!(dome.contains("primvars:doNotCastShadows = true"));
-        assert!(dome.contains("float[] primvars:displayOpacity = [0.15]"));
-        assert!(!dome.contains("lunco:surface:additive"));
+        assert!(dome.contains("float[] primvars:displayOpacity = [0.08]"));
+        assert!(dome.contains("bool lunco:surface:additive = true"));
     }
 
     #[test]

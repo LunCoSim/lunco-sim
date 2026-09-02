@@ -1,4 +1,4 @@
-//! Python script source as a Bevy `Asset`.
+//! Script source assets as Bevy `Asset`s.
 //!
 //! Symmetric to `lunco_modelica::source_asset::ModelicaSource`. Domain
 //! code must route `.py` reads through `AssetServer::load(...)` rather
@@ -7,25 +7,29 @@
 
 #[cfg(feature = "rhai")]
 use bevy::asset::AssetPath;
+#[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+#[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 
 /// Raw text of a `.py` file.
 ///
 /// We don't pre-compile the script in the loader. `lunco_scripting::python`
 /// owns Py bytecode and the compile happens lazily on first execution,
-/// driven by `ScriptDocument`. Keeping the asset as a string keeps the
-/// loader cheap and lets non-python consumers (linters, AI assistants)
-/// share the same handle.
+/// driven by `ScriptDocument`. Keeping the asset as a string keeps the loader
+/// cheap; execution remains exclusively behind the `python` feature.
+#[cfg(feature = "python")]
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct PythonSource {
     /// Raw `.py` text. UTF-8.
     pub text: String,
 }
 
+#[cfg(feature = "python")]
 #[derive(Default, TypePath)]
 pub struct PythonSourceLoader;
 
+#[cfg(feature = "python")]
 impl AssetLoader for PythonSourceLoader {
     type Asset = PythonSource;
     type Settings = ();
@@ -49,9 +53,11 @@ impl AssetLoader for PythonSourceLoader {
 }
 
 /// Plugin that registers the `.py` asset loader. Pulled in by
-/// `LunCoScriptingPlugin`.
+/// `LunCoScriptingPlugin` only when the Python feature is enabled.
+#[cfg(feature = "python")]
 pub struct PythonSourceAssetPlugin;
 
+#[cfg(feature = "python")]
 impl Plugin for PythonSourceAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<PythonSource>()

@@ -835,11 +835,12 @@ def Xform "WaypointMarker" (
 
     def Sphere "Dome"
     {
-        double radius = 2.5
-        double3 xformOp:translate = (0, 2.5, 0)
+        double radius = 1.5
+        double3 xformOp:translate = (0, 1.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.95, 0.5)]
-        float[] primvars:displayOpacity = [0.15]
+        float[] primvars:displayOpacity = [0.08]
+        bool lunco:surface:additive = true
     }
     def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {

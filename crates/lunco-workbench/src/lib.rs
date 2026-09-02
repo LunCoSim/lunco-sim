@@ -5015,7 +5015,10 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         level: StatusLevel,
         progress_pct: Option<f64>,
     }
-    let (latest, history): (Option<LatestSnapshot>, Vec<status_bus::StatusEvent>) = {
+    let (latest, history): (
+        Option<LatestSnapshot>,
+        Vec<(StatusEventKey, status_bus::StatusEvent)>,
+    ) = {
         let bus = world.resource::<StatusBus>();
         let latest = bus.display_latest().map(|e| LatestSnapshot {
             source: e.source,
@@ -5023,9 +5026,25 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             level: e.level,
             progress_pct: e.progress_pct(),
         });
-        let mut history: Vec<_> = bus.history().cloned().collect();
-        history.extend(bus.active_progress().cloned());
-        history.sort_by_key(|event| event.at);
+        let discrete: Vec<_> = bus.history().cloned().collect();
+        let discrete_len = discrete.len();
+        let history_total = bus.history_total();
+        let mut history: Vec<_> = discrete
+            .into_iter()
+            .enumerate()
+            .map(|(offset, event)| {
+                (
+                    discrete_status_event_key(history_total, discrete_len, offset),
+                    event,
+                )
+            })
+            .collect();
+        history.extend(
+            bus.active_progress()
+                .cloned()
+                .map(|event| (StatusEventKey::Progress(event.scope, event.source), event)),
+        );
+        history.sort_by_key(|(_, event)| event.at);
         (latest, history)
     };
     let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
@@ -5252,12 +5271,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                         return;
                     }
                     // Newest first.
-                    for (index, ev) in history.iter().rev().enumerate() {
+                    for (key, ev) in history.iter().rev() {
                         if render_status_event_row(
                             ui,
                             ev,
                             theme,
-                            ui.make_persistent_id(("workbench_status_event", index)),
+                            ui.make_persistent_id(("workbench_status_event", key)),
                         ) {
                             popup_attention_source = Some(ev.source);
                         }
@@ -5512,6 +5531,24 @@ const STATUS_POPUP_VIEWPORT_MARGIN: f32 = 24.0;
 const STATUS_POPUP_VIEWPORT_RATIO: f32 = 0.5;
 const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
 const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum StatusEventKey {
+    Discrete(u64),
+    Progress(status_bus::BusyScope, &'static str),
+}
+
+fn discrete_status_event_key(
+    history_total: u64,
+    history_len: usize,
+    offset: usize,
+) -> StatusEventKey {
+    StatusEventKey::Discrete(
+        history_total
+            .saturating_sub(history_len as u64)
+            .saturating_add(offset as u64),
+    )
+}
 
 fn status_popup_width(content_width: f32) -> f32 {
     let available = (content_width - STATUS_POPUP_VIEWPORT_MARGIN).max(0.0);
@@ -6472,6 +6509,17 @@ mod tests {
         assert_eq!(status_popup_width(1024.0), 500.0);
         assert_eq!(status_popup_width(1920.0), 948.0);
         assert_eq!(status_popup_width(4000.0), STATUS_POPUP_MAX_WIDTH);
+    }
+
+    #[test]
+    fn status_event_keys_survive_newer_entries_and_ring_eviction() {
+        let existing = discrete_status_event_key(3, 3, 1);
+        let after_append = discrete_status_event_key(4, 4, 1);
+        assert_eq!(existing, after_append);
+
+        let retained_after_eviction = discrete_status_event_key(201, 200, 0);
+        let retained_after_another_eviction = discrete_status_event_key(202, 200, 0);
+        assert_ne!(retained_after_eviction, retained_after_another_eviction);
     }
 
     #[test]

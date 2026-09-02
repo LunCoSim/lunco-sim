@@ -1842,7 +1842,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Focus on a target without taking control.
 
- Switches the avatar to `OrbitCamera` mode centered on the target.
+ Switches the avatar to `OrbitCamera` mode centered on the target. For a
+ celestial body, the local avatar restores its last user-controlled orbital
+ pose for that body's stable ephemeris id. If no pose exists, the orbit writer
+ derives the initial direction from the camera's current region in the
+ target's resolved inertial BigSpace grid.
 
 - *defined in:* `crates/lunco-avatar/src/commands.rs`
 

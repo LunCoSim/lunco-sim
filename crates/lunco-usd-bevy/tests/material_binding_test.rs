@@ -160,7 +160,7 @@ fn marker_assets_are_emissive_and_shadowless() {
     const PREDICTED_LANDING: &str =
         include_str!("../../../assets/vessels/markers/predicted_landing.usda");
     let markers = [
-        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.2)),
+        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.08)),
         (
             "landing location",
             LANDING_LOCATION,

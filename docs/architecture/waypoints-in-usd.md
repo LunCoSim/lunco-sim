@@ -76,11 +76,12 @@ The marker has one authored USD identity and one runtime arrival path:
   Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
   are separate authored geometry contracts because the dome is lifted for
   presentation while the trigger is anchored to the terrain.
-  The dome is softly translucent and emissive, so its authored green display
-  remains visible while a rover inside it stays readable and its appearance
-  remains independent of scene lighting. Its standard `primvars:displayOpacity`
-  is authored as an array (`float[]`, here `0.15` opacity); the separate Trigger
-  remains invisible and fully independent. The standard
+  The dome is softly translucent, additive, and emissive, so its authored green
+  display remains visible without writing an occluding depth value over a rover
+  inside it or the terrain behind it. Its standard `primvars:displayOpacity` is
+  authored as an array (`float[]`, here `0.08` opacity); the
+  `lunco:surface:additive` policy selects the existing non-occluding material
+  mode. The separate Trigger remains invisible and fully independent. The standard
   `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
   without adding a marker renderer. This keeps the visible dome lifted above
   terrain while the overlap volume remains useful on slopes.
@@ -136,8 +137,10 @@ The reusable marker follows the standard-schema boundary:
 ```usda
 def Sphere "Dome"
 {
-    double radius = 2.5
-    double3 xformOp:translate = (0, 2.5, 0)
+    double radius = 1.5
+    double3 xformOp:translate = (0, 1.5, 0)
+    float[] primvars:displayOpacity = [0.08]
+    bool lunco:surface:additive = true
 }
 def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 {

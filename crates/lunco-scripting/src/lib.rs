@@ -28,6 +28,7 @@ mod names;
 /// Modelica synthesis policies.
 #[cfg(feature = "rhai")]
 pub mod policy;
+#[cfg(feature = "python")]
 pub mod python;
 /// Journaling for named registrations (tool libraries + timelines) — so a
 /// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
@@ -322,6 +323,7 @@ impl Plugin for LunCoScriptingPlugin {
                 scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
             );
 
+        #[cfg(feature = "python")]
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
         }
@@ -365,6 +367,7 @@ impl Plugin for LunCoScriptingPlugin {
 
         app.configure_sets(FixedUpdate, ScriptingSet);
 
+        #[cfg(feature = "python")]
         app.init_resource::<python::PythonStatus>();
 
         // REPL drain: rhai (world-connected) is the default; python-only builds

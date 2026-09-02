@@ -83,6 +83,22 @@ BigSpace `pose_in_grid` machinery to read the current tracked/reference frame
 relationship, so the presentation path does not perform another orbital
 propagation.
 
+## Orbital camera poses
+
+`OrbitCamera` is an avatar-owned presentation mode. `OrbitViewHistory` stores
+the last user-controlled pose per stable celestial ephemeris id, so switching
+between Moon, Earth, or another body restores that body's own yaw, pitch,
+distance, damping, and vertical offset. The history is transient and is
+cleared when the active Twin closes or when the avatar is demoted; it is not a
+scene-wide celestial fact and is never persisted as USD.
+
+When a body has no saved user pose, `FocusTarget` seeds the orbit direction
+from the camera's current region in the target's explicit inertial BigSpace
+grid. It does not use a fixed world-axis or Sun-facing arrival. The existing
+f64 frame conversion and atomic grid migration remain the only placement path;
+the arrival marker is consumed by the orbit writer once and cannot become a
+second transform writer.
+
 ## Coordinate and physics boundary
 
 Ephemeris, anchors, orbits, velocities, and rotations remain f64 until the

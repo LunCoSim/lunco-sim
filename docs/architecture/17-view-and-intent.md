@@ -72,6 +72,12 @@ complete BigSpace `(CellCoord, Transform)` pose. The task-tree runtime owns
 long-running authored missions separately and does not use a camera-specific
 progress component.
 
+`FocusTarget` keeps the camera's transient, avatar-owned orbital pose history
+per stable celestial body id. A target switch records the current user pose and
+restores the target body's saved pose when available; otherwise the orbit
+writer derives an arrival from the camera's current radial region in the
+resolved inertial frame. Twin teardown and avatar demotion clear this history.
+
 ---
 
 ## 4. Input Preemption
