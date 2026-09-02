@@ -86,6 +86,8 @@ default) and leaves hidden cameras inactive. The generic ECS selection is a
 focused-session projection and must be restored from editor-owned session
 selection on focus changes. Dispatch edits with the session's explicit
 document, authored layer, and generation through the typed USD command surface.
+For path-based editor selection, use `SelectUsdPrim` with the focused preview;
+never resolve a USD path globally across live and preview projections.
 
 For interactive reusable-assembly authoring, follow the
 [edit-usd-assembly runbook](../edit-usd-assembly/SKILL.md): the production

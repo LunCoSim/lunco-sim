@@ -137,6 +137,9 @@ selection is only the focused-session projection; keep selection and drilled
 targets in editor-owned session state so focus changes cannot apply a command
 to a same-named prim in another document. Always carry the session's explicit
 `DocumentId`, `LayerId`, and projection generation into a typed USD command.
+The editor's path-selection command is `SelectUsdPrim`: it requires the
+focused `UsdPreviewId` and resolves through that lease's stage and preview-root
+hierarchy.
 
 When the work is an agent-driven human asset edit, use the
 [interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md). The

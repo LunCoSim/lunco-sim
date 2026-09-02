@@ -151,21 +151,25 @@ actually call, with the fields the deserializer actually accepts. See the
 | `extend` | `bool` |  If true, maintains the previous selection and adds this entity to it (like Shift-click) |
 | `toggle` | `bool` |  If true, toggles the selection state of the entity (like Cmd/Ctrl-click) |
 
-#### `SelectEntityByPath`
+#### `SelectUsdPrim`
 
- Select a composed USD prim by its authored path.
+ Select a composed USD prim by its authored path within one open and focused
+ USD preview. The preview identity is required because the same path can exist
+ in the live scene and in multiple editor documents.
 
- The path is resolved against the live `UsdPrimPath` projection rather than
- an episode-specific entity id. This keeps scripted presentation commands
- stable across scene reloads and across duplicated asset instances.
+ The path is resolved against the selected preview's stage handle and hierarchy
+ rather than an episode-specific entity id. This keeps scripted presentation
+ commands stable across scene reloads without allowing a same-path entity from
+ another document to be selected.
 
 - *defined in:* `crates/lunco-luncosim-edit/src/selection.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |   |
-| `extend` | `bool` |   |
-| `toggle` | `bool` |   |
+| `preview` | `UsdPreviewId` | Open, focused preview that owns the selection. |
+| `path` | `String` | Absolute composed USD prim path in the preview. |
+| `extend` | `bool` | If true, preserve the current selection and add this prim. |
+| `toggle` | `bool` | If true, toggle this prim in the current selection. |
 
 #### `SetSpawnDiagnostics`
 
@@ -347,7 +351,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Set the render-free runtime focus to the composed USD prim at `path`.
 
- This is separate from the editor's `SelectEntityByPath`: a headless
+ This is separate from the editor's `SelectUsdPrim`: a headless
  recorder has no Inspector, gizmo, or picking state to maintain, but
  runtime-authored surfaces still need a stable subject for scoped telemetry.
  The authored USD path remains stable across entity ids and scene reloads.

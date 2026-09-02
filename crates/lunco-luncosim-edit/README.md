@@ -15,7 +15,9 @@ parameter/variant/mount views, joint editor, and animation editor keep one
 derived view per `UsdPreviewId`; the dock paints the focused lease. Selection
 and drilled Inspector targets are restored per lease, and authored edits carry
 the lease's explicit document, layer, and projection generation through typed
-USD commands.
+USD commands. Scripted selection uses `SelectUsdPrim` with that same explicit
+preview lease; a USD path is never resolved globally across the live scene and
+open documents.
 
 ## Gizmo System
 

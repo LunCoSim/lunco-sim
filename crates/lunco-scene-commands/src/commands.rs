@@ -2822,7 +2822,7 @@ pub struct FocusEntityById {
 
 /// Set the render-free runtime focus to the composed USD prim at `path`.
 ///
-/// This is separate from the editor's `SelectEntityByPath`: a headless
+/// This is separate from the editor's `SelectUsdPrim`: a headless
 /// recorder has no Inspector, gizmo, or picking state to maintain, but
 /// runtime-authored surfaces still need a stable subject for scoped telemetry.
 /// The authored USD path remains stable across entity ids and scene reloads.

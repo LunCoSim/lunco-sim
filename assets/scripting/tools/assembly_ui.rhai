@@ -95,3 +95,20 @@ fn open_connections(preview, doc, edit_target) {
 fn open_animation(preview, doc, edit_target) {
     focus("environment", preview, doc, edit_target)
 }
+
+/// Select one prim in the focused preview through the shared typed selection
+/// owner. Focusing first makes the command's presentation precondition
+/// explicit and keeps hidden previews from mutating the visible Inspector.
+fn select_prim(preview, path, extend, toggle) {
+    let focused = cmd("FocusUsdPreview", #{ preview: preview });
+    if focused.ok == false {
+        return #{ ok: false, focus: focused };
+    }
+    let selected = cmd("SelectUsdPrim", #{
+        preview: preview,
+        path: path,
+        extend: extend,
+        toggle: toggle,
+    });
+    #{ ok: selected.ok, focus: focused, selection: selected }
+}

@@ -52,6 +52,10 @@ introduce a second authoring model.
   A click on a USD file in any open Twin resolves that file at the emitting
   Twin's path, admits it through the existing async `OpenFile` pipeline, then
   opens/focuses the stable editor session; it never becomes `LoadScene`.
+- `SelectUsdPrim` is the editor's path-selection command. It requires the
+  focused `UsdPreviewId` and resolves the path only against that session's
+  stage handle and preview-root hierarchy, so identical paths in the live
+  scene or another open document cannot cross the editor boundary.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open session and paint the session

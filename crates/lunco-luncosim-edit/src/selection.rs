@@ -16,7 +16,8 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -70,13 +71,18 @@ pub struct SelectEntity {
     pub toggle: bool,
 }
 
-/// Select a composed USD prim by its authored path.
+/// Select a composed USD prim in one explicit open and focused preview.
 ///
-/// The path is resolved against the live `UsdPrimPath` projection rather than
-/// an episode-specific entity id. This keeps scripted presentation commands
-/// stable across scene reloads and across duplicated asset instances.
+/// The preview lease is part of the identity. A path is not globally unique:
+/// the running scene and every open editor document can contain the same
+/// authored path. Resolving only by path can therefore select an entity from
+/// the wrong document. The handler first validates the lease and then scopes
+/// the projection lookup to its stage handle and preview root.
 #[Command(default)]
-pub struct SelectEntityByPath {
+pub struct SelectUsdPrim {
+    /// The isolated USD preview that owns the selection.
+    pub preview: UsdPreviewId,
+    /// Absolute composed USD prim path within that preview's stage.
     pub path: String,
     pub extend: bool,
     pub toggle: bool,
@@ -213,7 +219,7 @@ pub fn select_possessed_vessel(
 // `SelectEntity` is editor-only (Inspector highlight + gizmo), so it is registered
 // by `SceneEditPlugin` rather than the headless `SpawnCommandPlugin` — but it goes
 // through the SAME type+observer registration as every other verb.
-register_commands!(on_select_entity, on_select_entity_by_path);
+register_commands!(on_select_entity, on_select_usd_prim);
 
 #[on_command(SelectEntity)]
 pub fn on_select_entity(
@@ -254,21 +260,46 @@ pub fn on_select_entity(
     );
 }
 
-#[on_command(SelectEntityByPath)]
-pub fn on_select_entity_by_path(
-    trigger: On<SelectEntityByPath>,
+#[on_command(SelectUsdPrim)]
+pub fn on_select_usd_prim(
+    trigger: On<SelectUsdPrim>,
+    viewport: Option<Res<UsdViewportState>>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
+    q_parents: Query<&ChildOf>,
     mut selected: ResMut<SelectedEntities>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    let Some(target) = q_paths
-        .iter()
-        .find(|(_, path)| path.path == cmd.path)
-        .map(|(entity, _)| entity)
-    else {
-        warn!("SELECT_ENTITY_BY_PATH: no composed prim at `{}`", cmd.path);
+    let Some(viewport) = viewport.as_deref() else {
+        warn!(
+            "SELECT_USD_PRIM: preview {} is unavailable because USD previews are not installed",
+            cmd.preview.0
+        );
+        return;
+    };
+    let Some(session) = viewport.session(cmd.preview) else {
+        warn!("SELECT_USD_PRIM: preview {} is not open", cmd.preview.0);
+        return;
+    };
+    if viewport.focused_preview_id() != Some(cmd.preview) {
+        warn!(
+            "SELECT_USD_PRIM: preview {} must be focused before selecting `{}`",
+            cmd.preview.0, cmd.path
+        );
+        return;
+    }
+    let Some(target) = resolve_usd_prim_in_preview(
+        session.scene_root(),
+        session.stage_handle().id(),
+        &cmd.path,
+        &q_paths,
+        &q_parents,
+    ) else {
+        warn!(
+            "SELECT_USD_PRIM: preview {} has no composed prim at `{}`",
+            cmd.preview.0, cmd.path
+        );
         if !cmd.extend && !cmd.toggle {
             clear_selection(&mut commands, &mut selected, q_old.iter());
         }
@@ -283,7 +314,33 @@ pub fn on_select_entity_by_path(
         cmd.extend,
         cmd.toggle,
     );
-    info!("SELECT_ENTITY_BY_PATH: selected {}", cmd.path);
+    info!(
+        "SELECT_USD_PRIM: preview {} selected {}",
+        cmd.preview.0, cmd.path
+    );
+}
+
+/// Resolve one authored path against the stage and hierarchy of one preview.
+///
+/// The stage check prevents collisions between separately projected documents;
+/// the hierarchy check prevents a live-scene entity that happens to share the
+/// stage handle from entering the editor selection. The preview session owns
+/// both inputs, so callers never need a second identity map.
+fn resolve_usd_prim_in_preview(
+    preview_root: Entity,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    path: &str,
+    q_paths: &Query<(Entity, &UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    q_paths
+        .iter()
+        .find(|(entity, prim)| {
+            prim.stage_handle.id() == stage_id
+                && prim.path == path
+                && crate::ui::is_editor_preview_entity(*entity, preview_root, q_parents)
+        })
+        .map(|(entity, _)| entity)
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
@@ -664,6 +721,98 @@ pub fn draw_selection_bounds(
 mod tests {
     use super::*;
     use bevy::camera::primitives::Aabb;
+
+    const MINIMAL_USD: &str =
+        "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\" {}\n";
+
+    #[test]
+    fn usd_prim_resolution_requires_the_requested_preview_scope() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>();
+
+        let stage_a = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+                "preview-a.usda",
+                MINIMAL_USD,
+            ))
+            .expect("preview A stage asset"),
+        );
+        let stage_b = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+                "preview-b.usda",
+                MINIMAL_USD,
+            ))
+            .expect("preview B stage asset"),
+        );
+
+        let root_a = app.world_mut().spawn_empty().id();
+        let root_b = app.world_mut().spawn_empty().id();
+        let prim_a = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage_a.clone(),
+                    path: "/World/Chassis".into(),
+                },
+                ChildOf(root_a),
+            ))
+            .id();
+        // Put the same-stage collision before the valid preview entity so the
+        // resolver must enforce the preview-root boundary instead of passing
+        // because the entity iteration happened to find the right row first.
+        let live_collision = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: stage_b.clone(),
+                path: "/World/Chassis".into(),
+            })
+            .id();
+        let prim_b = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage_b.clone(),
+                    path: "/World/Chassis".into(),
+                },
+                ChildOf(root_b),
+            ))
+            .id();
+
+        let mut q_paths = app.world_mut().query::<(Entity, &UsdPrimPath)>();
+        let mut q_parents = app.world_mut().query::<&ChildOf>();
+
+        assert_eq!(
+            resolve_usd_prim_in_preview(
+                root_b,
+                stage_b.id(),
+                "/World/Chassis",
+                &q_paths.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            Some(prim_b)
+        );
+        assert_ne!(
+            resolve_usd_prim_in_preview(
+                root_b,
+                stage_b.id(),
+                "/World/Chassis",
+                &q_paths.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            Some(live_collision)
+        );
+        assert_ne!(
+            resolve_usd_prim_in_preview(
+                root_b,
+                stage_b.id(),
+                "/World/Chassis",
+                &q_paths.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            Some(prim_a)
+        );
+    }
 
     #[test]
     fn mobility_root_owns_nested_spawnable_component_selection() {

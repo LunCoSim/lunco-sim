@@ -112,7 +112,9 @@ The built-in wrappers are in
 [`assembly_edit.rhai`](../../assets/scripting/tools/assembly_edit.rhai). The
 preview helpers are `preview_open`, `preview_view_open`,
 `preview_view_focus`, `preview_view_close`, `preview_focus`, and
-`preview_close`.
+`preview_close`. Use `assembly_ui::select_prim(preview, path, extend, toggle)`
+for selection: it focuses the explicit preview and dispatches `SelectUsdPrim`,
+which resolves the path only inside that preview's stage and hierarchy.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
 `panel_templates(preview, doc, edit_target)` to discover the existing Editor
