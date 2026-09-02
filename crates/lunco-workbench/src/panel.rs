@@ -320,7 +320,10 @@ pub trait Panel: Send + Sync + 'static {
         self.title()
     }
 
-    /// Where to dock this panel by default when registered.
+    /// Where to dock this panel when no perspective has declared its slots.
+    ///
+    /// This seeds the pre-perspective layout only. After a perspective is
+    /// active, that perspective is the authoritative owner of slot intent.
     fn default_slot(&self) -> PanelSlot;
 
     /// Which **View ▸ Panels** group this panel is listed under.

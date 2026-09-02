@@ -32,6 +32,12 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+`default_slot()` seeds layout intent only before the first perspective is
+active. After that, the active `Perspective` owns its slot declarations;
+late panel registration adds the renderer without changing the current
+presentation. Declare a panel id in the perspective that should show it, or
+use the existing explicit panel-opening command/path.
+
 The workbench status history is one shared presentation surface: render Info,
 Progress, Warn, Error, and Attention through the same responsive
 level/source/message/progress/action row. Its popup is compact, sized to roughly

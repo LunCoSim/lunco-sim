@@ -1273,7 +1273,14 @@ impl Default for WorkbenchLayout {
 }
 
 impl WorkbenchLayout {
-    /// Register a panel and dock it in its default slot.
+    /// Register a panel and make its renderer available to the workbench.
+    ///
+    /// Before the first perspective is active, [`Panel::default_slot`] seeds
+    /// the initial slot intent. Once a perspective is active, that
+    /// perspective owns the slot intent; late registration must not add a
+    /// panel to the active layout. A perspective that wants a late-registered
+    /// panel declares its id through its slot setters, and the rebuild below
+    /// then realizes that declaration.
     pub fn register<P: Panel + 'static>(&mut self, panel: P) {
         let id = panel.id();
         let slot = panel.default_slot();
@@ -1287,7 +1294,7 @@ impl WorkbenchLayout {
             || self.right_inspector.contains(&id)
             || self.right_inspector_bottom.contains(&id)
             || self.bottom.contains(&id);
-        if !declared {
+        if self.active_perspective.is_none() && !declared {
             match slot {
                 PanelSlot::SideBrowser => {
                     if !self.side_browser.contains(&id) {
@@ -6754,6 +6761,27 @@ mod tests {
         assert_eq!(layout.right_inspector, [PanelId("inspector")]);
         assert_eq!(layout.right_inspector_bottom, [PanelId("spawn")]);
         assert!(layout.bottom.is_empty());
+    }
+
+    #[test]
+    fn late_panel_registration_does_not_mutate_active_perspective() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("view"),
+            title: "View",
+            marker: PanelId("side_panel"),
+        });
+        assert!(layout.center.is_empty());
+
+        layout.register(DockPanel(PanelId("late_center")));
+
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
+        assert!(layout.center.is_empty());
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center"))));
+        assert!(layout.panels.contains_key(&PanelId("late_center")));
     }
 
     struct TestPerspective {

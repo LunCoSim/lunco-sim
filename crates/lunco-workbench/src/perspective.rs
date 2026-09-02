@@ -29,7 +29,8 @@ impl PerspectiveId {
 ///
 /// Panels are registered once and exist for the life of the app. A
 /// Perspective decides **which panels occupy which slots** for this UX
-/// mode and triggers a rebuild of the underlying `egui_dock` tree.
+/// mode and triggers a rebuild of the underlying `egui_dock` tree. Its slot
+/// intent remains authoritative when panel renderers register later.
 /// Switching Perspectives is non-destructive — no panel is torn down,
 /// only the dock layout changes.
 pub trait Perspective: Send + Sync + 'static {
