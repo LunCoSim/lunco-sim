@@ -28,8 +28,7 @@ use std::sync::Arc;
 
 use avian3d::prelude::{
     Collider, ColliderAabb, ColliderDisabled, ColliderOf, ColliderTransform, CollisionLayers,
-    Position, RayHitData,
-    RayHits, RigidBody, Rotation, SimpleCollider, SpatialQueryFilter,
+    Position, RayHitData, RayHits, RigidBody, Rotation, SimpleCollider, SpatialQueryFilter,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
@@ -649,6 +648,7 @@ pub(crate) fn update_physics_support_cache(
     mut cache: ResMut<PhysicsSupportCache>,
     queries: PhysicsSupportQueries,
     joints: JointGraph,
+    mut changed_bodies: Local<HashSet<Entity>>,
 ) {
     let PhysicsSupportQueries {
         bodies,
@@ -670,7 +670,7 @@ pub(crate) fn update_physics_support_cache(
         mut removed_spherical,
         mut removed_distance,
     } = queries;
-    let mut changed_bodies = HashSet::new();
+    changed_bodies.clear();
     let mut topology_dirty = cache.topology_dirty;
 
     // Motors and joint frames may change frequently. Observe changed joints but
@@ -786,7 +786,6 @@ pub(crate) fn update_physics_support_cache(
                 support_bounds,
                 bounds: support_bounds,
             });
-        cache.recompute_body(entity);
         changed_bodies.insert(entity);
         if !cache.assembly_of.contains_key(&entity) {
             topology_dirty = true;
