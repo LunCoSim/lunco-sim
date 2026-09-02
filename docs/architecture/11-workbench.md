@@ -330,6 +330,14 @@ A panel's default slot derives from its `default_slot()` (and `id` substring con
 Users can drag panels between slots, tab them together, collapse them,
 or detach them (see § 8).
 
+Panel registration and perspective ownership are separate. Before the first
+perspective is active, `default_slot()` seeds the initial slot intent. After a
+perspective is active, registering another panel only adds its renderer to the
+registry; it does not mutate the active perspective or place the panel in its
+dock. The perspective that owns the presentation must declare the panel id
+through its slot setters. Opening a panel from the View menu is an explicit
+user request and uses the workbench insertion path.
+
 ### 5a. Side-browser architecture — Twin panel + Files panel
 
 The two Navigation-slot panels follow a Dymola/OMEdit-style split:
