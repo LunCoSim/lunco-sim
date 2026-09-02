@@ -117,14 +117,16 @@ for selection: it focuses the explicit preview and dispatches `SelectUsdPrim`,
 which resolves the path only inside that preview's stage and hierarchy.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
-`panel_templates(preview, doc, edit_target)` to discover the existing Editor
-surfaces and `open_session(preview, doc, edit_target)` to activate the Editor,
-open/focus the explicit preview, and foreground its viewport. Use its
-`focus`, `open_structure`, `open_inspector`, `open_connections`,
-and `open_animation` helpers for registered panels. They only dispatch existing
-`ActivatePerspective`/`FocusPanel` commands; they do not own layout or create
-parallel document/view state. Mount and review are Inspector sections, and
-animation is the Environment panel.
+`panel_templates(preview, doc, edit_target)` to discover the nine existing
+Editor surfaces/workflows and their explicit handles. `open_session(preview,
+doc, edit_target)` activates the Editor, opens/focuses the explicit preview,
+and foregrounds its viewport. Use `focus`, `open_structure`, `open_inspector`,
+`open_connections`, `open_animation`, `open_mount`, and `open_review` to focus
+the owning registered panels. Animation is an Environment section and mount
+and review are Inspector sections; persistence is the existing document
+lifecycle command group and has no fabricated panel. These helpers only
+dispatch existing `ActivatePerspective`/`FocusPanel` commands; they do not own
+layout or create parallel document/view state.
 Discover reflected command shapes with `DiscoverSchema` rather than inventing
 JSON for a new command.
 
@@ -152,6 +154,10 @@ Use the smallest existing typed intent that expresses the change:
 
 - `transform`, `attribute`, `schema`, `variant`, `relationship`, and
   `connection` lower to `ApplyUsdOp`/`ApplyUsdOps`.
+- `add_prim`, `remove_prim`, `move_prim`, `payload`, and `active` expose the
+  existing typed structural USD operations. They require an explicit target,
+  exact paths, and the inspected generation; they never replace a layer's raw
+  source.
 - `assembly_edit::attach_component` and `assembly_edit::detach_component` use
   the existing mount, socket, joint, frame, ownership, and occupancy
   validators. Supply exact paths in the

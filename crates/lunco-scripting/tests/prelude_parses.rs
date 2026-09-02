@@ -105,6 +105,8 @@ fn usd_authoring_surface_is_namespaced() {
         .collect();
     for required in [
         "add_prim",
+        "remove_prim",
+        "move_prim",
         "transform",
         "attribute",
         "keyframe",
@@ -113,6 +115,8 @@ fn usd_authoring_surface_is_namespaced() {
         "connection",
         "schema",
         "variant",
+        "payload",
+        "active",
         "batch",
         "attach_component",
         "detach_component",
@@ -126,6 +130,54 @@ fn usd_authoring_surface_is_namespaced() {
             "assembly_edit.rhai must define `{required}`"
         );
     }
+}
+
+#[test]
+fn assembly_ui_templates_use_existing_surfaces_and_workflows() {
+    let (_, source) = lunco_assets::scripting::tool_libraries()
+        .into_iter()
+        .find(|(name, _)| *name == "assembly_ui")
+        .expect("assembly_ui.rhai must be embedded");
+    let template_count = runtime_engine()
+        .eval::<i64>(&format!(
+            "{source}\npanel_templates(7, 3, \"@root@\").len()"
+        ))
+        .expect("assembly_ui templates must evaluate without command bindings");
+    assert_eq!(template_count, 9);
+
+    let engine = runtime_engine();
+    for (role, expected_panel) in [
+        ("browser", "lunco.workbench.twin_browser"),
+        ("structure", "usd_prim_tree"),
+        ("preview", "usd::viewport"),
+        ("inspector", "sandbox_inspector"),
+        ("connections", "usd_connection_canvas"),
+        ("animation", "sandbox_environment"),
+        ("mount", "sandbox_inspector"),
+        ("review", "sandbox_inspector"),
+    ] {
+        let panel = engine
+            .eval::<String>(&format!("{source}\npanel_id(\"{role}\")"))
+            .expect("known assembly surface must resolve to a registered panel");
+        assert_eq!(panel, expected_panel, "surface role {role}");
+    }
+
+    let persistence = engine
+        .eval::<rhai::Map>(&format!(
+            "{source}\npanel_template(\"persistence\", 7, 3, \"@root@\")"
+        ))
+        .expect("persistence must be represented as a workflow, not a fake panel");
+    assert_eq!(
+        persistence
+            .get("kind")
+            .expect("workflow kind")
+            .clone_cast::<String>(),
+        "workflow"
+    );
+    assert!(
+        !persistence.contains_key("panel"),
+        "persistence must use lifecycle commands rather than inventing a panel"
+    );
 }
 
 #[test]

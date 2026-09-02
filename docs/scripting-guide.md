@@ -458,17 +458,24 @@ Playback and scrubbing remain the shared `ControlAnimation` transport in the
 Environment panel. There is no assembly-specific runtime setter or second
 animation clock.
 
+Structural authoring uses the same typed operation surface: `add_prim`,
+`remove_prim`, `move_prim`, `payload`, and `active` expose the existing
+reversible USD operations. They require an explicit edit target, exact paths,
+and the generation returned by inspection; raw layer replacement is not part
+of the agent workflow.
+
 Use `assembly_ui` for the presentation step after the document and preview
 identities are known. `assembly_ui::panel_templates(preview, doc,
-edit_target)` returns the registered Editor surfaces and their explicit
+edit_target)` returns nine existing Editor surfaces/workflows with explicit
 session handles. `assembly_ui::open_session(preview, doc, edit_target)`
 activates the existing `editor` perspective, admits/focuses the explicit USD
 preview, and focuses its viewport; `focus`, `open_structure`,
-`open_inspector`, `open_connections`, and `open_animation` foreground existing
-panels. These functions do not create a
-layout, duplicate view-model state, or infer a document from a name. Mount and
-review are sections of the existing Inspector, and animation is the existing
-Environment panel. The returned preview admission is not a substitute for
+`open_inspector`, `open_connections`, `open_animation`, `open_mount`, and
+`open_review` foreground existing panels. Animation is an Environment section,
+mount and review are Inspector sections, and persistence is the existing
+document lifecycle command group rather than a fabricated panel. These
+functions do not create a layout, duplicate view-model state, or infer a
+document from a name. The returned preview admission is not a substitute for
 `InspectUsdDocument` or a runtime screenshot; continue with the headful
 checkpoint in the assembly-editor runbook.
 
