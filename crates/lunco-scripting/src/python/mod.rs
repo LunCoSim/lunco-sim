@@ -14,6 +14,12 @@ pub enum PythonStatus {
     Unavailable,
 }
 
+impl Default for PythonStatus {
+    fn default() -> Self {
+        Self::Uninitialized
+    }
+}
+
 static PYTHON_LOADED: OnceLock<PythonStatus> = OnceLock::new();
 
 #[cfg(feature = "python")]
@@ -158,7 +164,12 @@ fn find_libpython_via_python3() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-pub fn initialize_python() {
-    let status = get_python_status();
-    info!("Python status: {:?}", status);
+/// Resolve the native Python runtime only when a Python consumer actually
+/// needs it. The process-wide probe is memoized, while the resource mirrors
+/// the resolved state for systems that already borrow it.
+pub fn ensure_initialized(status: &mut PythonStatus) {
+    if *status == PythonStatus::Uninitialized {
+        *status = get_python_status();
+        info!("Python status: {:?}", status);
+    }
 }

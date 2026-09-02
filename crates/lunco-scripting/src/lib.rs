@@ -312,8 +312,6 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(any(feature = "rhai", feature = "python"))]
         lunco_api::ensure_command_core(app);
 
-        python::initialize_python();
-
         #[cfg(any(feature = "rhai", feature = "python"))]
         app.init_resource::<scenario::ScenarioExecutionGate>()
             .init_resource::<scenario::ScenarioReadinessArm>()
@@ -367,8 +365,7 @@ impl Plugin for LunCoScriptingPlugin {
 
         app.configure_sets(FixedUpdate, ScriptingSet);
 
-        let python_status = python::get_python_status();
-        app.insert_resource(python_status);
+        app.init_resource::<python::PythonStatus>();
 
         // REPL drain: rhai (world-connected) is the default; python-only builds
         // fall back to the interpreter path. Wasm has no stdin, so neither runs.
@@ -580,7 +577,7 @@ struct PyCompiledDoc {
 fn run_scripted_models(
     mut q_models: Query<&mut ScriptedModel>,
     registry: Res<ScriptRegistry>,
-    python_status: Res<python::PythonStatus>,
+    mut python_status: ResMut<python::PythonStatus>,
     mut diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut compiled: Local<std::collections::HashMap<u64, PyCompiledDoc>>,
 ) {
@@ -602,6 +599,7 @@ fn run_scripted_models(
             continue;
         }
 
+        python::ensure_initialized(&mut python_status);
         if *python_status != python::PythonStatus::Available {
             error_once!("Python is not available on this system. Cannot run Python scripts.");
             continue;

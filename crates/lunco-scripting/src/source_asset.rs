@@ -5,7 +5,9 @@
 //! than `std::fs::read_to_string` — that path doesn't exist on wasm32.
 //! See `docs/architecture/40-asset-io.md`.
 
-use bevy::asset::{io::Reader, Asset, AssetLoader, AssetPath, LoadContext};
+#[cfg(feature = "rhai")]
+use bevy::asset::AssetPath;
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::prelude::*;
 
 /// Raw text of a `.py` file.

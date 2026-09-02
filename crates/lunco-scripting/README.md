@@ -95,7 +95,8 @@ never on a networked client (which receives behaviour via replication).
 ## Cargo features
 
 - `rhai` (**default**) — the rhai backend; pure-Rust, wasm-clean.
-- `python` — the PyO3 runtime (one-shot eval; requires a Python 3.12 shared library).
+- `python` — the PyO3 runtime (one-shot eval; requires a Python 3.12 shared library,
+  probed when Python is first used).
 
 The crate builds with `rhai`, with `--no-default-features` (script-free), with
 `python`, and for `wasm32-unknown-unknown`.

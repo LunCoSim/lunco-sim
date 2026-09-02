@@ -80,10 +80,11 @@ pub fn drain_repl_rhai(world: &mut World) {
 #[cfg(all(feature = "python", not(feature = "rhai")))]
 pub fn process_repl_commands(
     repl: Res<ReplResource>,
-    python_status: Res<crate::python::PythonStatus>,
+    mut python_status: ResMut<crate::python::PythonStatus>,
 ) {
     while let Ok(cmd) = repl.receiver.try_recv() {
         info!("Executing REPL: {}", cmd);
+        crate::python::ensure_initialized(&mut python_status);
         if *python_status != crate::python::PythonStatus::Available {
             error!("Python is not available. Cannot execute REPL command.");
             continue;
