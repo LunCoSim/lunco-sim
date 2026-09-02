@@ -71,12 +71,20 @@ it with this one.
   implement it at its authoritative owner or report the blocker explicitly.
 - Comments must describe the code as it stands. Do not describe discarded
   approaches, previous solutions, or missing capabilities.
+- A replacement is a clean cutover: delete the retired implementation, API,
+  caller, fallback, shim, and documentation/test coverage for the old contract
+  in the same change. Never add a compatibility alias or a test that preserves
+  obsolete behavior, and do not carry the retired path forward in migration or
+  history documentation as an alternate implementation.
 
 ## Coding guide
 
 - Fix the root cause. Do not add a shim, alias, compatibility branch, silent
   fallback, or alternate path to hide missing or invalid behavior. A default is
   allowed only when it is the documented semantic default of an omitted input.
+- When changing an interface, update every caller and its tests to the new
+  contract, then remove tests for the retired contract; tests must validate only
+  the authoritative behavior that should remain.
 - Keep Rust lightweight and policy out of the core when Rhai or an existing
   owner can express it. Do not duplicate an API, parser, setting, or assertion;
   update the authoritative interface and all callers together.

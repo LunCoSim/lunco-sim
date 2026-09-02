@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "RhaiEventDeliveryNegative"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Negative production regression: an objective requiring an absent event must
+# remain incomplete and report that fact through the authored verdict.
+def Xform "RhaiEventDeliveryNegative" (
+    kind = "assembly"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        custom string lunco:scenario = "rhai-event-delivery-negative"
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/rhai_event_delivery_negative.rhai@
+    }
+}

@@ -339,6 +339,11 @@ Progress is observable on the bus: `TASK_COMPLETE`/`TASK_FAILED` for the native
 task root and `OBJECTIVE_COMPLETE`/`PLAN_COMPLETE` when mission policy emits
 those application events.
 
+`requires_event` mission objectives consume the native runtime's bounded
+`name`/`source` identity projection. Full typed payloads belong only to a
+matching user `on_event` hook; do not recreate a persistent Rhai event buffer or
+retain a retired event-delivery API.
+
 For **complex reactive AI** (obstacle avoidance, interception) prefer the
 Autopilot Behavior Tree (`cmd("SetAutopilotBehavior", #{vessel, spec_json})`,
 see `docs/behaviour-trees.md`) over hand-rolled `on_tick` state machines.
