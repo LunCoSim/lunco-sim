@@ -337,9 +337,13 @@ Panel registration and perspective ownership are separate. Before the first
 perspective is active, `default_slot()` seeds the initial slot intent. After a
 perspective is active, registering another panel only adds its renderer to the
 registry; it does not mutate the active perspective or place the panel in its
-dock. The perspective that owns the presentation must declare the panel id
-through its slot setters. Opening a panel from the View menu is an explicit
-user request and uses the workbench insertion path.
+dock. A perspective may seed a canonical multi-instance tab during `apply` by
+calling `WorkbenchLayout::open_instance`; that insertion uses the instance
+panel's authoritative `default_slot()`. Because `apply` runs for a first visit,
+layout revision rebuild, or explicit reset, switching back to a visited
+perspective restores its cached user layout and does not reopen a closed tab.
+Opening a panel from the View menu is an explicit user request and uses the
+same workbench insertion path.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

@@ -1,12 +1,11 @@
 //! Modelica plot panel — multi-instance host for time-series plots.
 //!
 //! Each tab is a `ModelicaPlotPanel` instance keyed by `VizId`. The
-//! historical singleton "Graphs" tab is now just the *first* instance,
-//! auto-spawned at startup with `VizId = DEFAULT_MODELICA_GRAPH` and
-//! the title "Graphs". Telemetry checkboxes still bind their signals
-//! to that default config; users can open additional plots via
-//! `NewPlotPanel` (the `➕` button) and each gets its own
-//! `VisualizationConfig` with independent live-signal bindings.
+//! canonical "Graphs" tab is the first instance, seeded by the Build
+//! perspective with `VizId = DEFAULT_MODELICA_GRAPH` and the title "Graphs".
+//! Telemetry checkboxes bind their signals to that default config; users can
+//! open additional plots via `NewPlotPanel` (the `➕` button) and each gets its
+//! own `VisualizationConfig` with independent live-signal bindings.
 //!
 //! 1. Reserves the `modelica_graphs` slot in the bottom dock.
 //! 2. Renders a small toolbar (Fit + count).
@@ -74,9 +73,9 @@ impl InstancePanel for ModelicaPlotPanel {
 
     fn title(&self, world: &World, instance: u64) -> String {
         let id = VizId(instance);
-        // The default plot keeps the historical "Graphs" name. Other
-        // instances use whatever title was set on creation, falling
-        // back to "Plot #N" via the registry config.
+        // The canonical plot keeps the "Graphs" name. Other instances use
+        // whatever title was set on creation, falling back to "Plot #N" via
+        // the registry config.
         if id == DEFAULT_MODELICA_GRAPH {
             return "Graphs".into();
         }

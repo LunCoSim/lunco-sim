@@ -1083,10 +1083,10 @@ impl Perspective for BuildPerspective {
         "⚒ Build".into()
     }
     fn layout_revision(&self) -> u32 {
-        // Revision 2 adds the default Graphs instance to the bottom-center
-        // split. Existing cached Build layouts must be rebuilt once so the
-        // default is deterministic for every workspace.
-        2
+        // Revision 3 completes the Graphs instance in the bottom-center
+        // split. Revision 2 shipped the invalidated preset without opening
+        // the instance, so cached layouts from it must be rebuilt once.
+        3
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -1100,6 +1100,14 @@ impl Perspective for BuildPerspective {
             vec![PanelId("spawn_palette")],
         );
         layout.set_bottom(None);
+        // Graphs is a multi-instance panel, so it cannot be declared through
+        // the singleton bottom-slot setter. The existing insertion path uses
+        // its authoritative PanelSlot::Bottom and splits beneath the exclusive
+        // viewport leaf, keeping the scene interactive and the graph bounded.
+        layout.open_instance(
+            lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+            lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+        );
     }
 }
 
@@ -1186,6 +1194,20 @@ impl Perspective for TerrainPerspective {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_perspective_seeds_the_canonical_graph_instance() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register(ViewportPanel);
+        layout.register_instance_panel(lunco_modelica::ui::panels::graphs::ModelicaPlotPanel);
+
+        BuildPerspective.apply(&mut layout);
+
+        assert_eq!(
+            layout.instances_in_order(lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND),
+            vec![lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0]
+        );
+    }
 
     #[test]
     fn editor_perspective_uses_editor_identity() {
