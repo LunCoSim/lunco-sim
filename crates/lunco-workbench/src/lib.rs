@@ -4419,10 +4419,12 @@ fn render_layout(
                 let submenus = std::mem::take(&mut layout.settings_submenus);
                 for (label, callbacks) in &submenus {
                     ui.menu_button(label, |ui| {
+                        let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
                         let max_height = ui.spacing().interact_size.y * 24.0;
                         egui::ScrollArea::vertical()
+                            .max_width(max_width)
                             .max_height(max_height)
-                            .auto_shrink([false, false])
+                            .auto_shrink([true, true])
                             .show(ui, |ui| {
                                 for (i, callback) in callbacks.iter().enumerate() {
                                     if i > 0 {
@@ -5551,6 +5553,7 @@ const STATUS_POPUP_VIEWPORT_MARGIN: f32 = 24.0;
 const STATUS_POPUP_VIEWPORT_RATIO: f32 = 0.5;
 const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
 const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
+const SETTINGS_SUBMENU_MAX_WIDTH: f32 = 640.0;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
@@ -5575,6 +5578,12 @@ fn status_popup_width(content_width: f32) -> f32 {
     (available * STATUS_POPUP_VIEWPORT_RATIO)
         .clamp(STATUS_POPUP_MIN_WIDTH, STATUS_POPUP_MAX_WIDTH)
         .min(available)
+}
+
+fn settings_submenu_max_width(content_width: f32) -> f32 {
+    (content_width - STATUS_POPUP_VIEWPORT_MARGIN)
+        .max(0.0)
+        .min(SETTINGS_SUBMENU_MAX_WIDTH)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6529,6 +6538,19 @@ mod tests {
         assert_eq!(status_popup_width(1024.0), 500.0);
         assert_eq!(status_popup_width(1920.0), 948.0);
         assert_eq!(status_popup_width(4000.0), STATUS_POPUP_MAX_WIDTH);
+    }
+
+    #[test]
+    fn settings_submenu_width_is_content_bounded_by_the_viewport() {
+        assert_eq!(settings_submenu_max_width(200.0), 176.0);
+        assert_eq!(
+            settings_submenu_max_width(1024.0),
+            SETTINGS_SUBMENU_MAX_WIDTH
+        );
+        assert_eq!(
+            settings_submenu_max_width(4000.0),
+            SETTINGS_SUBMENU_MAX_WIDTH
+        );
     }
 
     #[test]
