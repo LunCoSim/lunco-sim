@@ -554,6 +554,11 @@ UI surfaces the same resource three ways — a named Settings submenu row
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 
+Settings submenus are content-sized in both axes, capped at 640 logical px in
+width and 24 interaction rows in height. They become vertically scrollable
+only when their registered controls exceed that height; the submenu itself
+does not reserve unused popup space.
+
 **Don't** invent per-feature JSON files for new settings. **Do**
 keep the intentional exceptions separate, each for a documented
 reason: `recents.json` (different lifetime / churn), the planned
