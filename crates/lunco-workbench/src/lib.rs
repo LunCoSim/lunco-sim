@@ -5268,6 +5268,13 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme.tokens.overlay_backdrop)
+                    .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(8)),
+            )
             .show(|ui| {
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
@@ -5374,7 +5381,7 @@ fn render_status_event_row(
 
         // Keep the level column width identical for every row so that
         // diagnostic rows do not shift the source or message columns.
-        add_status_text_right(
+        add_status_text(
             ui,
             level_width,
             egui::Label::new(
@@ -5412,11 +5419,6 @@ fn render_status_event_row(
                 |ui| {
                     ui.spinner();
                 },
-            );
-        } else {
-            ui.allocate_exact_size(
-                egui::vec2(progress_width, ui.spacing().interact_size.y),
-                egui::Sense::hover(),
             );
         }
 
@@ -5479,15 +5481,6 @@ fn add_status_text(ui: &mut egui::Ui, width: f32, label: egui::Label) -> egui::R
         ui,
         width,
         egui::Layout::left_to_right(egui::Align::Center),
-        label,
-    )
-}
-
-fn add_status_text_right(ui: &mut egui::Ui, width: f32, label: egui::Label) -> egui::Response {
-    add_status_text_with_layout(
-        ui,
-        width,
-        egui::Layout::right_to_left(egui::Align::Center),
         label,
     )
 }

@@ -46,7 +46,9 @@ the message column consumes the remaining inner width rather than an arbitrary
 fixed fraction. Diagnostic rows keep the shared column geometry, expose row
 activation through the cursor and tooltip, and add the complete diagnostic as
 an optional body under that row. Emit the existing typed action for Attention;
-do not create level-specific row layouts or source-specific styling.
+do not create level-specific row layouts or source-specific styling. StatusBus
+coalesces consecutive identical discrete snapshots before this shared reader;
+do not hide producer floods in a renderer-specific filter.
 
 For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
