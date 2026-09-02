@@ -26,15 +26,14 @@ over "Tire" (
     float physics:dynamicFriction = 1.0
     float physics:staticFriction = 1.0
 
-    # The look states the grip: rounded, flattened lugs under a heavy coat of
-    # the hundred klicks that wore them.
+    # The look states the grip: rounded and flattened lugs after a hundred
+    # klicks of wear.
     over "TireLook"
     {
         over "Shader"
         {
             float inputs:lug_depth = 0.4
             float inputs:wear = 0.7
-            float inputs:dust_amount = 0.6
         }
     }
 }

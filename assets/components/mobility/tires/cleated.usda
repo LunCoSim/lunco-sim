@@ -30,7 +30,6 @@ over "Tire" (
         {
             float inputs:tread_lugs = 14.0
             float inputs:lug_depth = 1.0
-            float inputs:dust_amount = 0.5
         }
     }
 }

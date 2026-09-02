@@ -55,6 +55,19 @@ fn authored_feed_pose_ok() {
         && close_vec(indicator.attrs["xformOp:translate"], [0.0, 0.085, 0.0])
 }
 
+fn wheel_shader_contract_ok(path) {
+    let record = query("QueryUsdPrim", #{
+        path: path + "/TireLook/Shader",
+        attrs: ["info:wgsl:sourceAsset", "inputs:dust_amount", "inputs:dust_color"],
+    });
+    if record == () || record.ok == false || record.attrs == () {
+        return false;
+    }
+    record.attrs["info:wgsl:sourceAsset"] == "lunco://shaders/wheel.wgsl"
+        && record.attrs["inputs:dust_amount"] == ()
+        && record.attrs["inputs:dust_color"] == ()
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -95,6 +108,19 @@ fn on_tick(me) {
         failures.push(t_true(
             authored_rotation_ok(path, [link[1], 0.0, 0.0]),
             path + " has a detached forward-link pose; expected rotateXYZ=" + link[1]));
+    }
+    let wheels = [
+        "RockerL/Wheel_FL",
+        "RockerR/Wheel_FR",
+        "BogieL/Wheel_ML",
+        "BogieL/Wheel_RL",
+        "BogieR/Wheel_MR",
+        "BogieR/Wheel_RR",
+    ];
+    for wheel in wheels {
+        failures.push(t_true(
+            wheel_shader_contract_ok(ROOT + "/" + wheel),
+            ROOT + "/" + wheel + " still carries a retired wheel dust input"));
     }
     report_verdict(failures, "ROCKER BOGIE ANTENNA VISUAL", "ROCKER_BOGIE_ANTENNA_VISUAL");
 }
