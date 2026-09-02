@@ -21,14 +21,17 @@ use avian3d::prelude::{
     TranslationInterpolation,
 };
 use bevy::camera::RenderTarget;
-use bevy::math::DVec3;
+use bevy::math::{DVec3, Rect};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
-use lunco_render::SceneCamera;
 use lunco_usd::document::LayerId;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd::ui::viewport::{
+    UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+};
 use lunco_usd_bevy::UsdPrimPath;
+use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
 };
@@ -50,8 +53,8 @@ pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
     }
 }
 
-/// Saves the user's gizmo configuration while planetary presentation owns the
-/// viewport and the transform frontend is disabled.
+/// Saves the user's gizmo configuration while orbital presentation owns the
+/// live viewport and the transform frontend is disabled there.
 #[derive(Resource, Default)]
 pub(crate) struct GizmoVisibilityState {
     saved_options: Option<GizmoOptions>,
@@ -934,15 +937,38 @@ pub fn restore_gizmo_dynamic(
 /// a **plain** left-drag on a handle still moves the object (the gizmo only
 /// engages when `hovered`, i.e. the cursor is actually over a handle). Matches
 /// the app's shift=select / plain=possess partition (see `on_scene_click_select`).
+/// The raw egui focus flag is global because it protects the live scene; the
+/// focused USD preview is admitted separately only when the scene-pick gate
+/// assigns the pointer to its offscreen surface.
 pub fn drive_gizmo_drag_no_shift(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
+    gate: Option<Res<ScenePickGate>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: Option<Res<UsdViewportState>>,
+    panel_rects: Option<Res<PanelRects>>,
     q_targets: Query<&GizmoTarget>,
     mut drag_started: MessageWriter<GizmoDragStarted>,
     mut dragging: MessageWriter<GizmoDragging>,
 ) {
-    if egui_focus.wants_pointer
+    let window = windows.single().ok();
+    let scale_factor = window.map(Window::scale_factor).unwrap_or(1.0);
+    let preview_pointer = window
+        .and_then(Window::cursor_position)
+        .zip(focused_preview_rect(
+            viewport.as_deref(),
+            panel_rects.as_deref(),
+        ))
+        .is_some_and(|(cursor, rect)| rect_to_logical(rect, scale_factor).contains(cursor));
+    let preview_owns_pointer = preview_pointer
+        && gate
+            .as_deref()
+            .and_then(ScenePickGate::resolved)
+            .is_some_and(|target| matches!(target, SceneTarget::Offscreen(_)));
+    let live_owns_pointer = !egui_focus.wants_pointer && !preview_pointer;
+
+    if (!live_owns_pointer && !preview_owns_pointer)
         || keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
         || !q_targets.iter().any(|target| target.is_focused())
     {
@@ -960,24 +986,33 @@ pub fn drive_gizmo_drag_no_shift(
     }
 }
 
-/// Keeps `GizmoCamera` on the viewport-bound window camera only.
+/// Keeps `GizmoCamera` on the presentation camera that owns the focused editor.
 ///
 /// The gizmo renders/interacts through whichever camera carries `GizmoCamera`.
-/// With multiple scene cameras present (USD `def Camera` prims spawn as extra
-/// window `Camera3d`s), tagging *every* window camera made the gizmo bind to
-/// the wrong one. `SceneViewport::active_camera` is the presentation owner;
-/// `Camera::is_active` is only checked as the reconciler's actuated readiness
-/// state. The rest are untagged as the active view switches.
+/// A focused USD preview owns an offscreen camera and supplies the panel's
+/// screen rectangle through `GizmoOptions::viewport_rect`; otherwise
+/// `SceneViewport::active_camera` owns the standard full-window presentation.
+/// This is the same frontend and the same proxy target set in both editors.
 pub(crate) fn sync_gizmo_camera(
     viewport: Res<SceneViewport>,
-    q_cameras: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    q_cameras: Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
     q_tagged: Query<Entity, With<GizmoCamera>>,
+    usd_viewport: Option<Res<UsdViewportState>>,
+    panel_rects: Option<Res<PanelRects>>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut options: ResMut<GizmoOptions>,
     mut visibility: ResMut<GizmoVisibilityState>,
     mut commands: Commands,
 ) {
-    if orbital_pin.is_some_and(|pin| pin.active) {
+    let preview_candidate =
+        focused_preview_camera(usd_viewport.as_deref(), panel_rects.as_deref(), &q_cameras);
+    // The orbital presentation lock belongs to the live scene camera. An
+    // isolated USD editor has its own camera and must remain editable while a
+    // mounted simulation happens to use an orbital view.
+    let orbital_active =
+        preview_candidate.is_none() && orbital_pin.as_ref().is_some_and(|pin| pin.active);
+    if orbital_active {
         if visibility.saved_options.is_none() {
             visibility.saved_options = Some(*options);
         }
@@ -987,7 +1022,7 @@ pub(crate) fn sync_gizmo_camera(
         *options = saved_options;
     }
 
-    let active = viewport.active_camera.and_then(|requested| {
+    let live = viewport.active_camera.and_then(|requested| {
         q_cameras
             .get(requested)
             .ok()
@@ -995,8 +1030,15 @@ pub(crate) fn sync_gizmo_camera(
                 (camera.is_active && matches!(target, RenderTarget::Window(_))).then_some(entity)
             })
     });
-
-    // Untag any camera that is no longer the active window view. FALLIBLE: a scene
+    let preview = preview_candidate.filter(|_| !orbital_active);
+    let active = preview.map(|(entity, _)| entity).or(live);
+    options.viewport_rect = preview.map(|(_, rect)| {
+        rect_to_logical(
+            rect,
+            windows.single().map(Window::scale_factor).unwrap_or(1.0),
+        )
+    });
+    // Untag any camera that is no longer the active presentation view. FALLIBLE: a scene
     // clear (LoadScene) despawns the scene's cameras, and this system's queries were
     // built before that despawn flushed — so `tagged`/`active` can already be dead by
     // the time these commands apply. A plain `remove`/`insert` panics on that
@@ -1015,10 +1057,75 @@ pub(crate) fn sync_gizmo_camera(
     }
 }
 
+/// Return the focused preview's panel footprint in physical pixels.
+///
+/// `PanelRects` is cleared and repopulated by the active workbench pass, so a
+/// rectangle exists only while the focused singleton or an opened view tab is
+/// actually visible. The singleton is preferred when both render the focused
+/// view; otherwise the focused instance supplies the footprint.
+fn focused_preview_rect(
+    viewport: Option<&UsdViewportState>,
+    panel_rects: Option<&PanelRects>,
+) -> Option<PanelRect> {
+    let view = viewport?.focused_view()?;
+    let rects = panel_rects?;
+    rects
+        .get(USD_VIEWPORT_PANEL_ID)
+        .or_else(|| rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, view.id().0))
+}
+
+fn focused_preview_camera(
+    viewport: Option<&UsdViewportState>,
+    panel_rects: Option<&PanelRects>,
+    q_cameras: &Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
+) -> Option<(Entity, PanelRect)> {
+    let view = viewport?.focused_view()?;
+    let rect = focused_preview_rect(viewport, panel_rects)?;
+    let (entity, _camera, target) = q_cameras.get(view.camera()).ok()?;
+    // Preview visibility is actuated by the USD panel measurement later in the
+    // frame. At this reconciliation point `reset_preview_view_visibility` has
+    // already parked every camera, so the focused view and its measured rect
+    // are the authoritative presentation binding; requiring `is_active` here
+    // would make the binding miss every visible preview.
+    matches!(target, RenderTarget::Image(_)).then_some((entity, rect))
+}
+
+/// `Window::cursor_position` is logical, while the workbench records panel
+/// geometry in physical pixels for camera/image sizing. The gizmo frontend's
+/// custom viewport is also logical, so use the window's scale factor at this
+/// single boundary rather than duplicating DPI conversion in each consumer.
+fn rect_to_logical(rect: PanelRect, scale_factor: f32) -> Rect {
+    let scale = scale_factor.max(f32::EPSILON);
+    Rect::from_corners(
+        Vec2::new(rect.origin.x as f32 / scale, rect.origin.y as f32 / scale),
+        Vec2::new(
+            rect.origin.x.saturating_add(rect.size.x) as f32 / scale,
+            rect.origin.y.saturating_add(rect.size.y) as f32 / scale,
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lunco_controller::ControllerLink;
+    use lunco_render::SceneCamera;
+
+    #[test]
+    fn preview_panel_rect_uses_window_logical_coordinates() {
+        let rect = rect_to_logical(
+            PanelRect {
+                origin: UVec2::new(150, 75),
+                size: UVec2::new(900, 600),
+            },
+            1.5,
+        );
+
+        assert_eq!(rect.min, Vec2::new(100.0, 50.0));
+        assert_eq!(rect.max, Vec2::new(700.0, 450.0));
+        assert!(rect.contains(Vec2::new(400.0, 250.0)));
+        assert!(!rect.contains(Vec2::new(701.0, 250.0)));
+    }
 
     #[test]
     fn proxy_reconciliation_presents_only_the_current_selection() {
