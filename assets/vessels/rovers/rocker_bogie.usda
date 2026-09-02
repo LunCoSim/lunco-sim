@@ -361,6 +361,20 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
+        # Arm-side wheel bearing. The link, bearing, and axle share this
+        # authored joint frame; the bearing is the structural seat between the
+        # diagonal link and the transverse axle, not a floating marker.
+        def Cylinder "FrontAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.085
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            bool physics:collisionEnabled = false
+        }
+
         # Rocker-side pivot hub. It overlaps the body-side bearing housing at the
         # authored hinge frame, making the leg-to-body attachment readable while
         # remaining a visual-only child of this rigid body.
@@ -553,6 +567,18 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
+        # Arm-side wheel bearing at the shared front-link/axle joint.
+        def Cylinder "FrontAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.085
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            bool physics:collisionEnabled = false
+        }
+
         def Cylinder "RockerPivotHub"
         {
             uniform token axis = "X"
@@ -706,6 +732,18 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
+        # Arm-side wheel bearing at the shared front-link/axle joint.
+        def Cylinder "MiddleAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.075
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            bool physics:collisionEnabled = false
+        }
+
         # Axle to rear wheel
         def Cylinder "RearAxle"
         {
@@ -715,6 +753,18 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            bool physics:collisionEnabled = false
+        }
+
+        # Arm-side wheel bearing at the shared rear-link/axle joint.
+        def Cylinder "RearAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.075
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
@@ -925,6 +975,18 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
 
+        # Arm-side wheel bearing at the shared front-link/axle joint.
+        def Cylinder "MiddleAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.075
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            bool physics:collisionEnabled = false
+        }
+
         def Cylinder "RearAxle"
         {
             uniform token axis = "X"
@@ -933,6 +995,18 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            bool physics:collisionEnabled = false
+        }
+
+        # Arm-side wheel bearing at the shared rear-link/axle joint.
+        def Cylinder "RearAxleBearing"
+        {
+            uniform token axis = "X"
+            double radius = 0.075
+            double height = 0.16
+            double3 xformOp:translate = (0.0, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
