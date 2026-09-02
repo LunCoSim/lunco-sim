@@ -560,6 +560,13 @@ width and 24 interaction rows in height. They become vertically scrollable
 only when their registered controls exceed that height; the submenu itself
 does not reserve unused popup space.
 
+The native Updates submenu follows that shared container. Its build identity is
+an explicit Version, GitHub Actions build/run attempt, and Update channel
+block; the run label is available only for CI-stamped nightly versions, while
+local builds say that the GitHub build is unavailable. The submenu does not
+use the source revision as a substitute build number or add a feature-local
+minimum width.
+
 **Don't** invent per-feature JSON files for new settings. **Do**
 keep the intentional exceptions separate, each for a documented
 reason: `recents.json` (different lifetime / churn), the planned
