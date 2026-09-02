@@ -1529,11 +1529,16 @@ fn apply_shadow_caster_policy(
     if limit_shed_count > 0 {
         if !state.configured_limit_status_active {
             if let Some(mut status_bus) = status_bus {
+                let light_label = if limit_shed_count == 1 {
+                    "light"
+                } else {
+                    "lights"
+                };
                 status_bus.push(
                     crate::status_bus::RENDER_SOURCE,
                     crate::status_bus::StatusLevel::Warn,
                     format!(
-                        "Configured shadow limits active: {limit_shed_count} light(s) do not receive shadows."
+                        "Configured shadow limits active: {limit_shed_count} {light_label} remain illuminated; shadow maps are omitted for them."
                     ),
                 );
             }
@@ -2238,6 +2243,8 @@ mod tests {
         app.add_systems(PostUpdate, apply_shadow_caster_policy);
         for _ in 0..5 {
             app.world_mut().spawn((bevy::light::PointLight {
+                intensity: 321.0,
+                range: 37.0,
                 shadow_maps_enabled: true,
                 ..default()
             },));
@@ -2264,6 +2271,10 @@ mod tests {
             .filter(|light| light.shadow_maps_enabled)
             .count();
         assert_eq!(enabled, 1);
+        let mut point_lights = world.query::<&bevy::light::PointLight>();
+        assert!(point_lights
+            .iter(world)
+            .all(|light| light.intensity == 321.0 && light.range == 37.0));
         assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) <= 16 * 1024 * 1024);
         assert_eq!(
             health.shadow_estimated_bytes.load(Ordering::Relaxed),
@@ -2283,7 +2294,7 @@ mod tests {
             1
         );
         assert!(status_bus.history().any(|event| event.message
-            == "Configured shadow limits active: 4 light(s) do not receive shadows."));
+            == "Configured shadow limits active: 4 lights remain illuminated; shadow maps are omitted for them."));
 
         app.update();
         assert_eq!(
