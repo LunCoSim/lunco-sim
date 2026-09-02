@@ -159,6 +159,12 @@ because GPU extraction receives active cameras before the first cluster
 assignment. Preserve an explicit `ClusterConfig`; do not add a scene-name
 check, per-frame light scan, or alternate lighting implementation.
 
+Light shadow intent follows the same standard-schema boundary: read
+`UsdLuxShadowAPI.inputs:shadow:enable` from the composed stage for every light.
+Application possession or graphics settings must not overwrite that authored
+intent; renderer-owned resource budgets may only report or suppress casters at
+their admission boundary.
+
 Scene-root `UsdPrimPath` values may be empty until the stage is parsed. Resolve
 that sentinel through the shared USD `defaultPrim` resolver before any domain
 projector reads the path; visual and celestial projection must not each invent

@@ -627,13 +627,9 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// Whether this light casts shadows — `UsdLuxShadowAPI`, at its schema
 /// fallback.
 ///
-/// The same rule for every light type. It used to be `true` for the sun and
-/// `false` for local lights, on the reasoning that each shadow-casting
-/// spot/point re-renders the scene into its own map and a few rovers stack up a
-/// dozen extra passes. That cost is real, but it is not a licence to answer a
-/// question the stage already answered: the fix is for the light to author
-/// `inputs:shadow:enable = false` — which shipped local lights now do — so the
-/// scene states its own render budget and the engine reads it.
+/// The same rule applies to every light type: an authored value is preserved,
+/// and the `UsdLuxShadowAPI` schema fallback is used only when the attribute is
+/// omitted.
 fn read_shadow_enable(
     reader: &impl crate::UsdRead,
     path: &SdfPath,
@@ -886,9 +882,6 @@ pub(crate) fn instantiate_light_prim(
             };
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
-            //
-            // Both were previously unread, so authoring a radius had ZERO effect and
-            // USD's area-scaling rule was simply absent.
             //
             // The spec (`crates/lunco-usd/schema/core/usdLux.usda`):
             //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
@@ -1502,6 +1495,36 @@ def Xform "World"
         assert_eq!(
             read_shadow_distance(&view, &lamp, 1500.0, convention),
             Ok((6.0, true))
+        );
+    }
+
+    #[test]
+    fn authored_shadow_enable_is_preserved_for_all_light_types() {
+        let source = r#"#usda 1.0
+
+def Xform "World"
+{
+    def DistantLight "Sun"
+    {
+        bool inputs:shadow:enable = true
+    }
+    def SphereLight "Lamp"
+    {
+        bool inputs:shadow:enable = false
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = stage.view();
+
+        assert_eq!(
+            read_shadow_enable(&view, &SdfPath::new("/World/Sun").unwrap()),
+            Ok(true)
+        );
+        assert_eq!(
+            read_shadow_enable(&view, &SdfPath::new("/World/Lamp").unwrap()),
+            Ok(false)
         );
     }
 
