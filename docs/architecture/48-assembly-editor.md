@@ -58,7 +58,8 @@ name convention, or ECS-only grouping state is introduced.
   All preview sessions are isolated from the simulation scene.
 - A `UsdPreviewSession` owns one projected composed stage, scene root, and
   render layer. A `UsdPreviewView` owns only one camera, light, render target,
-  and orbit pose over that session. `OpenUsdPreviewView` therefore provides
+  projection mode, orbit pose, and navigation scale over that session.
+  `OpenUsdPreviewView` therefore provides
   split or tabbed 3D inspection without duplicate USD projection work.
   Hidden view tabs have inactive cameras; visible tabs publish their own dock
   geometry and are resized independently. `UsdPreviewRenderBudget` bounds each
@@ -73,6 +74,17 @@ name convention, or ECS-only grouping state is introduced.
   focused `UsdPreviewId` and resolves the path only against that session's
   stage handle and preview-root hierarchy, so identical paths in the live
   scene or another open document cannot cross the editor boundary.
+- Preview navigation is owned by `UsdPreviewView`. Primary-drag orbit,
+  middle/secondary-drag pan, and wheel zoom update that view's camera state
+  from per-frame pointer deltas. `SetUsdPreviewProjection`,
+  `PanUsdPreviewView`, `ZoomUsdPreviewView`, `FrameUsdPreviewView`, and
+  `ResetUsdPreviewView` are the same typed boundary for agents and UI
+  controls. Perspective and orthographic are presentation modes only; no
+  authored USD camera or stage transform is rewritten by navigation. `Frame`
+  uses the projected Bevy `Aabb` hierarchy, so it does not duplicate USD
+  traversal or invent asset-specific camera poses. `InspectUsdViewport`
+  reports the active projection, orbit target, distance, and orthographic
+  scale so an agent can correlate a screenshot with the exact view state.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open session and paint the session

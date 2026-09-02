@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "RhaiEventDelivery"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production regression for mission event delivery under an event burst.
+def Xform "RhaiEventDelivery" (
+    kind = "assembly"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        custom string lunco:scenario = "rhai-event-delivery"
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/rhai_event_delivery.rhai@
+    }
+}

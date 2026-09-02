@@ -104,18 +104,6 @@ fn reactive_sel(items) { __task_composite("reactive_sel", items) }
 /// predicate is true, Failure when false — unlike wait_until, which waits.
 fn check(pred)     { #{ kind: "check", check: pred } }
 
-/// Engine driver — buffer an event for a declarative `mission(me)`'s
-/// `requires_event` objectives. (The task tree's `wait_for` leaves are fed
-/// natively by the kernel driver; this rhai buffer only serves the mission.)
-fn __note_task_event(me, evt) {
-    if evt.name == () { return; }
-    if this.mission != () {
-        if this.__mevents == () { this.__mevents = []; }
-        let source = if evt.source == () { 0 } else { evt.source };
-        this.__mevents.push(#{ name: evt.name, source: source });
-    }
-}
-
 /// SUGAR — define a `task(me)` function returning a node and the engine runs it
 /// automatically: no on_start, no `this.task = …`. The whole scenario can be:
 ///

@@ -123,6 +123,10 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                         serde_json::json!({
                             "view": view.id().0,
                             "focused": viewport.focused_view_id() == Some(view.id()),
+                            "projection": view.projection().as_str(),
+                            "target": view.orbit().target.to_array(),
+                            "distance": view.orbit().distance,
+                            "orthographic_scale": view.orthographic_scale(),
                         })
                     })
                     .collect();
@@ -271,10 +275,10 @@ fn on_browser_usd_document_ready(
     });
 }
 
-/// Pointer-driven orbit camera (Blender-style preview). Anchored on a
-/// `target` point in scene space; left-drag spins yaw/pitch, scroll
-/// zooms by adjusting `distance`. All thresholds are tunable per
-/// AGENTS.md §3 — no hardcoded magic numbers below the constructor.
+/// Pointer-driven orbit camera (CAD-style preview). Anchored on a `target`
+/// point in scene space; primary-drag orbits, middle/secondary-drag pans, and
+/// scroll zooms. The camera state is presentation state owned by one
+/// [`UsdPreviewView`], never by the projected USD stage.
 #[derive(Debug, Clone)]
 pub struct OrbitCamera {
     /// Yaw rotation around +Y (radians).
@@ -283,16 +287,21 @@ pub struct OrbitCamera {
     pub pitch: f32,
     /// Distance from target. Scroll wheel scales it geometrically.
     pub distance: f32,
-    /// Point the camera orbits around. Pannable in a follow-up.
+    /// Point the camera orbits around.
     pub target: Vec3,
     /// Radians per drag-pixel for yaw + pitch.
     pub drag_sensitivity: f32,
     /// Fractional distance change per scroll unit (0.001 ≈ 0.1% per px).
     pub zoom_sensitivity: f32,
+    /// World-space pan distance per pointer pixel, scaled by orbit distance.
+    pub pan_sensitivity: f32,
     /// Lower/upper clamps on `distance` so the user can't fly into
     /// the target or out to infinity.
     pub min_distance: f32,
     pub max_distance: f32,
+    /// Lower/upper clamps on orthographic view scale.
+    pub min_orthographic_scale: f32,
+    pub max_orthographic_scale: f32,
     /// `pitch.abs()` is clamped below this so we never look exactly
     /// straight up/down (LookAt with Vec3::Y is undefined there).
     pub pitch_clamp: f32,
@@ -309,8 +318,11 @@ impl Default for OrbitCamera {
             target: Vec3::ZERO,
             drag_sensitivity: 0.008,
             zoom_sensitivity: 0.0015,
+            pan_sensitivity: 0.002,
             min_distance: 0.5,
             max_distance: 5_000.0,
+            min_orthographic_scale: 0.01,
+            max_orthographic_scale: 5_000.0,
             pitch_clamp: std::f32::consts::FRAC_PI_2 - 0.05,
         }
     }
@@ -335,15 +347,53 @@ impl OrbitCamera {
             .clamp(-self.pitch_clamp, self.pitch_clamp);
     }
 
+    /// Pan the orbit target in the camera's screen plane.
+    pub fn apply_pan(&mut self, delta: egui::Vec2) {
+        let transform = self.transform();
+        let right = transform.rotation * Vec3::X;
+        let up = transform.rotation * Vec3::Y;
+        let scale = self.distance * self.pan_sensitivity;
+        self.target -= (right * delta.x + up * delta.y) * scale;
+    }
+
+    /// Return the multiplicative zoom factor represented by one scroll delta.
+    /// Orthographic views use the same input curve on their projection scale.
+    pub fn zoom_factor(&self, scroll_y: f32) -> f32 {
+        (1.0 - scroll_y * self.zoom_sensitivity).clamp(0.1, 10.0)
+    }
+
     /// Apply a scroll delta (vertical scroll wheel, pixels).
     pub fn apply_zoom(&mut self, scroll_y: f32) {
-        let factor = (1.0 - scroll_y * self.zoom_sensitivity).clamp(0.1, 10.0);
+        let factor = self.zoom_factor(scroll_y);
         self.distance = (self.distance * factor).clamp(self.min_distance, self.max_distance);
     }
 
     /// Build the transform the camera entity should carry this frame.
     pub fn transform(&self) -> Transform {
         Transform::from_translation(self.position()).looking_at(self.target, Vec3::Y)
+    }
+}
+
+/// Projection mode of one USD preview view. This is a presentation choice;
+/// authored `UsdGeomCamera` projection remains owned by the document and is
+/// never rewritten by an editor camera gesture.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
+)]
+#[reflect(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsdPreviewProjection {
+    #[default]
+    Perspective,
+    Orthographic,
+}
+
+impl UsdPreviewProjection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Perspective => "perspective",
+            Self::Orthographic => "orthographic",
+        }
     }
 }
 
@@ -421,6 +471,8 @@ pub struct UsdPreviewView {
     camera: Entity,
     light: Entity,
     orbit: OrbitCamera,
+    projection: UsdPreviewProjection,
+    orthographic_scale: f32,
     auto_frame: bool,
 }
 
@@ -447,6 +499,14 @@ impl UsdPreviewView {
 
     pub fn orbit(&self) -> &OrbitCamera {
         &self.orbit
+    }
+
+    pub fn projection(&self) -> UsdPreviewProjection {
+        self.projection
+    }
+
+    pub fn orthographic_scale(&self) -> f32 {
+        self.orthographic_scale
     }
 
     pub fn texture_id(&self) -> Option<egui::TextureId> {
@@ -694,6 +754,7 @@ struct UsdPreviewViewMeasured {
 struct UsdViewportOrbitInput {
     view: UsdPreviewViewId,
     drag: egui::Vec2,
+    pan: egui::Vec2,
     scroll_y: f32,
 }
 
@@ -775,10 +836,10 @@ fn mark_view_visible(
 fn on_viewport_orbit_input(
     trigger: On<UsdViewportOrbitInput>,
     mut state: ResMut<UsdViewportState>,
-    mut transforms: Query<&mut Transform>,
+    mut cameras: Query<(&mut Transform, &mut Projection)>,
 ) {
     let input = trigger.event();
-    if input.drag == egui::Vec2::ZERO && input.scroll_y == 0.0 {
+    if input.drag == egui::Vec2::ZERO && input.pan == egui::Vec2::ZERO && input.scroll_y == 0.0 {
         return;
     }
     let Some(view) = state.view_mut(input.view) else {
@@ -787,13 +848,28 @@ fn on_viewport_orbit_input(
     if input.drag != egui::Vec2::ZERO {
         view.orbit.apply_drag(input.drag);
     }
+    if input.pan != egui::Vec2::ZERO {
+        view.orbit.apply_pan(input.pan);
+    }
     if input.scroll_y != 0.0 {
-        view.orbit.apply_zoom(input.scroll_y);
+        match view.projection {
+            UsdPreviewProjection::Perspective => view.orbit.apply_zoom(input.scroll_y),
+            UsdPreviewProjection::Orthographic => {
+                let factor = view.orbit.zoom_factor(input.scroll_y);
+                view.orthographic_scale = (view.orthographic_scale * factor).clamp(
+                    view.orbit.min_orthographic_scale,
+                    view.orbit.max_orthographic_scale,
+                );
+            }
+        }
     }
     view.auto_frame = false;
     let camera = view.camera;
-    if let Ok(mut transform) = transforms.get_mut(camera) {
+    if let Ok((mut transform, mut projection)) = cameras.get_mut(camera) {
         *transform = view.orbit.transform();
+        if let Projection::Orthographic(projection) = &mut *projection {
+            projection.scale = view.orthographic_scale;
+        }
     }
 }
 
@@ -929,6 +1005,8 @@ fn create_preview_view(
         camera,
         light,
         orbit: OrbitCamera::default(),
+        projection: UsdPreviewProjection::default(),
+        orthographic_scale: 1.0,
         auto_frame: true,
     })
 }
@@ -942,7 +1020,7 @@ fn frame_preview_views(
     q_children: Query<&Children>,
     q_added_bounds: Query<Entity, Or<(Added<Aabb>, Added<Mesh3d>)>>,
     q_bounds: Query<(&GlobalTransform, &Aabb)>,
-    mut q_cameras: Query<(&mut Transform, &Projection)>,
+    mut q_cameras: Query<(&mut Transform, &mut Projection)>,
 ) {
     let scan_all = state.is_changed();
     if !scan_all && q_added_bounds.is_empty() {
@@ -971,20 +1049,30 @@ fn frame_preview_views(
         else {
             continue;
         };
-        let Ok((mut transform, projection)) = q_cameras.get_mut(camera) else {
-            continue;
-        };
-        let Projection::Perspective(projection) = projection else {
+        let Ok((mut transform, mut projection)) = q_cameras.get_mut(camera) else {
             continue;
         };
         let Some(view) = state.view_mut(view_id) else {
             continue;
         };
-        let vertical = (projection.fov * 0.5).tan();
-        let horizontal = vertical * projection.aspect_ratio.max(f32::EPSILON);
-        let half_fov_tangent = vertical.min(horizontal).max(f32::EPSILON);
-        let distance = (radius / half_fov_tangent * 1.2)
-            .clamp(view.orbit.min_distance, view.orbit.max_distance);
+        let distance = match (&mut *projection, view.projection) {
+            (Projection::Perspective(projection), UsdPreviewProjection::Perspective) => {
+                let vertical = (projection.fov * 0.5).tan();
+                let horizontal = vertical * projection.aspect_ratio.max(f32::EPSILON);
+                let half_fov_tangent = vertical.min(horizontal).max(f32::EPSILON);
+                (radius / half_fov_tangent * 1.2)
+                    .clamp(view.orbit.min_distance, view.orbit.max_distance)
+            }
+            (Projection::Orthographic(projection), UsdPreviewProjection::Orthographic) => {
+                projection.scaling_mode = bevy::camera::ScalingMode::FixedVertical {
+                    viewport_height: 2.0,
+                };
+                view.orthographic_scale = (radius * 1.2).max(0.01);
+                projection.scale = view.orthographic_scale;
+                (radius * 3.0).clamp(view.orbit.min_distance, view.orbit.max_distance)
+            }
+            _ => continue,
+        };
         view.orbit.target = center;
         view.orbit.distance = distance;
         *transform = view.orbit.transform();
@@ -1215,6 +1303,23 @@ fn make_target_image(width: u32, height: u32) -> Image {
     Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None)
 }
 
+fn preview_projection(mode: UsdPreviewProjection, orthographic_scale: f32) -> Projection {
+    match mode {
+        UsdPreviewProjection::Perspective => lunco_render::usd_default_perspective_projection(),
+        UsdPreviewProjection::Orthographic => {
+            Projection::Orthographic(bevy::camera::OrthographicProjection {
+                near: 0.1,
+                far: 1.0e6,
+                scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                    viewport_height: 2.0,
+                },
+                scale: orthographic_scale,
+                ..bevy::camera::OrthographicProjection::default_3d()
+            })
+        }
+    }
+}
+
 fn validated_preview_profile(world: &World) -> Result<RenderQualityProfile, String> {
     if !world.contains_resource::<Assets<Image>>() {
         return Err("USD preview rendering is unavailable in this host".to_string());
@@ -1279,6 +1384,43 @@ pub struct CloseUsdPreviewView {
 #[Command(default)]
 pub struct CloseUsdPreview {
     pub preview: UsdPreviewId,
+}
+
+/// Change the projection of one isolated USD preview view. This changes only
+/// the editor camera; authored USD camera opinions stay read-only presentation
+/// input and are never rewritten by a navigation gesture.
+#[Command]
+pub struct SetUsdPreviewProjection {
+    pub view: UsdPreviewViewId,
+    pub projection: UsdPreviewProjection,
+}
+
+/// Fit one preview view to the projected visual bounds of its USD stage.
+#[Command]
+pub struct FrameUsdPreviewView {
+    pub view: UsdPreviewViewId,
+}
+
+/// Restore one preview view's default orbit pose and fit it to its stage.
+#[Command]
+pub struct ResetUsdPreviewView {
+    pub view: UsdPreviewViewId,
+}
+
+/// Pan one preview view in screen-pixel units. The view converts the delta to
+/// its camera plane using the current orbit distance.
+#[Command]
+pub struct PanUsdPreviewView {
+    pub view: UsdPreviewViewId,
+    pub delta: [f32; 2],
+}
+
+/// Zoom one preview view by a positive multiplicative factor. Perspective
+/// views change orbit distance; orthographic views change projection scale.
+#[Command]
+pub struct ZoomUsdPreviewView {
+    pub view: UsdPreviewViewId,
+    pub factor: f32,
 }
 
 #[on_command(OpenUsdPreview)]
@@ -1536,6 +1678,203 @@ fn on_close_usd_preview(trigger: On<CloseUsdPreview>, mut commands: Commands) {
     });
 }
 
+#[on_command(SetUsdPreviewProjection)]
+fn on_set_usd_preview_projection(trigger: On<SetUsdPreviewProjection>, mut commands: Commands) {
+    let command = trigger.event();
+    let view = command.view;
+    let projection = command.projection;
+    commands.queue(move |world: &mut World| {
+        let (camera, scale) = {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            let Some(view_state) = viewport.view_mut(view) else {
+                drop(viewport);
+                report_preview_error(
+                    world,
+                    "usd-preview-projection-failed",
+                    format!("view {} is not open", view.0),
+                );
+                return;
+            };
+            view_state.projection = projection;
+            view_state.auto_frame = true;
+            (view_state.camera, view_state.orthographic_scale)
+        };
+        let Some(mut camera_projection) = world.get_mut::<Projection>(camera) else {
+            report_preview_error(
+                world,
+                "usd-preview-projection-failed",
+                format!("view {} camera is unavailable", view.0),
+            );
+            return;
+        };
+        *camera_projection = preview_projection(projection, scale);
+    });
+}
+
+#[on_command(FrameUsdPreviewView)]
+fn on_frame_usd_preview_view(trigger: On<FrameUsdPreviewView>, mut commands: Commands) {
+    let view = trigger.event().view;
+    commands.queue(move |world: &mut World| {
+        let mut viewport = world.resource_mut::<UsdViewportState>();
+        let Some(view_state) = viewport.view_mut(view) else {
+            drop(viewport);
+            report_preview_error(
+                world,
+                "usd-preview-frame-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
+        };
+        view_state.auto_frame = true;
+    });
+}
+
+#[on_command(ResetUsdPreviewView)]
+fn on_reset_usd_preview_view(trigger: On<ResetUsdPreviewView>, mut commands: Commands) {
+    let view = trigger.event().view;
+    commands.queue(move |world: &mut World| {
+        let (camera, mode, scale) = {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            let Some(view_state) = viewport.view_mut(view) else {
+                drop(viewport);
+                report_preview_error(
+                    world,
+                    "usd-preview-reset-failed",
+                    format!("view {} is not open", view.0),
+                );
+                return;
+            };
+            view_state.orbit = OrbitCamera::default();
+            view_state.orthographic_scale = 1.0;
+            view_state.auto_frame = true;
+            (
+                view_state.camera,
+                view_state.projection,
+                view_state.orthographic_scale,
+            )
+        };
+        if let Some(mut transform) = world.get_mut::<Transform>(camera) {
+            *transform = OrbitCamera::default().transform();
+        }
+        if let Some(mut camera_projection) = world.get_mut::<Projection>(camera) {
+            *camera_projection = preview_projection(mode, scale);
+        }
+    });
+}
+
+#[on_command(PanUsdPreviewView)]
+fn on_pan_usd_preview_view(trigger: On<PanUsdPreviewView>, mut commands: Commands) {
+    let command = trigger.event();
+    let view = command.view;
+    let delta = command.delta;
+    commands.queue(move |world: &mut World| {
+        if !delta.iter().all(|value| value.is_finite()) {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} received a non-finite pan delta", view.0),
+            );
+            return;
+        }
+        let camera = {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            let Some(view_state) = viewport.view_mut(view) else {
+                drop(viewport);
+                report_preview_error(
+                    world,
+                    "usd-preview-pan-failed",
+                    format!("view {} is not open", view.0),
+                );
+                return;
+            };
+            view_state
+                .orbit
+                .apply_pan(egui::Vec2::new(delta[0], delta[1]));
+            view_state.auto_frame = false;
+            view_state.camera
+        };
+        let transform = world
+            .resource::<UsdViewportState>()
+            .view(view)
+            .expect("preview view remains registered")
+            .orbit()
+            .transform();
+        if let Some(mut target_transform) = world.get_mut::<Transform>(camera) {
+            *target_transform = transform;
+        } else {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} camera is unavailable", view.0),
+            );
+        }
+    });
+}
+
+#[on_command(ZoomUsdPreviewView)]
+fn on_zoom_usd_preview_view(trigger: On<ZoomUsdPreviewView>, mut commands: Commands) {
+    let command = trigger.event();
+    let view = command.view;
+    let factor = command.factor;
+    commands.queue(move |world: &mut World| {
+        if !factor.is_finite() || factor <= 0.0 {
+            report_preview_error(
+                world,
+                "usd-preview-zoom-failed",
+                format!("view {} received an invalid zoom factor", view.0),
+            );
+            return;
+        }
+        let (camera, scale) = {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            let Some(view_state) = viewport.view_mut(view) else {
+                drop(viewport);
+                report_preview_error(
+                    world,
+                    "usd-preview-zoom-failed",
+                    format!("view {} is not open", view.0),
+                );
+                return;
+            };
+            match view_state.projection {
+                UsdPreviewProjection::Perspective => {
+                    view_state.orbit.distance = (view_state.orbit.distance * factor)
+                        .clamp(view_state.orbit.min_distance, view_state.orbit.max_distance);
+                }
+                UsdPreviewProjection::Orthographic => {
+                    view_state.orthographic_scale = (view_state.orthographic_scale * factor).clamp(
+                        view_state.orbit.min_orthographic_scale,
+                        view_state.orbit.max_orthographic_scale,
+                    );
+                }
+            }
+            view_state.auto_frame = false;
+            (view_state.camera, view_state.orthographic_scale)
+        };
+        let transform = world
+            .resource::<UsdViewportState>()
+            .view(view)
+            .expect("preview view remains registered")
+            .orbit()
+            .transform();
+        if let Some(mut target_transform) = world.get_mut::<Transform>(camera) {
+            *target_transform = transform;
+        } else {
+            report_preview_error(
+                world,
+                "usd-preview-zoom-failed",
+                format!("view {} camera is unavailable", view.0),
+            );
+            return;
+        }
+        if let Some(mut projection) = world.get_mut::<Projection>(camera) {
+            if let Projection::Orthographic(projection) = &mut *projection {
+                projection.scale = scale;
+            }
+        }
+    });
+}
+
 register_commands!(
     on_open_usd_preview,
     on_open_usd_preview_view,
@@ -1543,6 +1882,11 @@ register_commands!(
     on_focus_usd_preview_view,
     on_close_usd_preview_view,
     on_close_usd_preview,
+    on_set_usd_preview_projection,
+    on_frame_usd_preview_view,
+    on_reset_usd_preview_view,
+    on_pan_usd_preview_view,
+    on_zoom_usd_preview_view,
 );
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1941,7 +2285,7 @@ fn render_preview_view(
     view_id: UsdPreviewViewId,
     singleton: bool,
 ) {
-    let (tex_id, focused_doc, next_view) = ctx
+    let (tex_id, focused_doc, next_view, projection) = ctx
         .resource::<UsdViewportState>()
         .and_then(|state| {
             let view = state.view(view_id)?;
@@ -1950,9 +2294,14 @@ fn render_preview_view(
                 .then(|| state.next_view_id())
                 .flatten()
                 .map(|view| (session.id(), view));
-            Some((view.texture_id(), Some(session.doc()), next_view))
+            Some((
+                view.texture_id(),
+                Some(session.doc()),
+                next_view,
+                view.projection(),
+            ))
         })
-        .unwrap_or((None, None, None));
+        .unwrap_or((None, None, None, UsdPreviewProjection::default()));
     let name = focused_doc
         .and_then(|doc| {
             ctx.resource::<DocumentRegistry<UsdDocument>>()
@@ -1963,6 +2312,36 @@ fn render_preview_view(
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(&name).strong());
+        if ui
+            .selectable_label(
+                projection == UsdPreviewProjection::Perspective,
+                "Perspective",
+            )
+            .clicked()
+        {
+            ctx.trigger(SetUsdPreviewProjection {
+                view: view_id,
+                projection: UsdPreviewProjection::Perspective,
+            });
+        }
+        if ui
+            .selectable_label(
+                projection == UsdPreviewProjection::Orthographic,
+                "Orthographic",
+            )
+            .clicked()
+        {
+            ctx.trigger(SetUsdPreviewProjection {
+                view: view_id,
+                projection: UsdPreviewProjection::Orthographic,
+            });
+        }
+        if ui.button("Frame").clicked() {
+            ctx.trigger(FrameUsdPreviewView { view: view_id });
+        }
+        if ui.button("Reset").clicked() {
+            ctx.trigger(ResetUsdPreviewView { view: view_id });
+        }
         if let Some((preview, view)) = next_view {
             if ui.button("Open view").clicked() {
                 ctx.trigger(OpenUsdPreviewView { preview, view });
@@ -2006,16 +2385,29 @@ fn render_preview_view(
         }
     }
 
-    let drag = response.drag_delta();
-    let scroll_y = if response.hovered() {
-        ui.ctx().input(|input| input.smooth_scroll_delta.y)
+    let (drag, pan, scroll_y) = if response.hovered() || response.contains_pointer() {
+        ui.ctx().input(|input| {
+            let pointer = &input.pointer;
+            let delta = pointer.delta();
+            let primary = pointer.button_down(egui::PointerButton::Primary);
+            let middle = pointer.button_down(egui::PointerButton::Middle);
+            let secondary = pointer.button_down(egui::PointerButton::Secondary);
+            let pan = middle || secondary || (primary && input.modifiers.shift);
+            let orbit = primary && !pan;
+            (
+                orbit.then_some(delta).unwrap_or_default(),
+                pan.then_some(delta).unwrap_or_default(),
+                input.smooth_scroll_delta.y,
+            )
+        })
     } else {
-        0.0
+        (egui::Vec2::ZERO, egui::Vec2::ZERO, 0.0)
     };
-    if drag != egui::Vec2::ZERO || scroll_y != 0.0 {
+    if drag != egui::Vec2::ZERO || pan != egui::Vec2::ZERO || scroll_y != 0.0 {
         ctx.trigger(UsdViewportOrbitInput {
             view: view_id,
             drag,
+            pan,
             scroll_y,
         });
     }
@@ -2359,6 +2751,40 @@ mod tests {
             },
         )
         .is_none());
+    }
+
+    #[test]
+    fn orbit_pan_and_zoom_keep_view_state_finite() {
+        let mut orbit = OrbitCamera::default();
+        let original_target = orbit.target;
+        let original_distance = orbit.distance;
+
+        orbit.apply_pan(egui::Vec2::new(40.0, -18.0));
+        orbit.apply_zoom(12.0);
+
+        assert_ne!(orbit.target, original_target);
+        assert!(orbit.target.is_finite());
+        assert!(orbit.distance.is_finite());
+        assert!(orbit.distance < original_distance);
+        assert!((orbit.zoom_factor(12.0) - 0.982).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn preview_projection_modes_use_explicit_presentation_contract() {
+        let perspective = preview_projection(UsdPreviewProjection::Perspective, 3.0);
+        assert!(matches!(perspective, Projection::Perspective(_)));
+
+        let orthographic = preview_projection(UsdPreviewProjection::Orthographic, 3.0);
+        let Projection::Orthographic(orthographic) = orthographic else {
+            panic!("orthographic preview mode must create an orthographic camera");
+        };
+        assert_eq!(orthographic.scale, 3.0);
+        assert!(matches!(
+            orthographic.scaling_mode,
+            bevy::camera::ScalingMode::FixedVertical {
+                viewport_height: 2.0
+            }
+        ));
     }
 
     #[test]

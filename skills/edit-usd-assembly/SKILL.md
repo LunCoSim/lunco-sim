@@ -140,11 +140,23 @@ the active simulation viewport.
    These are presentation budgets, not authored USD values; invalid zero limits
    leave the target inactive.
 
+   Navigate the focused view with primary-drag orbit, middle/secondary-drag
+   pan, and wheel zoom. The toolbar and agents use the same typed commands:
+   `SetUsdPreviewProjection { view, projection: "perspective"|"orthographic" }`,
+   `PanUsdPreviewView { view, delta: [x, y] }`,
+   `ZoomUsdPreviewView { view, factor }`, `FrameUsdPreviewView { view }`, and
+   `ResetUsdPreviewView { view }`. These are view presentation operations; they
+   do not author USD camera or transform values. `Frame` uses the projected
+   visual bounds, and `InspectUsdViewport` reports projection, target, distance,
+   and orthographic scale for screenshot correlation.
+
 The built-in wrappers are in
 [`assembly_edit.rhai`](../../assets/scripting/tools/assembly_edit.rhai). The
 preview helpers are `preview_open`, `preview_view_open`,
-`preview_view_focus`, `preview_view_close`, `preview_focus`, and
-`preview_close`. Use `assembly_ui::select_prim(preview, path, extend, toggle)`
+`preview_view_focus`, `preview_view_projection`, `preview_view_frame`,
+`preview_view_reset`, `preview_view_pan`, `preview_view_zoom`,
+`preview_view_close`, `preview_focus`, and `preview_close`. Use
+`assembly_ui::select_prim(preview, path, extend, toggle)`
 for selection: it focuses the explicit preview and dispatches `SelectUsdPrim`,
 which resolves the path only inside that preview's stage and hierarchy.
 The presentation helpers are in
