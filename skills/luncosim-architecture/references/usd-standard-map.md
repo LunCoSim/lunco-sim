@@ -10,7 +10,7 @@ semantic owner.
 | Units and transforms | layer `upAxis`, `metersPerUnit`, `UsdGeom.Xformable` | none |
 | Geometry and visibility | `UsdGeom` typed prims, `UsdGeom.Imageable`, `purpose`, `visibility`, `Usd.CollectionAPI` | terrain-generation policy that is not geometry itself |
 | Materials and node graphs | `UsdShade.Material`, `Shader`, `NodeGraph`, `ConnectableAPI`, `MaterialBindingAPI` | engine-specific shader implementation parameters only when the shader has no standard schema |
-| Lights and shadows | `UsdLux.LightAPI`, concrete light types, `UsdLux.ShadowAPI`, light-list APIs | engine-specific environment or earthshine semantics |
+| Lights and shadows | `UsdLux.LightAPI`, concrete light types, `UsdLux.ShadowAPI`, light-list APIs | renderer-specific local-light influence cutoff where UsdLux has no equivalent; engine-specific environment or earthshine semantics |
 | Cameras | `UsdGeom.Camera` and authored transforms | camera-follow/path-time semantics that USD does not define |
 | Bodies, collision, mass, joints, limits, drives | `UsdPhysics` and the maintained PhysX schema when the runtime needs PhysX-specific behavior | vehicle-domain concepts such as wheel/tire/suspension authoring where no standard vehicle schema is present |
 | Graph topology | typed `inputs:`/`outputs:` attributes and native `connectionPaths`; `UsdShade` connectable conventions for graph nodes | domain-specific port meaning and legality, expressed as open domain data/rules |

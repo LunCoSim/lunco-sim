@@ -163,8 +163,14 @@ intent intact, and one authored here keeps it there. Its polarity already matche
 
 It is a primvar, so it travels with the geometry and needs **no schema class of ours**.
 `UsdGeom` has no say in gprim shadow casting (`UsdLuxShadowAPI` governs the *light*, not
-the caster), which makes inventing one tempting — the first cut of this did exactly that,
-adding a `LunCoRenderAPI` for a name Omniverse had already standardised.
+the caster). Use Omniverse's established `primvars:doNotCastShadows` spelling rather
+than introducing a LunCo schema for that renderer-facing geometry intent.
+
+The same ownership rule applies to a light's shadow admission: `UsdLuxShadowAPI`'s
+`inputs:shadow:enable` is the authoritative intent for every `DistantLight` and local
+light. Runtime render-quality limits may reject casters when an explicit resource budget
+is exceeded, but application state must not rewrite an authored `false` to `true` or
+invent a possession-based shadow policy.
 
 Read on the **gprim**, not the shader: two prims sharing one material can disagree about
 casting, and `material:binding` is not the place to say so.
@@ -300,7 +306,7 @@ the value, not the pixels.
 | `inventory` for the registry | Forces stateless bare `fn`s, adds link-time surface near the clang limit that already forced `reflect_auto_register` off, and `asset_sources.rs` steers explicitly toward a runtime resource for scriptable dispatch. |
 | `register_commands!` | Dispatches by type, needs a Rust type per id, gives no string key. |
 | A bespoke ray-beam attribute | One-off. The raw ray query owns the value; authored geometry and its driver own presentation. |
-| A `lunco:*` name where a vendor already has one | `primvars:doNotCastShadows` is the worked example: a `LunCoRenderAPI` was written, then deleted, because Omniverse had already named the thing. Check Omniverse and core USD before minting. |
+| A `lunco:*` name where a vendor already has one | Use the vendor or core-USD spelling, as with Omniverse's `primvars:doNotCastShadows`. Check Omniverse and core USD before minting. |
 
 ## Isaac Sim does the opposite, deliberately
 
