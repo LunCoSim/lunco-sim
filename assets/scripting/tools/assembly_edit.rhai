@@ -75,6 +75,35 @@ fn preview_view_focus(view) {
     cmd("FocusUsdPreviewView", #{ view: view })
 }
 
+/// Set the presentation projection of one explicit preview view. This does
+/// not rewrite an authored USD camera opinion.
+fn preview_view_projection(view, projection) {
+    cmd("SetUsdPreviewProjection", #{
+        view: view,
+        projection: projection,
+    })
+}
+
+/// Fit one preview view to the projected visual bounds.
+fn preview_view_frame(view) {
+    cmd("FrameUsdPreviewView", #{ view: view })
+}
+
+/// Restore one preview view's default orbit pose and refit it.
+fn preview_view_reset(view) {
+    cmd("ResetUsdPreviewView", #{ view: view })
+}
+
+/// Pan one preview view by screen-pixel units.
+fn preview_view_pan(view, delta) {
+    cmd("PanUsdPreviewView", #{ view: view, delta: delta })
+}
+
+/// Zoom one preview view by a positive multiplicative factor.
+fn preview_view_zoom(view, factor) {
+    cmd("ZoomUsdPreviewView", #{ view: view, factor: factor })
+}
+
 /// Close one presentation view. Closing the final view closes its parent
 /// preview session.
 fn preview_view_close(view) {

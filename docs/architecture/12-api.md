@@ -224,6 +224,9 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | **USD** | `LoadScene` | Mount or reload a USD stage from a root-qualified `lunco://` or `twin://` address. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |
+| | `SetUsdPreviewProjection` | Choose perspective or orthographic presentation for one explicit USD preview view. |
+| | `PanUsdPreviewView` / `ZoomUsdPreviewView` | Navigate one preview view without mutating authored USD. |
+| | `FrameUsdPreviewView` / `ResetUsdPreviewView` | Fit or restore one preview view using its projected bounds. |
 | | `AttachProgram` | Attach a source-backed program with explicit scalar ports, defaults, and USD connections. |
 | **Time** | `ControlAnimation` | Play/pause/scrub/rate the USD animation preview (independent of the physics clock). |
 | **Modelica** | `CompileModel` | Compile a specific class in a document. |
@@ -578,8 +581,8 @@ for the design.
 
 The USD Assembly Editor's `InspectUsdViewport` query follows the same owner
 rule. It reports the focused preview/view pair and all explicit USD preview
-leases with their document, edit target, projected generation, and independent
-view ids. Pair it with `ListOpenDocuments` and a captured screenshot to
+leases with their document, edit target, projected generation, independent view
+ids, and each view's projection/orbit state. Pair it with `ListOpenDocuments` and a captured screenshot to
 identify the exact open item before issuing a typed authoring command.
 
 The built-in `ReadExposures` query reads the domain-neutral
