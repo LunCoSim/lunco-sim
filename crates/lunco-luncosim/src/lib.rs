@@ -81,11 +81,6 @@ use lunco_modelica::ModelicaSet;
 /// against the rendered `Transform`, so it only means anything in a `ui` build.
 #[cfg(feature = "ui")]
 mod jitter_probe;
-/// Engine light-handling policy (`ShadowCastingSettings` + reactive
-/// possession-driven headlight shadow projection). Client render concern, so
-/// `ui`-gated. See [`light_policy`].
-#[cfg(feature = "ui")]
-mod light_policy;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
 /// Runtime producers for the generic exposure registry. Consumers are
@@ -3243,11 +3238,6 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         terrain_horizon::register(app);
 
-        // Engine light-handling policy: the locally-possessed vessel's headlights
-        // cast shadows, the parked rovers stay cheap (reactive on possession
-        // events — see `light_policy`). Render concern → `ui`-gated.
-        #[cfg(feature = "ui")]
-        app.add_plugins(light_policy::LightPolicyPlugin);
         // Environment-settings projection: apply a persisted `LunCoEnvironment`
         // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
         // render state on stage change. UI-gated (render/camera state); core

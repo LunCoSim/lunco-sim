@@ -96,10 +96,9 @@ lunco-render = { path = "../lunco-render" }
 # state INTENT (`PbrLook` / `ShaderLook` / `SceneCamera`) instead.
 # See docs/architecture/render-decoupling.md.
 lunco-render-bevy = { path = "../lunco-render-bevy", optional = true }
-# Engine light-handling policy (ShadowCastingSettings) is a client render
-# concern, so the settings dep rides the `ui` feature (see `light_policy.rs`).
+# UI-owned application settings, including update and overlay preferences.
 lunco-settings = { path = "../lunco-settings", optional = true }
-# serde derives for the `ShadowCastingSettings` settings section (ui-gated).
+# UI settings and API payloads use the workspace serde dependency.
 serde = { workspace = true, optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
