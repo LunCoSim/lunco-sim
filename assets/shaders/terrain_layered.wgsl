@@ -277,8 +277,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
     // composites over the LIT result — after PBR, after the sun march, after
     // shadow fill — and is never multiplied by any of them. Same composite
-    // point as terrain_geomorph.wgsl's analysis overlay, so texture overlays
-    // and in-shader analysis overlays stack identically. The drape is the
+    // point as the separate terrain diagnostic material, so texture overlays
+    // and the diagnostic view use the same transfer definition. The drape is the
     // map's own colour (e.g. the LROC slope classes), not an albedo tint:
     // its whole job is to stay readable where the light does not reach.
     if (mat.weight_mineral > 0.0) {

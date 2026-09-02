@@ -70,7 +70,7 @@ interactive window therefore have one policy and one cache/path resolver.
 |---|---|---|
 | `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as `demSource = @terrain/<site>@` |
 | `map` | co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/`_CLRGRAD` `.TIF`) | 8-bit RGB PNG at `output` (a FILE). Gray sources get a 1–99 percentile stretch |
-| `normalmap` | DTM | world-space normal PNG (`RGB = n*0.5+0.5`, `n = normalize(-dh/dx, 1, -dh/dz)` — the `terrain_layered.wgsl` decode) |
+| `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
 | `texture` | any image | resized PNG (non-geo default) |
 | `gltf` | .glb | Bevy-clean .glb (needs npx) |
 
@@ -153,10 +153,11 @@ of `RenderingQualitySettings`, camera-driven visual LOD, and `targetRes`; a
 graphics preset must never change collider tile count or resolution.
 
 Asset paths are **scene-root-relative** and resolve through `twin://`, so they
-travel with the twin. Read by `read_material_network_layer_maps`
-(`lunco-luncosim`), which walks `material:binding` → Material →
-`outputs:surface.connect` → Shader. Roles: `albedo`, `mineral`, `surface`
-(packed R=rough G=AO B=rockDens), `normal`.
+travel with the twin. The generic USD shader projection walks
+`material:binding` → Material → `outputs:surface.connect` → Shader and publishes
+one `ShaderLook`; the terrain source reconciler derives the typed roles from that
+same look. Roles are `albedo`, `mineral`, `surface` (packed R=rough G=AO B=rockDens),
+and `normal`.
 
 - Every `inputs:*` is a live-tunable, journaled knob (networked, undoable) and
   the network is inspectable in usdview/Blender.
@@ -164,9 +165,9 @@ travel with the twin. Read by `read_material_network_layer_maps`
   node (doc 18 Tier B), not an authored file.
 - `mineral` composites **UNLIT after lighting**, so a slope/classification
   drape stays readable inside shadow — its entire job.
-- Layers bind on the static-mesh path (`terrain_layered.wgsl`); streamed LOD
-  tiles derive normal/AO from the DEM at runtime, and the derived bake only
-  fills slots an authored map left empty.
+- The authored shader source and maps bind on both static and streamed terrain
+  through the same `ShaderLook`; streamed LOD tiles add only their CDLOD
+  geometry inputs, and the derived bake fills slots an authored map left empty.
 - The runtime derived bake is optional visual refinement after the DEM ground
   is ready. Its effective resolution is bounded by a static terrain's authored
   visual target, so a low-resolution static product does not pay for an

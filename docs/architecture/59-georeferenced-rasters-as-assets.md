@@ -115,7 +115,7 @@ Ordered, with the load-bearing item flagged.
    so this works on wasm too.
 2. **`asset lunco:layer:albedoSource` / `mineralSource`** in `schema.usda`, beside
    `demSource:180`.
-3. **A `raster` layer kind** — a parser next to `terrain_layers/shader.rs`,
+3. **A `raster` layer kind** — a parser next to `terrain_layers/mod.rs`,
    registered at `terrain_layers/mod.rs:328`, reading the asset via the existing
    `LayerAttrSource::get_asset` (`mod.rs:209`).
 4. **⚠ A way for a `TerrainLayer` to publish a texture.** The trait has four verbs
@@ -125,26 +125,24 @@ Ordered, with the load-bearing item flagged.
 5. **Footprint validation** against the DEM, reporting on the `StatusBus`.
 
 The fixed-slot GPU path is already in place for authored terrain appearance:
-`TextureLayer` declares the slots (`materials/src/look.rs:73`),
-`terrain_layered.wgsl` and the streamed `terrain_geomorph.wgsl` bind the authored
-albedo/mineral/surface/normal maps with their USD weights, and `shader_look.rs`
-maps them. The runtime binder publishes those USD material-network inputs as
-`TerrainAuthoredMaps`, and resident streamed tiles receive the same handles and
-weights. The streamed shader chooses the authored surface or normal role over the
-engine-derived product; a positive-weight authored role is never overwritten by a
-late derived-map publication. This is the current PNG/asset-handle path; it does
-not yet provide the general `GeoRaster` loader, georeference validation, or
-arbitrary raster-layer stack described above.
+`TextureLayer` declares the slots (`materials/src/look.rs:73`), standard USD
+`UsdShade` material networks name the WGSL source and authored texture inputs, and
+the generic shader projection maps them into `ShaderLook`/`TerrainAuthoredMaps`.
+The same render-free source reconciler serves the static terrain owner and
+resident streamed tiles. The production streamed shader consumes authored
+albedo/surface/normal roles plus engine-derived roles when they are absent; the
+separate terrain diagnostic material owns slope/LOD analysis. This is the current
+PNG/asset-handle path; it does not yet provide the general `GeoRaster` loader,
+georeference validation, or arbitrary raster-layer stack described above.
 
 ### Scoping trap
 
 Do not infer the current rendered path from the generalized design below. The
 school twin uses streamed CDLOD tiles, and those tiles now consume
-`TerrainAuthoredMaps` through `terrain_geomorph.wgsl`; bindings 2–5 are the
-authored albedo/mineral inputs, while bindings 6–11 are the shared per-role
-surface/normal slots selected between authored and derived sources. A missing
-`GeoRaster` importer is therefore an ingest limitation, not a reason for an
-authored USD layer to disappear from an existing streamed scene.
+`TerrainAuthoredMaps` through the production shader selected by the owning USD
+`UsdShade` network. A missing `GeoRaster` importer is therefore an ingest
+limitation, not a reason for an authored USD layer to disappear from an existing
+streamed scene.
 
 ## Routes are not rasters
 

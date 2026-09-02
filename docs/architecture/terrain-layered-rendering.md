@@ -85,12 +85,13 @@ is the first design decision.
 
 | Plane | What it is | Belongs here | Mechanism |
 |---|---|---|---|
-| **1 — in-material** | recolours the surface *per pixel*, lit + occlusion-correct, inside the terrain tile fragment shader | albedo/mosaic texture, mineral map, slope/AO/roughness/hazard, elevation ramp, connectivity coverage | a data texture + transfer uniforms on the tile `ShaderMaterial`; live via `Changed<…>` re-apply (as `TerrainDerivedMaps` already does) |
-| **2 — on-top** | *marks/annotates* over the terrain as its own geometry, independent of the terrain material | lat/lon graticule, region/ROI boundaries, traverse paths, landing rings, coordinate labels | `Gizmos` (enabled) for lines; an unlit overlay mesh for conformal fills; egui world-anchored labels (the rover name-tag pattern) |
+| **1 — terrain material** | recolours the surface *per pixel*, lit + occlusion-correct, inside the terrain material's fragment stage | albedo/mosaic texture, mineral map, slope/AO/roughness, elevation ramp, connectivity coverage | a standard USD `UsdShade` material supplies the shader source and authored maps; the render-free `ShaderLook` reconciler adds only engine-derived map inputs |
+| **2 — diagnostic/annotation** | either temporarily replaces the terrain material for analysis, or marks/annotates over it as independent geometry | slope/LOD diagnostics, lat/lon graticule, region/ROI boundaries, traverse paths, landing rings, coordinate labels | a separate authored diagnostic material for analysis; `Gizmos`/overlay meshes/labels for annotations |
 
 Rule of thumb: **does the layer change how the ground *looks under light* (Plane 1),
-or does it *draw a mark on top* (Plane 2)?** The lat/lon grid is Plane 2 — it must
-work in every shader mode, toggle per-viewer, and needs no material change.
+or is it a temporary diagnostic/marking tool (Plane 2)?** The terrain diagnostic is
+Plane 2 and swaps a separate material; the lat/lon grid is also Plane 2 but remains
+independent geometry. Neither adds analysis branches to the production shader.
 
 ## Data sources — including dynamic, time-dependent ones
 
@@ -336,10 +337,11 @@ shader mode.
 ## Current status and next work
 
 Implemented: deterministic `SurfaceField` and `TransferFn` queries, the
-`TerrainField` region query, streamed-CDLOD overlay uniforms, live
+`TerrainField` region query, a separate streamed-CDLOD diagnostic material, live
 `SetTerrainOverlay` partial updates, and the inspector legend/sliders. The
-headless field is not yet addressable as a USD layer, and the overlay is wired
-to the streamed `terrain_geomorph` material rather than the static DEM path.
+headless field is not yet addressable as a USD layer; production terrain materials
+are authored through standard USD `UsdShade` bindings and the same map-source
+reconciler serves static and streamed paths.
 Open DEM ground is picked through the same `bevy_picking` backend using the
 analytic `GridSurfaceQuery`; it does not retain CPU mesh vertices or require a
 separate click path per scene tool.
@@ -371,9 +373,9 @@ Remaining work, in dependency order:
   sample the active layers. Core analyst tool, not yet specced.
 - **Layer-manager UI** — the GIS "layers panel": list / toggle / opacity / reorder / solo
   per layer, with legends. The stack + inspector exist; the management surface does not.
-- **Lit-vs-unlit compositing** — analysis false-colour is usually **unlit** (slope reads
-  the same regardless of sun) over the lit base; a per-layer lit/unlit toggle + the blend
-  math need pinning down.
+- **Lit-vs-unlit diagnostic presentation** — analysis false-colour is usually **unlit**
+  (slope reads the same regardless of sun) in a separate diagnostic material; a
+  per-layer lit/unlit toggle and replacement policy need pinning down.
 - **Time-control UX + range integration** — a scrubber tied to dynamic maps, and the cost
   model for "integrate coverage over an orbit / lunar day" (many time samples).
 - **Dynamic-map cadence** — fixed sim-time step vs adaptive driver-motion threshold

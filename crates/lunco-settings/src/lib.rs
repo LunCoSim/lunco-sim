@@ -483,9 +483,6 @@ impl SettingsSection for ProfileSettings {
 /// Persisted terrain/ground settings.
 #[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
 pub struct TerrainSettings {
-    /// If false, custom terrain shaders (such as procedural regolith FBM)
-    /// are disabled and fall back to the simple flat-lit/unlit geomorph shader.
-    pub enable_shaders: bool,
     /// Radius around a visual-detail camera that the terrain streamer refines
     /// aggressively. A camera marker can override this for a specific view.
     #[serde(default = "TerrainSettings::default_visual_detail_radius_m")]
@@ -513,7 +510,6 @@ impl TerrainSettings {
 impl Default for TerrainSettings {
     fn default() -> Self {
         Self {
-            enable_shaders: true,
             visual_detail_radius_m: Self::DEFAULT_VISUAL_DETAIL_RADIUS_M,
             visual_detail_hysteresis_m: Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M,
         }
@@ -783,19 +779,6 @@ mod disk_guard_tests {
                 .resource::<Settings>()
                 .raw(ValidatedTestSection::KEY),
             Some(&serde_json::json!({ "value": 4 }))
-        );
-    }
-
-    #[test]
-    fn terrain_settings_migrate_missing_visual_lod_fields_to_defaults() {
-        let settings: TerrainSettings = serde_json::from_str(r#"{"enable_shaders":true}"#).unwrap();
-        assert_eq!(
-            settings.visual_detail_radius_m,
-            TerrainSettings::DEFAULT_VISUAL_DETAIL_RADIUS_M
-        );
-        assert_eq!(
-            settings.visual_detail_hysteresis_m,
-            TerrainSettings::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M
         );
     }
 

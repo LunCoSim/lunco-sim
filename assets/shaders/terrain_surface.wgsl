@@ -1,32 +1,9 @@
 // Shared regolith SURFACE kernel for every terrain shader, via naga_oil import.
 //
-// WHY THIS FILE EXISTS. `ramp`, `aa_fade`, `layer_height` and `bump_layer` were
-// copy-pasted into all six terrain shaders (`terrain_geomorph`, `terrain_layered`,
-// `regolith`, and a `_web` variant of each). Measured 2026-07-26: the `_web` files
-// were 88-92% byte-identical to their native twins. Two bugs had already grown in
-// that gap, and both were invisible because nothing forced the copies to agree:
-//
-//   * `aa_fade` was retuned from (6.0, 18.0) to (5.0, 7.0) in `terrain_geomorph`
-//     only. The other FOUR shaders kept the old wide ramp — carrying full FBM to
-//     ~1 km at real fragment cost, the exact thing the retune removed.
-//   * `ORTHO_GAIN` (see `lunar_brdf.wgsl`) was applied to the native shaders but
-//     not `terrain_layered_web`, so the same scene rendered its ground 3x darker
-//     in a browser than on the desktop.
-//
-// A shared kernel is not a tidiness preference here: it is the only structure in
-// which "native and web agree" is a fact rather than a hope.
-//
-// PLATFORM SPLIT. Exactly two things ever differed between a native shader and
-// its `_web` twin:
-//
-//   1. Noise dimensionality — `fbm` (3D world position) vs `fbm2d` (the XZ plane).
-//   2. An octave budget — every `_web` call site used `max(1, native / 2)`. That
-//      was verified against all six files: geomorph 3,2,3,2 -> 1,1,1,1 and
-//      layered/regolith 4,5,3 -> 2,2,1. The rule reproduces every shipped web
-//      value EXACTLY, so folding it in here changes neither platform's output.
-//
-// Both live behind `LUNCO_NOISE_2D`, a shader_def the material pipeline sets on
-// wasm (`shader_material.rs::specialize`). One definition, one place to change.
+// This module is the single implementation of shared terrain surface operations.
+// The material pipeline selects the noise dimensionality for the target platform
+// with `LUNCO_NOISE_2D`; every terrain material then imports the same transfer,
+// anti-aliasing, map, and bump helpers.
 
 #define_import_path lunco::terrain
 
@@ -44,21 +21,16 @@
 // detail finer than ~5 px stops reading as relief and starts reading as shimmer.
 // This is ALSO the cost knob: `bump_layer` runs a full FBM (3 taps x N octaves) on
 // every fragment where the fade is > 0, so the cut radius — not the ramp width —
-// sets the size of the expensive disc around the camera. At the old 3 px cut the
-// meso layer alone reached ~960 m: essentially the whole screen when standing on
-// the surface.
+// sets the size of the expensive disc around the camera.
 //
-// CONVERGED 2026-07-26 on `terrain_geomorph`'s tuned pair. `terrain_layered` and
-// `regolith` previously used (6.0, 18.0); that ramp is ~2.6x wider, so those two
-// carried procedural detail much further out. The baked normal/AO/tone maps take
-// over past the near field, which is what makes the tighter ramp safe — verify
-// the static-mesh scenes still read correctly at distance.
+// The baked normal/AO/tone maps take over past the near field, which makes this
+// tight anti-aliasing ramp safe for both static and streamed terrain materials.
 const AA_CUT_PX: f32 = 5.0;
 const AA_RAMP_PX: f32 = 7.0;
 
 /// Remap `x` from [lo, hi] to [0, 1], clamped. LINEAR on purpose — every terrain
-/// shader's bump strengths and albedo ramps were authored against this response,
-/// so a smoothstep here would quietly restyle all six.
+/// shader's bump strengths and albedo ramps are authored against this response,
+/// so a smoothstep here would quietly restyle every terrain material.
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
@@ -74,8 +46,8 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
     return saturate((px_per_period - AA_CUT_PX) / AA_RAMP_PX);
 }
 
-/// The platform octave budget. Call sites pass the NATIVE octave count and this
-/// halves it on web — see the header for why that reproduces the shipped values.
+/// The platform octave budget. Call sites pass the native octave count; the web
+/// path uses a reduced budget for its 2D noise implementation.
 fn oct(full: i32) -> i32 {
 #ifdef LUNCO_NOISE_2D
     return max(1, full / 2);
@@ -125,8 +97,7 @@ fn dem_normal_to_world(encoded: vec3<f32>, instance_index: u32) -> vec3<f32> {
 /// Raw FBM at a terrain-stable position, platform-correct. Use this for the un-ramped
 /// tonal layers (dust wash, metre-scale grain) so they pick up the same noise
 /// family and octave budget as the bump layers instead of calling `fbm`/`fbm2d`
-/// directly — that direct call is how the native shaders ended up on unrotated
-/// noise while their `_web` twins were on rotated.
+/// directly, keeping all terrain materials on the same noise family and budget.
 fn surface_fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
 #ifdef LUNCO_NOISE_2D
     return fbm2d(p.xz, oct(octaves), gain);

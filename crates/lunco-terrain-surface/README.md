@@ -5,8 +5,9 @@ heightfield colliders and big_space per-tile anchoring.
 
 Builds on `lunco-terrain-core`'s projection-agnostic LOD spine and adds the
 bevy / avian / big_space / DEM
-layers the core deliberately omits. The complement to `lunco-terrain-globe`
-(orbit scale).
+layers the core deliberately omits. The surface geometry is paired with the
+material intent authored by the owning USD `UsdShade` network. The complement
+to `lunco-terrain-globe` (orbit scale).
 
 ## Modules
 
@@ -15,8 +16,8 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 | `lunco-terrain-bake` | The pure bevy/avian-free bake pipeline (GeoTIFF decode, crop/resample, crater stamp) is owned by [`lunco-terrain-bake`](../lunco-terrain-bake/README.md) so the wasm DEM Web Worker runs the same code. |
 | `tile_mesh` | per-tile mesh baking (`bake_tile_mesh`, `TileMesh`) |
 | `collider_ring` | resident avian heightfield collider ring around the focus (`TerrainColliderRing`, `TerrainColliderSettings`, `ColliderTiles`) |
-| `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`, `TerrainShaderMode`) |
-| `terrain_layers` | composable USD-prim layer stack (`TerrainLayerStack`, `TerrainLayer`, parser registry) — craters / rocks / shader |
+| `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`) using the owning USD `ShaderLook` |
+| `terrain_layers` | composable USD-prim layer stack (`TerrainLayerStack`, `TerrainLayer`, parser registry) — craters / rocks |
 | `derived_layers` | off-thread surface/normal map bake from the DEM |
 | `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` plus `FlatSiteSurface` derived from an explicitly designated standard USD site cube |
 | `terrain` | the DEM terrain surface + spawn requests (`DemTerrainSurface`, `DemTerrainRequest`, `SpawnDemTerrain`) |
