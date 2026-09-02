@@ -64,6 +64,11 @@ pub fn retain_physics_telemetry(
             &UsdPrimPath,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
+        ),
+        With<RigidBody>,
+    >,
+    body_state: Query<
+        (
             Option<&Position>,
             Option<&Rotation>,
             Option<&ComputedMass>,
@@ -137,24 +142,13 @@ pub fn retain_physics_telemetry(
     }
 
     let mut retained_any = HashSet::new();
+    let sample_interval = 1.0 / settings.default_rate_hz;
     // The registry owns the channel catalog. Snapshot its size once per fixed
     // pass; checking it by walking every signal for every body sample turns
     // telemetry overhead into an avoidable quadratic scan.
     let mut channel_count = signals.iter_scalar().count();
 
-    for (
-        entity,
-        prim,
-        linear,
-        angular,
-        position,
-        rotation,
-        mass,
-        center_of_mass,
-        inertia,
-        collider,
-    ) in &bodies
-    {
+    for (entity, prim, linear, angular) in &bodies {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -187,13 +181,19 @@ pub fn retain_physics_telemetry(
         let sample_due = state
             .last_sample_times
             .get(&entity)
-            .is_none_or(|last| time < *last || time - *last >= 1.0 / settings.default_rate_hz);
+            .is_none_or(|last| time < *last || time - *last >= sample_interval);
         if !sample_due {
             continue;
         }
         if metadata_dirty {
             state.metadata_group_paths.insert(entity, prim.path.clone());
         }
+
+        let Ok((position, rotation, mass, center_of_mass, inertia, collider)) =
+            body_state.get(entity)
+        else {
+            continue;
+        };
 
         let mut samples = Vec::with_capacity(36);
         if let Some(linear_velocity) = linear_velocity {
@@ -468,7 +468,7 @@ pub fn retain_physics_telemetry(
         let sample_due = state
             .last_sample_times
             .get(&entity)
-            .is_none_or(|last| time < *last || time - *last >= 1.0 / settings.default_rate_hz);
+            .is_none_or(|last| time < *last || time - *last >= sample_interval);
         if !sample_due {
             continue;
         }
