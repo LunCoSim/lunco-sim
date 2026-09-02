@@ -414,6 +414,11 @@ they route through the same lifecycle commands as the human Editor. All
 authored edits require the document, `@root@` or `@runtime@` layer, and the USD
 path explicitly:
 
+Before editing what is visible, call `assembly_edit::viewport()` and use
+`CaptureScreenshot` with the image viewer. Correlate the returned preview/view
+handles with `ListOpenDocuments`; tab titles and filesystem names are not
+document identity.
+
 ```rhai
 let doc = 3;
 let before = assembly_edit::describe(doc);
@@ -476,8 +481,15 @@ mount and review are Inspector sections, and persistence is the existing
 document lifecycle command group rather than a fabricated panel. These
 functions do not create a layout, duplicate view-model state, or infer a
 document from a name. The returned preview admission is not a substitute for
-`InspectUsdDocument` or a runtime screenshot; continue with the headful
+`InspectUsdDocument`/`InspectUsdViewport` or a runtime screenshot; continue with the headful
 checkpoint in the assembly-editor runbook.
+
+Use `assembly_ui` for a focused assembly in Editor and use the `rover_build`
+perspective for general live-Twin base composition. Build treats each authored
+USD compound root as one selectable element through the existing
+`PhysicsRigidBodyAPI`/`SelectableRoot`/`MobilityRoot` projection; there is no
+name-based or script-owned group registry. Internal rover or lander parts are
+edited by opening that assembly's explicit USD document and preview in Editor.
 
 ## F. Policy hooks (decision functions)
 

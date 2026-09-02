@@ -75,6 +75,35 @@ curl -s -X POST http://127.0.0.1:4127/api/commands \
 
 Read that local PNG with the image viewer before reporting the checkpoint.
 
+## Choose Editor or Builder
+
+Use **Editor** (shown as `✎ Editor` in the perspective switcher) for one specific reusable assembly: open its USD document from
+the Twin Browser, focus its isolated preview, and edit the authored prim tree.
+This is the path for rover, lander, payload, and sensor work. Editor does not
+show the live Entity list or spawn palette because those operate on the mounted
+Twin rather than the selected document.
+
+Use **Build** for general base composition: spawn and place complete USD
+assemblies in the live Twin, and select them as one element. The group boundary
+is the authored compound root projected through USD `PhysicsRigidBodyAPI` and
+the existing `SelectableRoot`/`MobilityRoot` markers. Drill into the explicit
+assembly document in Editor to modify its internal parts. Never add a second
+group table or identify members by name prefixes.
+
+`◉ View` is a separate live-Twin perspective for operating the simulation.
+`USD · View N` tabs are separate presentation views inside Editor: each has
+its own camera and render target while sharing the one explicit USD preview
+stage. Neither kind of view is a document identity; query the explicit
+handles before editing.
+
+When leaving an Editor field to control a possessed vehicle in View or Build,
+click the main 3D scene once. That scene press is the workbench's typed focus
+handoff: it clears retained egui text focus while preserving capture for a
+field that is still active. The controller then receives the normal
+`InputBindingsSettings` → Leafwing `ActionState` → authored `ControlBinding`
+path. Do not bypass this boundary with raw-key reads or a second vehicle input
+path.
+
 ## Open the exact document and preview
 
 The document registry and OpenUSD composition system are authoritative. Never
@@ -87,16 +116,19 @@ the active simulation viewport.
    `assembly_edit::fork_document(source, name)`. These are the normal async
    document lifecycle paths; `LoadScene` is only for mounting a scene.
 2. Query `ListOpenDocuments` and select the returned `DocumentId`.
-3. Use `assembly_edit::describe(doc)`, `inspect(doc, path)`, and
+3. Query `assembly_edit::viewport()` and capture a screenshot when the user
+   asks what is visible. Correlate the focused preview/view and visible tabs
+   with `ListOpenDocuments`; use the returned explicit handles, never a title.
+4. Use `assembly_edit::describe(doc)`, `inspect(doc, path)`, and
    `resolve_target(doc, path, edit_target)` to read composed topology, layer
    ownership, generation, and the legal target. Use `sync_document` when an
    already-known generation can be advanced by a typed delta.
-4. Select the `Editor` perspective from the title-bar switcher, or activate it
+5. Select the `Editor` perspective from the title-bar switcher, or activate it
    through the typed `ActivatePerspective { id: "editor" }` command, then open
    an isolated preview with `OpenUsdPreview { preview, doc, edit_target }`; use
    `FocusUsdPreview { preview }` when changing the visible document. Every
    panel and selection must remain bound to that `UsdPreviewId`.
-5. For a second 3D view of the same assembly, use
+6. For a second 3D view of the same assembly, use
    `OpenUsdPreviewView { preview, view }`. It creates a new camera/render
    target over the existing projected stage; it does not reload or duplicate
    USD. Opened view tabs can be dragged to a dock edge to create a split.

@@ -576,6 +576,12 @@ See `crates/lunco-modelica/src/api_queries.rs` for examples and
 spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 
+The USD Assembly Editor's `InspectUsdViewport` query follows the same owner
+rule. It reports the focused preview/view pair and all explicit USD preview
+leases with their document, edit target, projected generation, and independent
+view ids. Pair it with `ListOpenDocuments` and a captured screenshot to
+identify the exact open item before issuing a typed authoring command.
+
 The built-in `ReadExposures` query reads the domain-neutral
 `EngineExposures` registry used by runtime HTML/CSS surfaces and other
 clients. Its `revision` is the change-detection boundary; callers can poll

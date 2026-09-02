@@ -2028,19 +2028,22 @@ pub struct LodFrozen;
 pub fn update_lod_tiles(
     mut commands: Commands,
     demands: Res<TerrainDetailDemands>,
-    mut terrains: Query<(
-        Entity,
-        &DemHeightField,
-        &TerrainLodViz,
-        &mut LodTiles,
-        &mut PendingTileBakes,
-        &mut TerrainNodeErrors,
-        Option<&TerrainDerivedMaps>,
-        Option<&TerrainAuthoredMaps>,
-        Option<&TileShadowCache>,
-        Option<&ShaderLook>,
-        Has<LodFrozen>,
-    )>,
+    mut terrains: Query<
+        (
+            Entity,
+            &DemHeightField,
+            &TerrainLodViz,
+            &mut LodTiles,
+            &mut PendingTileBakes,
+            &mut TerrainNodeErrors,
+            Option<&TerrainDerivedMaps>,
+            Option<&TerrainAuthoredMaps>,
+            Option<&TileShadowCache>,
+            Option<&ShaderLook>,
+            Has<LodFrozen>,
+        ),
+        Without<LodTileOf>,
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
     quality: Res<lunco_render::RenderingQualitySettings>,
@@ -2053,7 +2056,7 @@ pub fn update_lod_tiles(
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
     material_bound: Query<(), With<ShaderLookReady>>,
-    mut looks: Query<&mut ShaderLook>,
+    mut looks: Query<&mut ShaderLook, With<LodTileOf>>,
     mut scratch: Local<StreamScratch>,
 ) {
     let profile = match quality.validated_profile() {
@@ -3266,6 +3269,22 @@ mod draw_partition_tests {
 
     fn diagnostic_template() -> ShaderLook {
         crate::overlay::TerrainDiagnosticLook::default().0
+    }
+
+    #[test]
+    fn lod_update_queries_keep_terrain_templates_disjoint_from_tile_looks() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDetailDemands>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<LodMeshCache>()
+            .init_resource::<lunco_render::RenderingQualitySettings>()
+            .init_resource::<TerrainStreamStatus>()
+            .init_resource::<TerrainStreamLockstep>()
+            .init_resource::<crate::overlay::TerrainOverlayParams>()
+            .init_resource::<crate::overlay::TerrainDiagnosticLook>()
+            .add_systems(Update, update_lod_tiles);
+
+        app.update();
     }
 
     #[test]

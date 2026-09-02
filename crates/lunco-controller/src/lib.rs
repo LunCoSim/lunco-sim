@@ -1476,6 +1476,82 @@ mod tests {
         assert!(state.pressed(&UserIntent::MoveBackward));
     }
 
+    #[derive(Resource, Default)]
+    struct VesselControlObserved(Vec<(Entity, Vec<(String, f64)>)>);
+
+    fn observe_vessel_control(
+        trigger: On<lunco_cosim::SetPorts>,
+        mut observed: ResMut<VesselControlObserved>,
+    ) {
+        let event = trigger.event();
+        observed.0.push((event.target, event.writes.clone()));
+    }
+
+    /// Possession redirects the shared keyboard action state to the authored
+    /// vessel binding. This is the complete desktop control seam: a physical
+    /// `KeyW` updates the avatar's leafwing state, `ControllerLink` selects the
+    /// vessel, and `ControlBinding` produces its named command port.
+    #[test]
+    fn possessed_avatar_keyboard_drives_the_authored_vessel() {
+        use bevy::input::InputPlugin;
+        use leafwing_input_manager::prelude::InputManagerPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        app.insert_resource(lunco_core::NetworkRole::Host)
+            .init_resource::<lunco_core::SimTick>()
+            .init_resource::<lunco_core::OwnedInputLog>()
+            .init_resource::<VesselControlObserved>()
+            .add_observer(observe_vessel_control)
+            .add_systems(FixedUpdate, drive_from_bindings);
+
+        let vessel = app
+            .world_mut()
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(0xCAFE),
+                lunco_core::InputPorts::new(&["throttle", "steer", "brake"]),
+                ControlBinding::from_intent_entries(&[
+                    ("forward".into(), "throttle".into(), 1.0),
+                    ("backward".into(), "throttle".into(), -1.0),
+                ])
+                .expect("authored rover binding"),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                ControllerLink {
+                    vessel_entity: vessel,
+                },
+                ActionState::<UserIntent>::default(),
+                InputBindingsSettings::default().input_map().unwrap(),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        app.update();
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let observed = &app.world().resource::<VesselControlObserved>().0;
+        assert_eq!(
+            observed.last(),
+            Some(&(vessel, vec![("throttle".into(), 1.0)])),
+            "KeyW on the possessed avatar must reach the vessel's named control surface"
+        );
+        assert!(app
+            .world()
+            .entity(avatar)
+            .get::<ActionState<UserIntent>>()
+            .expect("avatar action state")
+            .pressed(&UserIntent::MoveForward));
+    }
+
     /// Shift is a movement modifier, not a second input path.  It must remain
     /// active when Q/E transitions while the modifier is held, regardless of
     /// which physical Shift key was pressed first.

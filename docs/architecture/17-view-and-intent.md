@@ -239,6 +239,11 @@ are the current projection of `InputBindingsSettings`; UI help and tutorials
 must resolve labels from that resource so remapping updates presentation while
 the semantic profile and physical actuator ownership remain unchanged.
 
+A press in the main scene is also the keyboard-focus handoff: the workbench
+surrenders retained egui editor focus before publishing `EguiFocus`, so a
+possessed vessel receives the shared input map immediately after the scene click.
+Text fields retain keyboard ownership until that explicit scene press.
+
 ---
 
 ## Technical Reference

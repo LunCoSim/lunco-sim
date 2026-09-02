@@ -529,8 +529,10 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("rover_build"),
                 lunco_workbench::PerspectiveHelp {
-                    description: "3D scene editor. Spawn objects from the palette, \
-                                  select and transform them, and assemble the scene.",
+                    description: "General Twin builder. Compose the live base from \
+                                  complete USD assembly roots, select and transform them \
+                                  as one element, and use Editor for a rover or lander's \
+                                  internal parts.",
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "Shift",
@@ -612,11 +614,11 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("editor"),
                 lunco_workbench::PerspectiveHelp {
-                    description: "Assemble and edit a USD document. Choose the \
-                                  document in the Twin Browser, navigate its structure, \
-                                  attach components from \
-                                  the palette, and tune the selected prim's parameters in \
-                                  the Inspector.",
+                    description: "Assembly Editor. Open one rover, lander, or other \
+                                  USD document in the Twin Browser, navigate its \
+                                  authored structure, and edit the selected prim in the \
+                                  Inspector. Use the Build perspective for live base \
+                                  composition.",
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "Ctrl+Z",
@@ -977,8 +979,10 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — Entities over Telemetry on the left, 3D centre, and Inspector
-/// over Spawn on the right.
+/// Build mode — the general live-Twin composition workspace. Entity roots and
+/// the spawn catalog stay here because this mode edits the mounted scene as a
+/// whole; complete USD assemblies remain one selectable element and their
+/// internals are inspected only through the focused Editor document.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -1011,7 +1015,9 @@ impl Perspective for BuildPerspective {
     }
 }
 
-/// Editor mode — edit one explicit USD assembly document.
+/// Editor mode — edit one explicit USD assembly document such as a rover or
+/// lander. The layout deliberately excludes the live Entity list and spawn
+/// palette; those belong to the Assembly Editor's live-scene counterpart.
 ///
 /// Distinct from Build (which edits the live simulation scene): Editor leads
 /// with the selected document's USD structure and isolated USD preview. The
@@ -1029,21 +1035,20 @@ impl Perspective for EditorPerspective {
         PerspectiveId("editor")
     }
     fn title(&self) -> String {
-        "Editor".into()
+        "✎ Editor".into()
     }
     fn show_in_switcher(&self) -> bool {
         true
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Structure first: the USD prim tree (the assembly's authoring hierarchy)
-        // to navigate/select parts, the entity list as an alternate view, and the
-        // palette to add parts. (Unknown ids are filtered.)
+        // Structure first: the USD prim tree is the assembly's authoring
+        // hierarchy. The live Entity list and spawn palette belong to Build and
+        // are intentionally absent so an Editor session cannot mix a mounted
+        // scene entity with the selected document.
         layout.set_side_browser_tabs(vec![
             TWIN_BROWSER_PANEL_ID,
             usd_prim_tree::USD_PRIM_TREE_PANEL_ID,
-            PanelId("entity_list"),
-            PanelId("spawn_palette"),
         ]);
         // Central tabs: the isolated USD document preview and the Rhai
         // behaviour editor. The
@@ -1099,7 +1104,7 @@ mod tests {
         let perspective = EditorPerspective;
 
         assert_eq!(perspective.id(), PerspectiveId("editor"));
-        assert_eq!(perspective.title(), "Editor");
+        assert_eq!(perspective.title(), "✎ Editor");
         assert!(perspective.show_in_switcher());
     }
 }

@@ -88,6 +88,15 @@ focused-session projection restored from editor-owned session selection, not a
 document identity. Panel writes use the session's explicit `DocumentId`,
 `LayerId`, and projection generation.
 
+When an agent needs to answer “what is visible?” or edit the item a user has
+open, call the UI-owned `InspectUsdViewport` query (or
+`assembly_edit::viewport()`) and correlate its explicit preview/view handles
+with `CaptureScreenshot`. The query is presentation context, not a second
+document registry: use the returned `doc`, `edit_target`, and projection
+generation with document inspection and typed edit commands. Never infer
+identity from a tab title, filesystem basename, entity order, or the live
+simulation viewport.
+
 The Files section sends a `.usda`, `.usd`, or `.usdc` click through the existing
 `BrowserAction::OpenFile` and async document pipeline. The emitting Twin's resolved absolute path is
 preserved, so an inactive Twin is not accidentally anchored on the active one.
@@ -119,7 +128,8 @@ replacement for OpenUSD PCP resolution.
 
 Agents and editor automation should use the built-in `assembly_edit` Rhai
 library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
-`ResolveUsdTarget`, `SyncUsdDocument`, `ApplyUsdOp`/`ApplyUsdOps` (including
+`InspectUsdViewport`, `ResolveUsdTarget`, `SyncUsdDocument`,
+`ApplyUsdOp`/`ApplyUsdOps` (including
 `SetTimeSample` and `RemoveTimeSample` for keyframes),
 `AttachComponent`, `DetachComponent`, `UndoDocument`/`RedoDocument`,
 `CreateUsdProposal`, `InspectUsdEditSession`, `ReviewUsdProposal`, and

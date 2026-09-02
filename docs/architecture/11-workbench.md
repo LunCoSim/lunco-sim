@@ -671,6 +671,12 @@ surfaces, and user-global preferences remain in `settings.json`.
 Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
 no novel design.
 
+The workbench owns the scene/editor keyboard handoff. A press resolved to the
+main 3D scene surrenders any retained egui `TextEdit` focus before publishing
+`EguiFocus`; this lets a user click a rover and immediately use the shared
+semantic controls, while focused fields still capture keys until that explicit
+scene press.
+
 ## 11. Relationship to `lunco-ui` and domain crates
 
 ```

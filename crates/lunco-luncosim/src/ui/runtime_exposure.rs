@@ -5,19 +5,19 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{PrimaryEguiContext, egui};
+use bevy_egui::{egui, PrimaryEguiContext};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress,
     TemplateProperties, UiId,
 };
-use lunco_core::SceneViewport;
 use lunco_core::exposure::EngineExposures;
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
 use serde::Deserialize;
@@ -319,24 +319,49 @@ pub(crate) struct RuntimeUiManifestState {
 
 /// Acknowledgement from the render extraction boundary. Main-world layout is
 /// not enough to arm offline capture: the render world must have extracted at
-/// least one visible UI node for every required surface at the current
-/// exposure revision. This is the presentation event the recorder consumes
-/// indirectly through [`StatusBus`].
+/// least one visible UI node for every required surface in the current
+/// presentation generation. This is the presentation event the recorder
+/// consumes indirectly through [`StatusBus`].
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub(crate) struct RuntimeUiRenderState {
-    pub extracted_revision: u64,
+    pub extracted_generation: u64,
     pub extracted_surface_count: u32,
 }
 
+/// Monotonic identity for a required runtime UI presentation lifecycle.
+///
+/// Exposure revisions describe changing values inside an already-mounted
+/// retained tree. They are deliberately not used as a render acknowledgement
+/// key because a live surface can update every frame. This generation changes
+/// only when a required surface becomes visible and ready, so a new render
+/// submission can be matched to the presentation that needs to be captured.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct RuntimeUiPresentationGeneration {
+    next: u64,
+}
+
+impl RuntimeUiPresentationGeneration {
+    fn start_if_visible(&mut self, surface: &mut RuntimeUiSurface, visible: bool) {
+        if visible && !surface.presentation_visible {
+            self.next = self
+                .next
+                .checked_add(1)
+                .expect("runtime UI presentation generation exhausted");
+            surface.presentation_generation = self.next;
+        }
+        surface.presentation_visible = visible;
+    }
+}
+
 /// Render-world handoff for the presentation acknowledgement. The extraction
-/// phase fills `extracted_revision`; the render schedule promotes it only after
-/// the UI render set has submitted the frame. The next extraction copies that
-/// submitted revision back to the simulation world.
+/// phase fills `extracted_generation`; the render schedule promotes it only
+/// after the UI render set has submitted the frame. The next extraction copies
+/// that submitted generation back to the simulation world.
 #[derive(Resource, Debug, Default)]
 struct RuntimeUiRenderAck {
-    extracted_revision: u64,
+    extracted_generation: u64,
     extracted_surface_count: u32,
-    submitted_revision: u64,
+    submitted_generation: u64,
     submitted_surface_count: u32,
     visible_exposure_revision: u64,
     visible_namespaces: HashSet<String>,
@@ -441,6 +466,12 @@ pub(crate) struct RuntimeUiSurface {
     /// live values change. Interactive surfaces do not wait for this
     /// render-world acknowledgement.
     presentation_ready: bool,
+    /// Whether the required surface was visible in the last readiness pass.
+    /// A visibility transition starts a new render acknowledgement lifecycle,
+    /// including when a surface is shown again after a perspective or gate
+    /// change.
+    presentation_visible: bool,
+    presentation_generation: u64,
     placement: RuntimeUiPlacement,
     applied_revision: u64,
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
@@ -465,6 +496,8 @@ impl RuntimeUiSurface {
             interactive: definition.interactive,
             mounted: false,
             presentation_ready: false,
+            presentation_visible: false,
+            presentation_generation: 0,
             placement: (&definition.placement).into(),
             applied_revision: 0,
             applied_placement: None,
@@ -477,11 +510,13 @@ impl RuntimeUiSurface {
 /// exposure, so unrelated scenes do not wait for a HUD they do not author.
 ///
 /// Readiness is evaluated at the end of Bevy's UI lifecycle. The root must have
-/// passed target-camera propagation and layout, and the exposure revision must
-/// have been applied. The recorder can therefore consume one semantic state
-/// transition instead of guessing how many render passes a retained UI needs.
+/// passed target-camera propagation and layout, and the retained presentation
+/// must have been submitted by the render world. The recorder can therefore
+/// consume one semantic state transition instead of guessing how many render
+/// passes a retained UI needs.
 pub(crate) fn report_runtime_ui_readiness(
     exposures: Res<EngineExposures>,
+    mut presentation_generation: ResMut<RuntimeUiPresentationGeneration>,
     mut roots: Query<(
         &mut RuntimeUiSurface,
         &Visibility,
@@ -498,6 +533,7 @@ pub(crate) fn report_runtime_ui_readiness(
 
     let mut required = 0usize;
     let mut ready = 0usize;
+    let mut current_generation = 0u64;
     for (
         mut surface,
         visibility,
@@ -514,6 +550,7 @@ pub(crate) fn report_runtime_ui_readiness(
             .is_some_and(|exposure| exposure.visible);
         if !surface.required_for_recording || !exposure_visible {
             surface.presentation_ready = false;
+            surface.presentation_visible = false;
             continue;
         }
         required += 1;
@@ -538,14 +575,16 @@ pub(crate) fn report_runtime_ui_readiness(
         surface.presentation_ready |= initial_presentation_ready;
         let surface_ready =
             surface.presentation_ready && matches!(*visibility, Visibility::Visible);
+        presentation_generation.start_if_visible(&mut surface, surface_ready);
         if surface_ready {
             ready += 1;
+            current_generation = current_generation.max(surface.presentation_generation);
         }
     }
 
     let render_ready = required == 0
         || render_state.is_some_and(|state| {
-            state.extracted_revision == exposures.revision
+            state.extracted_generation == current_generation
                 && state.extracted_surface_count == required as u32
         });
     if required == 0 || (ready == required && render_ready) {
@@ -595,19 +634,28 @@ fn acknowledge_runtime_ui_render_extraction(
         render_ack.visible_exposure_revision = exposure_revision;
     }
 
-    let (required_roots, presentation_ready_roots) = {
+    let (required_roots, presentation_ready_roots, presentation_generation) = {
         let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
         let mut required_roots = EntityHashSet::default();
         let mut presentation_ready_roots = 0;
+        let mut presentation_generation = 0;
         for (entity, surface) in roots.iter(&main_world) {
             if surface.required_for_recording
                 && render_ack.visible_namespaces.contains(&surface.namespace)
             {
                 required_roots.insert(entity);
-                presentation_ready_roots += surface.presentation_ready as usize;
+                if surface.presentation_ready && surface.presentation_visible {
+                    presentation_ready_roots += 1;
+                    presentation_generation =
+                        presentation_generation.max(surface.presentation_generation);
+                }
             }
         }
-        (required_roots, presentation_ready_roots)
+        (
+            required_roots,
+            presentation_ready_roots,
+            presentation_generation,
+        )
     };
 
     // The acknowledgement exists only for authored surfaces that participate
@@ -616,7 +664,7 @@ fn acknowledge_runtime_ui_render_extraction(
     // no presentation contract to validate. Avoid traversing every extracted
     // UI node in those steady-state frames.
     if required_roots.is_empty() {
-        render_ack.extracted_revision = 0;
+        render_ack.extracted_generation = 0;
         render_ack.extracted_surface_count = 0;
         return;
     }
@@ -639,10 +687,8 @@ fn acknowledge_runtime_ui_render_extraction(
 
     let all_extracted = presentation_ready_roots == required_roots.len()
         && extracted_roots.len() == required_roots.len();
-    render_ack.extracted_revision = if all_extracted {
-        main_world
-            .get_resource::<EngineExposures>()
-            .map_or(0, |exposures| exposures.revision)
+    render_ack.extracted_generation = if all_extracted {
+        presentation_generation
     } else {
         0
     };
@@ -661,15 +707,15 @@ fn publish_runtime_ui_render_ack(
     render_ack: Res<RuntimeUiRenderAck>,
 ) {
     if let Some(mut state) = main_world.get_resource_mut::<RuntimeUiRenderState>() {
-        state.extracted_revision = render_ack.submitted_revision;
+        state.extracted_generation = render_ack.submitted_generation;
         state.extracted_surface_count = render_ack.submitted_surface_count;
     }
 }
 
-/// Mark the UI revision submitted once Bevy's render schedule has completed its
-/// render set. This is the handoff that replaces the old warm-up/probe logic.
+/// Mark the UI presentation generation submitted once Bevy's render schedule
+/// has completed its render set.
 fn acknowledge_runtime_ui_render_submission(mut render_ack: ResMut<RuntimeUiRenderAck>) {
-    render_ack.submitted_revision = render_ack.extracted_revision;
+    render_ack.submitted_generation = render_ack.extracted_generation;
     render_ack.submitted_surface_count = render_ack.extracted_surface_count;
 }
 
@@ -1611,6 +1657,8 @@ mod tests {
                     interactive: true,
                     mounted: true,
                     presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: 0,
                     applied_placement: None,
@@ -1690,6 +1738,8 @@ mod tests {
                     // contract, so it must be visible before any render-world
                     // acknowledgement exists.
                     presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: initial_revision,
                     applied_placement: None,
@@ -1714,6 +1764,44 @@ mod tests {
             app.world().get::<Visibility>(root),
             Some(Visibility::Visible)
         ));
+    }
+
+    #[test]
+    fn presentation_generation_tracks_visibility_lifecycle_not_value_updates() {
+        let mut surface = RuntimeUiSurface {
+            namespace: "recorded".to_owned(),
+            required_for_recording: true,
+            template: Handle::default(),
+            stylesheet: Handle::default(),
+            bindings: HashMap::new(),
+            visible_in_perspective: None,
+            gate: None,
+            setting: None,
+            setting_default: false,
+            interactive: false,
+            mounted: true,
+            presentation_ready: true,
+            presentation_visible: false,
+            presentation_generation: 0,
+            placement: RuntimeUiPlacement::Viewport,
+            applied_revision: 17,
+            applied_placement: None,
+        };
+        let mut generation = RuntimeUiPresentationGeneration::default();
+
+        generation.start_if_visible(&mut surface, false);
+        assert_eq!(generation.next, 0);
+        generation.start_if_visible(&mut surface, true);
+        assert_eq!(generation.next, 1);
+        assert_eq!(surface.presentation_generation, 1);
+
+        // A live exposure update does not create a new render lifecycle.
+        generation.start_if_visible(&mut surface, true);
+        assert_eq!(generation.next, 1);
+        generation.start_if_visible(&mut surface, false);
+        generation.start_if_visible(&mut surface, true);
+        assert_eq!(generation.next, 2);
+        assert_eq!(surface.presentation_generation, 2);
     }
 
     #[test]
@@ -1753,6 +1841,8 @@ mod tests {
                     interactive: false,
                     mounted: true,
                     presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: revision,
                     applied_placement: None,
@@ -1811,6 +1901,8 @@ mod tests {
                     interactive: false,
                     mounted: false,
                     presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: revision,
                     applied_placement: None,

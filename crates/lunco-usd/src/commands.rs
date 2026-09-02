@@ -291,6 +291,8 @@ impl Plugin for UsdCommandsPlugin {
             .world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
         query_registry.register(crate::assembly_api::InspectUsdDocumentProvider);
+        #[cfg(feature = "ui")]
+        query_registry.register(crate::ui::viewport::InspectUsdViewportProvider);
         query_registry.register(crate::assembly_api::InspectUsdEditSessionProvider);
         query_registry.register(crate::assembly_api::ResolveUsdTargetProvider);
         query_registry.register(crate::assembly_api::SyncUsdDocumentProvider);
@@ -3561,6 +3563,12 @@ mod tests {
             .resource::<lunco_api::queries::ApiQueryRegistry>()
             .names()
             .any(|name| name == "InspectUsdDocument"));
+        #[cfg(feature = "ui")]
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdViewport"));
         assert!(app
             .world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()

@@ -393,13 +393,12 @@ impl ScenePickGate {
 
     /// Fold this frame's inputs + egui's geometry into the resolved target,
     /// applying the press-latch. The whole decision, in one testable place.
-    pub fn resolve(&mut self, egui_state: EguiPointerState) {
+    pub fn resolve(&mut self, egui_state: EguiPointerState) -> bool {
         if !self.rendered {
             // The egui pass was skipped this frame: the inputs below are empty,
-            // not merely stale. Resolving against them would answer with garbage
-            // (and the old code closed a feedback loop by reading its own previous
-            // output back in as an input). Hold the last real answer instead.
-            return;
+            // not merely stale. Resolving against them would answer with garbage,
+            // so hold the last real answer until a rendered frame supplies inputs.
+            return false;
         }
         let candidate = resolve_scene_target(
             egui_state,
@@ -412,9 +411,12 @@ impl ScenePickGate {
             held: self.latched,
             owner: self.resolved,
         };
+        let scene_press =
+            !self.latched && egui_state.any_down && candidate == Some(SceneTarget::MainViewport);
         let next = latch.update(egui_state.any_down, candidate);
         self.resolved = next.owner;
         self.latched = next.held;
+        scene_press
     }
 }
 
@@ -892,7 +894,21 @@ pub(crate) fn resolve_scene_pointer(
         state.hover_pos = state.hover_pos.or_else(|| c.pointer_hover_pos());
         state.any_down |= c.input(|i| i.pointer.any_down());
     }
-    gate.resolve(state);
+    let scene_press = gate.resolve(state);
+    if scene_press {
+        // A scene click is the explicit handoff from an egui editor/control to
+        // the interactive simulation. egui retains the last focused TextEdit
+        // even after its panel is hidden by a perspective switch; surrendering
+        // that focus at the scene press keeps the shared keyboard map live for
+        // possession and vessel control without weakening text-field capture.
+        for mut ctx in q.iter_mut() {
+            ctx.get_mut().memory_mut(|memory| {
+                if let Some(id) = memory.focused() {
+                    memory.surrender_focus(id);
+                }
+            });
+        }
+    }
 }
 
 /// Scene-vs-chrome-aware egui picking backend — the replacement for bevy_egui's
@@ -1184,6 +1200,26 @@ mod tests {
     fn full_window_mode_is_all_scene() {
         let out = resolve_scene_target(hovering((400.0, 300.0)), None, &[], None, None);
         assert_eq!(out, Some(SceneTarget::MainViewport));
+    }
+
+    #[test]
+    fn main_scene_press_is_reported_for_keyboard_focus_handoff() {
+        let mut gate = ScenePickGate::default();
+        gate.begin_frame();
+        gate.mark_rendered();
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+
+        let mut press = hovering((400.0, 300.0));
+        press.any_down = true;
+        assert!(gate.resolve(press));
+        assert!(gate.over_main_scene());
+
+        // A held drag is not a second handoff; ownership remains latched to the
+        // original scene press until the pointer is released.
+        gate.begin_frame();
+        gate.mark_rendered();
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+        assert!(!gate.resolve(press));
     }
 
     /// 6c — an OPAQUE panel records `card == body`, so its empty lower half is
