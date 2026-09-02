@@ -218,7 +218,94 @@ fn test_nested_grid_rotation() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 3: Avian3D colliders on rotated Grid children
+// Test 3: Stationary globe tiles inherit body rotation
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The production globe tiles are immutable within a residency epoch and use
+// BigSpace's Stationary optimisation.  That optimisation must still update a
+// tile when the floating-origin relationship to a rotating body changes.
+
+#[test]
+fn test_stationary_nested_grid_rotation() {
+    let mut app = App::new();
+    app.add_plugins(BigSpaceMinimalPlugins)
+        .add_plugins(BigSpaceStationaryPlugin);
+
+    let inertial_grid = app
+        .world_mut()
+        .spawn((
+            Grid::new(10_000.0, 1_000.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    let body_grid = app
+        .world_mut()
+        .spawn((
+            Grid::new(10_000.0, 1_000.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    let surface_grid = app
+        .world_mut()
+        .spawn((
+            Grid::new(10_000.0, 1_000.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    let tile_offset = Vec3::new(100.0, 500.0, 200.0);
+    let tile = app
+        .world_mut()
+        .spawn((
+            CellCoord::default(),
+            Transform::from_translation(tile_offset),
+            GlobalTransform::default(),
+            Stationary,
+        ))
+        .id();
+    let floating_origin = app
+        .world_mut()
+        .spawn((
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            FloatingOrigin,
+        ))
+        .id();
+
+    let root = app
+        .world_mut()
+        .spawn(BigSpaceRootBundle::default())
+        .id();
+    app.world_mut()
+        .entity_mut(root)
+        .add_children(&[inertial_grid, floating_origin]);
+    app.world_mut().entity_mut(inertial_grid).add_child(body_grid);
+    app.world_mut().entity_mut(body_grid).add_child(surface_grid);
+    app.world_mut().entity_mut(surface_grid).add_child(tile);
+
+    app.update();
+    app.update();
+    let body_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    app.world_mut()
+        .get_mut::<Transform>(body_grid)
+        .unwrap()
+        .rotation = body_rot;
+    app.update();
+
+    let tile_gt = app.world().get::<GlobalTransform>(tile).unwrap();
+    let expected_position = body_rot * tile_offset;
+    assert!((tile_gt.translation() - expected_position).length() < 1.0e-3);
+    assert!((tile_gt.compute_transform().rotation - body_rot).length() < 1.0e-5);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 4: Avian3D colliders on rotated Grid children
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // ASSUMPTION: Avian3D Collider on a child of a rotated Grid entity uses the
