@@ -164,10 +164,11 @@ All six tasks are implemented. Deviations from the plan are noted inline.
 - **P2.5 `cmd:*` bus events + `requires_event`** — `crates/lunco-api/src/executor.rs`
   `project_command_events` observer fires `cmd:<Name>` on the TelemetryEvent bus for
   every dispatched command. Prelude `objective()` gained `requires_event` (latched)
-  and `text`; an independent `this.__mevents` buffer feeds missions so event-gated
-  objectives work with or without a running task. *Deviation:* an observer (not
-  `project_events`, which needs a buffered Message) since `ApiCommandEvent` is
-  observer-triggered.
+  and `text`; the native scenario runtime passes a bounded name/source identity
+  projection to the mission driver, so event-gated objectives work with or without
+  a running task while full payloads remain on user `on_event` hooks. *Deviation:*
+  an observer (not `project_events`, which needs a buffered Message) since
+  `ApiCommandEvent` is observer-triggered.
 - **P1 `lunco-tutorial` crate** — registry + `TutorialsPanel` (side-browser, via
   `register_panel`) + `StartTutorial`/`SkipTutorial` + `TutorialProgress`
   (persisted via `lunco-settings`, marked on `MISSION_COMPLETE`). `StartTutorial`

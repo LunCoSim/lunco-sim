@@ -117,19 +117,19 @@ fn __mission_status(m) {
 }
 
 /// Engine driver — evaluate `this.mission` once per fixed step alongside the
-/// native task tree; no-op when no mission was declared. Emits MISSION_COMPLETE /
-/// MISSION_FAILED once when the mission resolves.
-fn __run_mission(me) {
-    if this.mission == () { this.__mevents = []; return; }
+/// native task tree; no-op when no mission was declared. `evs` is the transient
+/// name/source projection from the native scenario event buffer; it is not copied
+/// into persistent `this` state. Emits MISSION_COMPLETE / MISSION_FAILED once
+/// when the mission resolves.
+fn __run_mission(me, evs) {
+    if this.mission == () { return; }
     let now = elapsed_seconds();
-    let evs = if this.__mevents == () { [] } else { this.__mevents };
     let m = this.mission;
     let doc = if this.__mission_doc == () { () } else { this.__mission_doc };
     for i in 0..m.len() {
         m[i] = __tick_objective(me, m[i], m, now, evs, doc);
     }
     this.mission = m;
-    this.__mevents = [];   // events live one tick (actor-model cadence)
     // Auto-publish the objectives checklist to the tutorial HUD when it changes,
     // so a declarative `mission(me)` renders on screen with no extra scripting.
     let hud = __mission_hud(m);

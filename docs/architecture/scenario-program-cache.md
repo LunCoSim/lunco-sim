@@ -43,7 +43,17 @@ Two gates decide whether a `TelemetryEvent` enters the VM for an entity's `on_ev
 1. **Hook mask (structure).** `ProgramMask::event` is derived once at compile. If the program has no `on_event`, the per-event call is skipped entirely — no AST scan, no VM entry. This replaces the old per-`(entity, event)` `ast.iter_functions().any(...)` scan.
 2. **Subscription filter (state, opt-in).** `subscribe("name")` / `subscribe_prefix("enter:")`, called in `on_start`, narrow delivery to named events. Default (no `subscribe`) = **all events** — behaviour-identical to before, and *forgetting* to subscribe is safe (you get everything, never a silent drop). Subscribing trades a small footgun (an unnamed event skips `on_event`) for skipping the VM entry on every event it doesn't name.
 
-The filter gates **only the user `on_event`** — the built-in task driver (`__note_task_event`, feeding `wait_for`) still sees every event, so task/mission progress can't be starved by a subscription.
+The filter gates **only the user `on_event`**. The native scenario runtime keeps
+one bounded name/source event projection for both task `wait_for` leaves and the
+Rhai mission driver, so task/mission progress cannot be starved by a subscription
+and mission state cannot grow with the event stream. Full typed payloads are
+constructed only for matching user `on_event` hooks.
+
+The production contract is covered by the authored `rhai_event_delivery` scene
+test, which sends a burst larger than the projection and requires mission
+completion, plus `rhai_event_delivery_negative`, which proves an absent event
+cannot complete an objective. These fixtures exercise the public scenario
+surface; they do not call an internal event-delivery helper.
 
 **Names are never inferred from the AST.** Zone events are `enter:<zone>` prefixes, and names can come from `switch` / `.contains` / computed strings — static inference would miss cases, and a missed name is a silently dropped event (a broken lesson). Subscription is therefore explicit-only.
 

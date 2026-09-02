@@ -1564,6 +1564,12 @@ enum CacheEntry {
 /// below this, so a clear is rare and only costs a cold re-parse next compile.
 const COMPILED_CACHE_CAP: usize = 512;
 
+/// Maximum number of event identities retained between fixed scenario passes.
+/// Task and mission consumers only need existence/name/source, so this is a
+/// bounded transient queue rather than persistent script state. User event
+/// hooks still receive every event and its complete typed payload.
+const SCRIPT_EVENT_BUFFER_CAPACITY: usize = 256;
+
 /// Which events a scenario wants delivered to its `on_event` — **per-entity
 /// state** (set at runtime in `on_start` via `subscribe`/`subscribe_prefix`), so
 /// it is NOT part of the shared [`CompiledProgram`]. Default [`All`] = every
@@ -1638,15 +1644,15 @@ struct RhaiScenarioState {
     /// Which events reach this entity's `on_event` (default: all). Set from
     /// `subscribe()` calls harvested after `on_start`.
     filter: EventFilter,
-    /// The `this.task` map compiled onto the [`lunco_behavior`] kernel (the
-    /// native replacement for the prelude's retired `__tick*` engine). Runtime
+    /// The `this.task` map compiled onto the [`lunco_behavior`] kernel. Runtime
     /// tick state (cursors, dwell stamps) lives HERE, not in the map — the map
     /// stays the pristine spec.
     task: Option<crate::task_tree::CompiledTask>,
-    /// Events buffered for the task's `wait_for` leaves since the last tick
-    /// (`(name, emitter-gid)`), drained by [`tick_native_task`] — the native
-    /// replacement for the retired `this.__events` buffer.
-    task_events: Vec<(ImmutableString, i64)>,
+    /// Event identities buffered since the last fixed tick
+    /// (`(name, emitter-gid)`). The native task kernel and the declarative
+    /// mission driver consume this same bounded projection; full telemetry
+    /// payloads stay on the user `on_event` path only.
+    pending_events: Vec<(ImmutableString, i64)>,
 }
 
 /// The rhai [`ScenarioRuntime`](crate::scenario::ScenarioRuntime): one
@@ -1675,7 +1681,7 @@ pub struct RhaiScenarioRuntime {
     /// since the working set is small). A finer LRU is deferred until measured.
     compiled: std::collections::HashMap<u64, CacheEntry>,
     /// The prelude compiled to an `AST`, merged into every scenario's AST so its
-    /// helpers — including the engine-driven `__init_task` / `__note_task_event`
+    /// helpers — including the engine-driven `__init_task` / `__run_mission`
     /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
     /// engine's registered global modules). The prelude stays registered as a
     /// global module too, for the runtime-resolution path used while a script's
@@ -1775,7 +1781,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                             ast.set_source(id);
                         }
                         // Merge the prelude's functions into the scenario AST so
-                        // the engine-driven `__init_task`/`__note_task_event` (and
+                        // the engine-driven `__init_task`/`__run_mission` (and
                         // every other prelude helper) are resolvable by `call_fn`.
                         // Merging prelude←user lets a user function win on any
                         // name/arity clash; the prelude has no top-level body, so
@@ -1855,7 +1861,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 this: Dynamic::from_map(Map::new()),
                 filter: EventFilter::default(),
                 task: None,
-                task_events: Vec::new(),
+                pending_events: Vec::new(),
             },
         );
         CompileOutcome::Ready { top_level }
@@ -1902,28 +1908,42 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Built-in drivers (prelude fns, called regardless of what the user AST
         // defines): after on_start, seed `this.task`/`this.mission` from `task(me)`
         // / `mission(me)` fns if present; after on_tick, advance the declared task
-        // and evaluate the mission. Each no-ops when the script declared neither,
-        // so a plain scenario pays only a couple of cheap calls.
+        // and evaluate the mission. Mission event identities are passed as a
+        // transient argument from the native bounded buffer, never stored in
+        // `this`. Each driver no-ops when the script declared neither, so a plain
+        // scenario pays only a couple of cheap calls.
         let drivers: &[&str] = match hook {
             ScenarioHook::Start => &["__init_task", "__init_mission"],
-            // `__run_task` is retired: `this.task` ticks natively on the
-            // lunco-behavior kernel (see `tick_native_task`), same slot in the
-            // order (task advances before the mission evaluates).
+            // `this.task` advances on the lunco-behavior kernel before the
+            // mission evaluates.
             ScenarioHook::Tick => &["__run_mission"],
             ScenarioHook::Stop => &[],
         };
         let mut driver_err = None;
+        let pending_events = if matches!(hook, ScenarioHook::Tick) {
+            std::mem::take(&mut st.pending_events)
+        } else {
+            Vec::new()
+        };
         if matches!(hook, ScenarioHook::Tick) {
-            driver_err = tick_native_task(&self.engine, st, self_gid);
+            driver_err = tick_native_task(&self.engine, st, self_gid, &pending_events);
         }
         for name in drivers {
+            let args = if *name == "__run_mission" {
+                vec![
+                    Dynamic::from_int(self_gid),
+                    build_event_identities(&pending_events),
+                ]
+            } else {
+                vec![Dynamic::from_int(self_gid)]
+            };
             let e = call_prelude_driver(
                 &self.engine,
                 &mut st.scope,
                 &st.program.ast,
                 name,
                 &mut st.this,
-                vec![Dynamic::from_int(self_gid)],
+                args,
             );
             driver_err = driver_err.or(e);
         }
@@ -1951,8 +1971,6 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         self_gid: i64,
         event: &TelemetryEvent,
     ) -> Option<Diagnostic> {
-        // Build the native event value before borrowing per-entity state.
-        let evt = bridge_core::build_event(&RhaiBuilder, event);
         // Seed the deterministic RNG: (entity, tick, event-name) — distinct events
         // in the same tick draw distinct streams.
         bridge_core::rng_begin(
@@ -1961,21 +1979,18 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
-        // Buffer for the native task tree's `wait_for` leaves (drained every
-        // tick by `tick_native_task`). Capped defensively: a scenario that stops
-        // ticking while events keep arriving must not grow this unboundedly.
-        st.task_events
-            .push((event.name.as_str().into(), event.source as i64));
-        if st.task_events.len() > 256 {
-            let excess = st.task_events.len() - 256;
-            st.task_events.drain(..excess);
-        }
+        // Buffer the bounded identity projection shared by the native task and
+        // mission drivers. The full event is constructed only for a user hook;
+        // built-in progression never receives arbitrary telemetry payloads.
+        queue_event_identity(&mut st.pending_events, event);
         // Per-EVENT hot path: only enter the VM for the user hook if the program
         // defines `on_event` (cached mask bit — no AST scan) AND this event passes
         // the entity's subscription filter (default: all). Either fails → skip the
-        // call entirely; the built-in task driver below still sees every event.
+        // call entirely. Task and mission drivers consume the already-buffered
+        // bounded identity projection on the next fixed pass.
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.event && st.filter.matches(&event.name) {
+            let evt = bridge_core::build_event(&RhaiBuilder, event);
             call_event_hook(
                 &self.engine,
                 &mut st.scope,
@@ -1988,17 +2003,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         } else {
             None
         };
-        // Feed the event into the BUILT-IN task too, so `wait_for(name)` steps in a
-        // `this.task` complete without a hand-written on_event. No-op if no task.
-        let task = call_prelude_driver(
-            &self.engine,
-            &mut st.scope,
-            &st.program.ast,
-            "__note_task_event",
-            &mut st.this,
-            vec![Dynamic::from_int(self_gid), evt],
-        );
-        user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        user.map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn forget(&mut self, entity: Entity) {
@@ -2143,6 +2148,35 @@ fn call_event_hook(
     }
 }
 
+/// Build the transient event projection consumed by the Rhai mission driver.
+/// Mission objectives match only `name` and `source`; carrying `value` or other
+/// telemetry fields here would duplicate the full event payload in persistent
+/// script state and can exceed Rhai's data-size limit during event storms.
+fn build_event_identities(events: &[(ImmutableString, i64)]) -> Dynamic {
+    Dynamic::from_array(
+        events
+            .iter()
+            .map(|(name, source)| {
+                let mut identity = Map::new();
+                identity.insert("name".into(), Dynamic::from(name.to_string()));
+                identity.insert("source".into(), Dynamic::from_int(*source));
+                Dynamic::from_map(identity)
+            })
+            .collect(),
+    )
+}
+
+/// Record one event for task/mission progression without retaining its payload.
+/// This queue is deliberately shared: two independent buffers would let one
+/// consumer grow or observe a different event stream than the other.
+fn queue_event_identity(pending: &mut Vec<(ImmutableString, i64)>, event: &TelemetryEvent) {
+    pending.push((event.name.as_str().into(), event.source as i64));
+    if pending.len() > SCRIPT_EVENT_BUFFER_CAPACITY {
+        let excess = pending.len() - SCRIPT_EVENT_BUFFER_CAPACITY;
+        pending.drain(..excess);
+    }
+}
+
 /// Call a built-in PRELUDE driver function `name` (a global-module fn, NOT in the
 /// user's AST) with `this` bound — for engine-driven hooks like task auto-advance
 /// that live in the prelude, so the AST-presence gate in [`call_hook`] would skip
@@ -2166,9 +2200,8 @@ struct RhaiTaskCtx {
     me: i64,
     now: f64,
     events: Vec<(ImmutableString, i64)>,
-    /// First closure error this tick (leaves keep `Running`; the error surfaces
-    /// once as the hook's diagnostic — the retired engine aborted-and-retried
-    /// the same way).
+    /// First closure error this tick. Leaves keep `Running`; the error surfaces
+    /// once as the hook diagnostic.
     error: Option<(String, rhai::Position)>,
 }
 
@@ -2257,23 +2290,19 @@ enum TaskPlan {
     Compile(Dynamic, i64),
 }
 
-/// Advance `this.task` one tick on the [`lunco_behavior`] kernel — the native
-/// replacement for the prelude's retired `__run_task` rhai driver. The map in
-/// `this.task` is the pristine SPEC (constructors build pure data); runtime
+/// Advance `this.task` one tick on the [`lunco_behavior`] kernel. The map in
+/// `this.task` is the pristine spec (constructors build pure data); runtime
 /// state lives in the compiled tree on [`RhaiScenarioState`]. A fresh
 /// assignment is detected by the `__bt` identity marker this function stamps
-/// into the map after compiling (a rhai re-assignment always produces an
-/// unmarked map). Emits `TASK_COMPLETE` once on root success (parity with the
-/// retired engine) and `TASK_FAILED` on root failure (new — only reachable via
-/// the new `check`/`sel`/`retry` vocabulary).
+/// into the map after compiling (a Rhai re-assignment always produces an
+/// unmarked map). Emits `TASK_COMPLETE` once on root success and `TASK_FAILED`
+/// on root failure.
 fn tick_native_task(
     engine: &std::sync::Arc<Engine>,
     st: &mut RhaiScenarioState,
     self_gid: i64,
+    events: &[(ImmutableString, i64)],
 ) -> Option<(String, rhai::Position)> {
-    // Drain unconditionally so the buffer can't accumulate while no task runs.
-    let events = std::mem::take(&mut st.task_events);
-
     static NEXT_TASK_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
 
     // Inspect the spec (and stamp a new marker) inside one `this` borrow.
@@ -2332,7 +2361,7 @@ fn tick_native_task(
         this,
         me: self_gid,
         now: bridge_core::elapsed_seconds(),
-        events,
+        events: events.to_vec(),
         error: None,
     };
     let status = ct.tree.tick(&mut ctx);
@@ -2635,6 +2664,82 @@ mod tests {
                 .and_then(|value| value.clone().into_string().ok()),
             Some("/Mission/RoverTarget1".to_string())
         );
+    }
+
+    #[test]
+    fn mission_delivery_uses_bounded_event_identities_not_payloads() {
+        let event = TelemetryEvent {
+            name: "diagnostic".to_string(),
+            source: 42,
+            severity: Severity::Error,
+            data: TelemetryValue::String("x".repeat(128 * 1024)),
+            timestamp: 12.0,
+        };
+        let full = crate::bridge_core::build_event(&super::RhaiBuilder, &event);
+        let mut limited = rhai::Engine::new();
+        crate::rhai_limits::apply(&mut limited);
+        assert!(
+            limited.ensure_data_size_within_limits(&full).is_err(),
+            "the fixture must exceed the Rhai string contract"
+        );
+
+        let identity = super::build_event_identities(&[("diagnostic".into(), 42)]);
+        limited
+            .ensure_data_size_within_limits(&identity)
+            .expect("mission delivery must carry only bounded event identity");
+        let identity = identity
+            .try_cast::<rhai::Array>()
+            .expect("identity projection must be an array");
+        assert_eq!(identity.len(), 1);
+        let identity = identity[0]
+            .clone()
+            .try_cast::<Map>()
+            .expect("event identity must be a map");
+        assert_eq!(
+            identity["name"].clone().into_string().unwrap(),
+            "diagnostic"
+        );
+        assert_eq!(identity["source"].as_int().unwrap(), 42);
+    }
+
+    #[test]
+    fn scenario_event_identity_buffer_has_an_explicit_bound() {
+        let mut pending = Vec::new();
+        for source in 0..(super::SCRIPT_EVENT_BUFFER_CAPACITY + 3) {
+            super::queue_event_identity(
+                &mut pending,
+                &TelemetryEvent {
+                    name: format!("event-{source}"),
+                    source: source as u64,
+                    severity: Severity::Info,
+                    data: TelemetryValue::Bool(true),
+                    timestamp: 0.0,
+                },
+            );
+        }
+        assert_eq!(pending.len(), super::SCRIPT_EVENT_BUFFER_CAPACITY);
+        assert_eq!(pending.first().map(|(_, source)| *source), Some(3));
+        assert_eq!(pending.last().map(|(_, source)| *source), Some(258));
+    }
+
+    #[test]
+    fn mission_driver_accepts_transient_event_identities() {
+        let mut engine = rhai::Engine::new();
+        crate::rhai_limits::apply(&mut engine);
+        let ast = super::compile_prelude(&engine).expect("prelude must compile");
+        let mut scope = rhai::Scope::new();
+        let mut this = Dynamic::from_map(Map::new());
+        let result = engine.call_fn_with_options::<Dynamic>(
+            rhai::CallFnOptions::new()
+                .eval_ast(false)
+                .rewind_scope(false)
+                .bind_this_ptr(&mut this),
+            &mut scope,
+            &ast,
+            "__run_mission",
+            [Dynamic::from_int(1), Dynamic::from_array(Vec::new())],
+        );
+        drop(result.expect("mission driver must use the new transient event argument"));
     }
 
     #[test]
