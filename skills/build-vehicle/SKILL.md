@@ -56,7 +56,7 @@ contract without checking its consumer and test.
 | Part | File | Owns |
 |---|---|---|
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, brake, contact, and solved shaft boundary — THE default set every wheel composes |
-| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
+| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: tread lugs, relief, wear) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover-root collection composes it with loads and synthesizes one acausal network DAE |
 | Ideal rail | `power/ideal_voltage_source.usda` | authored unlimited-power source for the `infinite` power variant; it is still compiled into the same electrical network |
@@ -327,12 +327,12 @@ over "Chassis" { color3f[] primvars:displayColor = [(0.30, 0.72, 0.35)] }
 ```
 
 Shader `inputs:` are for what displayColor cannot say — `accent_color`,
-`panel_scale`, `wear`, `dust_amount`. Authoring `inputs:display_color`
+`panel_scale`, `wear`, and `dust_amount` where the owning shader defines it. Authoring `inputs:display_color`
 explicitly still wins over the engine fill, but you rarely want that; it hides
 the colour from every other tool that reads USD.
 
 Tire look lives on the tire component (`wheel.wgsl` inputs `tread_lugs`,
-`lug_depth`, `wear`, `dust_amount`) — a tire that grips differently should
+`lug_depth`, `wear`) — a tire that grips differently should
 LOOK different in the same file. Tires author their colours as shader `inputs:`
 deliberately; that is unchanged.
 
