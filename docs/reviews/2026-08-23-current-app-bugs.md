@@ -59,6 +59,16 @@ capture (`target/ui-summer-autopilot8.png`) shows the driven rover HUD with
 `Charging 0.0 W | Net -3199.3 W | SOC 98.0 % | Used 3199.3 W`. The full
 technical channel list remains available to the telemetry/API consumers.
 
+The compact lander profile had a separate presentation defect: its authored
+telemetry text used `-bevy-line-break: no-wrap` inside the same 224 px card,
+so a valid multi-value summary escaped horizontally into the scene. The
+profile now constrains the telemetry row to the card width, wraps at words or
+characters, and uses an authored 184 px placement height for the resulting
+multi-line content. The generic `telemetry_summary` producer and authored
+fuel/thrust channels are unchanged. Production captures with the integrated
+binary show the lander summary, unavailable defaults, and the generic rover
+profile remaining inside their authored surfaces.
+
 ### APP-02 — compositor ownership is only partially ordered
 
 `EguiAboveBevyUi` correctly places egui chrome above runtime-authored HUI, but
