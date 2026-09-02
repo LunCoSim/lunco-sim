@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, TheLocalAvatar};
+use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
@@ -38,6 +39,7 @@ pub mod inspector;
 pub mod joint_state;
 /// Generic right-click menus for USD-authored transparent markers.
 pub mod scene_context;
+pub(crate) mod selection_context;
 pub mod spawn_palette;
 pub mod terrain_tools;
 /// Bounded, terrain-conforming motion trails for topology-derived vehicles.
@@ -214,18 +216,58 @@ pub(crate) fn selected_entity_in_preview(
 }
 
 #[derive(Clone, Default)]
-struct EditorSessionSelection {
-    entities: Vec<Entity>,
-    target: Option<Entity>,
+pub(crate) struct EditorSessionSelection {
+    /// Canonical composed prim paths. Bevy entities are only a live projection
+    /// and are not retained across a preview reload.
+    pub(crate) paths: Vec<String>,
+    /// Canonical path of the Inspector's drilled target, if any.
+    pub(crate) target_path: Option<String>,
 }
 
 /// Session-owned editor selection. `SelectedEntities` remains the shared ECS
 /// highlight/gizmo projection, while this resource owns which preview lease
 /// that projection belongs to and restores it after focus changes.
 #[derive(Resource, Default)]
-struct EditorSessionSelections {
-    sessions: HashMap<lunco_usd::ui::viewport::UsdPreviewId, EditorSessionSelection>,
-    live: EditorSessionSelection,
+pub(crate) struct EditorSessionSelections {
+    pub(crate) sessions: HashMap<lunco_usd::ui::viewport::UsdPreviewId, EditorSessionSelection>,
+    /// Live-scene selection remains entity-keyed because it is not an authored
+    /// USD preview lease and never crosses into an Editor preview.
+    live: LiveSceneSelection,
+}
+
+#[derive(Clone, Default)]
+struct LiveSceneSelection {
+    entities: Vec<Entity>,
+    target: Option<Entity>,
+}
+
+fn preview_path_for_entity(
+    entity: Entity,
+    preview: &lunco_usd::ui::viewport::UsdPreviewSession,
+    q_paths: &Query<(Entity, &UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<String> {
+    q_paths.get(entity).ok().and_then(|(_, path)| {
+        (path.stage_handle.id() == preview.stage_handle().id()
+            && is_editor_preview_entity(entity, preview.scene_root(), q_parents))
+        .then(|| path.path.clone())
+    })
+}
+
+fn preview_entity_for_path(
+    path: &str,
+    preview: &lunco_usd::ui::viewport::UsdPreviewSession,
+    q_paths: &Query<(Entity, &UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
+        (prim.stage_handle.id() == preview.stage_handle().id()
+            && prim.path == path
+            && is_editor_preview_entity(entity, preview.scene_root(), q_parents))
+        .then_some(entity)
+    });
+    let entity = matches.next()?;
+    matches.next().is_none().then_some(entity)
 }
 
 /// Keep the generic ECS selection projection scoped to the focused USD lease.
@@ -238,6 +280,7 @@ fn sync_editor_session_selection(
     viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
+    q_paths: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     q_selected: Query<Entity, With<crate::selection::Selected>>,
     mut commands: Commands,
@@ -256,28 +299,25 @@ fn sync_editor_session_selection(
         .sessions
         .retain(|preview, _| open.contains(preview));
 
-    let belongs = |preview: lunco_usd::ui::viewport::UsdPreviewId, entity: Entity| {
-        viewport
-            .as_deref()
-            .and_then(|state| state.session(preview))
-            .is_some_and(|session| {
-                crate::ui::is_editor_preview_entity(entity, session.scene_root(), &q_parents)
-            })
-    };
-
     if *last_preview != focused {
         if let Some(previous) = *last_preview {
             if open.contains(&previous) {
-                let entry = sessions.sessions.entry(previous).or_default();
-                entry.entities = selected
-                    .entities
-                    .iter()
-                    .copied()
-                    .filter(|entity| belongs(previous, *entity))
-                    .collect();
-                entry.target = inspector_target
-                    .part
-                    .filter(|entity| belongs(previous, *entity));
+                if let Some(session) = viewport
+                    .as_deref()
+                    .and_then(|state| state.session(previous))
+                {
+                    let entry = sessions.sessions.entry(previous).or_default();
+                    entry.paths = selected
+                        .entities
+                        .iter()
+                        .filter_map(|entity| {
+                            preview_path_for_entity(*entity, session, &q_paths, &q_parents)
+                        })
+                        .collect();
+                    entry.target_path = inspector_target.part.and_then(|entity| {
+                        preview_path_for_entity(entity, session, &q_paths, &q_parents)
+                    });
+                }
             }
         } else {
             sessions.live.entities.clone_from(&selected.entities);
@@ -294,11 +334,28 @@ fn sync_editor_session_selection(
         inspector_target.part = None;
 
         if let Some(preview) = focused {
+            let Some(session) = viewport.as_deref().and_then(|state| state.session(preview)) else {
+                *last_preview = focused;
+                return;
+            };
             let entry = sessions.sessions.entry(preview).or_default();
-            entry.entities.retain(|entity| belongs(preview, *entity));
-            selected.entities.clone_from(&entry.entities);
-            inspector_target.part = entry.target.filter(|entity| belongs(preview, *entity));
-            for &entity in &entry.entities {
+            entry.paths.retain(|path| {
+                preview_entity_for_path(path, session, &q_paths, &q_parents).is_some()
+            });
+            entry.target_path = entry.target_path.take().filter(|path| {
+                preview_entity_for_path(path, session, &q_paths, &q_parents).is_some()
+            });
+            let paths = entry.paths.clone();
+            let target_path = entry.target_path.clone();
+            let restored: Vec<Entity> = paths
+                .iter()
+                .filter_map(|path| preview_entity_for_path(path, session, &q_paths, &q_parents))
+                .collect();
+            selected.entities.clone_from(&restored);
+            inspector_target.part = target_path
+                .as_deref()
+                .and_then(|path| preview_entity_for_path(path, session, &q_paths, &q_parents));
+            for entity in restored {
                 commands
                     .entity(entity)
                     .try_insert((crate::selection::Selected, crate::gizmo::GizmoSelected));
@@ -317,16 +374,43 @@ fn sync_editor_session_selection(
     }
 
     if let Some(preview) = focused {
-        let entry = sessions.sessions.entry(preview).or_default();
-        entry.entities = selected
+        let Some(session) = viewport.as_deref().and_then(|state| state.session(preview)) else {
+            return;
+        };
+        // Keep the shared ECS projection inside the focused lease. A generic
+        // SelectEntity command may arrive while a USD preview is focused; it
+        // must not leak a live-scene entity into the authored Editor context.
+        let valid: Vec<Entity> = selected
             .entities
             .iter()
             .copied()
-            .filter(|entity| belongs(preview, *entity))
+            .filter(|entity| {
+                preview_path_for_entity(*entity, session, &q_paths, &q_parents).is_some()
+            })
             .collect();
-        entry.target = inspector_target
+        if valid != selected.entities {
+            for entity in q_selected.iter().filter(|entity| !valid.contains(entity)) {
+                commands
+                    .entity(entity)
+                    .remove::<crate::selection::Selected>()
+                    .remove::<crate::gizmo::GizmoSelected>();
+            }
+            selected.entities = valid;
+            if inspector_target.part.is_some_and(|entity| {
+                preview_path_for_entity(entity, session, &q_paths, &q_parents).is_none()
+            }) {
+                inspector_target.part = None;
+            }
+        }
+        let entry = sessions.sessions.entry(preview).or_default();
+        entry.paths = selected
+            .entities
+            .iter()
+            .filter_map(|entity| preview_path_for_entity(*entity, session, &q_paths, &q_parents))
+            .collect();
+        entry.target_path = inspector_target
             .part
-            .filter(|entity| belongs(preview, *entity));
+            .and_then(|entity| preview_path_for_entity(entity, session, &q_paths, &q_parents));
     } else {
         sessions.live.entities.clone_from(&selected.entities);
         sessions.live.target = inspector_target.part;
@@ -461,6 +545,10 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<lunco_scene_commands::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
         app.init_resource::<EditorSessionSelections>();
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(selection_context::InspectUsdSelectionProvider);
         app.add_systems(
             Update,
             sync_editor_session_selection.before(ViewModelSet(())),

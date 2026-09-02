@@ -22,14 +22,13 @@ over "Tire" (
     float physics:dynamicFriction = 0.8
     float physics:staticFriction = 0.8
 
-    # The look states the grip: tread gone — a smooth, dusty drum.
+    # The look states the grip: tread gone — a smooth drum.
     over "TireLook"
     {
         over "Shader"
         {
             float inputs:lug_depth = 0.05
             float inputs:wear = 0.95
-            float inputs:dust_amount = 0.55
         }
     }
 }

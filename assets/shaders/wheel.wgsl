@@ -27,8 +27,6 @@
     mesh_view_bindings::view,
     mesh_functions,
 }
-#import lunco::noise::fbm
-
 const TAU: f32 = 6.28318530718;
 
 //!@ui      rim_color   color "Rim / spoke colour"
@@ -41,24 +39,18 @@ const TAU: f32 = 6.28318530718;
 //!@default tread_lugs  24
 //!@ui      spoke_width 0.05 0.9 "Spoke width (of sector)"
 //!@default spoke_width 0.35
-//!@ui      dust_color  color "Regolith dust"
-//!@default dust_color  0.42,0.40,0.38
 //!@ui      lug_depth   0 1 "Lug relief depth"
 //!@default lug_depth   0.6
 //!@ui      wear        0 1 "Tread wear"
 //!@default wear        0.15
-//!@ui      dust_amount 0 1 "Dust coverage"
-//!@default dust_amount 0.35
 struct Material {
     rim_color:   vec3<f32>,
     spoke_count: f32,
     tire_color:  vec3<f32>,
     tread_lugs:  f32,
     spoke_width: f32,
-    dust_color:  vec3<f32>,
     lug_depth:   f32,
     wear:        f32,
-    dust_amount: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -124,18 +116,6 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
         color = mix(rubber, tread, lug_m);
         color *= 1.0 - mat.lug_depth * 0.35 * (1.0 - lug_m);   // valley AO
         is_metal = 0.0;
-    }
-
-    // Regolith dust coating — noise-masked in OBJECT space so it spins with
-    // the wheel. Strongest where the tire touches soil (lug tops / lower
-    // sidewall reads too fine-grained to distinguish here; a mesh-fixed patchy
-    // coat sells it).
-    if (mat.dust_amount > 0.0) {
-        let p_local = transpose(R) * (input.world_position.xyz - m[3].xyz);
-        let dust_n = fbm(p_local * 7.0, 3, 0.5);
-        let dust_m = mat.dust_amount * smoothstep(0.30, 0.75, dust_n);
-        color = mix(color, mat.dust_color, dust_m);
-        is_metal = mix(is_metal, 0.0, dust_m);
     }
 
     // Delegate illumination and shadowing to Bevy's native PBR path. Custom

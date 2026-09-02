@@ -313,6 +313,28 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .cloned()
         .unwrap_or_default();
 
+    let selected_paths: Vec<String> = selected
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            ctx.get::<UsdPrimPath>(*entity)
+                .map(|path| path.path.clone())
+        })
+        .collect();
+    if selected_paths.is_empty() {
+        ui.label(egui::RichText::new("Selection: none — choose a composed prim").weak());
+    } else {
+        ui.label(format!("Selected prims: {}", selected_paths.join(", ")))
+            .on_hover_text("Exact composed USD paths are the editor selection identity");
+    }
+    if let Some(target) = ctx.resource::<crate::InspectorTarget>() {
+        if let Some(entity) = target.part {
+            if let Some(path) = ctx.get::<UsdPrimPath>(entity) {
+                ui.label(format!("Inspector target: {}", path.path));
+            }
+        }
+    }
+
     let mut to_select: Option<Entity> = None;
 
     {

@@ -36,6 +36,7 @@ pub(crate) struct SelectEntityTarget {
 pub(crate) fn on_select_entity_target(
     trigger: On<SelectEntityTarget>,
     mut selected: ResMut<SelectedEntities>,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -48,6 +49,7 @@ pub(crate) fn on_select_entity_target(
         request.extend,
         request.toggle,
     );
+    inspector_target.part = None;
     commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
 }
 
@@ -226,6 +228,7 @@ pub fn on_select_entity(
     trigger: On<SelectEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut selected: ResMut<SelectedEntities>,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -233,6 +236,7 @@ pub fn on_select_entity(
 
     if cmd.entity_id == 0 {
         clear_selection(&mut commands, &mut selected, q_old.iter());
+        inspector_target.part = None;
         info!("SELECT_ENTITY: cleared selection");
         return;
     }
@@ -242,6 +246,7 @@ pub fn on_select_entity(
         warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
         if !cmd.extend && !cmd.toggle {
             clear_selection(&mut commands, &mut selected, q_old.iter());
+            inspector_target.part = None;
         }
         return;
     };
@@ -254,6 +259,7 @@ pub fn on_select_entity(
         cmd.extend,
         cmd.toggle,
     );
+    inspector_target.part = None;
     info!(
         "SELECT_ENTITY: selected api_id={} ({target:?})",
         cmd.entity_id
@@ -267,6 +273,7 @@ pub fn on_select_usd_prim(
     q_paths: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     mut selected: ResMut<SelectedEntities>,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -302,6 +309,7 @@ pub fn on_select_usd_prim(
         );
         if !cmd.extend && !cmd.toggle {
             clear_selection(&mut commands, &mut selected, q_old.iter());
+            inspector_target.part = None;
         }
         return;
     };
@@ -314,6 +322,7 @@ pub fn on_select_usd_prim(
         cmd.extend,
         cmd.toggle,
     );
+    inspector_target.part = None;
     info!(
         "SELECT_USD_PRIM: preview {} selected {}",
         cmd.preview.0, cmd.path
@@ -540,7 +549,6 @@ pub fn on_scene_click_select(
         extend: true,
         toggle: true,
     });
-    inspector_target.part = None;
 }
 
 /// The `Cancel` intent clears the selection and gizmo. Split out of the click
@@ -910,6 +918,7 @@ mod tests {
     fn toggled_selection_updates_highlights_without_starting_drag() {
         let mut app = App::new();
         app.init_resource::<SelectedEntities>()
+            .init_resource::<crate::InspectorTarget>()
             .insert_resource(lunco_core::DragModeActive::default())
             .add_observer(on_select_entity_target);
 
@@ -932,6 +941,10 @@ mod tests {
             .get::<crate::gizmo::GizmoSelected>(first)
             .is_some());
 
+        app.world_mut()
+            .resource_mut::<crate::InspectorTarget>()
+            .part = Some(first);
+
         app.world_mut().trigger(SelectEntityTarget {
             target: second,
             extend: true,
@@ -943,6 +956,11 @@ mod tests {
             vec![first, second]
         );
         assert!(app.world().get::<Selected>(second).is_some());
+        assert!(app
+            .world()
+            .resource::<crate::InspectorTarget>()
+            .part
+            .is_none());
 
         app.world_mut().trigger(SelectEntityTarget {
             target: first,
