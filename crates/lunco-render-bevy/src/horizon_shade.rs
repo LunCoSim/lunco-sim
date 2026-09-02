@@ -15,10 +15,10 @@
 //! only engine-owned uniforms on already-bound materials; they never choose a
 //! shader or create a terrain material.
 //!
-//! Ordering: horizon/material discovery runs in `Update` after
-//! `lunco_environment::horizon::finish_shadow_cache_bake`. The blueprint frame
-//! projection runs separately in `PostUpdate`, after BigSpace has finished
-//! propagating the floating-origin frame used by the renderer.
+//! Ordering: material and frame projection run in `PostUpdate`, after BigSpace
+//! has finished propagating the floating-origin frame used by the renderer.
+//! Cache completion remains in `Update`; the post-update consumers see that
+//! completed cache and the same finalized terrain transforms as the renderer.
 
 use crate::shader_material::ShaderMaterial;
 use bevy::asset::AssetId;
@@ -29,8 +29,7 @@ use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_environment::horizon::{
-    finish_shadow_cache_bake, pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig,
-    SunQuery,
+    pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, SunQuery,
 };
 use lunco_environment::SunRenderState;
 use lunco_materials::ParamValue;
@@ -43,27 +42,21 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<lunco_render::RenderingQualitySettings>();
     app.add_systems(
         Update,
-        (
-            sync_horizon_quality_settings
-                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
-            wire_terrain_materials,
-            wire_sun_for_non_terrain_materials,
-        )
-            .chain()
-            .after(finish_shadow_cache_bake)
-            // The bake half is gated on the asset stores existing; the material
-            // half needs them too (plus the material assets, which are `Option`al
-            // below so an app without `ShaderMaterialPlugin` degrades quietly).
-            .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
+        sync_horizon_quality_settings
+            .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
     );
-    // `wire_blueprint_origin` consumes the same finalized render-space frame as
-    // the mesh GlobalTransforms. The camera-origin writer runs before BigSpace's
-    // recenter/propagation phases; running this in Update would read the previous
-    // frame's render transform and make the shader's Cartesian coordinates
-    // disagree with the vertices for one frame whenever the origin moves.
+    // These consumers all use the finalized render-space frame. The camera-origin
+    // writer and BigSpace recenter/propagation phases run earlier in PostUpdate;
+    // keeping the whole group after low-precision propagation prevents the
+    // current sun from being combined with the previous terrain GlobalTransform.
     app.add_systems(
         PostUpdate,
-        wire_blueprint_origin
+        (
+            wire_terrain_materials,
+            wire_sun_for_non_terrain_materials,
+            wire_blueprint_origin,
+        )
+            .chain()
             .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
@@ -792,6 +785,66 @@ mod tests {
             .expect("the active frame must retain a propagated render transform")
             .translation();
         assert!((actual_uniform - frame_render).length() < 1.0e-3);
+    }
+
+    #[test]
+    fn terrain_shadow_projection_uses_the_finalized_render_transform() {
+        use big_space::plugin::BigSpaceMinimalPlugins;
+        use std::f32::consts::FRAC_PI_2;
+
+        fn finalize_terrain_render_pose(
+            mut terrains: Query<
+                &mut GlobalTransform,
+                With<lunco_terrain_surface::DemTerrainSurface>,
+            >,
+        ) {
+            for mut transform in &mut terrains {
+                *transform = GlobalTransform::from_rotation(Quat::from_rotation_y(FRAC_PI_2));
+            }
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<bevy::pbr::StandardMaterial>()
+            .init_asset::<ShaderMaterial>();
+        app.insert_resource(lunco_environment::SunRenderState {
+            direction_to_sun_world: Some(Vec3::X),
+            revision: 1,
+        });
+        app.world_mut().spawn(DirectionalLight::default());
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn((
+            lunco_terrain_surface::DemTerrainSurface,
+            GlobalTransform::IDENTITY,
+            MeshMaterial3d(handle.clone()),
+        ));
+
+        app.add_systems(
+            PostUpdate,
+            finalize_terrain_render_pose.before(wire_terrain_materials),
+        );
+        build(&mut app);
+        app.update();
+
+        let actual = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&handle)
+            .and_then(|material| material.get_vec3("sun_dir"))
+            .expect("terrain sun direction must be wired");
+        let expected = Quat::from_rotation_y(FRAC_PI_2).inverse() * Vec3::X;
+        assert!(
+            actual.abs_diff_eq(expected, 1.0e-6),
+            "terrain shadow direction must use the finalized render transform: got {actual:?}, expected {expected:?}"
+        );
     }
 
     /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.

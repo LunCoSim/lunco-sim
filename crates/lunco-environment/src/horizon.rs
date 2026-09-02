@@ -86,6 +86,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
 use bevy::light::{CascadeShadowConfig, NotShadowReceiver};
+use bevy::math::Affine3A;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -787,13 +788,18 @@ pub fn start_shadow_cache_bake(
     terrains: Query<
         (
             Entity,
-            &GlobalTransform,
+            Ref<GlobalTransform>,
             &HorizonMap,
             Option<&HorizonShadowCache>,
         ),
         (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
     >,
+    mut inverse_cache: Local<std::collections::HashMap<Entity, Affine3A>>,
+    mut removed_maps: RemovedComponents<HorizonMap>,
 ) {
+    for entity in removed_maps.read() {
+        inverse_cache.remove(&entity);
+    }
     if !cfg.enabled {
         return;
     }
@@ -824,11 +830,22 @@ pub fn start_shadow_cache_bake(
             );
             continue;
         }
-        let sun_local = terrain_gt
-            .affine()
-            .inverse()
-            .transform_vector3(to_sun_world)
-            .normalize_or_zero();
+        // The finalized render transform is the coordinate-frame boundary,
+        // but its inverse is stable while the terrain is stationary. Keep the
+        // expensive matrix inversion change-driven; only the vector projection
+        // and angular validity check run for a moving sun.
+        let inverse = match inverse_cache.entry(entity) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if terrain_gt.is_changed() {
+                    *entry.get_mut() = terrain_gt.affine().inverse();
+                }
+                *entry.get()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                *entry.insert(terrain_gt.affine().inverse())
+            }
+        };
+        let sun_local = inverse.transform_vector3(to_sun_world).normalize_or_zero();
         // No sun / sun below horizon → the march handles it cheaply; no bake.
         if sun_local.y <= 1e-4 {
             continue;
@@ -894,8 +911,9 @@ pub fn start_shadow_cache_bake(
 /// Collects finished off-thread visibility-cache bakes and installs them
 /// (native). The cache handle swaps atomically: the old `HorizonShadowCache`
 /// image is dropped, the fresh one takes over, and the render-side
-/// `wire_terrain_materials` rebinds it next frame. While the bake ran the stale
-/// cache stayed bound (within the sun threshold → visually lossless).
+/// `wire_terrain_materials` consumes it in the same frame's PostUpdate. While
+/// the bake ran the stale cache stayed bound (within the sun threshold →
+/// visually lossless).
 pub fn finish_shadow_cache_bake(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -1034,10 +1052,12 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a DirectionalLight, f32, f32
 /// the USD loader).
 ///
 /// The material half (`wire_terrain_materials`) is added by
-/// `lunco_render_bevy::LuncoRenderPlugin`, and ordered after these
-/// systems. Headless simply never adds it: the heightfields and caches are still
-/// baked (they are simulation-visible data — a shadow query, a solar-power
-/// model), they just never reach a GPU material.
+/// `lunco_render_bevy::LuncoRenderPlugin`. Cache completion remains in Update;
+/// material and terrain-local frame projection consume the completed cache and
+/// finalized BigSpace render transforms in PostUpdate. Headless simply never
+/// adds the material system: heightfields and caches are still baked (they are
+/// simulation-visible data — a shadow query, a solar-power model), they just
+/// never reach a GPU material.
 pub struct HorizonShadowPlugin;
 
 impl Plugin for HorizonShadowPlugin {
@@ -1054,10 +1074,19 @@ impl Plugin for HorizonShadowPlugin {
             (
                 start_horizon_bakes,
                 finish_horizon_bakes,
-                start_shadow_cache_bake,
                 finish_shadow_cache_bake,
             )
                 .chain()
+                .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
+        );
+        // The cache's sun direction is terrain-local, so its decision must use
+        // the same finalized floating-origin transform that the renderer sees.
+        // BigSpace updates GlobalTransform in PostUpdate; starting this bake in
+        // Update would combine the current sun with the previous render frame.
+        app.add_systems(
+            PostUpdate,
+            start_shadow_cache_bake
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
                 .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
         );
     }
