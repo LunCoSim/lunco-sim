@@ -6,7 +6,7 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 
 - **Spawn System** — click-to-place rovers, props, and terrain with ghost preview
 - **Entity Selection** — Shift+Left-click selects entities and shows transform gizmo immediately
-- **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`, converted through BigSpace and committed as one scene command
+- **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — EGUI sliders for transform, mass, damping, and wheel parameters
 - **Undo** — Ctrl+Z to revert spawns and transform changes
 
@@ -38,16 +38,17 @@ path is introduced.
 
 The gizmo system uses `transform-gizmo-bevy` as a render-space frontend. Its
 `GizmoTarget` lives on an unparented proxy; the real entity is never exposed to
-the library's `&mut Transform` writer. A drag is a transaction over one exact
-f64 pose in `ActivePhysicsFrame`:
+the library's `&mut Transform` writer. A drag is one transaction with an
+explicit owner: live entities carry an exact f64 pose in `ActivePhysicsFrame`,
+while USD preview entities carry their parent-local composed pose:
 
 ```
 Shift+Left-click → Select editable entity → Spawn render proxy
-Drag gizmo handle → Capture Avian/hierarchy pose → proxy proposes render pose
-                     → render pose → active-frame f64 pose → parent-local storage
-                     → KinematicDrive and BigSpace bridge keep physics aligned
-Release gizmo handle → one TransformEntity command → one USD change set
-                     → original body state restored → physics resumes
+Drag gizmo handle → Capture the owner pose → proxy proposes render pose
+                     → live: render → active-frame f64 → parent-local storage
+                     → USD: render → parent-local Bevy transform
+Release gizmo handle → live: TransformEntity; USD: one ApplyUsdOps change set
+                     → owner state restored or projected, then the session ends
 ```
 
 ### Coordinate and ownership contract
@@ -57,18 +58,23 @@ not calculate deltas, subtract a parent rotation, read `GlobalTransform` as a
 physics pose, or write Avian `Position`/`Rotation` directly. The canonical flow
 is:
 
-1. **`capture_gizmo_start`** — read `SimulationPoseQuery`, snapshot the active
-   frame and body state, then make the body kinematic.
-2. **`apply_gizmo_proxy_drag`** — convert the complete proxy pose through
+1. **`capture_gizmo_start`** — resolve the focused USD preview lease first. A
+   preview snapshots its local `Transform`; a live entity reads
+   `SimulationPoseQuery`, snapshots the active frame/body state, and becomes
+   kinematic.
+2. **`apply_gizmo_proxy_drag`** — live poses use
    `render_pose_to_grid_absolute` and
-   `position_in_grid_to_parent_local`/`rotation_in_grid_to_parent_local`.
+   `position_in_grid_to_parent_local`/`rotation_in_grid_to_parent_local`;
+   preview poses use Bevy's `GlobalTransform::reparented_to`.
 3. **`capture_final_gizmo_pose`** — snapshot the proxy's final `Last`-schedule
    write before release cleanup, because the normal interaction transfer runs
    earlier in `PostUpdate`.
-4. **`restore_gizmo_dynamic`** — commit one `TransformEntity`, or restore the
-   snapshot on cancel/frame invalidation, then restore physics state.
-5. **`TransformEntity`** — the scene-command owner writes the parent-local/cell
-   representation and persists translation plus rotation as one USD change set.
+4. **`restore_gizmo_dynamic`** — the live owner restores body/interpolation
+   state and commits `TransformEntity`; the USD owner restores on Escape or
+   stale preview revision, or commits changed local channels as one
+   generation-checked `ApplyUsdOps` change set.
+5. **Owner boundary** — the scene command owns live parent-local/cell storage;
+   `UsdOp::SetTranslate`/`SetRotate` own preview authoring and projection.
 
 Scale handles are disabled until scale has an authored USD and runtime command
 contract. The existing BigSpace physics bridge remains the only normal Avian
@@ -76,10 +82,12 @@ pose adapter.
 
 ### Why Render and Physics Poses Are Split
 
-The proxy is render-frame-owned, while the real entity stores the scene's
-parent-local/cell representation. The transaction keeps the exact active-frame
-pose separately so BigSpace rebranching and Avian writeback cannot turn a
-camera-relative f32 value into a kilometre-scale teleport.
+The proxy is render-frame-owned. Live entities store the scene's
+parent-local/cell representation and keep an exact active-frame pose so
+BigSpace rebranching and Avian writeback cannot turn a camera-relative f32
+value into a kilometre-scale teleport. Preview entities store ordinary
+parent-local transforms; their explicit document/generation owner prevents a
+stale drag from overwriting a newer USD edit.
 
 ## USD Compound Rigid Bodies
 

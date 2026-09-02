@@ -176,6 +176,30 @@ an arbitrary entity. `assembly_edit::selection_context()` reads the focused
 context and `selection_context_for(preview)` reads a hidden open preview
 without changing user-visible focus.
 
+The Inspector uses that same lease boundary for numeric transform edits. A
+selected entity under the focused preview root is edited as its composed USD
+prim's local canonical transform: the controls display metres and Euler XYZ
+degrees and submit one `ApplyUsdOps` change set containing the changed existing
+`SetTranslate` and/or `SetRotate` operation after a value is committed. The command
+uses the preview's explicit document, edit target, and projected generation, so
+stale edits are rejected and the USD projector remains the only preview update
+owner. Live simulation entities continue to use `MoveEntity`, which owns
+BigSpace/physics seating; a preview entity is never sent through that live
+identity path.
+
+The standard transform gizmo uses the same unparented proxy frontend for both
+owners. At drag start, a focused preview target is identified by its exact
+preview root, stage handle, document, edit target, generation, and `UsdPrimPath`;
+its local composed Bevy `Transform` becomes the transaction snapshot. During the
+drag, the proxy's render pose is converted to parent-local space with Bevy's
+`GlobalTransform::reparented_to`. Release authors only the changed local
+translation and/or Euler XYZ rotation as one generation-checked `ApplyUsdOps`
+change set. Escape restores the local snapshot, while a changed preview
+generation or closed session discards the transaction without restoring stale
+state. Preview drags never create `RigidBody`, `KinematicDrive`, or a physics
+hold. Live targets keep the existing BigSpace/Avian capture, rebranch, restore,
+and `TransformEntity` path.
+
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,

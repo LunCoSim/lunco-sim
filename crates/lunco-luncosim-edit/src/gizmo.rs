@@ -2,7 +2,9 @@
 //!
 //! Uses `transform-gizmo-bevy` for render-space picking and manipulation. The
 //! gizmo never owns a scene transform: this module translates its proxy pose
-//! through the active BigSpace frame and the scene-command boundary. It also handles:
+//! through the authoritative owner boundary. Live entities use the active
+//! BigSpace frame and scene command; isolated USD previews use their composed
+//! Bevy hierarchy and `ApplyUsdOps`. It also handles:
 //! - Making bodies kinematic during gizmo drag
 //! - Holding physics integration during manual dragging
 //! - Disabling physics interpolation during manual dragging
@@ -22,7 +24,11 @@ use bevy::camera::RenderTarget;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::SceneViewport;
+use lunco_doc::DocumentId;
 use lunco_render::SceneCamera;
+use lunco_usd::document::LayerId;
+use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_bevy::UsdPrimPath;
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
 };
@@ -63,32 +69,42 @@ pub struct GizmoDragSession {
     targets: HashSet<Entity>,
 }
 
-/// Captures the pre-drag body state for drag lifecycle restoration.
+/// The authoritative owner of a gizmo transaction.
+///
+/// Live scene entities use the existing BigSpace/Avian pose and restoration
+/// contract. Isolated USD previews use their explicit document lease and
+/// parent-local Bevy transform; they never enter the live physics path.
+#[derive(Clone, Debug)]
+pub enum GizmoDragOwner {
+    Live {
+        active_frame: Entity,
+        original_body: Option<RigidBody>,
+        original_drive: Option<lunco_physics::KinematicDrive>,
+        had_custom_position_integration: bool,
+        had_translation_interpolation: bool,
+        had_rotation_interpolation: bool,
+    },
+    UsdPreview {
+        preview: UsdPreviewId,
+        doc: DocumentId,
+        edit_target: LayerId,
+        generation: u64,
+        path: String,
+    },
+}
+
+/// Captures the pre-drag pose and its authoritative owner.
 #[derive(Component)]
 pub struct GizmoDragState {
-    /// The active semantic frame captured at drag start.
-    pub active_frame: Entity,
-    /// The pose before the drag, in `active_frame`.
+    /// The pose before the drag. Live poses are in `owner`'s active frame;
+    /// preview poses are local to the selected USD prim's Bevy parent.
+    pub owner: GizmoDragOwner,
     pub original_position: DVec3,
     pub original_rotation: bevy::math::DQuat,
-    /// The latest valid pose proposed by the gizmo, in `active_frame`.
+    /// The latest valid pose proposed by the gizmo in the same space as the
+    /// original pose.
     pub current_position: DVec3,
     pub current_rotation: bevy::math::DQuat,
-    /// Original RigidBody type before drag started, or `None` if the entity had
-    /// no `RigidBody` at all. `None` must stay `None` on restore: inserting a
-    /// `Dynamic` body onto a prim that never had one gives avian a body with no
-    /// mass or inertia ("Dynamic rigid body has no mass or inertia. This can
-    /// cause NaN values.") and hands the solver a NaN source that outlives the
-    /// drag.
-    pub original_body: Option<RigidBody>,
-    /// A drive that existed before this gizmo session, if any.
-    pub original_drive: Option<lunco_physics::KinematicDrive>,
-    /// Whether custom Avian position integration existed before capture.
-    pub had_custom_position_integration: bool,
-    /// Whether the entity had TranslationInterpolation.
-    pub had_translation_interpolation: bool,
-    /// Whether the entity had RotationInterpolation.
-    pub had_rotation_interpolation: bool,
 }
 
 /// Marks an entity as selected for gizmo editing. The `GizmoTarget` the gizmo
@@ -173,9 +189,9 @@ pub fn despawn_gizmo_proxies(
 /// Parks each proxy on the pose owned by its current side of the transaction.
 ///
 /// Idle proxies use the target's propagated render pose. During a drag the
-/// transaction owns an active-frame f64 pose, which is projected back through
-/// BigSpace every frame. That re-projection is what keeps the handle attached
-/// when a cell or floating origin changes between interaction steps.
+/// Live transactions own an active-frame f64 pose, which is projected back
+/// through BigSpace every frame. Preview transactions own a parent-local pose
+/// and are refreshed by ordinary Bevy hierarchy propagation.
 ///
 /// Runs after `TransformSystems::Propagate` (big_space's propagation is in that
 /// set), so the `GlobalTransform` read here is this frame's.
@@ -187,21 +203,23 @@ pub fn sync_gizmo_proxies(
 ) {
     for (mut tf, link, _gizmo_target) in &mut q_proxies {
         if let Ok(state) = q_drag.get(link.target) {
-            let Ok(grid) = q_grids.get(state.active_frame) else {
+            if let GizmoDragOwner::Live { active_frame, .. } = &state.owner {
+                let Ok(grid) = q_grids.get(*active_frame) else {
+                    continue;
+                };
+                let (render_position, render_rotation) =
+                    lunco_core::coords::grid_absolute_pose_to_render(
+                        grid,
+                        lunco_core::coords::GridPos(state.current_position),
+                        lunco_core::coords::GridRot(state.current_rotation),
+                    );
+                tf.translation = render_position.0.as_vec3();
+                tf.rotation = render_rotation.0.as_quat();
+                // Scale editing is intentionally disabled until it has a scene
+                // command and an authored contract of its own.
+                tf.scale = Vec3::ONE;
                 continue;
-            };
-            let (render_position, render_rotation) =
-                lunco_core::coords::grid_absolute_pose_to_render(
-                    grid,
-                    lunco_core::coords::GridPos(state.current_position),
-                    lunco_core::coords::GridRot(state.current_rotation),
-                );
-            tf.translation = render_position.0.as_vec3();
-            tf.rotation = render_rotation.0.as_quat();
-            // Scale editing is intentionally disabled until it has a scene
-            // command and an authored contract of its own.
-            tf.scale = Vec3::ONE;
-            continue;
+            }
         }
         let Ok(global) = q_targets.get(link.target) else {
             continue;
@@ -239,12 +257,54 @@ fn proxy_pose_to_active_frame(
     Some((position.0, rotation.0))
 }
 
+/// Convert the gizmo frontend's render-space pose into a preview prim's local
+/// transform using Bevy's authoritative hierarchy transform operation.
+///
+/// Preview entities are ordinary USD projections, not BigSpace bodies. Their
+/// authored transform is local to the composed USD parent, so the render-space
+/// proxy must be reparented through the current parent `GlobalTransform` before
+/// it can be written to the projection or authored as `SetTranslate`/`SetRotate`.
+fn proxy_pose_to_preview_local(
+    entity: Entity,
+    tf: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_globals: &Query<&GlobalTransform, Without<GizmoProxy>>,
+) -> Option<(DVec3, bevy::math::DQuat)> {
+    let parent = match q_parents.get(entity) {
+        Ok(parent) => Some(q_globals.get(parent.parent()).ok()?),
+        Err(_) => None,
+    };
+    preview_global_to_local_pose(tf, parent)
+}
+
+fn preview_global_to_local_pose(
+    tf: &Transform,
+    parent: Option<&GlobalTransform>,
+) -> Option<(DVec3, bevy::math::DQuat)> {
+    let local = match parent {
+        Some(parent) => GlobalTransform::from(*tf).reparented_to(parent),
+        None => *tf,
+    };
+    local_transform_pose(&local)
+}
+
+fn local_transform_pose(tf: &Transform) -> Option<(DVec3, bevy::math::DQuat)> {
+    if !tf.translation.is_finite()
+        || !tf.rotation.is_finite()
+        || tf.rotation.length_squared() < 1.0e-12
+    {
+        return None;
+    }
+    Some((tf.translation.as_dvec3(), tf.rotation.as_dquat()))
+}
+
 /// Transfers the proxy's complete render pose into the real entity.
 ///
 /// This is deliberately an absolute conversion, never a render-space delta:
 /// render → active-frame f64 → actual parent-local `(CellCoord, Transform)`.
-/// The same active pose also drives Avian through `KinematicDrive`; the
-/// BigSpace physics bridge remains the sole Position/Rotation adapter.
+/// Live poses also drive Avian through `KinematicDrive`; the BigSpace physics
+/// bridge remains the sole live Position/Rotation adapter. Preview poses stay
+/// outside that path and update only their projected local `Transform`.
 pub fn apply_gizmo_proxy_drag(
     q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
     mut world: ParamSet<(
@@ -256,28 +316,48 @@ pub fn apply_gizmo_proxy_drag(
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
+    q_globals: Query<&GlobalTransform, Without<GizmoProxy>>,
     mut commands: Commands,
 ) {
     for (tf, link, gizmo_target) in &q_proxies {
         if !gizmo_target.is_active() {
             continue;
         }
-        let Ok(state_snapshot) = world.p3().get(link.target).map(|state| {
-            (
-                state.active_frame,
-                state.original_position,
-                state.original_rotation,
-            )
-        }) else {
+        let Ok(owner) = world.p3().get(link.target).map(|state| state.owner.clone()) else {
+            continue;
+        };
+        if let GizmoDragOwner::UsdPreview { .. } = owner {
+            let Some((position, rotation)) =
+                proxy_pose_to_preview_local(link.target, tf, &q_parents, &q_globals)
+            else {
+                continue;
+            };
+            if let Ok(mut target_tf) = world.p1().get_mut(link.target) {
+                target_tf.translation = position.as_vec3();
+                target_tf.rotation = rotation.as_quat();
+            } else {
+                continue;
+            }
+            if let Ok(mut state) = world.p3().get_mut(link.target) {
+                state.current_position = position;
+                state.current_rotation = rotation;
+            }
+            continue;
+        }
+        let GizmoDragOwner::Live {
+            active_frame: drag_frame,
+            ..
+        } = owner
+        else {
             continue;
         };
         // A BigSpace handoff invalidates the transaction. Do not reinterpret a
         // proxy pose captured in the old semantic frame through the new frame
         // for even one interaction update; Last-stage cleanup will discard it.
-        if state_snapshot.0 != active_frame.0 {
+        if drag_frame != active_frame.0 {
             continue;
         }
-        let Ok(grid) = q_grids.get(state_snapshot.0) else {
+        let Ok(grid) = q_grids.get(drag_frame) else {
             continue;
         };
         let Some((position, rotation)) = proxy_pose_to_active_frame(grid, tf) else {
@@ -293,7 +373,7 @@ pub fn apply_gizmo_proxy_drag(
                 lunco_core::coords::position_in_grid_to_parent_local(
                     link.target,
                     position,
-                    state_snapshot.0,
+                    drag_frame,
                     &q_parents,
                     &q_grids,
                     &q_spatial,
@@ -304,7 +384,7 @@ pub fn apply_gizmo_proxy_drag(
             let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
                 link.target,
                 rotation,
-                state_snapshot.0,
+                drag_frame,
                 &q_parents,
                 &q_grids,
                 &q_spatial,
@@ -355,6 +435,8 @@ pub fn capture_final_gizmo_pose(
     mut q_drag: Query<&mut GizmoDragState, Without<GizmoProxy>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
+    q_parents: Query<&ChildOf>,
+    q_globals: Query<&GlobalTransform, Without<GizmoProxy>>,
     session: Res<GizmoDragSession>,
 ) {
     for (proxy_tf, link, gizmo_target) in &q_proxies {
@@ -364,13 +446,24 @@ pub fn capture_final_gizmo_pose(
         let Ok(mut drag) = q_drag.get_mut(link.target) else {
             continue;
         };
-        if drag.active_frame != active_frame.0 {
-            continue;
-        }
-        let Ok(grid) = q_grids.get(drag.active_frame) else {
-            continue;
+        let pose = match &drag.owner {
+            GizmoDragOwner::Live {
+                active_frame: drag_frame,
+                ..
+            } => {
+                if *drag_frame != active_frame.0 {
+                    continue;
+                }
+                let Ok(grid) = q_grids.get(*drag_frame) else {
+                    continue;
+                };
+                proxy_pose_to_active_frame(grid, proxy_tf)
+            }
+            GizmoDragOwner::UsdPreview { .. } => {
+                proxy_pose_to_preview_local(link.target, proxy_tf, &q_parents, &q_globals)
+            }
         };
-        let Some((position, rotation)) = proxy_pose_to_active_frame(grid, proxy_tf) else {
+        let Some((position, rotation)) = pose else {
             continue;
         };
         drag.current_position = position;
@@ -408,9 +501,41 @@ pub fn sync_gizmo_dragging_marker(
     drag_mode.active = any_active;
 }
 
+/// Resolve an active gizmo target to the focused USD preview lease.
+///
+/// The stage handle and exact preview hierarchy are both required. The handle
+/// alone is insufficient because the same composed stage can be projected into
+/// the live scene and more than one isolated preview at once.
+fn preview_drag_owner(
+    entity: Entity,
+    viewport: Option<&UsdViewportState>,
+    q_paths: &Query<&UsdPrimPath>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<GizmoDragOwner> {
+    let session = viewport?.focused_session()?;
+    let prim = q_paths.get(entity).ok()?;
+    if prim.stage_handle.id() != session.stage_handle().id()
+        || prim.path.is_empty()
+        || !crate::ui::is_editor_preview_entity(entity, session.scene_root(), q_parents)
+    {
+        return None;
+    }
+    Some(GizmoDragOwner::UsdPreview {
+        preview: session.id(),
+        doc: session.doc(),
+        edit_target: session.edit_target().clone(),
+        generation: session.projected_generation(),
+        path: prim.path.clone(),
+    })
+}
+
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
 pub fn capture_gizmo_start(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
+    viewport: Option<Res<UsdViewportState>>,
+    q_paths: Query<&UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    q_transforms: Query<&Transform, Without<GizmoProxy>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     simulation_pose: lunco_physics::SimulationPoseQuery,
     q_rigid_bodies: Query<&RigidBody>,
@@ -423,7 +548,7 @@ pub fn capture_gizmo_start(
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
-    let mut captured_any = false;
+    let mut captured_live_any = false;
     for (link, gizmo_target) in gizmo_targets.iter() {
         let entity = link.target;
         if !gizmo_target.is_active() {
@@ -433,6 +558,27 @@ pub fn capture_gizmo_start(
         // the synchronous guard; without it, every Last pass before the insert
         // flushes captures and reopens the physics hold.
         if session.targets.contains(&entity) {
+            continue;
+        }
+
+        if let Some(owner) = preview_drag_owner(entity, viewport.as_deref(), &q_paths, &q_parents) {
+            let Some((position, rotation)) =
+                q_transforms.get(entity).ok().and_then(local_transform_pose)
+            else {
+                continue;
+            };
+            session.targets.insert(entity);
+            info!(
+                "GIZMO: USD preview drag started for {:?}, local_pos={:?}",
+                entity, position
+            );
+            commands.entity(entity).try_insert(GizmoDragState {
+                owner,
+                original_position: position,
+                original_rotation: rotation,
+                current_position: position,
+                current_rotation: rotation,
+            });
             continue;
         }
 
@@ -459,7 +605,7 @@ pub fn capture_gizmo_start(
             commands.entity(entity).remove::<RotationInterpolation>();
         }
 
-        captured_any = true;
+        captured_live_any = true;
         session.targets.insert(entity);
 
         info!(
@@ -474,21 +620,23 @@ pub fn capture_gizmo_start(
                 CustomPositionIntegration,
                 lunco_physics::KinematicDrive::new(position.0, rotation.0),
                 GizmoDragState {
-                    active_frame: active_frame.0,
+                    owner: GizmoDragOwner::Live {
+                        active_frame: active_frame.0,
+                        original_body,
+                        original_drive,
+                        had_custom_position_integration,
+                        had_translation_interpolation: had_translation,
+                        had_rotation_interpolation: had_rotation,
+                    },
                     original_position: position.0,
                     original_rotation: rotation.0,
                     current_position: position.0,
                     current_rotation: rotation.0,
-                    original_body,
-                    original_drive,
-                    had_custom_position_integration,
-                    had_translation_interpolation: had_translation,
-                    had_rotation_interpolation: had_rotation,
                 },
             ));
     }
 
-    if captured_any {
+    if captured_live_any {
         // A selected lander is an articulation: the leg bodies are coupled to
         // the root and carry welded footpad colliders. Holding the entire physics world
         // is the only atomic capture boundary available to Avian; changing only
@@ -499,13 +647,15 @@ pub fn capture_gizmo_start(
 }
 
 /// Finish or cancel the active gizmo transactions and restore their pre-drag
-/// physics state. A completed transaction emits exactly one
-/// [`lunco_scene_commands::commands::TransformEntity`] command; the command
-/// layer owns the live and USD persistence legs together.
+/// state. Live transactions emit the existing
+/// [`lunco_scene_commands::commands::TransformEntity`] command; USD preview
+/// transactions emit one existing [`lunco_usd::commands::ApplyUsdOps`]
+/// change set. Each owner keeps its authoritative persistence boundary.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    viewport: Option<Res<UsdViewportState>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
     mut q_vel: Query<(Option<&mut LinearVelocity>, Option<&mut AngularVelocity>)>,
@@ -543,23 +693,97 @@ pub fn restore_gizmo_dynamic(
             continue;
         }
 
-        let frame_changed = active_frame.0 != drag.active_frame;
-        let cancel_transaction = cancelled || frame_changed;
+        let (frame_changed, stale_preview) = match &drag.owner {
+            GizmoDragOwner::Live {
+                active_frame: drag_frame,
+                ..
+            } => (active_frame.0 != *drag_frame, false),
+            GizmoDragOwner::UsdPreview {
+                preview,
+                doc,
+                generation,
+                ..
+            } => {
+                let current = viewport
+                    .as_deref()
+                    .and_then(|state| state.session(*preview));
+                let stale = current.is_none_or(|session| {
+                    session.doc() != *doc || session.projected_generation() != *generation
+                });
+                (false, stale)
+            }
+        };
+        let cancel_transaction = cancelled || frame_changed || stale_preview;
 
         info!(
             "GIZMO: drag ended for {:?}, restoring coordinate systems",
             entity
         );
 
+        if matches!(&drag.owner, GizmoDragOwner::UsdPreview { .. }) {
+            // A document revision or preview close invalidates the captured
+            // local pose. The USD projector owns the newer state, so never
+            // write the stale snapshot back over it. Escape on an unchanged
+            // preview is the ordinary local transaction rollback.
+            if cancel_transaction && !stale_preview {
+                if let Ok(mut tf) = spatial.p1().get_mut(entity) {
+                    tf.translation = drag.original_position.as_vec3();
+                    tf.rotation = drag.original_rotation.as_quat();
+                }
+            }
+
+            if !cancel_transaction {
+                if let GizmoDragOwner::UsdPreview {
+                    doc,
+                    edit_target,
+                    generation,
+                    path,
+                    ..
+                } = &drag.owner
+                {
+                    let mut ops = Vec::with_capacity(2);
+                    if (drag.current_position - drag.original_position).length_squared() > 1.0e-12 {
+                        ops.push(lunco_usd::document::UsdOp::SetTranslate {
+                            edit_target: edit_target.clone(),
+                            path: path.clone(),
+                            value: drag.current_position.to_array(),
+                        });
+                    }
+                    if drag.current_rotation.dot(drag.original_rotation).abs() < 1.0 - 1.0e-12 {
+                        let (rx, ry, rz) = drag.current_rotation.to_euler(EulerRot::XYZ);
+                        ops.push(lunco_usd::document::UsdOp::SetRotate {
+                            edit_target: edit_target.clone(),
+                            path: path.clone(),
+                            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+                        });
+                    }
+                    if !ops.is_empty() {
+                        commands.trigger(lunco_usd::commands::ApplyUsdOps {
+                            doc: *doc,
+                            parent_gen: (*generation != 0).then_some(*generation),
+                            label: "Edit USD transform".to_string(),
+                            ops,
+                        });
+                    }
+                }
+            }
+            commands.entity(entity).try_remove::<GizmoDragState>();
+            restored_entities.push(entity);
+            continue;
+        }
+
         if cancel_transaction && !frame_changed {
             let rollback = {
                 let q_spatial = spatial.p0();
                 q_spatial.get(entity).ok().and_then(|(old_cell, _)| {
+                    let GizmoDragOwner::Live { active_frame, .. } = &drag.owner else {
+                        return None;
+                    };
                     let (new_cell, new_translation) =
                         lunco_core::coords::position_in_grid_to_parent_local(
                             entity,
                             drag.original_position,
-                            drag.active_frame,
+                            *active_frame,
                             &q_parents,
                             &q_grids,
                             &q_spatial,
@@ -567,7 +791,7 @@ pub fn restore_gizmo_dynamic(
                     let new_rotation = lunco_core::coords::rotation_in_grid_to_parent_local(
                         entity,
                         drag.original_rotation,
-                        drag.active_frame,
+                        *active_frame,
                         &q_parents,
                         &q_grids,
                         &q_spatial,
@@ -592,19 +816,34 @@ pub fn restore_gizmo_dynamic(
                     }
                 }
             } else {
+                let GizmoDragOwner::Live { active_frame, .. } = &drag.owner else {
+                    unreachable!("USD preview gizmo transactions are handled above");
+                };
                 warn!(
                     ?entity,
-                    active_frame = ?drag.active_frame,
+                    active_frame = ?active_frame,
                     "GIZMO: could not restore cancelled pose; completing physics cleanup without reinterpretation"
                 );
             }
         }
 
+        let GizmoDragOwner::Live {
+            original_body,
+            original_drive,
+            had_custom_position_integration,
+            had_translation_interpolation,
+            had_rotation_interpolation,
+            ..
+        } = &drag.owner
+        else {
+            unreachable!("USD preview gizmo transactions are handled above");
+        };
+
         // 2. RESTORE INTERPOLATION
-        if drag.had_translation_interpolation {
+        if *had_translation_interpolation {
             commands.entity(entity).try_insert(TranslationInterpolation);
         }
-        if drag.had_rotation_interpolation {
+        if *had_rotation_interpolation {
             commands.entity(entity).try_insert(RotationInterpolation);
         }
 
@@ -620,7 +859,7 @@ pub fn restore_gizmo_dynamic(
         // Hand the pre-drag body kind back. An entity that had NO `RigidBody`
         // gets the drag's Kinematic taken away again rather than being handed a
         // fabricated `Dynamic` — see `GizmoDragState::original_body`.
-        match drag.original_body {
+        match *original_body {
             Some(body) => {
                 commands.entity(entity).try_insert(body);
             }
@@ -628,7 +867,7 @@ pub fn restore_gizmo_dynamic(
                 commands.entity(entity).try_remove::<RigidBody>();
             }
         }
-        match drag.original_drive {
+        match *original_drive {
             Some(drive) => {
                 commands.entity(entity).try_insert(drive);
             }
@@ -638,7 +877,7 @@ pub fn restore_gizmo_dynamic(
                     .try_remove::<lunco_physics::KinematicDrive>();
             }
         }
-        if drag.had_custom_position_integration {
+        if *had_custom_position_integration {
             commands
                 .entity(entity)
                 .try_insert(CustomPositionIntegration);
@@ -901,16 +1140,18 @@ mod tests {
         let target = app
             .world_mut()
             .spawn(GizmoDragState {
-                active_frame,
+                owner: GizmoDragOwner::Live {
+                    active_frame,
+                    original_body: None,
+                    original_drive: None,
+                    had_custom_position_integration: false,
+                    had_translation_interpolation: false,
+                    had_rotation_interpolation: false,
+                },
                 original_position: DVec3::ZERO,
                 original_rotation: bevy::math::DQuat::IDENTITY,
                 current_position: DVec3::ZERO,
                 current_rotation: bevy::math::DQuat::IDENTITY,
-                original_body: None,
-                original_drive: None,
-                had_custom_position_integration: false,
-                had_translation_interpolation: false,
-                had_rotation_interpolation: false,
             })
             .id();
         app.world_mut()
@@ -930,6 +1171,32 @@ mod tests {
         let drag = app.world().get::<GizmoDragState>(target).unwrap();
         assert!((drag.current_position - wanted_position).length() < 1.0e-3);
         assert!(drag.current_rotation.dot(wanted_rotation).abs() > 1.0 - 1.0e-6);
+    }
+
+    #[test]
+    fn preview_proxy_pose_uses_bevy_parent_local_transform() {
+        let parent_transform =
+            Transform::from_xyz(10.0, 2.0, -4.0).with_rotation(Quat::from_rotation_y(0.7));
+        let local = Transform::from_xyz(1.25, -0.5, 3.0)
+            .with_rotation(Quat::from_rotation_x(-0.3) * Quat::from_rotation_z(0.2));
+        let proxy = (GlobalTransform::from(parent_transform) * local).compute_transform();
+
+        let (position, rotation) =
+            preview_global_to_local_pose(&proxy, Some(&GlobalTransform::from(parent_transform)))
+                .expect("a preview parent must provide a valid local transform");
+
+        assert!((position - local.translation.as_dvec3()).length() < 1.0e-5);
+        assert!(rotation.dot(local.rotation.as_dquat()).abs() > 1.0 - 1.0e-5);
+    }
+
+    #[test]
+    fn preview_proxy_pose_rejects_an_invalid_rotation() {
+        let proxy = Transform {
+            rotation: Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0),
+            ..Transform::IDENTITY
+        };
+
+        assert!(preview_global_to_local_pose(&proxy, None).is_none());
     }
 
     #[test]
@@ -959,16 +1226,18 @@ mod tests {
                 lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
                 GizmoDragState {
-                    active_frame,
+                    owner: GizmoDragOwner::Live {
+                        active_frame,
+                        original_body: Some(RigidBody::Dynamic),
+                        original_drive: None,
+                        had_custom_position_integration: false,
+                        had_translation_interpolation: false,
+                        had_rotation_interpolation: false,
+                    },
                     original_position: DVec3::ZERO,
                     original_rotation: bevy::math::DQuat::IDENTITY,
                     current_position: DVec3::ZERO,
                     current_rotation: bevy::math::DQuat::IDENTITY,
-                    original_body: Some(RigidBody::Dynamic),
-                    original_drive: None,
-                    had_custom_position_integration: false,
-                    had_translation_interpolation: false,
-                    had_rotation_interpolation: false,
                 },
                 LinearVelocity(DVec3::new(4.0, 5.0, 6.0)),
             ))
@@ -1045,16 +1314,18 @@ mod tests {
                 lunco_physics::KinematicDrive::new(DVec3::ZERO, bevy::math::DQuat::IDENTITY),
                 GizmoTarget::default(),
                 GizmoDragState {
-                    active_frame,
+                    owner: GizmoDragOwner::Live {
+                        active_frame,
+                        original_body: None,
+                        original_drive: None,
+                        had_custom_position_integration: false,
+                        had_translation_interpolation: false,
+                        had_rotation_interpolation: false,
+                    },
                     original_position: DVec3::ZERO,
                     original_rotation: bevy::math::DQuat::IDENTITY,
                     current_position: DVec3::ZERO,
                     current_rotation: bevy::math::DQuat::IDENTITY,
-                    original_body: None,
-                    original_drive: None,
-                    had_custom_position_integration: false,
-                    had_translation_interpolation: false,
-                    had_rotation_interpolation: false,
                 },
                 LinearVelocity::default(),
             ))
