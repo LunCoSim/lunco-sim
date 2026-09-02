@@ -3132,6 +3132,12 @@ impl Plugin for SandboxCorePlugin {
             reset_terrain_status_mirror_on_scene_teardown,
         );
         #[cfg(feature = "ui")]
+        app.init_resource::<ModelicaStatusMirrorState>()
+            .add_systems(
+                lunco_core::SceneTeardown,
+                reset_modelica_status_mirror_on_scene_teardown,
+            );
+        #[cfg(feature = "ui")]
         app.add_systems(
             Update,
             (
@@ -3932,17 +3938,16 @@ fn report_dome_environment_status(
     }
 }
 
-/// Mirror USD-driven Modelica participant loading/compilation into the same
-/// status channel consumed by offline recording readiness.
+/// Mirror the aggregate USD-driven Modelica lifecycle into the same status
+/// channel consumed by offline recording readiness. One scene can create many
+/// participants; publishing one permanent event per participant left the last
+/// source filename looking like ongoing work after the scene had settled.
 #[cfg(feature = "ui")]
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
-    models: Query<
-        (Entity, &lunco_modelica::ModelicaModel),
-        With<lunco_usd_sim::cosim::UsdSourcedCosim>,
-    >,
+    models: Query<&lunco_modelica::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
-    mut last_ready: Local<std::collections::HashMap<Entity, bool>>,
+    mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
@@ -3955,27 +3960,19 @@ fn report_modelica_status(
     // the first tick that would make the participant Running can never happen.
     // The authoritative source lifecycle is the Modelica model itself; the
     // solver's first-step hold remains owned by the readiness subsystem.
-    let mut live_entities = std::collections::HashSet::new();
+    let mut model_count = 0;
     let mut compiling = 0;
-    for (entity, model) in &models {
-        live_entities.insert(entity);
+    let mut failed = 0;
+    for model in &models {
+        model_count += 1;
         let ready = model.is_compiled && !model.is_compiling && model.last_error.is_none();
-        if ready && !last_ready.get(&entity).copied().unwrap_or(false) {
-            bus.push(
-                SOURCE,
-                lunco_workbench::status_bus::StatusLevel::Info,
-                format!(
-                    "Modelica ready: {}",
-                    modelica_source_label(&model.source_uri, &model.model_name),
-                ),
-            );
-        }
-        last_ready.insert(entity, ready);
         if !ready && model.last_error.is_none() {
             compiling += 1;
+        } else if model.last_error.is_some() {
+            failed += 1;
         }
     }
-    last_ready.retain(|entity, _| live_entities.contains(entity));
+    let active = pending > 0 || compiling > 0;
 
     if pending > 0 {
         bus.set_progress(
@@ -3994,50 +3991,96 @@ fn report_modelica_status(
     } else {
         bus.remove_progress(SOURCE);
     }
+
+    if !active && failed == 0 && model_count > 0 && (mirror.was_active || mirror.model_count == 0) {
+        bus.push(
+            SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
+            format!("Modelica ready — {model_count} participant(s)"),
+        );
+    }
+    mirror.was_active = active;
+    mirror.model_count = model_count;
 }
 
-#[cfg(any(feature = "ui", test))]
-fn modelica_source_label(source_uri: &str, model_name: &str) -> String {
-    source_uri
-        .rsplit(['/', '\\'])
-        .find(|name| !name.is_empty())
-        .filter(|name| *name != source_uri)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            if source_uri.is_empty() {
-                model_name.to_owned()
-            } else {
-                source_uri.to_owned()
-            }
-        })
+#[cfg(feature = "ui")]
+#[derive(Resource, Default)]
+struct ModelicaStatusMirrorState {
+    was_active: bool,
+    model_count: usize,
 }
 
-#[cfg(test)]
+#[cfg(feature = "ui")]
+fn reset_modelica_status_mirror_on_scene_teardown(
+    mut mirror: ResMut<ModelicaStatusMirrorState>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    *mirror = ModelicaStatusMirrorState::default();
+    if let Some(mut bus) = bus {
+        bus.remove_progress(lunco_workbench::status_bus::MODELICA_SOURCE);
+    }
+}
+
+#[cfg(all(test, feature = "ui"))]
 mod modelica_status_tests {
-    use super::modelica_source_label;
+    use super::*;
 
-    #[test]
-    fn readiness_label_prefers_source_file_name() {
-        assert_eq!(
-            modelica_source_label("lunco://models/lander.mo", "Lander"),
-            "lander.mo"
-        );
+    fn ready_model(name: &str) -> lunco_modelica::ModelicaModel {
+        let mut model = lunco_modelica::ModelicaModel::default();
+        model.model_name = name.to_owned();
+        model.is_compiled = true;
+        model
     }
 
     #[test]
-    fn readiness_label_falls_back_to_model_name_for_generated_models() {
-        assert_eq!(
-            modelica_source_label("", "GeneratedNetwork"),
-            "GeneratedNetwork"
-        );
-    }
+    fn modelica_readiness_is_one_stable_lifecycle_event() {
+        let mut app = App::new();
+        app.insert_resource(lunco_workbench::status_bus::StatusBus::default())
+            .init_resource::<ModelicaStatusMirrorState>()
+            .add_systems(Update, report_modelica_status);
+        let first = app
+            .world_mut()
+            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("First")))
+            .id();
+        app.world_mut()
+            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("Second")));
 
-    #[test]
-    fn readiness_label_handles_windows_separators() {
+        app.update();
+        app.update();
+        let bus = app
+            .world()
+            .resource::<lunco_workbench::status_bus::StatusBus>();
+        assert_eq!(bus.history().count(), 1);
         assert_eq!(
-            modelica_source_label(r"C:\\models\\lander.mo", "Lander"),
-            "lander.mo"
+            bus.history().next().map(|event| event.message.as_str()),
+            Some("Modelica ready — 2 participant(s)")
         );
+
+        app.world_mut()
+            .entity_mut(first)
+            .get_mut::<lunco_modelica::ModelicaModel>()
+            .expect("Modelica model")
+            .is_compiling = true;
+        app.update();
+        assert!(app
+            .world()
+            .resource::<lunco_workbench::status_bus::StatusBus>()
+            .active_progress()
+            .any(|event| event.source == lunco_workbench::status_bus::MODELICA_SOURCE));
+
+        app.world_mut()
+            .entity_mut(first)
+            .get_mut::<lunco_modelica::ModelicaModel>()
+            .expect("Modelica model")
+            .is_compiling = false;
+        app.update();
+        let bus = app
+            .world()
+            .resource::<lunco_workbench::status_bus::StatusBus>();
+        assert_eq!(bus.history().count(), 2);
+        assert!(bus
+            .active_progress()
+            .all(|event| { event.source != lunco_workbench::status_bus::MODELICA_SOURCE }));
     }
 }
 
