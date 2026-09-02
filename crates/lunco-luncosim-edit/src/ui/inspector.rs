@@ -1310,6 +1310,170 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.separator();
 }
 
+/// The explicit authoring lease for one entity in the focused USD preview.
+///
+/// Preview entities are a render projection, not live simulation bodies. Their
+/// local `Transform` is already in the canonical metres/Y-up frame produced by
+/// `lunco-usd-bevy`, so the Inspector can author it with the document's existing
+/// transform operations without inventing a preview ECS setter or asking the
+/// live physics command to resolve an identity it does not own.
+#[derive(Clone)]
+struct PreviewTransformContext {
+    doc: lunco_doc::DocumentId,
+    edit_target: LayerId,
+    generation: u64,
+    path: String,
+}
+
+fn focused_preview_transform_context(
+    ctx: &PanelCtx,
+    entity: Entity,
+) -> Option<PreviewTransformContext> {
+    let prim = ctx.get::<UsdPrimPath>(entity)?;
+    let viewport = ctx.resource::<lunco_usd::ui::viewport::UsdViewportState>()?;
+    let session = viewport.focused_session()?;
+    if prim.stage_handle.id() != session.stage_handle().id() || prim.path.is_empty() {
+        return None;
+    }
+
+    // Stage handles are not sufficient identity: one stage can be projected
+    // into the live scene and several isolated preview leases. Confirm the
+    // entity belongs to this exact preview root through the authoritative
+    // hierarchy before exposing its document target to the Inspector.
+    if entity != session.scene_root() {
+        let mut current = entity;
+        let mut belongs = false;
+        for _ in 0..64 {
+            let Some(parent) = ctx.get::<ChildOf>(current) else {
+                break;
+            };
+            current = parent.parent();
+            if current == session.scene_root() {
+                belongs = true;
+                break;
+            }
+        }
+        if !belongs {
+            return None;
+        }
+    }
+
+    Some(PreviewTransformContext {
+        doc: session.doc(),
+        edit_target: session.edit_target().clone(),
+        generation: session.projected_generation(),
+        path: prim.path.clone(),
+    })
+}
+
+fn usd_edit_released(response: &egui::Response) -> bool {
+    response.drag_stopped() || (response.changed() && !response.dragged())
+}
+
+/// Edit the selected preview prim's canonical local transform.
+///
+/// The controls intentionally author only after a drag or typed value is
+/// committed. A single Inspector gesture therefore produces one
+/// `ApplyUsdOps` journal/change-set, while the document projector remains the
+/// only source that updates the preview after the commit.
+fn usd_preview_transform_section(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    entity: Entity,
+    preview: PreviewTransformContext,
+) {
+    let Some(transform) = ctx.get::<Transform>(entity).copied() else {
+        return;
+    };
+    let mut translation = transform.translation.as_dvec3().to_array();
+    let euler = transform.rotation.to_euler(EulerRot::XYZ);
+    let mut rotation = [
+        f64::from(euler.0.to_degrees()),
+        f64::from(euler.1.to_degrees()),
+        f64::from(euler.2.to_degrees()),
+    ];
+    let mut translation_commit = false;
+    let mut rotation_commit = false;
+    egui::CollapsingHeader::new("Transform")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.small("Local · canonical metres · Euler XYZ degrees");
+            let (translate_x, translate_y, translate_z) = ui
+                .horizontal(|ui| {
+                    (
+                        ui.add(
+                            egui::DragValue::new(&mut translation[0])
+                                .speed(0.1)
+                                .prefix("X: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut translation[1])
+                                .speed(0.1)
+                                .prefix("Y: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut translation[2])
+                                .speed(0.1)
+                                .prefix("Z: "),
+                        ),
+                    )
+                })
+                .inner;
+            let (rotate_x, rotate_y, rotate_z) = ui
+                .horizontal(|ui| {
+                    (
+                        ui.add(
+                            egui::DragValue::new(&mut rotation[0])
+                                .speed(0.5)
+                                .prefix("Rx: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut rotation[1])
+                                .speed(0.5)
+                                .prefix("Ry: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut rotation[2])
+                                .speed(0.5)
+                                .prefix("Rz: "),
+                        ),
+                    )
+                })
+                .inner;
+            translation_commit = [translate_x, translate_y, translate_z]
+                .iter()
+                .any(usd_edit_released);
+            rotation_commit = [rotate_x, rotate_y, rotate_z].iter().any(usd_edit_released);
+        });
+
+    let committed = translation_commit || rotation_commit;
+    if !committed {
+        return;
+    }
+
+    let mut ops = Vec::with_capacity(2);
+    if translation_commit {
+        ops.push(UsdOp::SetTranslate {
+            edit_target: preview.edit_target.clone(),
+            path: preview.path.clone(),
+            value: translation,
+        });
+    }
+    if rotation_commit {
+        ops.push(UsdOp::SetRotate {
+            edit_target: preview.edit_target.clone(),
+            path: preview.path.clone(),
+            value: rotation,
+        });
+    }
+    ctx.trigger(lunco_usd::commands::ApplyUsdOps {
+        doc: preview.doc,
+        parent_gen: (preview.generation != 0).then_some(preview.generation),
+        label: "Edit USD transform".to_string(),
+        ops,
+    });
+}
+
 fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
@@ -1380,13 +1544,18 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     crate::ui::usd_animation::authored_animation_section(ui, ctx, entity);
 
     // ── Transform component ──────────────────────────────────────
-    // The sliders author a **document op**, they do not poke ECS: a committed
-    // translation edit fires `MoveEntity`, whose observers seat the body and author
-    // `UsdOp::SetTranslate` into the runtime layer. So an Inspector move
-    // survives reload, journals, syncs, and is undone by the same Ctrl+Z as a
-    // gizmo drag. Committed = drag released or value typed — per-frame firing
-    // during a drag would push one op per frame.
-    if ctx.get::<Transform>(entity).is_some() {
+    // A USD preview has no live entity identity or physics body. Its
+    // document-backed transform is handled by the explicit preview lease;
+    // only live simulation entities use MoveEntity below.
+    if let Some(preview) = focused_preview_transform_context(ctx, entity) {
+        usd_preview_transform_section(ui, ctx, entity, preview);
+    } else if ctx.get::<Transform>(entity).is_some() {
+        // The sliders author a **document op**, they do not poke ECS: a committed
+        // translation edit fires `MoveEntity`, whose observers seat the body and author
+        // `UsdOp::SetTranslate` into the runtime layer. So an Inspector move
+        // survives reload, journals, syncs, and is undone by the same Ctrl+Z as a
+        // gizmo drag. Committed = drag released or value typed — per-frame firing
+        // during a drag would push one op per frame.
         egui::CollapsingHeader::new("Transform")
             .default_open(true)
             .show(ui, |ui| {

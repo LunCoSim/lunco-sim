@@ -513,17 +513,30 @@ fn register_update_settings_menu(world: &mut World) {
         return;
     };
     layout.register_settings_submenu("Updates", |ui, ctx| {
-        // Keep the whole updater flow readable when the menu is opened on a
-        // narrow window. The persistent dialog below uses the same width budget.
-        ui.set_min_width(560.0);
         ui.label(egui::RichText::new("Velopack updates").weak().small());
-        if let Some(identity) = ctx.resource::<lunco_workbench::BuildIdentity>() {
-            ui.label(identity.version_label());
-        }
-        ui.label(format!(
-            "LunCoSim nightly updates · {} channel",
-            UPDATE_CHANNEL
-        ));
+        let identity = ctx.resource::<lunco_workbench::BuildIdentity>();
+        egui::Grid::new("updates_build_identity")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("Version");
+                ui.monospace(
+                    identity
+                        .map(|identity| identity.version.as_str())
+                        .unwrap_or("Unavailable"),
+                );
+                ui.end_row();
+
+                ui.label("GitHub Actions build");
+                ui.monospace(github_build_label(
+                    identity.map(|identity| identity.version.as_str()),
+                ));
+                ui.end_row();
+
+                ui.label("Update channel");
+                ui.monospace(UPDATE_CHANNEL);
+                ui.end_row();
+            });
         egui::CollapsingHeader::new("How updates work")
             .default_open(false)
             .show(ui, |ui| {
@@ -1161,6 +1174,27 @@ fn format_last_check(timestamp: u64) -> String {
     format!("Last checked: {age}")
 }
 
+fn github_build_label(version: Option<&str>) -> String {
+    let Some(version) = version else {
+        return "Unavailable (local build)".to_owned();
+    };
+    let Some((_, nightly)) = version.rsplit_once("-nightly.") else {
+        return "Unavailable (local build)".to_owned();
+    };
+    let mut components = nightly.split('.');
+    let Some(run) = components.next().filter(|value| !value.is_empty()) else {
+        return "Unavailable (invalid release version)".to_owned();
+    };
+    let Some(attempt) = components.next().filter(|value| !value.is_empty()) else {
+        return "Unavailable (invalid release version)".to_owned();
+    };
+    if components.next().is_some() || run.parse::<u64>().is_err() || attempt.parse::<u64>().is_err()
+    {
+        return "Unavailable (invalid release version)".to_owned();
+    }
+    format!("Run #{run}, attempt {attempt}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1191,6 +1225,23 @@ mod tests {
         let actions = UpdateActions::default();
         settings.auto_check = false;
         assert!(!automatic_check_due(&settings, &state, &actions));
+    }
+
+    #[test]
+    fn github_build_label_uses_ci_run_metadata_only() {
+        assert_eq!(
+            github_build_label(Some("0.6.0-nightly.37.1")),
+            "Run #37, attempt 1"
+        );
+        assert_eq!(
+            github_build_label(Some("0.6.0-dev")),
+            "Unavailable (local build)"
+        );
+        assert_eq!(github_build_label(None), "Unavailable (local build)");
+        assert_eq!(
+            github_build_label(Some("0.6.0-nightly.bad.1")),
+            "Unavailable (invalid release version)"
+        );
     }
 
     #[test]

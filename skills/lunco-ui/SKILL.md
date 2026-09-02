@@ -70,6 +70,13 @@ values are visible errors, and the derived tree is cleared on active
 `TwinClosed`; do not cache this choice in a global UI resource or keep it across
 Twin replacement.
 
+The native Updates submenu is content-sized by the workbench's shared menu
+container. Keep its identity block explicit (`Version`, `GitHub Actions build`,
+and `Update channel`), derive the run/attempt label only from the CI-stamped
+nightly version, and show an explicit unavailable state for local builds. Do
+not present a source SHA as the GitHub build number or force a feature-local
+minimum width.
+
 Generated USD runtime scene edits use the same Twin-owned settings boundary:
 `usd.runtime_persistence` is one boolean opt-in for both reading and writing
 the `.lunco/runtime` cache. The Settings menu reads the USD owner's policy and
