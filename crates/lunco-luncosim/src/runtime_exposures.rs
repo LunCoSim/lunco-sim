@@ -970,7 +970,7 @@ pub(crate) fn publish_exposure(
     if let Some(overlay) = overlays.overlay.as_deref() {
         if seminar.overlay != Some(*overlay) {
             info!(
-                "[seminar] terrain overlay: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
+                "[seminar] terrain diagnostic: enabled={} mode={} safe={:.1}° cliff={:.1}° opacity={:.2}",
                 overlay.enabled,
                 if overlay.lod_depth { "lod" } else { "slope" },
                 overlay.safe_deg,

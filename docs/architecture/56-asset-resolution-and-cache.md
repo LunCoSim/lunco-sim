@@ -380,9 +380,9 @@ UI says "installed" while every consumer still finds nothing — the CLI's
 two-command flow (`download` then `process`) has no equivalent second command in
 the app.
 
-`lunco:body:albedoMap` is not a new mechanism — it is what terrain already does
-(`demSource = @terrain/apollo15@`), what materials do (`lunco:material:shader`),
-and what HDRI does (`UsdLuxDomeLight`). It buys: the texture becomes a normal
+`lunco:body:albedoMap` is not a new mechanism — it is the same asset-reference
+pattern used by terrain data (`demSource = @terrain/apollo15@`), standard
+`UsdShade` material inputs, and HDRI assets (`UsdLuxDomeLight`). It buys: the texture becomes a normal
 USD reference inheriting cache fallback and web staging with no
 celestial-specific path; a Twin can ship its own body map; third-party tools see
 a material instead of a Rust constant; and the same logical `lunco://textures/...`

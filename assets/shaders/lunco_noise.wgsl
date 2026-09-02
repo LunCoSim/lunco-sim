@@ -103,11 +103,9 @@ fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
 /// shader that used it inherited the streaks while its own `_web` twin (on
 /// `fbm2d`) did not.
 ///
-/// This function is not new code: it is `terrain_geomorph.wgsl`'s private copy,
-/// which fixed the streaking locally in 2026-07 and was never promoted here. The
-/// other two native terrain shaders kept calling the unrotated `fbm`. Lifting it
-/// into the shared module is what lets `lunco::terrain` hand every terrain shader
-/// the same isotropic grain on both platforms.
+/// The rotated form keeps each terrain material's value-noise octaves isotropic
+/// around the vertical axis, avoiding persistent diagonal streaks under grazing
+/// illumination.
 ///
 /// `fbm` is left as-is: non-terrain callers were authored against its output.
 fn fbm_rot(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {

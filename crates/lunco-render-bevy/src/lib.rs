@@ -22,7 +22,6 @@ mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
 
-mod terrain_maps;
 mod world_label;
 
 pub use shader_look::ShaderLookCache;
@@ -81,8 +80,8 @@ impl RenderProfile {
 ///   `ShaderMaterial` and the `StandardMaterial` darkening of shadowed props (from
 ///   `lunco-environment`);
 /// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
-/// - `terrain_maps` — the derived-layer bind onto the semantic static-terrain
-///   material created by `horizon_shade`.
+/// Terrain-derived map selection remains render-free on the terrain's
+/// `ShaderLook`; this crate only binds that intent to the generic GPU material.
 ///
 /// **Screenshots deliberately do NOT live here** — they live in
 /// `lunco_workbench::screenshot`. This crate is the 3D *material* binder, and `lunica`
@@ -157,7 +156,6 @@ impl Plugin for LuncoRenderPlugin {
             // both were deleted when the material moved into this crate, because Bevy
             // panics on a duplicate plugin.
             app.add_plugins(shader_material::ShaderMaterialPlugin);
-            terrain_maps::build(app);
             horizon_shade::build(app);
             env_light::build(app);
         }

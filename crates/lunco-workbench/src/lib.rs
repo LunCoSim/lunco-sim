@@ -6338,15 +6338,6 @@ fn register_graphics_settings_menu(world: &mut World) {
             return;
         };
         let original = settings.clone();
-        ui.checkbox(
-            &mut settings.enable_shaders,
-            "Enable high-quality procedural shaders",
-        )
-        .on_hover_text(
-            "Enable dynamic micro-relief normal mapping and albedo mottle. \
-                 Turning this off improves WebAssembly/browser frame rate. \
-                 Persisted to the shared LunCoSim settings file.",
-        );
         ui.add(
             egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
                 .text("Camera detail radius (m)"),

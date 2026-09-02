@@ -55,8 +55,8 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # the wasm Web Worker (`dem_worker`), so the off-thread web bake runs identical
 # code. Also owns the main-thread worker client (`worker_client`, wasm-only).
 lunco-terrain-bake = { path = "../lunco-terrain-bake" }
-# `ShaderLook` — the custom-shader appearance INTENT the LOD tiles state (the
-# `terrain_geomorph` CDLOD-morph shader path, its named params, its texture layers).
+# `ShaderLook` — the authored-shader appearance INTENT the LOD tiles state (the
+# USD material's source, CDLOD vertex source, params, and texture layers).
 # Also `ATTRIBUTE_MORPH_TARGET` (a `bevy_mesh` vertex attribute) for the tile bake.
 #
 # `lunco-materials` is render-free: `ShaderMaterial` (the `AsBindGroup`, hence

@@ -851,7 +851,7 @@ mod tests {
         );
         // A different shader path is also a different material.
         app.world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph_flat.wgsl"));
+            .spawn(ShaderLook::new("shaders/terrain_debug.wgsl"));
         app.update();
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 3);
     }

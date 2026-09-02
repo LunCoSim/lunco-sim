@@ -9,20 +9,21 @@
 //!    the camera, coarse far away),
 //! 3. diff against the currently-spawned tiles ([`LodTiles`]): bake + spawn the
 //!    new nodes ([`bake_tile_mesh`], real DEM-sampled geometry), despawn the gone,
-//! 4. draw each tile with the `terrain_geomorph` shader: a CDLOD **vertex morph**
+//! 4. draw each tile with the terrain material authored by the owning USD
+//! `UsdShade` network: its CDLOD **vertex morph**
 //!    (`POSITION → MORPH_TARGET` by camera distance, so no LOD pop) + the
-//!    procedural **regolith** fragment (FBM bump + PBR sun + DEM self-shadow +
-//!    dynamic-object CSM shadows).
+//!    fragment stage declared by the terrain's authored `UsdShade` material.
 //!
 //! # Appearance is INTENT here, not a material
 //!
-//! A tile carries a [`ShaderLook`] — the shader path, its named parameters (morph
-//! band, overlay uniforms, physical map scale) and its texture layers — and
-//! **nothing in this crate names a material**. `lunco-render-bevy` binds it,
-//! caching by `ShaderLook::key()`, so every tile in the same mode and LOD band
+//! A tile carries a clone of the owning terrain's [`ShaderLook`] — the shader
+//! source asset, its authored parameters, the CDLOD vertex source, and its
+//! texture layers — plus engine-owned morph/map values. **Nothing in this crate
+//! names a production shader asset.** `lunco-render-bevy` binds the intent,
+//! caching by `ShaderLook::key()`, so every tile in the same LOD band
 //! shares ONE material and ONE bind group. That cache *is* the old hand-rolled
-//! `LodMaterials`/`MatKey` table, done generically: the `(mode, depth, band
-//! bucket)` that `MatKey` encoded is simply the look's own content now.
+//! `LodMaterials`/`MatKey` table, done generically: the `(depth, band bucket)`
+//! that `MatKey` encoded is simply the look's own content now.
 //!
 //! Keep the key COARSE. It is what lets tiles batch, so any per-tile parameter
 //! added here mints a material per tile and costs draw calls. The topology
@@ -50,6 +51,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::{DemHeightField, SurfaceOracle};
+use crate::terrain::DemTerrainSurface;
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
 /// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
@@ -261,60 +263,6 @@ fn camera_pose_in_terrain(
     ))
 }
 
-/// Which shader the streamed LOD tiles draw with — switchable live in the
-/// Inspector (per terrain). Default [`Lit`](TerrainShaderMode::Lit).
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[reflect(Component)]
-pub enum TerrainShaderMode {
-    /// Procedural regolith (FBM bump + lunar PBR) — the production look.
-    #[default]
-    Lit,
-    /// Flat per-LOD-depth colour (blue→red) to SEE the quadtree refine.
-    DebugLod,
-    /// Flat lunar-grey, no FBM — the lightweight "no fancy shader" look.
-    Plain,
-}
-
-impl TerrainShaderMode {
-    /// Platform default when a terrain authors no explicit mode: [`Lit`](Self::Lit)
-    /// everywhere. Web used to default to [`Plain`](Self::Plain) when the Lit
-    /// far field was carried by ~5 unconditional per-fragment `fbm` calls
-    /// (~100 ms on a WebGL iGPU); the far field is texture-driven now (baked
-    /// surface/normal maps) and `terrain_geomorph.wgsl` gates every bump
-    /// layer behind its distance fade, so distant fragments cost two texture
-    /// samples. Switchable live in the Inspector either way.
-    pub fn platform_default() -> Self {
-        TerrainShaderMode::Lit
-    }
-
-    /// The `.wgsl` this mode draws with (all carry the CDLOD vertex morph).
-    fn shader_path(self) -> &'static str {
-        match self {
-            // One file for both platforms: the noise/octave split moved into
-            // `lunco::terrain` behind the `LUNCO_NOISE_2D` shader_def.
-            TerrainShaderMode::Lit => "shaders/terrain_geomorph.wgsl",
-            TerrainShaderMode::DebugLod | TerrainShaderMode::Plain => {
-                "shaders/terrain_geomorph_flat.wgsl"
-            }
-        }
-    }
-}
-
-/// Flat per-LOD-depth colour for [`TerrainShaderMode::DebugLod`]: coarse→fine
-/// sweeps blue→cyan→green→yellow→orange→red→magenta.
-fn lod_rgb(depth: u32) -> [f32; 3] {
-    const P: [[f32; 3]; 7] = [
-        [0.20, 0.35, 0.85],
-        [0.20, 0.75, 0.85],
-        [0.25, 0.80, 0.35],
-        [0.85, 0.85, 0.25],
-        [0.90, 0.55, 0.20],
-        [0.85, 0.25, 0.25],
-        [0.80, 0.30, 0.80],
-    ];
-    P[(depth as usize).min(P.len() - 1)]
-}
-
 /// Marker: this terrain streams visual LOD tiles. Inserted by the build when
 /// the request set `lod_viz`. The authoritative tile-resolution and refinement
 /// policy lives in [`lunco_render::RenderingQualitySettings`], so this marker
@@ -334,7 +282,7 @@ struct TileSlot {
     entity: Entity,
     gen: u32,
     /// The tile's selected morph-band end (parent refine range) — kept so a live
-    /// shader-mode swap can rebuild the right band material without re-selecting.
+    /// quality-profile change can rebuild the right band material without re-selecting.
     morph_end: f32,
     /// Whether this tile is currently VISIBLE. A tile can be resident but hidden:
     /// the coarse base is always resident, and only draws where the finer tile
@@ -993,13 +941,11 @@ fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
 }
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
-/// `mode` is the shader the live tiles were built with (a mode change swaps their
-/// materials in place); `gen` bumps on every live height re-bake so tiles refresh
+/// `gen` bumps on every live height re-bake so tiles refresh
 /// progressively (see [`TileSlot`]) rather than all being despawned at once.
 #[derive(Component, Default)]
 pub struct LodTiles {
     tiles: HashMap<QuadCoord, TileSlot>,
-    mode: TerrainShaderMode,
     morph_ratio: f32,
     gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
@@ -1066,16 +1012,19 @@ impl LodTiles {
         }
     }
 
-    /// The shader mode the resident tiles were built with — the D8 gate: only `Lit`
-    /// tiles carry the map/overlay params, so only they are re-stated when those
-    /// change.
-    pub(crate) fn shader_mode(&self) -> TerrainShaderMode {
-        self.mode
-    }
-
     /// Every resident tile entity (the late-bind / live-tune targets).
     pub(crate) fn tile_entities(&self) -> impl Iterator<Item = Entity> + '_ {
         self.tiles.values().map(|s| s.entity)
+    }
+
+    /// Material geometry inputs for the live diagnostic tool. The morph band is
+    /// snapped at the same boundary as normal tile creation so changing the
+    /// diagnostic mode cannot silently create a different material topology.
+    pub(crate) fn tile_material_specs(&self) -> impl Iterator<Item = (Entity, u32, f32, f32)> + '_ {
+        self.tiles.iter().map(move |(coord, slot)| {
+            let (morph_start, morph_end, _) = snap_band(slot.morph_end, self.morph_ratio);
+            (slot.entity, coord.depth as u32, morph_start, morph_end)
+        })
     }
 
     /// Bump the generation: every live tile becomes stale and re-bakes from the new
@@ -1499,21 +1448,30 @@ pub struct TileShadowCache {
 /// already present so the hot re-write path (the overlay sync)
 /// doesn't allocate a `String` per call.
 pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
-    if let Some(slot) = look.values.get_mut(name) {
-        *slot = v;
-    } else {
+    if look.values.get(name) != Some(&v) {
         look.values.insert(name.to_string(), v);
     }
 }
 
-/// Bind a terrain's far-shadow cache onto one tile look (Lit only).
+/// Bind a terrain's far-shadow cache onto one streamed tile look.
 pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShadowCache) {
-    look.textures
-        .insert(TextureLayer::ShadowCache, cache.image.clone());
+    set_texture(look, TextureLayer::ShadowCache, Some(&cache.image));
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
 }
 
-/// Bind one terrain's complete material source selection onto a Lit tile.
+fn set_texture(look: &mut ShaderLook, layer: TextureLayer, handle: Option<&Handle<Image>>) {
+    match handle {
+        Some(handle) if look.textures.get(&layer) != Some(handle) => {
+            look.textures.insert(layer, handle.clone());
+        }
+        None if look.textures.contains_key(&layer) => {
+            look.textures.remove(&layer);
+        }
+        _ => {}
+    }
+}
+
+/// Bind one terrain's complete material source selection onto a streamed tile.
 ///
 /// USD owns authored layer facts. The engine-derived maps are a per-role
 /// material source for roles USD did not author, so the two sources share the
@@ -1537,27 +1495,13 @@ pub(crate) fn apply_terrain_maps_to_look(
     } else {
         maps.map(|maps| &maps.surface)
     };
-    match surface {
-        Some(handle) => {
-            look.textures.insert(TextureLayer::Surface, handle.clone());
-        }
-        None => {
-            look.textures.remove(&TextureLayer::Surface);
-        }
-    }
+    set_texture(look, TextureLayer::Surface, surface);
     let normal = if authored_normal {
         authored.and_then(|maps| maps.normal.as_ref())
     } else {
         maps.map(|maps| &maps.normal)
     };
-    match normal {
-        Some(handle) => {
-            look.textures.insert(TextureLayer::Normal, handle.clone());
-        }
-        None => {
-            look.textures.remove(&TextureLayer::Normal);
-        }
-    }
+    set_texture(look, TextureLayer::Normal, normal);
 
     set_param(
         look,
@@ -1622,7 +1566,7 @@ pub(crate) fn apply_terrain_maps_to_look(
 
     match authored.and_then(|maps| maps.albedo.as_ref()) {
         Some(h) => {
-            look.textures.insert(TextureLayer::Albedo, h.clone());
+            set_texture(look, TextureLayer::Albedo, Some(h));
             set_param(
                 look,
                 "weight_albedo",
@@ -1630,22 +1574,8 @@ pub(crate) fn apply_terrain_maps_to_look(
             );
         }
         None => {
-            look.textures.remove(&TextureLayer::Albedo);
+            set_texture(look, TextureLayer::Albedo, None);
             set_param(look, "weight_albedo", ParamValue::F32(0.0));
-        }
-    }
-    match authored.and_then(|maps| maps.mineral.as_ref()) {
-        Some(h) => {
-            look.textures.insert(TextureLayer::Mineral, h.clone());
-            set_param(
-                look,
-                "weight_mineral",
-                ParamValue::F32(authored.map_or(0.0, |maps| maps.weight_mineral)),
-            );
-        }
-        None => {
-            look.textures.remove(&TextureLayer::Mineral);
-            set_param(look, "weight_mineral", ParamValue::F32(0.0));
         }
     }
 }
@@ -1664,20 +1594,20 @@ fn initial_lit_material_ready(
     maps.is_some() || !authored.needs_derived_maps()
 }
 
-/// The appearance INTENT of one LOD tile: the geomorph shader (it drives both the
-/// `@vertex` morph and the `@fragment` stage), its morph band, and — in `Lit`
-/// mode — the derived maps, the far-shadow cache and the analysis overlay.
+/// The appearance intent of one LOD tile: the owning terrain's authored shader
+/// source, its morph band, material maps, and far-shadow cache. The diagnostic
+/// tool temporarily replaces this look with its own authored diagnostic shader.
 ///
-/// THE SHARING CONTRACT: two tiles in the same mode and band bucket
-/// produce an EQUAL `ShaderLook::key()`, so `lunco-render-bevy` hands them the same
+/// THE SHARING CONTRACT: two tiles in the same band bucket produce an EQUAL
+/// `ShaderLook::key()`, so `lunco-render-bevy` hands them the same
 /// `ShaderMaterial` handle — one bind group, one batch. This is the property the
 /// hand-rolled `MatKey`/`LodMaterials` cache existed for; it is now a consequence of
 /// the look's content rather than a table anyone has to remember to consult.
 /// Anything that varies per-tile (a raw `morph_end` instead of the snapped band, an
 /// un-bucketed value) would mint a material per tile and destroy batching — which is
 /// exactly why the band is snapped before it lands here.
-fn tile_look(
-    mode: TerrainShaderMode,
+pub(crate) fn tile_look(
+    template: &ShaderLook,
     depth: u32,
     morph_start: f32,
     morph_end: f32,
@@ -1685,10 +1615,43 @@ fn tile_look(
     terrain_half_extent: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
+    diagnostic: &ShaderLook,
     overlay: crate::overlay::OverlayUniforms,
 ) -> ShaderLook {
-    let path = mode.shader_path();
-    let mut look = ShaderLook::new(path).with_vertex_shader(path);
+    if overlay.mode > 0.5 {
+        let mut look = diagnostic.clone();
+        assert!(
+            !look.shader.is_empty(),
+            "terrain diagnostic requires an authored fragment shader source"
+        );
+        assert!(
+            look.vertex_shader.is_some(),
+            "terrain diagnostic requires an authored vertex shader source"
+        );
+        set_param(&mut look, "morph_start", ParamValue::F32(morph_start));
+        set_param(&mut look, "morph_end", ParamValue::F32(morph_end));
+        set_param(
+            &mut look,
+            "stitch_edges",
+            ParamValue::Vec4([0.0, 0.0, 0.0, 0.0]),
+        );
+        set_param(&mut look, "mode", ParamValue::F32(overlay.mode));
+        set_param(&mut look, "opacity", ParamValue::F32(overlay.opacity));
+        set_param(&mut look, "safe_rad", ParamValue::F32(overlay.safe_rad));
+        set_param(&mut look, "cliff_rad", ParamValue::F32(overlay.cliff_rad));
+        set_param(&mut look, "lod", ParamValue::F32(depth as f32));
+        return look;
+    }
+
+    let mut look = template.clone();
+    assert!(
+        !look.shader.is_empty(),
+        "a streamed terrain must provide an authored fragment shader source"
+    );
+    assert!(
+        look.vertex_shader.is_some(),
+        "a streamed terrain must provide an authored CDLOD vertex shader source"
+    );
     set_param(&mut look, "morph_start", ParamValue::F32(morph_start));
     set_param(&mut look, "morph_end", ParamValue::F32(morph_end));
     set_param(
@@ -1696,32 +1659,14 @@ fn tile_look(
         "stitch_edges",
         ParamValue::Vec4([0.0, 0.0, 0.0, 0.0]),
     );
-    match mode {
-        TerrainShaderMode::DebugLod => {
-            set_param(&mut look, "base_color", ParamValue::Vec3(lod_rgb(depth)))
-        }
-        TerrainShaderMode::Plain => set_param(
-            &mut look,
-            "base_color",
-            ParamValue::Vec3([0.35, 0.34, 0.32]),
-        ),
-        TerrainShaderMode::Lit => {
-            // Explicit analysis data, intentionally separate from physical
-            // appearance. The shader reads this only when the LOD overlay is on.
-            set_param(&mut look, "lod_depth", ParamValue::F32(depth as f32));
-            set_param(
-                &mut look,
-                "terrain_half_extent",
-                ParamValue::F32(terrain_half_extent),
-            );
-            apply_terrain_maps_to_look(&mut look, maps, authored);
-            if let Some(shadow) = shadow {
-                apply_shadow_cache_to_look(&mut look, shadow);
-            }
-            // Analysis overlay params (slope hazard). Only the Lit shaders declare
-            // them; a fresh tile thus paints the current overlay with no extra pass.
-            overlay.apply(&mut look);
-        }
+    set_param(
+        &mut look,
+        "terrain_half_extent",
+        ParamValue::F32(terrain_half_extent),
+    );
+    apply_terrain_maps_to_look(&mut look, maps, authored);
+    if let Some(shadow) = shadow {
+        apply_shadow_cache_to_look(&mut look, shadow);
     }
     look
 }
@@ -1740,11 +1685,12 @@ fn spawn_tile(
     depth: u32,
     morph_end: f32,
     morph_ratio: f32,
-    mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
     terrain_half_extent: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
+    template: &ShaderLook,
+    diagnostic: &ShaderLook,
     overlay: crate::overlay::OverlayUniforms,
     // Surface height at the tile centre — the SAME value the mesh was rebased by in
     // `bake_tile_mesh` (`origin_y`). Anchoring the tile's `CellCoord` here (not Y=0)
@@ -1768,7 +1714,7 @@ fn spawn_tile(
     let mut tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(
-            mode,
+            template,
             depth,
             ms,
             me,
@@ -1776,6 +1722,7 @@ fn spawn_tile(
             terrain_half_extent,
             authored,
             shadow,
+            diagnostic,
             overlay,
         ),
         cell,
@@ -1797,9 +1744,17 @@ fn spawn_tile(
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
     ));
+    if overlay.mode > 0.5 {
+        tile.insert(TerrainDiagnosticTile);
+    }
     enforce_streamed_shadow_ownership(&mut tile);
     tile.id()
 }
+
+/// Marks a resident tile whose material has been replaced by the diagnostic
+/// tool. Production map and shadow binders must not mutate that look.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct TerrainDiagnosticTile;
 
 /// Establish the one shadow ownership split for a streamed terrain tile.
 ///
@@ -2080,10 +2035,10 @@ pub fn update_lod_tiles(
         &mut LodTiles,
         &mut PendingTileBakes,
         &mut TerrainNodeErrors,
-        Option<&TerrainShaderMode>,
         Option<&TerrainDerivedMaps>,
         Option<&TerrainAuthoredMaps>,
         Option<&TileShadowCache>,
+        Option<&ShaderLook>,
         Has<LodFrozen>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -2092,8 +2047,8 @@ pub fn update_lod_tiles(
     mut stream_status: ResMut<TerrainStreamStatus>,
     // Set while an offline recording captures — see [`TerrainStreamLockstep`].
     lockstep: Res<TerrainStreamLockstep>,
-    settings: Option<Res<lunco_settings::TerrainSettings>>,
     overlay_params: Res<crate::overlay::TerrainOverlayParams>,
+    diagnostic: Res<crate::overlay::TerrainDiagnosticLook>,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -2127,7 +2082,6 @@ pub fn update_lod_tiles(
         sel,
         cover_scratch,
     } = &mut *scratch;
-    let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     if demands.visual.is_empty() {
         return;
     }
@@ -2160,13 +2114,29 @@ pub fn update_lod_tiles(
         mut tiles,
         mut pending,
         mut errs,
-        mode_opt,
         maps,
         authored,
         shadow,
+        template,
         frozen,
     ) in &mut terrains
     {
+        let Some(template) = template else {
+            bevy::log::error!(
+                target: "terrain",
+                entity = ?terrain,
+                "streamed DEM terrain has no authored production material"
+            );
+            continue;
+        };
+        if template.vertex_shader.is_none() {
+            bevy::log::error!(
+                target: "terrain",
+                entity = ?terrain,
+                "streamed DEM terrain material has no authored CDLOD vertex source"
+            );
+            continue;
+        }
         // A terrain may be mounted under the canonical WorldGrid or under a
         // body's surface sub-grid. Resolve the actual frame from its ancestry;
         // streamed tiles must share that frame, while their mesh coordinates
@@ -2216,22 +2186,13 @@ pub fn update_lod_tiles(
             stream_status.resident += tiles.tiles.len();
             continue;
         }
-        let mut mode = mode_opt
-            .copied()
-            .unwrap_or_else(TerrainShaderMode::platform_default);
-        if !enable_shaders {
-            mode = TerrainShaderMode::Plain;
-        }
         // Do not expose a tile before the USD material projection and any
         // required engine-derived product have selected every source. Creating
         // a procedural/derived cover first and rewriting it when either
         // producer publishes would mint a second set of material keys, upload
         // the whole terrain again, and visibly change its appearance. The UI
         // remains active while these off-thread inputs are pending.
-        if mode == TerrainShaderMode::Lit
-            && tiles.tiles.is_empty()
-            && !initial_lit_material_ready(maps, authored)
-        {
+        if tiles.tiles.is_empty() && !initial_lit_material_ready(maps, authored) {
             continue;
         }
         // The frozen cover is ONE tile for the whole terrain, so it carries the
@@ -2263,13 +2224,11 @@ pub fn update_lod_tiles(
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;
-        // Shader mode changed (inspector edit) → RESTATE the look of every live tile
-        // in place (same geometry, new shader/colour) instead of despawning +
-        // rebuilding, which left a one-frame black hole until the tiles re-baked.
-        // The binder resolves each new look through its cache, so the swap costs one
-        // material per (mode, band) — not one per tile.
+        // A quality-profile morph change only changes the material's shared morph
+        // bands. Restate resident looks in place; geometry and the production
+        // material remain the same.
         let morph_ratio = profile.terrain_lod_morph_start_ratio as f32;
-        if tiles.mode != mode || tiles.morph_ratio.to_bits() != morph_ratio.to_bits() {
+        if tiles.morph_ratio.to_bits() != morph_ratio.to_bits() {
             swaps.clear();
             swaps.extend(
                 tiles
@@ -2278,10 +2237,10 @@ pub fn update_lod_tiles(
                     .map(|(c, s)| (s.entity, c.depth as u32, s.morph_end)),
             );
             for &(ent, depth, morph_end) in swaps.iter() {
-                // Each tile carries its own morph band; restate it under the new mode.
+                // Each tile carries its own morph band; restate it under the new profile.
                 let (ms, me, _) = snap_band(morph_end, morph_ratio);
                 let look = tile_look(
-                    mode,
+                    template,
                     depth,
                     ms,
                     me,
@@ -2289,11 +2248,11 @@ pub fn update_lod_tiles(
                     hf.0.half_extent(),
                     authored,
                     shadow,
+                    &diagnostic.0,
                     overlay,
                 );
                 commands.entity(ent).try_insert(look);
             }
-            tiles.mode = mode;
             tiles.morph_ratio = morph_ratio;
         }
 
@@ -2789,11 +2748,12 @@ pub fn update_lod_tiles(
                 depth,
                 baked.morph_end,
                 morph_ratio,
-                mode,
                 maps,
                 h as f32,
                 authored,
                 shadow,
+                template,
+                &diagnostic.0,
                 overlay,
                 oy,
                 terrain_grid_position,
@@ -2873,11 +2833,12 @@ pub fn update_lod_tiles(
                     depth,
                     morph_end,
                     morph_ratio,
-                    mode,
                     maps,
                     h as f32,
                     authored,
                     shadow,
+                    template,
+                    &diagnostic.0,
                     overlay,
                     oy,
                     terrain_grid_position,
@@ -3168,27 +3129,54 @@ pub fn despawn_orphaned_lod_tiles(
 }
 
 /// Reconcile a terrain's complete material source selection after either USD
-/// authored maps or engine-derived maps change. Keeping one reader path is
-/// essential: two independent late binders could observe the same frame in
-/// opposite orders and let one source overwrite the other.
-pub(crate) fn bind_terrain_maps_to_tiles(
+/// authored maps, engine-derived maps, or the authored `ShaderLook` arrive.
+/// The owner and its streamed tiles use this one reader path, so two independent
+/// late binders cannot observe the same frame in opposite orders and overwrite
+/// one source with another.
+pub(crate) fn bind_terrain_maps_to_materials(
     changed: Query<
         (
-            &LodTiles,
+            Entity,
+            Option<&LodTiles>,
             Option<&TerrainDerivedMaps>,
             Option<&TerrainAuthoredMaps>,
+            &mut ShaderLook,
         ),
-        Or<(Changed<TerrainDerivedMaps>, Changed<TerrainAuthoredMaps>)>,
+        (
+            With<DemTerrainSurface>,
+            Or<(
+                Changed<TerrainDerivedMaps>,
+                Changed<TerrainAuthoredMaps>,
+                Changed<ShaderLook>,
+            )>,
+        ),
     >,
-    mut looks: Query<&mut ShaderLook>,
+    mut tile_looks: Query<
+        (&mut ShaderLook, Option<&TerrainDiagnosticTile>),
+        Without<DemTerrainSurface>,
+    >,
+    mut commands: Commands,
 ) {
-    for (tiles, maps, authored) in &changed {
-        if tiles.mode != TerrainShaderMode::Lit {
-            continue;
+    for (terrain, tiles, maps, authored, mut look) in changed {
+        // The generic USD shader projection already put the material network into
+        // this look. Publish the terrain-specific view from those same handles so
+        // no second USD reader is needed. The temporary is also used immediately,
+        // so the owner does not render one frame with the derived source before the
+        // deferred component insertion becomes visible.
+        let inferred = TerrainAuthoredMaps::from_shader_look(&look);
+        let source_changed = authored != Some(&inferred);
+        if source_changed {
+            commands.entity(terrain).try_insert(inferred.clone());
         }
-        for entity in tiles.tile_entities() {
-            if let Ok(mut look) = looks.get_mut(entity) {
-                apply_terrain_maps_to_look(&mut look, maps, authored);
+        let authored = source_changed.then_some(&inferred).or(authored);
+        apply_terrain_maps_to_look(&mut look, maps, authored);
+        if let Some(tiles) = tiles {
+            for entity in tiles.tile_entities() {
+                if let Ok((mut look, diagnostic)) = tile_looks.get_mut(entity) {
+                    if diagnostic.is_none() {
+                        apply_terrain_maps_to_look(&mut look, maps, authored);
+                    }
+                }
             }
         }
     }
@@ -3197,30 +3185,42 @@ pub(crate) fn bind_terrain_maps_to_tiles(
 /// Reconcile resident looks when a published material source is removed. A
 /// whole-terrain recompose may remove the derived product before the replacement
 /// bake publishes; authored USD maps remain eligible in that interval.
-pub(crate) fn sync_removed_terrain_maps_to_tiles(
+pub(crate) fn sync_removed_terrain_maps_to_materials(
     mut removed_derived: RemovedComponents<TerrainDerivedMaps>,
     mut removed_authored: RemovedComponents<TerrainAuthoredMaps>,
-    terrains: Query<(
-        &LodTiles,
-        Option<&TerrainDerivedMaps>,
-        Option<&TerrainAuthoredMaps>,
-    )>,
-    mut looks: Query<&mut ShaderLook>,
+    terrains: Query<
+        (
+            Entity,
+            Option<&LodTiles>,
+            Option<&TerrainDerivedMaps>,
+            Option<&TerrainAuthoredMaps>,
+        ),
+        With<DemTerrainSurface>,
+    >,
+    mut looks: Query<&mut ShaderLook, (Without<TerrainDiagnosticTile>, With<DemTerrainSurface>)>,
+    mut tile_looks: Query<
+        (&mut ShaderLook, Option<&TerrainDiagnosticTile>),
+        Without<DemTerrainSurface>,
+    >,
 ) {
     let removed: HashSet<Entity> = removed_derived
         .read()
         .chain(removed_authored.read())
         .collect();
     for terrain in removed {
-        let Ok((tiles, maps, authored)) = terrains.get(terrain) else {
+        let Ok((owner, tiles, maps, authored)) = terrains.get(terrain) else {
             continue;
         };
-        if tiles.mode != TerrainShaderMode::Lit {
-            continue;
+        if let Ok(mut look) = looks.get_mut(owner) {
+            apply_terrain_maps_to_look(&mut look, maps, authored);
         }
-        for entity in tiles.tile_entities() {
-            if let Ok(mut look) = looks.get_mut(entity) {
-                apply_terrain_maps_to_look(&mut look, maps, authored);
+        if let Some(tiles) = tiles {
+            for entity in tiles.tile_entities() {
+                if let Ok((mut look, diagnostic)) = tile_looks.get_mut(entity) {
+                    if diagnostic.is_none() {
+                        apply_terrain_maps_to_look(&mut look, maps, authored);
+                    }
+                }
             }
         }
     }
@@ -3228,24 +3228,24 @@ pub(crate) fn sync_removed_terrain_maps_to_tiles(
 
 /// Same late-bind for the far-shadow cache: the horizon/shadow-cache bake (and
 /// every sun-driven re-bake) lands long after tiles exist — restate it on the
-/// resident Lit tiles' looks.
+/// resident production tiles' looks. Diagnostic tiles deliberately have no
+/// terrain-map or shadow inputs.
 pub(crate) fn bind_shadow_cache_to_tiles(
     mut commands: Commands,
     changed: Query<(&TileShadowCache, &LodTiles), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
-    mut looks: Query<&mut ShaderLook>,
+    mut looks: Query<(&mut ShaderLook, Option<&TerrainDiagnosticTile>)>,
 ) {
     for (cache, tiles) in &changed {
-        if tiles.mode != TerrainShaderMode::Lit {
-            continue;
-        }
         for entity in tiles.tile_entities() {
             let mut tile = commands.entity(entity);
             // Keep already-resident tiles on the same terrain self-shadow
             // ownership contract as newly spawned tiles. They remain ordinary
             // CSM receivers for dynamic-object shadows.
             enforce_streamed_shadow_ownership(&mut tile);
-            if let Ok(mut look) = looks.get_mut(entity) {
-                apply_shadow_cache_to_look(&mut look, cache);
+            if let Ok((mut look, diagnostic)) = looks.get_mut(entity) {
+                if diagnostic.is_none() {
+                    apply_shadow_cache_to_look(&mut look, cache);
+                }
             }
         }
     }
@@ -3259,6 +3259,15 @@ mod draw_partition_tests {
         lunco_render::RenderingQualitySettings::default().profile()
     }
 
+    fn production_template() -> ShaderLook {
+        ShaderLook::new("shaders/terrain_geomorph.wgsl")
+            .with_vertex_shader("shaders/terrain_geomorph.wgsl")
+    }
+
+    fn diagnostic_template() -> ShaderLook {
+        crate::overlay::TerrainDiagnosticLook::default().0
+    }
+
     #[test]
     fn derived_map_appearance_is_identical_across_mesh_depths() {
         let maps = TerrainDerivedMaps {
@@ -3268,7 +3277,7 @@ mod draw_partition_tests {
             texel_size_m: 7.820_137,
         };
         let near = tile_look(
-            TerrainShaderMode::Lit,
+            &production_template(),
             2,
             100.0,
             200.0,
@@ -3276,10 +3285,11 @@ mod draw_partition_tests {
             512.0,
             None,
             None,
+            &diagnostic_template(),
             crate::overlay::OverlayUniforms::OFF,
         );
         let far = tile_look(
-            TerrainShaderMode::Lit,
+            &production_template(),
             7,
             100.0,
             200.0,
@@ -3287,6 +3297,7 @@ mod draw_partition_tests {
             512.0,
             None,
             None,
+            &diagnostic_template(),
             crate::overlay::OverlayUniforms::OFF,
         );
 
@@ -3303,23 +3314,45 @@ mod draw_partition_tests {
             );
         }
         assert!(!near.values.contains_key("map_ratio"));
+        assert_eq!(near.shader, "shaders/terrain_geomorph.wgsl");
+        assert_eq!(far.shader, "shaders/terrain_geomorph.wgsl");
+        for name in ["mode", "overlay_mode", "overlay_opacity", "lod_depth"] {
+            assert!(
+                !near.values.contains_key(name),
+                "production terrain must not carry diagnostic input {name}"
+            );
+        }
+    }
 
-        let mut near_values = near.values;
-        let mut far_values = far.values;
-        assert_ne!(
-            near_values.remove("lod_depth"),
-            far_values.remove("lod_depth")
+    #[test]
+    fn diagnostic_material_is_a_separate_shader_path() {
+        let look = tile_look(
+            &production_template(),
+            4,
+            100.0,
+            200.0,
+            None,
+            512.0,
+            None,
+            None,
+            &diagnostic_template(),
+            crate::overlay::OverlayUniforms {
+                mode: crate::overlay::overlay_mode::LOD_DEPTH,
+                opacity: 1.0,
+                safe_rad: 0.0,
+                cliff_rad: 0.0,
+            },
         );
-        assert_eq!(
-            near_values, far_values,
-            "physical appearance must not encode quadtree depth"
-        );
+
+        assert_eq!(look.shader, "lunco://shaders/terrain_debug.wgsl");
+        assert_eq!(look.values.get("lod"), Some(&ParamValue::F32(4.0)));
+        assert!(!look.values.contains_key("micro_scale"));
     }
 
     #[test]
     fn absent_derived_maps_are_explicitly_disabled() {
         let look = tile_look(
-            TerrainShaderMode::Lit,
+            &production_template(),
             7,
             100.0,
             200.0,
@@ -3327,6 +3360,7 @@ mod draw_partition_tests {
             512.0,
             None,
             None,
+            &diagnostic_template(),
             crate::overlay::OverlayUniforms::OFF,
         );
 
@@ -3363,7 +3397,7 @@ mod draw_partition_tests {
             ..Default::default()
         };
         let look = tile_look(
-            TerrainShaderMode::Lit,
+            &production_template(),
             4,
             100.0,
             200.0,
@@ -3371,6 +3405,7 @@ mod draw_partition_tests {
             512.0,
             Some(&authored),
             None,
+            &diagnostic_template(),
             crate::overlay::OverlayUniforms::OFF,
         );
 
@@ -3401,6 +3436,53 @@ mod draw_partition_tests {
         assert_eq!(
             look.values.get("weight_normal"),
             Some(&ParamValue::F32(authored.weight_normal))
+        );
+    }
+
+    #[test]
+    fn reauthored_shader_look_refreshes_the_shared_terrain_source_view() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Image>()
+            .add_systems(Update, bind_terrain_maps_to_materials);
+        let first = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let second = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let terrain = app
+            .world_mut()
+            .spawn((
+                DemTerrainSurface,
+                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                    .with_texture(TextureLayer::Albedo, first.clone()),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<TerrainAuthoredMaps>(terrain)
+                .expect("initial USD look is projected")
+                .albedo,
+            Some(first)
+        );
+
+        *app.world_mut()
+            .get_mut::<ShaderLook>(terrain)
+            .expect("terrain look") = ShaderLook::new("shaders/terrain_geomorph.wgsl")
+            .with_texture(TextureLayer::Albedo, second.clone());
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<TerrainAuthoredMaps>(terrain)
+                .expect("reauthored USD look keeps the terrain view")
+                .albedo,
+            Some(second)
         );
     }
 
@@ -3441,7 +3523,7 @@ mod draw_partition_tests {
     #[test]
     fn removed_derived_maps_reconcile_resident_tiles() {
         let mut app = App::new();
-        app.add_systems(Update, sync_removed_terrain_maps_to_tiles);
+        app.add_systems(Update, sync_removed_terrain_maps_to_materials);
 
         let tile = app
             .world_mut()
@@ -3476,6 +3558,7 @@ mod draw_partition_tests {
             .world_mut()
             .spawn((
                 tiles,
+                DemTerrainSurface,
                 TerrainDerivedMaps {
                     surface: Handle::default(),
                     normal: Handle::default(),

@@ -372,6 +372,29 @@ fn streamed_terrain_map_weights_use_only_fragment_footprint() {
     );
 }
 
+/// Terrain analysis is a tool material, not a production-shader branch. Keeping
+/// its source separate means adding a diagnostic mode cannot add uniforms,
+/// texture bindings, or divergent topology to every lunar terrain draw.
+#[test]
+fn terrain_diagnostic_material_is_separate_from_production_material() {
+    let production = code_only(&read("terrain_geomorph.wgsl"));
+    for forbidden in [
+        "overlay_",
+        "lod_depth",
+        "weight_mineral",
+        "mineral_tex",
+        "slope_hazard_color",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "production terrain material contains diagnostic contract `{forbidden}`"
+        );
+    }
+    let diagnostic = code_only(&read("terrain_debug.wgsl"));
+    assert!(diagnostic.contains("slope_hazard_color"));
+    assert!(diagnostic.contains("lod_color"));
+}
+
 /// The published lunar fits these defaults came from (Chrono/UW-Madison,
 /// arxiv 2410.04371 Table 1). Pinned so a future "tweak" is a deliberate,
 /// reviewable edit rather than drift — the amplitude in particular was 0.8 for a

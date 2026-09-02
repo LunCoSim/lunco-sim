@@ -1,8 +1,7 @@
-//! CDLOD geomorph terrain tile — **procedural regolith look** with a custom
-//! `@vertex` morph stage. This is the production material for streamed LOD tiles
-//! (promoted from the old depth-tint debug view): the same DEM-anchored FBM bump +
-//! albedo variation as `regolith.wgsl`, lit by the scene sun through `lit_n`, on
-//! top of the CDLOD vertex geomorph so tiles never pop as the LOD switches.
+//! CDLOD geomorph terrain tile — the production lunar material with a custom
+//! `@vertex` morph stage. Macro and meso relief come from the DEM and authored
+//! terrain layers; this material adds only one anti-aliased close-range
+//! regolith micro-normal and the measured lunar photometric response.
 //!
 //! Each LOD-tile vertex carries two positions: its own LOD `POSITION` and the
 //! `MORPH_TARGET` (the vertex snapped to the parent's coarser even lattice, baked
@@ -10,7 +9,7 @@
 //! camera distance over the node's CDLOD morph band, so a tile collapses smoothly
 //! onto its parent. No texture fetch, no compute → wasm-safe.
 //!
-//! The FBM/bump look needs only the terrain's authored DEM extent, so per-tile
+//! The micro-normal needs only the terrain's authored DEM extent, so per-tile
 //! materials remain independent of the `wire_terrain_materials` heightfield
 //! wiring (which only reaches the single static terrain entity). It therefore
 //! omits `regolith.wgsl`'s live horizon ray-march. Streamed tiles use
@@ -31,24 +30,17 @@
     mesh_view_bindings::view,
 }
 #import lunco::pbr_lit::lit_n
-#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, layer_height, map_weights, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
+#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, map_weights, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
-#import lunco::transfer::{slope_hazard_color, slope_of}
 
 //!@ui      albedo            color  "Albedo"
 //!@default albedo            0.13,0.13,0.13
-//!@ui      tooth_scale       4 40    "Regolith tooth scale (/m)"
-//!@default tooth_scale       8
-//!@ui      tooth_bump        0 0.05  "Regolith tooth strength"
-//!@default tooth_bump        0.012
-//!@ui      fine_scale        50 400 "Fine grain scale (/m)"
-//!@default fine_scale        180
-//!@ui      fine_bump         0 0.1  "Fine grain strength"
-//!@default fine_bump         0.025
-//!@ui      rough_mix         0 1    "Roughness mix"
-//!@default rough_mix         0.35
-//!@ui      mottle            0 0.6  "Albedo mottle"
-//!@default mottle            0.22
+//!@ui      micro_scale       8 80    "Regolith micro scale (/m)"
+//!@default micro_scale       35
+//!@ui      micro_bump        0 0.05  "Regolith micro-normal strength"
+//!@default micro_bump        0.015
+//!@ui      roughness         0 1     "Base regolith roughness"
+//!@default roughness         0.88
 // Derived-map weights come from the screen-space surface footprint and the map's
 // physical texel size. Authored-map weights come from USD. Mesh LOD is deliberately
 // absent, so replacing a tile by its parent cannot change colour.
@@ -60,8 +52,6 @@
 //!@default terrain_half_extent 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
-//!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
-//!@default weight_mineral    0
 //!@ui      weight_rough      0 1    "Authored surface roughness weight"
 //!@default weight_rough      0
 //!@ui      weight_ao         0 1    "Authored surface AO weight"
@@ -91,20 +81,11 @@
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
-//!@default overlay_mode      0
-//!@default overlay_opacity   0
-//!@default overlay_safe_rad  0
-//!@default overlay_cliff_rad 0
-//!@ui      lod_depth         0 12   "CDLOD tile depth (LOD-depth overlay)"
-//!@default lod_depth         0
 struct Material {
     albedo:            vec3<f32>,
-    tooth_scale:       f32,
-    tooth_bump:        f32,
-    fine_scale:        f32,
-    fine_bump:         f32,
-    rough_mix:         f32,
-    mottle:            f32,
+    micro_scale:       f32,
+    micro_bump:        f32,
+    roughness:         f32,
     map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
     derived_surface_on: f32, // engine-filled: derived surface map is the selected source
     derived_normal_on:  f32, // engine-filled: derived normal map is the selected source
@@ -112,7 +93,6 @@ struct Material {
     authored_normal_on:  f32, // engine-filled: USD normal map is the selected source
     terrain_half_extent: f32, // engine-filled: authored DEM half side in terrain metres
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
-    weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
     weight_rough:      f32,  // AUTHORED surface roughness weight
     weight_ao:         f32,  // AUTHORED surface AO weight
     weight_normal:     f32,  // AUTHORED normal weight
@@ -124,11 +104,6 @@ struct Material {
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
     stitch_edges:      vec4<f32>, // [top,bottom,left,right] coarser-neighbour mask
-    overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard, 2 = LOD depth
-    overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
-    overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
-    overlay_cliff_rad: f32,  // slope (rad) at/above which ground is red (cliff)
-    lod_depth:         f32,  // this tile's CDLOD depth, for the depth overlay
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -143,10 +118,6 @@ var<uniform> mat: Material;
 var albedo_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3)
 var albedo_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4)
-var mineral_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5)
-var mineral_smp: sampler;
 
 // Baked derived maps (lunco-terrain-surface derived_layers; whole-DEM planar
 // UV). `None` binds Bevy's fallback white — every read is weight-gated so an
@@ -190,20 +161,6 @@ var shadow_cache_sampler: sampler;
 //   * Photometry: dark albedo (~0.08-0.13) + Hapke / Lommel-Seeliger + opposition
 //     surge (see lunar_brdf.wgsl). — JPL/arXiv: https://arxiv.org/html/2410.04371v1
 //   * Airless → NO haze: high-contrast, crisp to the horizon.
-
-// Palette-matched to `lod_rgb` in `stream_viz.rs` so the overlay and the debug
-// shader agree on what a depth looks like.
-fn lod_depth_color(d: f32) -> vec3<f32> {
-    // Cycle rather than clamp: modulo guarantees ADJACENT depths always differ,
-    // which is all the boundary question needs; clamping blinds the top depths.
-    let i = i32(max(d, 0.0)) % 7;
-    var p = array<vec3<f32>, 7>(
-        vec3(0.20, 0.35, 0.85), vec3(0.20, 0.75, 0.85), vec3(0.25, 0.80, 0.35),
-        vec3(0.90, 0.85, 0.20), vec3(0.95, 0.55, 0.15), vec3(0.90, 0.25, 0.20),
-        vec3(0.85, 0.30, 0.80),
-    );
-    return p[i];
-}
 
 // --- vertex: CDLOD geomorph ---------------------------------------------
 
@@ -270,10 +227,6 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    let fine_scale  = mat.fine_scale;
-    let fine_bump   = mat.fine_bump;
-    let rough_mix   = mat.rough_mix;
-    let mottle      = mat.mottle;
     var albedo = mat.albedo;
 
     let world_p = in.world_position.xyz;
@@ -294,18 +247,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Authored rasters. Neutral defaults so a shader compiled without UVs (or
     // with the maps unbound) behaves exactly as before these existed.
     var map_a = vec3(1.0, 1.0, 1.0);
-    var map_m = vec3(0.0, 0.0, 0.0);
 #ifdef VERTEX_UVS_A
     map_n = textureSample(normal_tex, normal_smp, in.uv);
     map_s = textureSample(surface_tex, surface_smp, in.uv);
     map_a = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
-    map_m = textureSample(mineral_tex, mineral_smp, in.uv).rgb;
 #endif
 
     // All macro/meso SHAPE comes from the mesh (DEM + crater geometry) and from
     // scattered rock meshes — the fragment no longer fakes relief. It adds only
-    // believable normal-only micro-texture (features small enough that the absence
-    // of parallax is imperceptible) + lunar photometry + broad albedo variation.
+    // one believable normal-only micro-texture layer (features small enough that
+    // the absence of parallax is imperceptible) and lunar photometry.
     // Physical material detail is a property of the map and the projected
     // surface, not of whichever quadtree mesh currently represents it. `pw` is
     // continuous across a CDLOD edge, while an integer tile depth is not.
@@ -347,45 +298,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     detail_n = terrain_detail_normal_to_local(n, in.instance_index);
 #endif
 
-    //   • regolith tooth — a sub-decimetre material detail. All relief at metre
-    //     scale belongs to the DEM/mesh; normal-only FBM at that scale produced
-    //     painted black patches under the authored grazing sun.
-    let tooth_scale = clamp(mat.tooth_scale, 4.0, 40.0);
-    let tooth_fade  = aa_fade(tooth_scale, pw);
-    var tooth_h = 0.5;
-    if (tooth_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.tooth_bump * tooth_fade, &tooth_h);
-    }
-
-    //   • fine regolith grain — millimetre tooth that catches the grazing sun in
-    //     the immediate foreground (tight fade → no detail bubble).
-    let fine_fade = aa_fade(fine_scale, pw);
-    var fine_h = 0.5;
-    if (fine_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, fine_scale, 2, 0.5, 0.42, 0.58, fine_bump * fine_fade, &fine_h);
+    // Regolith grain is a material response, not terrain shape. Keep one
+    // footprint-filtered layer so it disappears before it can alias or shimmer.
+    let micro_scale = clamp(mat.micro_scale, 8.0, 80.0);
+    let micro_fade = aa_fade(micro_scale, pw);
+    var micro_h = 0.5;
+    if (micro_fade > 0.0) {
+        detail_n = bump_layer(
+            detail_n, detail_p, micro_scale, 2, 0.5, 0.42, 0.58,
+            mat.micro_bump * micro_fade, &micro_h);
     }
 
     n = detail_n;
 #ifdef VERTEX_UVS_A
     n = terrain_detail_normal_to_world(detail_n, in.instance_index);
 #endif
-
-    // Large-scale tonal variation (albedo only — cheap, no relief, carries far).
-    // Very low frequency = broad maria/highland-style patches, NOT per-metre
-    // speckle. This breaks up the flat grey without inventing fake geometry.
-    let dust = surface_fbm(detail_p * 0.004, 3, 0.5);
-    albedo *= 1.0 + (dust - 0.5) * mottle;
-
-    // Metre-scale tonal grain: between the 250 m dust wash above and the
-    // normal-only micro layers there was NO albedo variation at human scale, so
-    // genuinely smooth ground read as untextured plastic. Disturbed (cresting)
-    // regolith is subtly brighter than compacted lows through an independent
-    // ~3 m albedo variation. This changes colour only; it never invents relief.
-    let grain_fade = aa_fade(0.35, pw);
-    if (grain_fade > 0.0) {
-        let grain = surface_fbm(detail_p * 0.35, 2, 0.5);
-        albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
-    }
 
     // Baked relief tone: rims/ejecta brighter, bowls darker (normal_tex alpha,
     // 0.5 = neutral). This is what keeps distant relief legible after the
@@ -463,10 +390,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let n_geo = normalize(in.world_normal);
     let fill = base_albedo * (0.02 + 0.03 * max(n_geo.y, 0.0));
 
-    // Regolith is rough and non-metallic; rough_mix nudges it, and the baked
-    // slope-derived roughness (surface_tex R) leans in where the maps are live.
+    // Regolith is rough and non-metallic; the baked slope-derived roughness
+    // (surface_tex R) replaces the base only where its source contract is active.
     let roughness = clamp(
-        mix(0.6 + rough_mix * 0.4, map_s.r, weight_rough),
+        mix(mat.roughness, map_s.r, weight_rough),
         0.05,
         1.0,
     );
@@ -482,58 +409,5 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         color = vec4(color.rgb * vis, color.a);
     }
 #endif
-    // --- Analysis overlay (Data→Transfer→Blend, in-material shading plane) -----
-    // The Blend step: composite the Transfer's colour over the lit regolith. The
-    // transfer itself lives in `lunco::transfer` — ONE definition, shared with the
-    // Inspector legend and any headless export, so the swatch can't drift from the
-    // terrain it explains. Params are uniforms → dropping the cliff angle re-reds
-    // steeper ground with no re-bake.
-    //
-    // SLOPE SOURCE: `n_geo` is the interpolated LOD MESH normal, so on a far/coarse
-    // tile — where the mesh has thrown the relief away — a real cliff shaded green
-    // and re-coloured as the camera approached. That is the wrong failure direction
-    // for a traversability overlay. Where the baked normal map is bound
-    // (`weight_normal > 0` — exactly the coarse tiles), take the slope from the
-    // DEM-resolution normal instead; near tiles out-resolve the map, so their own
-    // geometry stays the better answer.
-    if (mat.overlay_mode > 0.5 && mat.overlay_opacity > 0.0) {
-        var tint = vec3(0.0);
-        if (mat.overlay_mode < 1.5) {
-            var n_haz = n_geo;
-#ifdef VERTEX_UVS_A
-            if (weight_normal > 0.0) {
-                // `slope_of` is defined in the DEM's ENU frame (Y = local up),
-                // so analysis deliberately consumes the decoded LOCAL normal;
-                // lighting above consumes its transformed world-space twin.
-                n_haz = decode_dem_normal(map_n.xyz);
-            }
-#endif
-            tint = slope_hazard_color(
-                slope_of(n_haz), mat.overlay_safe_rad, mat.overlay_cliff_rad);
-        } else {
-            // LOD-depth view, composited OVER the production shading rather than
-            // replacing it (`TerrainShaderMode::DebugLod` swaps in the flat shader,
-            // so it cannot show where a detail boundary sits relative to the real
-            // look). Coarse -> fine sweeps blue/cyan/green/yellow/orange/red/magenta,
-            // matching `lod_rgb` in `stream_viz.rs`.
-            tint = lod_depth_color(mat.lod_depth);
-        }
-        color = vec4(mix(color.rgb, tint, mat.overlay_opacity), color.a);
-    }
-
-    // --- AUTHORED overlay drape (the raster half of the same plane) -----------
-    // A baked classification raster (slope ramp, hillshade, elevation gradient)
-    // from `inputs:mineral_map`, composited at the SAME post-lit point as the
-    // computed overlay above, and after it — so the two stack in a defined
-    // order instead of racing.
-    //
-    // UNLIT, and that is the whole point (doc 18 §4): this is a MAP, not a
-    // material. It must read the same on a shadowed crater floor as on the
-    // sunlit rim, because "where is the ground dangerous" is not a question
-    // about where the light happens to be. Tinting albedo instead would put the
-    // answer behind the very shadow the student is trying to see into.
-    if (mat.weight_mineral > 0.0) {
-        color = vec4(mix(color.rgb, map_m, mat.weight_mineral), color.a);
-    }
     return color;
 }

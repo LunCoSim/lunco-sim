@@ -61,10 +61,6 @@ pub(crate) enum InspectorComponentEdit {
         entity: Entity,
         value: f64,
     },
-    TerrainShader {
-        entity: Entity,
-        mode: lunco_terrain_surface::TerrainShaderMode,
-    },
     JointSetpoint {
         holder: Entity,
         value: f64,
@@ -192,7 +188,6 @@ pub(crate) fn on_inspector_component_edit(
     mut masses: Query<&mut avian3d::prelude::Mass>,
     mut linear: Query<&mut avian3d::prelude::LinearDamping>,
     mut angular: Query<&mut avian3d::prelude::AngularDamping>,
-    mut terrain: Query<&mut lunco_terrain_surface::TerrainShaderMode>,
 ) {
     match *trigger.event() {
         InspectorComponentEdit::Mass { entity, value } => {
@@ -208,11 +203,6 @@ pub(crate) fn on_inspector_component_edit(
         InspectorComponentEdit::AngularDamping { entity, value } => {
             if let Ok(mut damping) = angular.get_mut(entity) {
                 damping.0 = value;
-            }
-        }
-        InspectorComponentEdit::TerrainShader { entity, mode } => {
-            if let Ok(mut current) = terrain.get_mut(entity) {
-                *current = mode;
             }
         }
         InspectorComponentEdit::JointSetpoint { holder, value } => {
@@ -1569,34 +1559,6 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         }
     }
 
-    // ── Terrain shader mode (streamed DEM terrain) ──────────────
-    if let Some(mode) = ctx
-        .get::<lunco_terrain_surface::TerrainShaderMode>(entity)
-        .copied()
-    {
-        use lunco_terrain_surface::TerrainShaderMode as M;
-        egui::CollapsingHeader::new("Terrain Shader")
-            .default_open(true)
-            .show(ui, |ui| {
-                let label = |m: M| match m {
-                    M::Lit => "Lit (regolith)",
-                    M::DebugLod => "Debug LOD (colours)",
-                    M::Plain => "Plain (no shader)",
-                };
-                let mut sel = mode;
-                egui::ComboBox::from_label("Mode")
-                    .selected_text(label(sel))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut sel, M::Lit, label(M::Lit));
-                        ui.selectable_value(&mut sel, M::DebugLod, label(M::DebugLod));
-                        ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
-                    });
-                if sel != mode {
-                    ctx.trigger(InspectorComponentEdit::TerrainShader { entity, mode: sel });
-                }
-            });
-    }
-
     // ── Modelica parameters component ───────────────────────────
     let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
     if has_modelica {
@@ -2394,9 +2356,9 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 }
 
-/// Terrain analysis-overlay controls — slope hazard or LOD depth, the render VIEW
-/// of the terrain. Edits the global `TerrainOverlayParams`; the tile shader colourises live
-/// (no re-bake). Read a Copy, edit locally, write back ONLY on a real change so the
+/// Terrain diagnostic controls — slope hazard or LOD depth, the render VIEW of the
+/// terrain. Edits the global `TerrainOverlayParams`; a separate diagnostic material
+/// colourises live (no re-bake). Read a Copy, edit locally, write back ONLY on a real change so the
 /// live-sync system stays change-driven instead of firing every frame.
 fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_terrain_surface::overlay::TerrainOverlayParams;
@@ -2405,13 +2367,15 @@ fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         return;
     };
     let mut p = cur;
-    ui.checkbox(&mut p.enabled, "Analysis overlay")
-        .on_hover_text("Composite an analysis view over the lit terrain.");
+    ui.checkbox(&mut p.enabled, "Terrain diagnostic")
+        .on_hover_text(
+            "Replace the production terrain material with a separate analysis material.",
+        );
     ui.add_enabled_ui(p.enabled, |ui| {
         ui.checkbox(&mut p.lod_depth, "LOD depth view")
             .on_hover_text(
                 "Colour tiles by quadtree depth (cycling palette) instead of slope — \
-                 the streaming diagnostic, composited over the production look.",
+                 the streaming diagnostic material.",
             );
         ui.add(egui::Slider::new(&mut p.opacity, 0.0..=1.0).text("Opacity"));
         if !p.lod_depth {
@@ -2429,7 +2393,7 @@ fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         }
     })
     .response
-    .on_disabled_hover_text("Enable Analysis overlay to edit its visualization");
+    .on_disabled_hover_text("Enable Terrain diagnostic to edit its visualization");
     if p != cur {
         ctx.resource_scope(|_c, r: &mut TerrainOverlayParams| *r = p);
     }
