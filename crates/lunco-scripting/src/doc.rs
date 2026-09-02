@@ -6,10 +6,10 @@ use std::collections::HashMap;
 /// Supported scripting languages for Digital Twin integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect, Default)]
 pub enum ScriptLanguage {
-    #[default]
-    Python,
     /// Pure-Rust embedded engine (rhai). The default browser-capable backend.
+    #[default]
     Rhai,
+    Python,
 }
 
 /// A canonical document representing a script in the Digital Twin.
@@ -247,6 +247,7 @@ impl Document for ScriptDocument {
                 self.display_name()
             )));
         }
+        #[cfg(feature = "python")]
         if self.language == ScriptLanguage::Python
             && crate::python::get_python_status() != crate::python::PythonStatus::Available
         {

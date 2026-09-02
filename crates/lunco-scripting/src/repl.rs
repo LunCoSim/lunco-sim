@@ -30,8 +30,10 @@ pub fn spawn_repl_thread() -> ReplResource {
     // The default backend is rhai; only a python-only build prompts for Python.
     let lang = if cfg!(feature = "rhai") {
         "rhai"
-    } else {
+    } else if cfg!(feature = "python") {
         "python"
+    } else {
+        "disabled"
     };
     std::thread::spawn(move || {
         let stdin = io::stdin();

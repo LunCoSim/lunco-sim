@@ -125,6 +125,11 @@ it with this one.
 - Choose the smallest targeted check or test that covers the changed owner;
   crate-wide and workspace-wide suites are slow and should be reserved for
   changes that cross those broader boundaries.
+- For CPU performance profiling, use the adjacent `../tracy` checkout: build
+  the production binary with its opt-in `tracy` feature, start
+  `../tracy/capture/build/tracy-capture` before the app, and inspect the
+  resulting capture in Tracy. Keep a separate clean run for FPS acceptance;
+  profiler overhead is diagnostic, not the product-performance number.
 - Full scene reload is supported; partial object/reference reload remains TODO.
 
 ## Session lifecycle

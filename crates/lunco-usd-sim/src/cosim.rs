@@ -33,19 +33,23 @@ use lunco_core::{
     SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest, WorldGrid,
 };
 use lunco_cosim::{ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus};
-use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc::DocumentId;
+#[cfg(feature = "python")]
+use lunco_doc::DocumentOrigin;
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
     ModelicaSignalLayout,
 };
 use lunco_render::SceneCamera;
+#[cfg(feature = "python")]
+use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
+#[cfg(feature = "python")]
 use lunco_scripting::python::{get_python_status, PythonStatus};
+#[cfg(feature = "python")]
 use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
-    doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
-    scenario::ScenarioDriver,
-    world_bridge::RhaiScenarioRuntime,
+    doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::read::UsdReadObject;
@@ -403,6 +407,7 @@ pub struct PendingModelicaSource {
 
 /// Same for Python.
 #[derive(Component)]
+#[cfg(feature = "python")]
 pub struct PendingPythonSource {
     pub handle: Handle<PythonSource>,
     pub asset_path: String,
@@ -1352,7 +1357,17 @@ fn process_usd_cosim_prim_read(
     // the runtime contract honest on binaries built without the Python feature
     // and on machines whose shared Python library cannot be loaded.
     if let Some(asset_path) = python_path.as_deref() {
-        if get_python_status() != PythonStatus::Available {
+        let python_available = {
+            #[cfg(feature = "python")]
+            {
+                get_python_status() == PythonStatus::Available
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                false
+            }
+        };
+        if !python_available {
             let reason =
                 format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
             python_unavailable.paths.insert(prim_path.path.clone());
@@ -1476,7 +1491,9 @@ fn process_usd_cosim_prim_read(
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
-    } else if let Some(asset_path) = python_path {
+    }
+    #[cfg(feature = "python")]
+    if let Some(asset_path) = python_path {
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
@@ -1824,10 +1841,12 @@ pub(crate) fn dispatch_loaded_modelica_sources(
 }
 
 /// Drain `PendingPythonSource` analogously to the Modelica version.
+#[cfg(feature = "python")]
 fn python_source_load_error(asset_path: &str) -> String {
     format!("failed to load Python source `{asset_path}` via AssetServer")
 }
 
+#[cfg(feature = "python")]
 fn mark_python_source_load_failed(sim: &mut SimComponent, error: &str) {
     // The bind-time interface is still valid, but the executable source is not.
     // This terminal state releases the binding epoch and readiness producer;
@@ -1835,6 +1854,7 @@ fn mark_python_source_load_failed(sim: &mut SimComponent, error: &str) {
     sim.status = SimStatus::Error(error.to_owned());
 }
 
+#[cfg(feature = "python")]
 pub fn dispatch_loaded_python_sources(
     mut commands: Commands,
     q: Query<(Entity, &PendingPythonSource)>,
@@ -4831,14 +4851,15 @@ pub(crate) fn install(app: &mut App) {
     // scripting plugins; doing it here lets minimal apps (headless tests using
     // `MinimalPlugins` without those plugins) run the cosim systems without
     // panicking on a missing `Assets<…>` resource.
-    app.init_asset::<ModelicaSource>()
-        .init_asset::<PythonSource>()
-        // The USD simulation projection owns these derived registries and
-        // writes them even in a headless host.  Production Modelica setup also
-        // initializes them, but minimal USD/physics apps intentionally omit
-        // that plugin; keeping the resources here makes the projection
-        // plugin's system contract complete and idempotent.
-        .init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
+    app.init_asset::<ModelicaSource>();
+    #[cfg(feature = "python")]
+    app.init_asset::<PythonSource>();
+    // The USD simulation projection owns these derived registries and
+    // writes them even in a headless host.  Production Modelica setup also
+    // initializes them, but minimal USD/physics apps intentionally omit
+    // that plugin; keeping the resources here makes the projection
+    // plugin's system contract complete and idempotent.
+    app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
         .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
         .init_resource::<lunco_cosim::BindingRevision>()
         .init_resource::<lunco_core::SimulationBarrierParticipants>()
@@ -4971,12 +4992,6 @@ pub(crate) fn install(app: &mut App) {
             // Project authored `lunco:telemetry:*` declarations once the live
             // composed stage is available. This is independent of co-sim model
             // discovery so physical/avian and Modelica channels use one sampler.
-            // Python source-load drain runs every Update; cheap when no
-            // `PendingPythonSource` entities exist. Splitting it from
-            // `process_usd_cosim_prims` is intentional — the source asset may
-            // take multiple frames to load (network on wasm, async I/O on
-            // native).
-            dispatch_loaded_python_sources,
             // Reads the class each member's `.mo` declares, so the projector
             // below instantiates what the file says rather than what its path
             // implies. Before it in the chain: a class landing this frame should
@@ -4984,6 +4999,17 @@ pub(crate) fn install(app: &mut App) {
             crate::domain_projection::resolve_member_classes,
         )
             .chain()
+            .in_set(CosimUpdateSet::Scene),
+    );
+
+    // Python source-load drain runs every Update only when the Python feature
+    // is compiled in; the source asset may take multiple frames to load.
+    #[cfg(feature = "python")]
+    app.add_systems(
+        Update,
+        dispatch_loaded_python_sources
+            .after(process_usd_cosim_prims)
+            .before(crate::domain_projection::resolve_member_classes)
             .in_set(CosimUpdateSet::Scene),
     );
 
@@ -5620,6 +5646,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "python")]
     fn failed_python_source_is_terminal_for_binding_readiness() {
         let mut sim = SimComponent {
             model_name: "Python:models/controller.py".into(),

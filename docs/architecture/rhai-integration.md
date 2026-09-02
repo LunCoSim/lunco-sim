@@ -42,10 +42,12 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   ownership-gated predictive controls; direct reflected writes, structural
   edits, and policy changes are rejected.
 
-Python currently supports only the optional one-shot `RunPython` command. It
-does not implement `ScenarioRuntime` or execute `ScriptedModel` lifecycle
-hooks; Python scenario lifecycle support remains explicitly planned in
-`lunco-scripting/src/scenario.rs`.
+Python currently supports only the optional one-shot `RunPython` command. The
+`python` feature gates the PyO3 module, `.py` asset loader, status resource, and
+execution systems; a build without it cannot execute or register Python
+participants. Python does not implement `ScenarioRuntime` or execute
+`ScriptedModel` lifecycle hooks; Python scenario lifecycle support remains
+explicitly planned in `lunco-scripting/src/scenario.rs`.
 The native shared-library probe is lazy: the scripting plugin keeps Python
 `Uninitialized` until a Python command, participant, or REPL request needs the
 runtime. A Python participant then resolves availability at the USD bind seam;

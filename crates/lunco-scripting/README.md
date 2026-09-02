@@ -12,7 +12,7 @@ command/query API the HTTP API, MCP, and UI use.
 | Language | Status |
 |---|---|
 | **rhai** | **Default & primary.** Pure-Rust, sandboxed, wasm-clean — runs natively and in the browser. The full scenario lifecycle + world bridge. |
-| Python (PyO3) | One-shot eval only (`RunPython`). A full scenario lifecycle (`PythonScenarioRuntime`) is planned — the language-neutral driver + world bridge are in place; the Python binding is not. |
+| Python (PyO3) | Optional one-shot eval only (`RunPython`); compiled and registered only with the `python` feature. A full scenario lifecycle (`PythonScenarioRuntime`) is planned. |
 | Lua | Reserved language id; not implemented. |
 
 The language-neutral core means a backend supplies only the interpreter
@@ -95,8 +95,9 @@ never on a networked client (which receives behaviour via replication).
 ## Cargo features
 
 - `rhai` (**default**) — the rhai backend; pure-Rust, wasm-clean.
-- `python` — the PyO3 runtime (one-shot eval; requires a Python 3.12 shared library,
-  probed when Python is first used).
+- `python` — the optional PyO3 runtime (one-shot eval; requires a Python 3.12
+  shared library, probed when Python is first used). Without this feature, the
+  `.py` loader, Python status resource, and execution systems are not registered.
 
 The crate builds with `rhai`, with `--no-default-features` (script-free), with
 `python`, and for `wasm32-unknown-unknown`.
