@@ -4419,10 +4419,12 @@ fn render_layout(
                 let submenus = std::mem::take(&mut layout.settings_submenus);
                 for (label, callbacks) in &submenus {
                     ui.menu_button(label, |ui| {
+                        let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
                         let max_height = ui.spacing().interact_size.y * 24.0;
                         egui::ScrollArea::vertical()
+                            .max_width(max_width)
                             .max_height(max_height)
-                            .auto_shrink([false, false])
+                            .auto_shrink([true, true])
                             .show(ui, |ui| {
                                 for (i, callback) in callbacks.iter().enumerate() {
                                     if i > 0 {
@@ -5258,37 +5260,40 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         // egui::Popup is the post-0.31 API. `open_memory(None)` ties
         // the open state to egui's memory keyed by `popup_id`, so the
         // `toggle_popup` call above flips it.
+        let popup_width = status_popup_width(ui.ctx().content_rect().width());
         egui::Popup::from_response(&response)
             .id(popup_id)
+            .width(popup_width)
             .align(egui::RectAlign::TOP_START)
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .open_memory(None)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                let popup_width = status_popup_width(ui.ctx().content_rect().width());
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
                 ui.set_max_height(360.0);
                 ui.heading("Recent status events");
                 ui.separator();
                 let mut popup_attention_source = None;
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if history.is_empty() {
-                        ui.label(egui::RichText::new("(no events yet)").weak());
-                        return;
-                    }
-                    // Newest first.
-                    for (key, ev) in history.iter().rev() {
-                        if render_status_event_row(
-                            ui,
-                            ev,
-                            theme,
-                            ui.make_persistent_id(("workbench_status_event", key)),
-                        ) {
-                            popup_attention_source = Some(ev.source);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if history.is_empty() {
+                            ui.label(egui::RichText::new("(no events yet)").weak());
+                            return;
                         }
-                    }
-                });
+                        // Newest first.
+                        for (key, ev) in history.iter().rev() {
+                            if render_status_event_row(
+                                ui,
+                                ev,
+                                theme,
+                                ui.make_persistent_id(("workbench_status_event", key)),
+                            ) {
+                                popup_attention_source = Some(ev.source);
+                            }
+                        }
+                    });
                 if let Some(source) = popup_attention_source {
                     world.trigger(StatusBarAction { source });
                 }
@@ -5296,8 +5301,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     });
 }
 
-const STATUS_EVENT_LEVEL_WIDTH: f32 = 64.0;
-const STATUS_EVENT_SOURCE_WIDTH: f32 = 100.0;
+const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;
+const STATUS_EVENT_SOURCE_WIDTH: f32 = 84.0;
 const STATUS_EVENT_PROGRESS_WIDTH: f32 = 120.0;
 const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
 
@@ -5331,10 +5336,15 @@ fn render_status_event_row(
     } else {
         STATUS_EVENT_SOURCE_WIDTH
     };
-    let progress_width = if compact {
-        72.0
+    let has_progress = status_event_has_progress(event.level, event.progress);
+    let progress_width = if has_progress {
+        if compact {
+            72.0
+        } else {
+            STATUS_EVENT_PROGRESS_WIDTH
+        }
     } else {
-        STATUS_EVENT_PROGRESS_WIDTH
+        0.0
     };
     let action_width = status_event_action_width(event.level, compact);
     let column_gap = if compact {
@@ -5342,7 +5352,8 @@ fn render_status_event_row(
     } else {
         ui.spacing().item_spacing.x
     };
-    let column_gaps = if action_width > 0.0 { 4.0 } else { 3.0 };
+    let column_count = 3 + usize::from(has_progress) + usize::from(action_width > 0.0);
+    let column_gaps = column_count.saturating_sub(1) as f32;
     let message_width = (row_width
         - level_width
         - source_width
@@ -5394,7 +5405,7 @@ fn render_status_event_row(
                     .desired_width(progress_width)
                     .desired_height(6.0),
             );
-        } else if event.level == status_bus::StatusLevel::Progress {
+        } else if has_progress {
             ui.allocate_ui_with_layout(
                 egui::vec2(progress_width, ui.spacing().interact_size.y),
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -5503,6 +5514,10 @@ fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f
     }
 }
 
+fn status_event_has_progress(level: status_bus::StatusLevel, progress: Option<(u64, u64)>) -> bool {
+    progress.is_some() || level == status_bus::StatusLevel::Progress
+}
+
 fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(egui::FontFamily::Proportional)
 }
@@ -5538,6 +5553,7 @@ const STATUS_POPUP_VIEWPORT_MARGIN: f32 = 24.0;
 const STATUS_POPUP_VIEWPORT_RATIO: f32 = 0.5;
 const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
 const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
+const SETTINGS_SUBMENU_MAX_WIDTH: f32 = 640.0;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
@@ -5562,6 +5578,12 @@ fn status_popup_width(content_width: f32) -> f32 {
     (available * STATUS_POPUP_VIEWPORT_RATIO)
         .clamp(STATUS_POPUP_MIN_WIDTH, STATUS_POPUP_MAX_WIDTH)
         .min(available)
+}
+
+fn settings_submenu_max_width(content_width: f32) -> f32 {
+    (content_width - STATUS_POPUP_VIEWPORT_MARGIN)
+        .max(0.0)
+        .min(SETTINGS_SUBMENU_MAX_WIDTH)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6519,6 +6541,19 @@ mod tests {
     }
 
     #[test]
+    fn settings_submenu_width_is_content_bounded_by_the_viewport() {
+        assert_eq!(settings_submenu_max_width(200.0), 176.0);
+        assert_eq!(
+            settings_submenu_max_width(1024.0),
+            SETTINGS_SUBMENU_MAX_WIDTH
+        );
+        assert_eq!(
+            settings_submenu_max_width(4000.0),
+            SETTINGS_SUBMENU_MAX_WIDTH
+        );
+    }
+
+    #[test]
     fn status_event_keys_survive_newer_entries_and_ring_eviction() {
         let existing = discrete_status_event_key(3, 3, 1);
         let after_append = discrete_status_event_key(4, 4, 1);
@@ -6541,6 +6576,18 @@ mod tests {
 
     #[test]
     fn status_event_rows_reserve_width_only_for_attention_action() {
+        assert!(!status_event_has_progress(
+            status_bus::StatusLevel::Info,
+            None
+        ));
+        assert!(status_event_has_progress(
+            status_bus::StatusLevel::Progress,
+            None
+        ));
+        assert!(status_event_has_progress(
+            status_bus::StatusLevel::Info,
+            Some((1, 2))
+        ));
         assert_eq!(
             status_event_action_width(status_bus::StatusLevel::Info, false),
             0.0

@@ -150,6 +150,16 @@ projection only. Do not use a render-relative global X/Z directly for an
 authored site grid, and do not move the terrain or physics frame to compensate
 for a visual pattern.
 
+The same render boundary applies to terrain sun consumers. `SunState` remains
+the semantic source and `SunRenderState` is projected before BigSpace
+propagation; every consumer that converts that direction through a terrain
+`GlobalTransform` runs after `PropagateLowPrecision`. This includes static
+terrain material wiring, horizon-cache bake decisions, and streamed-tile cache
+validity. Streamed-tile shadow intent is then bound through
+`TerrainSurfaceSet::RenderShadowBinding`, so the tile material never combines a
+finalized mesh transform with a previous-frame terrain-local sun direction.
+There is one projection boundary and no render-frame correction or offset.
+
 ## Physics boundary
 
 `ActivePhysicsFrame` identifies the single local frame used by Avian for the

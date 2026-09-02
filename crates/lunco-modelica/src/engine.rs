@@ -303,6 +303,13 @@ impl ModelicaEngine {
         self.completed.drain(..count).collect()
     }
 
+    /// Whether the adapter still has completion notifications to drain.
+    /// Called while the engine mutex is held when the async-sync wakeup latch
+    /// is cleared.
+    pub(crate) fn has_completed_work(&self) -> bool {
+        !self.completed.is_empty() || !self.completed_library_roots.is_empty()
+    }
+
     /// Install a strict AST under `doc_id`'s session URI without
     /// touching pending/completed bookkeeping. Used by the async
     /// worker after it parses off-lock.

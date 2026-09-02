@@ -128,6 +128,16 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
+For terrain sun and shadow consumers, keep `SunState` as the semantic source
+and use `SunRenderState` for the single render projection. Any conversion of
+that direction through a terrain `GlobalTransform` belongs after
+`BigSpaceSystems::PropagateLowPrecision` in `PostUpdate`: static material
+wiring, horizon-cache validity/bake decisions, and streamed-tile shadow intent
+binding all consume that finalized frame. Put streamed-tile binding in the
+public `TerrainSurfaceSet::RenderShadowBinding` phase so it cannot observe a
+previous-frame terrain transform. Do not repair a stale projection with an
+offset or another per-frame transform writer.
+
 ## Do not patch symptoms
 
 Do not add a per-frame position correction, a fallback frame, a guessed parent,

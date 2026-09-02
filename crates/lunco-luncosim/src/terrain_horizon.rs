@@ -27,7 +27,9 @@ use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_core::HorizonShadowTerrain;
-use lunco_environment::horizon::{pick_sun, HorizonShadowCacheConfig, SunQuery};
+use lunco_environment::horizon::{
+    pick_sun, HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache,
+};
 use lunco_environment::SunRenderState;
 use lunco_environment::{
     install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
@@ -232,22 +234,27 @@ pub(crate) fn wire_tile_shadow_cache(
     terrains: Query<
         (
             Entity,
-            &GlobalTransform,
+            Ref<GlobalTransform>,
             Option<&HorizonShadowCache>,
             Option<&TileShadowCache>,
         ),
         (With<TerrainLodViz>, With<HorizonShadowTerrain>),
     >,
     sun: SunQuery,
+    mut sun_projection_cache: Local<TerrainSunProjectionCache>,
+    mut removed_terrains: RemovedComponents<TerrainLodViz>,
 ) {
+    for entity in removed_terrains.read() {
+        sun_projection_cache.remove(entity);
+    }
     // The same "one sun" rule as the environment's wiring, and the same
     // STRUCTURAL basis: a body's reflected fill is authored under that body's
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
     // is left is the scene's sun, so there is nothing to rank.
     let sun = pick_sun(&sun);
-    let sun_world = render_sun
-        .as_deref()
-        .and_then(|state| state.direction_to_sun_world);
+    let (sun_world, sun_revision) = render_sun.as_deref().map_or((None, 0), |state| {
+        (state.direction_to_sun_world, state.revision)
+    });
     let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, cache, wired) in &terrains {
@@ -255,11 +262,12 @@ pub(crate) fn wire_tile_shadow_cache(
             Some(c) => {
                 let on = sun.is_some()
                     && sun_world.is_some_and(|to_sun_world| {
-                        let sun_local = terrain_gt
-                            .affine()
-                            .inverse()
-                            .transform_vector3(to_sun_world)
-                            .normalize_or_zero();
+                        let sun_local = sun_projection_cache.project_sun_local(
+                            entity,
+                            &terrain_gt,
+                            to_sun_world,
+                            sun_revision,
+                        );
                         cache_quality_valid
                             && cfg.enabled
                             && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
@@ -290,8 +298,16 @@ pub(crate) fn register(app: &mut App) {
             mark_streamed_horizon_stale,
             start_streamed_horizon_bakes,
             finish_streamed_horizon_bakes,
-            wire_tile_shadow_cache,
         )
             .chain(),
+    );
+    // The cache validity test converts the semantic sun into terrain-local
+    // render space. Run it only after BigSpace has finalized GlobalTransform,
+    // then publish before the terrain-surface tile binder consumes the result.
+    app.add_systems(
+        PostUpdate,
+        wire_tile_shadow_cache
+            .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+            .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding),
     );
 }

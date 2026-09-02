@@ -22,6 +22,13 @@ against the existing `UsdStageRevision`. No second propagation implementation,
 quality reduction, fallback, duplicate cache, or local BigSpace fork is part of
 the implementation.
 
+The shared Modelica engine adapter follows the same boundary. Its document
+generation cursor no longer polls the registry and engine queues every `Update`;
+document revisions, completion notifications, and tracked edit-debounce
+deadlines are the only wake sources. A completion latch is cleared only while
+the engine mutex confirms both completion queues are empty, so the bounded
+completion budget cannot strand a queued parse or library result.
+
 ## Verification
 
 - `cargo clean` from the optimization checkout removed 16.2 GiB after the
