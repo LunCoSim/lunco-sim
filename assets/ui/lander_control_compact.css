@@ -177,7 +177,8 @@
 
 #compact-telemetry-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  width: 100%;
   min-width: 0px;
   padding-top: 2px;
   border-top-width: 1px;
@@ -185,15 +186,15 @@
 }
 
 #compact-telemetry-value {
+  width: 100%;
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
   min-width: 0px;
-  overflow: hidden;
   color: var(--accent-color);
   font-size: 10px;
   font-weight: 700;
-  -bevy-line-break: no-wrap;
+  -bevy-line-break: word-or-character;
 }
 
 #compact-control-bottom {

@@ -96,7 +96,7 @@
         "anchor": "bottom_left",
         "offset": [16.0, -16.0],
         "width": 224.0,
-        "height": 154.0
+        "height": 184.0
       }
     },
     {
@@ -136,7 +136,7 @@
         "anchor": "bottom_right",
         "offset": [-16.0, -16.0],
         "width": 224.0,
-        "height": 154.0
+        "height": 184.0
       }
     },
     {
