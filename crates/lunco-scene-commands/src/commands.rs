@@ -2944,7 +2944,7 @@ pub fn apply_pending_focus(
     let (target, distance) = (pending.target, pending.distance);
     // Celestial bodies are ORBIT-scale targets: hand them to the avatar's
     // `FocusTarget` flow (OrbitCamera flies in the body's explicit inertial
-    // view grid with sunlit-side arrival). Local framing stays for
+    // view grid with current-region arrival). Local framing stays for
     // metre-scale subjects (wheels, rovers, props).
     let mut is_celestial = q_celestial.get(target).is_ok() || q_celestial_decl.get(target).is_ok();
     let mut pending = vec![target];
@@ -3068,7 +3068,6 @@ pub fn apply_pending_focus(
             commands
                 .entity(avatar_ent)
                 .remove::<lunco_avatar::OrbitCamera>()
-                .remove::<lunco_avatar::SunlitArrival>()
                 .remove::<lunco_avatar::SpringArmCamera>()
                 .remove::<lunco_avatar::SurfaceCamera>()
                 .remove::<lunco_avatar::SurfaceRelativeMode>()
@@ -3189,7 +3188,6 @@ pub fn on_set_camera_look_at(
             .entity(entity)
             .remove::<lunco_avatar::OrbitCamera>()
             .remove::<lunco_avatar::OrbitViewReturn>()
-            .remove::<lunco_avatar::SunlitArrival>()
             .remove::<lunco_avatar::SpringArmCamera>()
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
