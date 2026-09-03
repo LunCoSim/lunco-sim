@@ -114,6 +114,44 @@ pub fn discard_fixed_overstep(fixed: &mut Time<Fixed>) {
     }
 }
 
+/// Apply a transport command to Bevy's virtual clock at the command boundary.
+///
+/// The regular time-spine projection still runs in `PreUpdate`, but a command
+/// may be triggered from inside `FixedUpdate`. Waiting for the next frame would
+/// leave the current fixed-loop burst and the physics schedule using the old
+/// admission state. A pause therefore projects immediately and consumes only
+/// the unspent fixed overstep, preserving the tick that already completed while
+/// refusing another one in the same render frame.
+pub fn project_transport_state(
+    transport: &TimeTransport,
+    virtual_time: &mut Time<Virtual>,
+    fixed_time: Option<&mut Time<Fixed>>,
+) {
+    let frozen = !transport.is_running();
+    let configured = if frozen { 1.0 } else { transport.rate };
+
+    if virtual_time.relative_speed_f64() != configured {
+        virtual_time.set_relative_speed_f64(configured);
+    }
+    if frozen != virtual_time.is_paused() {
+        if frozen {
+            virtual_time.pause();
+            if let Some(fixed_time) = fixed_time {
+                discard_fixed_overstep(fixed_time);
+            }
+        } else {
+            virtual_time.unpause();
+        }
+    }
+}
+
+/// Run condition for systems that mutate the causal simulation. An absent
+/// virtual clock keeps small headless owner tests usable; installed clocks must
+/// be both unpaused and configured with a positive rate.
+pub fn simulation_is_running(time: Option<Res<Time<Virtual>>>) -> bool {
+    time.is_none_or(|time| !time.is_paused() && time.relative_speed_f64() > 0.0)
+}
+
 /// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.
 ///
 /// This is the only fixed-step budget projection. The transport still controls
@@ -157,6 +195,13 @@ pub struct TimeTransport {
     /// Speed multiplier relative to real time (1.0 = realtime).
     pub rate: f64,
 }
+
+/// A pause explicitly requested while a scene transaction is waiting for its
+/// teardown/reset boundary. The transport command is synchronous, but the scene
+/// reset is deferred; retaining this intent lets `restart_scene(); pause()` mean
+/// pause the replacement scene rather than letting `ResetTime` overwrite it.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct PendingScenePause(pub bool);
 
 impl Default for TimeTransport {
     fn default() -> Self {
@@ -372,7 +417,9 @@ pub fn advance_world_clock(
     // system on `resource_changed`) keeps it self-healing — if anything clobbers
     // `relative_speed` out of band, the mismatch is corrected next frame — while
     // avoiding a redundant per-frame write and the spurious change-detection it
-    // would trigger.
+    // would trigger. A coupling hold is a separate pause source here, so its
+    // projection cannot discard a fixed overstep that may belong to a command
+    // being handled in the current fixed schedule.
     if virtual_time.relative_speed_f64() != configured {
         virtual_time.set_relative_speed_f64(configured);
     }
@@ -433,6 +480,7 @@ impl Plugin for TimePlugin {
         app.init_resource::<SimTick>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
+            .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
             .register_type::<MissionClock>()
             .register_type::<TimeTransport>()

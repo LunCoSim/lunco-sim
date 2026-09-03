@@ -982,7 +982,10 @@ impl Plugin for LunCoCorePlugin {
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
-        app.add_systems(SceneTeardown, clear_runtime_diagnostics);
+        app.add_systems(
+            SceneTeardown,
+            (clear_runtime_diagnostics, reset_scene_simulation_state),
+        );
         // Runtime subsystem toggles (progressive-fidelity substrate) +
         // `SetSubsystemEnabled` command.
         subsystems::build_subsystems(app);
@@ -1052,6 +1055,26 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<RuntimeDiagnostics>()
         .init_resource::<pacing::SimulationBarrier>()
         .init_resource::<pacing::SimulationBarrierParticipants>();
+}
+
+/// Reset scene-scoped simulation and prediction state before the outgoing
+/// entities are despawned. These resources are keyed by scene gids or by the
+/// fixed tick; retaining them would let a replacement scene inherit old input
+/// frames, acknowledgements, render-leading values, or a rollback marker.
+fn reset_scene_simulation_state(
+    mut rollback: ResMut<RollbackInProgress>,
+    mut owned: ResMut<session::OwnedInputLog>,
+    mut buffered: ResMut<session::BufferedClientInputs>,
+    mut local_drive: ResMut<session::LocalDriveInput>,
+    mut applied: ResMut<session::AppliedInputSeq>,
+) {
+    rollback.0 = false;
+    owned.0.clear();
+    buffered.pending.clear();
+    buffered.applied.clear();
+    buffered.last_writes.clear();
+    local_drive.0.clear();
+    applied.retain_gids(|_| false);
 }
 
 /// HOST: re-key the input-ack watermarks against the authoritative ownership
@@ -1235,6 +1258,52 @@ mod ph1_identity_tests {
         // explicitly so a regression names them.
         assert!(w.get_resource::<session::OwnedInputLog>().is_some());
         assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
+    }
+
+    #[test]
+    fn scene_teardown_clears_prediction_state() {
+        let mut app = App::new();
+        register_core_resources(&mut app);
+        app.init_resource::<RollbackInProgress>()
+            .add_systems(SceneTeardown, reset_scene_simulation_state);
+
+        app.world_mut().resource_mut::<RollbackInProgress>().0 = true;
+        app.world_mut()
+            .resource_mut::<session::OwnedInputLog>()
+            .0
+            .insert(1, session::VesselInputLog::default());
+        app.world_mut()
+            .resource_mut::<session::BufferedClientInputs>()
+            .push(1, 1, vec![("throttle".into(), 1.0)]);
+        app.world_mut()
+            .resource_mut::<session::LocalDriveInput>()
+            .0
+            .insert(1, (1.0, 0.0));
+        app.world_mut()
+            .resource_mut::<session::AppliedInputSeq>()
+            .record(1, None, 1);
+
+        run_scene_teardown(app.world_mut());
+
+        assert!(!app.world().resource::<RollbackInProgress>().0);
+        assert!(app
+            .world()
+            .resource::<session::OwnedInputLog>()
+            .0
+            .is_empty());
+        let buffered = app.world().resource::<session::BufferedClientInputs>();
+        assert!(buffered.pending.is_empty());
+        assert!(buffered.applied.is_empty());
+        assert!(buffered.last_writes.is_empty());
+        assert!(app
+            .world()
+            .resource::<session::LocalDriveInput>()
+            .0
+            .is_empty());
+        assert!(app
+            .world()
+            .resource::<session::AppliedInputSeq>()
+            .is_empty());
     }
 
     #[test]

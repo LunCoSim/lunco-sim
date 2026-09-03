@@ -305,7 +305,8 @@ impl Plugin for CoSimPlugin {
         app.add_systems(
             lunco_core::RollbackReplay,
             systems::propagate::propagate_connections
-                .in_set(systems::propagate::CosimSet::Propagate),
+                .in_set(systems::propagate::CosimSet::Propagate)
+                .run_if(lunco_time::simulation_is_running),
         );
         app.add_systems(
             lunco_core::RollbackReplay,
@@ -318,7 +319,8 @@ impl Plugin for CoSimPlugin {
             FixedUpdate,
             (
                 systems::propagate::propagate_connections
-                    .in_set(systems::propagate::CosimSet::Propagate),
+                    .in_set(systems::propagate::CosimSet::Propagate)
+                    .run_if(lunco_time::simulation_is_running),
                 // The avian boundary consumers: apply solved joint torques and
                 // drain net force/torque ports plus USD-authored point-force
                 // mounts into Avian's `Forces`.
@@ -331,9 +333,10 @@ impl Plugin for CoSimPlugin {
                 // single step that released the hold. Torque, unlike gravity,
                 // accumulates about the COM and so discharges as SPIN — the measured
                 // ~25 rad/s transient on episode 1's lander/rover stack. The
-                // `propagate_connections` above is deliberately NOT gated here: it
-                // moves VALUES around the cosim graph rather than accumulating one,
-                // a held beat still wants a live graph, and its network gating is
+                // `propagate_connections` above is deliberately not gated on
+                // `Time<Physics>`: it moves VALUES around the cosim graph rather
+                // than accumulating one, a physics-held beat still wants a live
+                // graph, and its network gating is
                 // PER TARGET (`peer_simulates`) rather than per process — a client
                 // must keep propagating into the bodies it locally predicts, or the
                 // predicted rover's command never reaches its actuators.
@@ -757,6 +760,17 @@ fn on_set_ports(
         if world
             .get_resource::<connection::ControlWriteFence>()
             .is_some_and(|fence| fence.blocks(target))
+        {
+            return;
+        }
+        // A paused causal scene rejects deferred writes to scene entities. The
+        // local free avatar has no GlobalEntityId and remains an interaction-
+        // cadence endpoint, so pausing the simulation does not freeze the
+        // user's presentation controls.
+        if world
+            .get_resource::<Time<Virtual>>()
+            .is_some_and(|time| time.is_paused())
+            && world.get::<lunco_core::GlobalEntityId>(target).is_some()
         {
             return;
         }

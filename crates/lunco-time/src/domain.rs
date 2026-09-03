@@ -732,9 +732,30 @@ pub struct SetTimeTransport {
 fn on_set_time_transport(
     trigger: On<SetTimeTransport>,
     mut transport: ResMut<crate::TimeTransport>,
+    virtual_time: Option<ResMut<Time<Virtual>>>,
+    mut fixed_time: Option<ResMut<Time<Fixed>>>,
+    mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
+    coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) {
     let before = *transport;
-    apply_time_transport(&mut transport, trigger.event());
+    let command = trigger.event();
+    apply_time_transport(&mut transport, command);
+    if command.playing == Some(false)
+        && coordinator.is_some_and(|state| state.active().is_some() || state.has_admitted())
+    {
+        if let Some(pending_scene_pause) = pending_scene_pause.as_deref_mut() {
+            pending_scene_pause.0 = true;
+        }
+    }
+    if before.mode != transport.mode || before.rate.to_bits() != transport.rate.to_bits() {
+        if let Some(mut virtual_time) = virtual_time {
+            crate::project_transport_state(
+                &transport,
+                &mut virtual_time,
+                fixed_time.as_deref_mut(),
+            );
+        }
+    }
     if before.mode != transport.mode || before.rate.to_bits() != transport.rate.to_bits() {
         info!(
             "[time] transport changed: mode {:?} -> {:?}, rate {:.3} -> {:.3}",
@@ -971,9 +992,10 @@ fn on_set_clock(
 /// * **celestial** → back on the `Epoch` root, affine identity;
 /// * **interaction** → wall-rooted identity (its default);
 /// * **animation preview** → playhead 0, playing, 1×;
-/// * **transport** → Playing at 1×;
-/// * **mission calendar** → the authored mission origin. The mission origin itself
-///   is preserved so a scene load can apply its `SetMissionEpoch` afterward.
+/// * **transport** → Playing at 1×, except for an explicit pause requested while
+///   the scene transition was pending, which is applied once to the replacement;
+/// * **mission calendar** → the authored mission epoch at tick zero. The epoch
+///   itself is preserved so a scene load can apply its `SetMissionEpoch` afterward.
 #[Command(default)]
 pub struct ResetTime {}
 
@@ -985,7 +1007,11 @@ fn on_reset_time(
     mut q_domain: Query<&mut TimeDomain>,
     mut q_playback: Query<&mut Playback>,
     preview: Option<Res<AnimationPreview>>,
+    tick: Option<ResMut<lunco_core::SimTick>>,
     mut transport: ResMut<crate::TimeTransport>,
+    virtual_time: Option<ResMut<Time<Virtual>>>,
+    fixed_time: Option<ResMut<Time<Fixed>>>,
+    mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
     mut resolved: ResMut<ResolvedDomains>,
     mut last: ResMut<LastClockT>,
     mut commands: Commands,
@@ -1015,11 +1041,38 @@ fn on_reset_time(
         }
     }
 
-    // Transport: a reloaded scene starts playing at realtime.
+    // Transport: a reloaded scene starts playing at realtime unless the caller
+    // explicitly requested a pause while this scene transaction was pending.
+    // The latter is the deterministic ordering contract behind
+    // `restart_scene(); pause();`: the reset is deferred, so the request must
+    // survive this boundary without preserving an unrelated earlier pause.
+    let pause_replacement = pending_scene_pause
+        .as_deref()
+        .is_some_and(|pending| pending.0);
     *transport = crate::TimeTransport::default();
+    transport.mode = if pause_replacement {
+        crate::TransportMode::Paused
+    } else {
+        crate::TransportMode::Playing
+    };
+    if let Some(pending_scene_pause) = pending_scene_pause.as_deref_mut() {
+        pending_scene_pause.0 = false;
+    }
+    if let Some(mut virtual_time) = virtual_time {
+        crate::project_transport_state(&transport, &mut virtual_time, None);
+    }
+    if let Some(mut fixed_time) = fixed_time {
+        let timestep = fixed_time.timestep();
+        *fixed_time = Time::<Fixed>::from_duration(timestep);
+    }
 
-    // Restore the calendar anchor so the next scene starts from its authored
-    // mission date.
+    // Reset the causal master alongside the fixed-clock admission state. Keep
+    // the authored epoch date, but make it the origin at tick zero; otherwise a
+    // replacement scene would inherit the previous scene's MET offset.
+    if let Some(mut tick) = tick {
+        tick.0 = 0;
+    }
+    mission.mission_tick0 = 0;
     mission.reset_calendar();
 
     // Clock entities persist across scene loads, so clear their sample history
@@ -1267,6 +1320,88 @@ mod tests {
         );
         assert_eq!(transport.mode, TransportMode::Playing);
         assert_eq!(transport.rate, 8.0);
+    }
+
+    #[test]
+    fn transport_pause_command_closes_the_current_fixed_burst() {
+        let mut app = App::new();
+        app.insert_resource(crate::TimeTransport::default())
+            .insert_resource(Time::<Virtual>::default())
+            .insert_resource(Time::<Fixed>::from_hz(60.0));
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(std::time::Duration::from_millis(20));
+        app.add_observer(on_set_time_transport);
+
+        app.world_mut().trigger(SetTimeTransport {
+            playing: Some(false),
+            rate: None,
+        });
+
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            std::time::Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn reset_time_restores_clock_projection_and_fixed_admission_state() {
+        let mut app = App::new();
+        app.insert_resource(crate::MissionClock::default())
+            .insert_resource(lunco_core::SimTick(11))
+            .insert_resource(crate::TimeTransport {
+                mode: TransportMode::Paused,
+                rate: 4.0,
+            })
+            .insert_resource(Time::<Virtual>::default())
+            .insert_resource(Time::<Fixed>::from_hz(60.0))
+            .init_resource::<ResolvedDomains>()
+            .init_resource::<LastClockT>();
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(std::time::Duration::from_millis(20));
+        app.add_observer(on_reset_time);
+
+        app.world_mut().trigger(ResetTime {});
+
+        let transport = app.world().resource::<crate::TimeTransport>();
+        assert_eq!(transport.mode, TransportMode::Playing);
+        assert_eq!(transport.rate, 1.0);
+        assert_eq!(app.world().resource::<lunco_core::SimTick>().0, 0);
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            std::time::Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn pause_requested_behind_scene_restart_survives_reset() {
+        let mut app = App::new();
+        app.insert_resource(crate::TimeTransport::default())
+            .insert_resource(crate::PendingScenePause::default())
+            .insert_resource(lunco_core::SceneTransitionCoordinator::default())
+            .insert_resource(Time::<Virtual>::default())
+            .insert_resource(Time::<Fixed>::from_hz(60.0))
+            .insert_resource(crate::MissionClock::default())
+            .init_resource::<ResolvedDomains>()
+            .init_resource::<LastClockT>();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneTransitionCoordinator>()
+            .admit(lunco_core::SceneTransitionRequest::restart(false));
+        app.add_observer(on_set_time_transport);
+        app.add_observer(on_reset_time);
+
+        app.world_mut().trigger(SetTimeTransport {
+            playing: Some(false),
+            rate: None,
+        });
+        app.world_mut().trigger(ResetTime {});
+
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(app.world().resource::<crate::PendingScenePause>().0, false);
     }
 
     #[test]

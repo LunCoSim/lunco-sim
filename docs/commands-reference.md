@@ -1045,7 +1045,9 @@ actually call, with the fields the deserializer actually accepts. See the
  has confirmed a full reset. The lifecycle mechanic still targets whichever
  scene is loaded.
  Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
- wanted (`restart_scene(); pause();`).
+ wants (`restart_scene(); pause();`). The pause intent is retained across the
+ deferred scene reset and applies once to the replacement scene; an unrelated
+ pause from before the restart is not carried over.
 
 - *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
 
@@ -2851,7 +2853,9 @@ actually call, with the fields the deserializer actually accepts. See the
  * **celestial** → back on the `Epoch` root, affine identity;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
- * **transport** → Playing at 1×;
+ * **transport** → Playing at 1×, unless a `SetTimeTransport { playing: false }`
+   command was explicitly issued while the scene transition was pending;
+   that one-shot pause is applied to the replacement scene;
  * **mission calendar** → the authored mission origin. The mission origin itself
    is preserved so a scene load can apply its `SetMissionEpoch` afterward.
 

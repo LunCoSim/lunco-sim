@@ -7311,6 +7311,7 @@ dependencies = [
  "lunco-modelica",
  "lunco-physics",
  "lunco-scripting",
+ "lunco-time",
 ]
 
 [[package]]

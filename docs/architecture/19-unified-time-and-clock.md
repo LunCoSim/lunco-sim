@@ -193,3 +193,20 @@ Presentation systems use the interaction cadence and its `InteractionEased`
 history. Causal systems use the fixed simulation cadence. A system must not be
 duplicated merely because it needs a different pause behavior; put it on the
 correct cadence and bind it to the correct domain.
+
+### 5.4 Pause is an admission barrier
+
+`SetTimeTransport { playing: false }` projects to `Time<Virtual>` synchronously
+at the command boundary. If the command was raised from inside `FixedUpdate`,
+the time spine also discards only the unspent `Time<Fixed>` overstep, preserving
+the completed tick without admitting another fixed iteration from the same render
+frame. The physics owner mirrors the paused virtual clock immediately before
+Avian's solver schedule and zeroes `Time<Physics>`'s delta. This is the pause
+contract; a one-tick delay, wall-clock guess, or UI-only flag is not equivalent.
+
+Scene teardown resets the fixed-clock admission state, physics holds and step
+debt, simulation tick, and prediction/control buffers before the replacement
+scene integrates. A pause explicitly issued while a scene transition is
+admitted is carried through that reset and consumed once, so a queued
+`restart_scene(); pause();` pauses the replacement rather than being overwritten
+by the reset's normal playing default.

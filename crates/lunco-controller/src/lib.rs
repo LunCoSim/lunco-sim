@@ -196,6 +196,17 @@ register_commands!(on_simulate_intent, on_set_control_path);
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
 
+/// Clear controller state that names scene entities. A released intent or
+/// control-path blackout must not be applied to a replacement scene that reuses
+/// the same entity slot or global id.
+fn reset_scene_control_state(
+    mut intents: ResMut<SimulatedIntents>,
+    mut paths: ResMut<lunco_core::session::ControlPathRegistry>,
+) {
+    intents.0.clear();
+    paths.clear();
+}
+
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
         // NOTE: OwnedInputLog / AppliedInputSeq are always-on substrate owned by
@@ -212,6 +223,7 @@ impl Plugin for LunCoControllerPlugin {
         app.init_resource::<SimulatedIntents>()
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>();
+        app.add_systems(lunco_core::SceneTeardown, reset_scene_control_state);
         // The blackout table the authorization gate reads. Empty by default, so an
         // app that never declares one is byte-for-byte unchanged.
         app.init_resource::<lunco_core::session::ControlPathRegistry>();
@@ -225,6 +237,7 @@ impl Plugin for LunCoControllerPlugin {
             // on that coin flip.
             drive_from_bindings
                 .run_if(lunco_core::not_rolling_back)
+                .run_if(lunco_time::simulation_is_running)
                 .before(lunco_core::ControlDacSet),
         );
         // The SELF-DRIVER half runs on the INTERACTION cadence, not the sim tick.
@@ -529,6 +542,7 @@ fn record_control_input(
     trigger: On<lunco_cosim::SetPorts>,
     role: Res<lunco_core::NetworkRole>,
     sim_tick: Res<lunco_core::SimTick>,
+    virtual_time: Option<Res<Time<Virtual>>>,
     mut owned_log: ResMut<lunco_core::OwnedInputLog>,
     mut applied: ResMut<lunco_core::AppliedInputSeq>,
     // Latest local drive input per gid — the render-lead reads it to visually
@@ -544,6 +558,9 @@ fn record_control_input(
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
 ) {
     let cmd = trigger.event();
+    if virtual_time.is_some_and(|time| time.is_paused()) {
+        return;
+    }
     let Ok((gid, owned)) = q.get(cmd.target) else {
         return;
     };
