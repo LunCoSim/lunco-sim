@@ -15,27 +15,12 @@ lunco-environment = { path = "../lunco-environment" }
 # only the physics step clears; the `Time<Virtual>` gate they used to carry is open
 # during a physics hold and let force pile up across a frozen shot.
 lunco-physics = { path = "../lunco-physics" }
-# Language-neutral hook registry — backs the scripted (rhai) drive kernel:
-# `apply_drive_mix` falls back to a hook named by `DriveMix.kernel` when it isn't a
-# built-in `ControlKernelRegistry` entry. Dependency-free (no rhai/bevy).
-lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
-lunco-hardware = { path = "../lunco-hardware" }
 # Expose physics-backed spatial queries (Raycast/GroundHeight) through the
 # API query registry. default-features off keeps the HTTP transport (tokio/mio)
 # out so mobility stays wasm-clean.
 lunco-api = { path = "../lunco-api", default-features = false }
 serde_json = { workspace = true }
-
-[features]
-# Drive-actuation chain tracing (off by default). Lights up the DriveCommand →
-# port → wheel-force path with `info!` so a "rover won't move / snaps back" bug
-# can be localised: command mixing (`apply_drive_mix`) and the
-# per-tick force application incl. body kind / contact (`apply_wheel_drive`).
-# Mirrors `lunco-networking`'s `net-diag`. Used via the `drive_diag!` macro —
-# compiled out entirely when off (no hot-loop cost). Build with
-# `--features lunco-mobility/drive-diag` (or lunco-luncosim's `drive-diag`).
-drive-diag = []
 
 [lints]
 workspace = true

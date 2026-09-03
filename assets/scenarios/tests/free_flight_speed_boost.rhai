@@ -27,9 +27,12 @@ fn on_start(me) {
     this.phase = "warmup";
     this.avatar = find("/FreeFlightSpeedBoost/Avatar");
     this.base_start = ();
+    this.diagonal_start = ();
     this.boost_start = ();
     this.base_distance = 0.0;
     this.base_speed = 0.0;
+    this.diagonal_distance = 0.0;
+    this.diagonal_speed = 0.0;
     this.boost_down_distance = 0.0;
     this.boost_up_distance = 0.0;
     this.done = false;
@@ -67,6 +70,25 @@ fn on_tick(me) {
         this.base_distance = planar_distance(this.base_start, world_pos(this.avatar));
         this.base_speed = this.base_distance / MEASURE_S;
         let result = cmd("SimulateIntent", #{
+            intent: "right",
+            held: true,
+            target: this.avatar,
+        });
+        if !result.ok {
+            this.done = true;
+            fail("could not hold semantic right intent: " + result.error);
+            return;
+        }
+        this.diagonal_start = world_pos(this.avatar);
+        this.phase = "diagonal";
+        return;
+    }
+
+    if this.phase == "diagonal" && this.elapsed >= WARMUP_S + MEASURE_S * 2.0 {
+        this.diagonal_distance = planar_distance(this.diagonal_start, world_pos(this.avatar));
+        this.diagonal_speed = this.diagonal_distance / MEASURE_S;
+        cmd("SimulateIntent", #{ intent: "right", held: false, target: this.avatar });
+        let result = cmd("SimulateIntent", #{
             intent: "speed_boost",
             held: true,
             target: this.avatar,
@@ -91,7 +113,7 @@ fn on_tick(me) {
         return;
     }
 
-    if this.phase == "boost_down" && this.elapsed >= WARMUP_S + MEASURE_S + 1.0 {
+    if this.phase == "boost_down" && this.elapsed >= WARMUP_S + MEASURE_S * 2.0 + 1.0 {
         this.boost_down_distance = vertical_distance(this.boost_start, world_pos(this.avatar));
         cmd("SimulateIntent", #{ intent: "yaw_left", held: false, target: this.avatar });
         let result = cmd("SimulateIntent", #{
@@ -109,7 +131,7 @@ fn on_tick(me) {
         return;
     }
 
-    if this.phase == "boost_up" && this.elapsed >= WARMUP_S + MEASURE_S + 2.0 {
+    if this.phase == "boost_up" && this.elapsed >= WARMUP_S + MEASURE_S * 2.0 + 2.0 {
         this.boost_up_distance = vertical_distance(this.boost_start, world_pos(this.avatar));
         this.phase = "release";
         return;
@@ -123,6 +145,9 @@ fn on_tick(me) {
         let checks = [];
         checks.push(t_true(this.base_speed > 5.0,
             "normal forward intent did not move the free-flight avatar"));
+        checks.push(t_range(this.diagonal_speed, this.base_speed * 0.9,
+                            this.base_speed * 1.1,
+                            "diagonal intent must preserve single-axis speed"));
         checks.push(t_true(this.boost_down_distance > this.base_speed * 5.0,
             "Shift+Q control frame did not produce the expected tenfold descent"));
         checks.push(t_true(this.boost_up_distance > this.base_speed * 5.0,
@@ -130,6 +155,7 @@ fn on_tick(me) {
         checks.push(t_bounded(world_pos(this.avatar), 1000.0,
             "free-flight avatar left the bounded acceptance fixture"));
         print("[free-flight-speed-boost] base=" + r4(this.base_speed) +
+            " m/s diagonal=" + r4(this.diagonal_speed) +
             " m/s Shift+Q=" + r4(this.boost_down_distance) +
             " m Shift+E=" + r4(this.boost_up_distance) + " m");
         this.done = true;

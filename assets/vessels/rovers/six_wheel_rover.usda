@@ -10,9 +10,9 @@
 # to any Rust-side index heuristic: each wheel connects its
 # `inputs:drive` to the FSW drive port it listens to, an `outputs:` attribute on
 # the rover root. Three wheels per side connect to `outputs:drive_left`
-# / `outputs:drive_right`, so the built-in skid mix (`PhysxVehicleTankDifferentialAPI`) yaws the
-# body exactly as it does for the 4-wheel rover — proving a non-2×2 layout is a
-# USD file, not a Rust struct.
+# / `outputs:drive_right`, so its authored controller produces the same skid
+# motion as the 4-wheel rover — proving a non-2×2 layout is a USD file, not a
+# Rust struct.
 #
 # Self-contained RAYCAST drivetrain: the raycaster drives the body, so no joints
 # are needed and the mounts are authored inline (no shared-component variant arc).
@@ -30,7 +30,7 @@ def Xform "SixWheelRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI",
+        "LunCoCatalogAPI",
         "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
@@ -39,6 +39,7 @@ def Xform "SixWheelRover" (
     # and need nothing of their own. See `skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
         string power = "infinite"
@@ -56,6 +57,7 @@ def Xform "SixWheelRover" (
     over "FrontCamera"
     {
         double3 xformOp:translate = (0.0, 0.55, -1.35)
+        custom double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
     }
 
     float physics:mass = 1400.0
@@ -65,7 +67,6 @@ def Xform "SixWheelRover" (
     # reference arcs instead of matched by name.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    float outputs:steering = 0.0
     float outputs:brake = 0.0
     float outputs:headlight_left_intensity = 0.0
     float outputs:headlight_right_intensity = 0.0
@@ -488,9 +489,9 @@ def Xform "SixWheelRover" (
 
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become per-side drive is COMPOSITION, not an
-    # enumeration. The plain authored state is the instant built-in skid kernel.
-    # For a solver-clocked first-order motor lag, compose the law on as a
-    # reference arc alongside the airframe:
+    # enumeration. The authored Modelica/Rhai controller publishes the per-side
+    # outputs. For another solver-clocked law, compose a different program on the
+    # same generic port surface:
     #
     #   def "Rover" (
     #       prepend references = [
@@ -499,9 +500,8 @@ def Xform "SixWheelRover" (
     #       ]
     #   ) {}
     #
-    # A drive law is just a `LunCoProgramAPI` on the vessel, and the file extension
-    # picks the engine — a closed variant list could only ever name the laws that
-    # existed when this file was written.
+    # A drive law is a `LunCoProgramAPI` on the vessel; the file extension picks
+    # the authored engine.
 
     # The battery is an assembly child, not a variant-local arc. Keeping the
     # component reference in the stable chassis namespace preserves the

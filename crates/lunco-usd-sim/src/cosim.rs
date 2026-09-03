@@ -2406,7 +2406,7 @@ fn modelica_models_terminal<'a>(
 /// physics, while the binder must be allowed to record the failed endpoint.
 ///
 /// Native endpoint admission is deliberately *not* a world-level readiness
-/// hold. `PendingUsdJoint`, `PendingWheelWiring`, and `PendingDifferential` are
+/// hold. `PendingUsdJoint` and `PendingDifferential` are
 /// local activation gates: the affected bodies remain kinematic until their
 /// endpoint is ready. Their preparation runs in the fixed schedule and their
 /// structural admission runs in the outer `Update` schedule, so globally
@@ -2417,7 +2417,6 @@ fn modelica_models_terminal<'a>(
 fn settle_binding_epoch(
     awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
-    wheels: Query<(), With<crate::PendingWheelWiring>>,
     differentials: Query<(), With<crate::PendingDifferential>>,
     // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
     // intentionally also present on native endpoints such as a revolute joint
@@ -2441,17 +2440,14 @@ fn settle_binding_epoch(
     mut commands: Commands,
 ) {
     let models_terminal = modelica_models_terminal(models.iter());
-    let settled = awaiting.is_empty()
-        && joints.is_empty()
-        && wheels.is_empty()
-        && differentials.is_empty()
-        && models_terminal;
+    let settled =
+        awaiting.is_empty() && joints.is_empty() && differentials.is_empty() && models_terminal;
     if settled {
         dirty.0 = false;
         revision.seal_epoch();
     } else {
         // Keep the reconciliation scheduled until every deferred stage,
-        // joint, wheel, differential, and model participant has reached a
+        // joint, differential, and model participant has reached a
         // terminal state. Some of those transitions come from async asset or
         // compiler completion and do not emit one of the structural events
         // that originally opened this epoch.
@@ -2509,35 +2505,6 @@ fn settle_binding_epoch(
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
-/// `inputs:` ports whose connection is a STRUCTURAL binding — read once at PARSE to
-/// discover topology — rather than a live scalar wire.
-///
-/// Each row is `(port, api_schema)`: the port name, and the applied schema that makes
-/// the prim the kind of thing whose parse-time reader consumes it. Both halves matter —
-/// `torque` is a perfectly ordinary live port on a motor, and only structural on a
-/// gearbox.
-///
-/// A USD connection into a structural vehicle binding is real authoring, but the
-/// FSW port registry owns that edge rather than the generic scalar binder. Every
-/// other authored input is handled by the generic runtime endpoint surface.
-const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
-    // `Wheel.inputs:drive` / `inputs:steer` when the authored source is a
-    // vehicle control surface. Read by `connected_port` in `crate::lib`, which
-    // resolves the authored connection to the FSW port NAME the wheel
-    // subscribes to (`PendingWheelWiring`). A source from another authored
-    // output, such as a generated domain member, is a normal scalar wire and
-    // is intentionally not listed here.
-    ("drive", "LunCoWheelAPI"),
-    ("steer", "LunCoWheelAPI"),
-];
-
-/// Is this `inputs:` port one of [`STRUCTURAL_INPUT_BINDINGS`] on this prim?
-fn is_structural_binding(view: &dyn UsdReadObject, sink: &SdfPath, port: &str) -> bool {
-    STRUCTURAL_INPUT_BINDINGS
-        .iter()
-        .any(|(name, schema)| *name == port && view.has_api_schema(sink, schema))
-}
-
 pub fn rewire_usd_connections(
     mut commands: Commands,
     // Any endpoint identity or contract arriving must re-derive the USD wire
@@ -2824,28 +2791,6 @@ pub fn rewire_usd_connections(
             // for the stage lookup below, but use this canonical connector name
             // for every runtime decision and edge endpoint.
             let sink_conn = sink_conn.strip_suffix(".connect").unwrap_or(sink_conn);
-            // A structural binding is already resolved; building a phantom wire
-            // for it manufactures a dangling-wire report that can never clear.
-            let wheel_source_is_structural = if matches!(sink_conn, "drive" | "steer")
-                && view.has_api_schema(&sink_sdf, "LunCoWheelAPI")
-            {
-                view.connections(&sink_sdf, &attr).iter().all(|source| {
-                    let Some((source_prim, _)) = source.rsplit_once('.') else {
-                        return false;
-                    };
-                    let Ok(source_path) = SdfPath::new(source_prim) else {
-                        return false;
-                    };
-                    view.has_api_schema(&source_path, "PhysxVehicleContextAPI")
-                })
-            } else {
-                false
-            };
-            if is_structural_binding(view, &sink_sdf, sink_conn)
-                && (!matches!(sink_conn, "drive" | "steer") || wheel_source_is_structural)
-            {
-                continue;
-            }
             // Same reasoning, one level up — but for `outputs:` ONLY.
             //
             // An `outputs:` connection authored on a domain network root is read
@@ -3033,14 +2978,14 @@ pub fn rewire_usd_connections(
                 // ── The SOURCE side of the runtime-output indirection ────────
                 // A vessel's `outputs:drive_left` is not stored on the vessel
                 // prim: `OutputPorts` realises it as a child `Port` entity, and
-                // that is where `apply_drive_mix` writes. The sink side above has
+                // that is where the authored controller writes. The sink side above has
                 // always redirected onto that child; reading one had no such hop,
                 // so a wire whose SOURCE is a vessel actuator port resolved to the
                 // vessel entity, found no port of that name, and delivered its
                 // default forever.
                 //
                 // MEASURED on `scenes/tests/solar_domain_nested_ref.usda`: the
-                // rover's `throttle` reached 1.0 and the skid kernel wrote both
+                // rover's `throttle` reached 1.0 and the authored controller wrote both
                 // bank ports, while the rover-root drive input — wired from
                 // `</RockerBogie.outputs:drive_left>` — stayed at 0.0 for the whole
                 // run. Every motor drew no current, so a driving rover's battery
@@ -3681,18 +3626,6 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
-        let Some(mut pending_wheels_query) =
-            QueryState::<&UsdPrimPath, With<crate::PendingWheelWiring>>::try_new(world)
-        else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
-                "BindingStatus: pending-wheel query is unavailable",
-            );
-        };
-        let pending_wheels = pending_wheels_query
-            .iter(world)
-            .map(|path| path.path.clone())
-            .collect::<Vec<_>>();
         let Some(mut pending_differentials_query) =
             QueryState::<&UsdPrimPath, With<crate::PendingDifferential>>::try_new(world)
         else {
@@ -3982,7 +3915,6 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             "awaiting": awaiting,
             "pending_joints": pending_joints,
             "bodies": bodies,
-            "pending_wheels": pending_wheels,
             "pending_differentials": pending_differentials,
             "non_terminal_models": non_terminal_models,
         }))
@@ -4889,8 +4821,6 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
         .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
-        .add_observer(request_binding_epoch::<crate::PendingWheelWiring>)
-        .add_observer(request_binding_epoch_on_remove::<crate::PendingWheelWiring>)
         .add_observer(request_binding_epoch::<crate::PendingDifferential>)
         .add_observer(request_binding_epoch_on_remove::<crate::PendingDifferential>)
         .add_observer(request_binding_epoch::<SimConnection>)
@@ -5802,13 +5732,13 @@ mod tests {
         let component = SimComponent::default();
         let command_surface = lunco_core::InputPorts::with_defaults([
             ("throttle".to_string(), 0.75),
-            ("steer".to_string(), -0.2),
+            ("heading".to_string(), -0.2),
         ]);
 
         copy_modelica_input_values(&mut model, &component, Some(&command_surface));
 
         assert_eq!(model.inputs.get("throttle"), Some(&0.75));
-        assert!(!model.inputs.contains_key("steer"));
+        assert!(!model.inputs.contains_key("heading"));
     }
 
     #[test]

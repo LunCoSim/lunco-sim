@@ -4,8 +4,8 @@ use bevy::asset::AssetPlugin;
 /// ALL tests load REAL files from disk — no inline USD strings.
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_core::{MobilityRoot, OutputPorts};
-use lunco_mobility::kernels::DriveMix;
+use lunco_core::{ControlBinding, InputPorts, MobilityRoot, OutputPorts};
+use lunco_materials::ShaderLook;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
 use lunco_usd_bevy::*;
@@ -155,15 +155,11 @@ fn headless_server_builds_wheel_physics_without_renderer() {
 #[test]
 fn test_all_rover_files_project_canonical_structure() {
     let files = [
-        ("vessels/rovers/skid_rover.usda", "/SkidRover", false),
-        (
-            "vessels/rovers/ackermann_rover.usda",
-            "/AckermannRover",
-            true,
-        ),
+        ("vessels/rovers/skid_rover.usda", "/SkidRover"),
+        ("vessels/rovers/ackermann_rover.usda", "/AckermannRover"),
     ];
 
-    for (file, prim, ackermann) in &files {
+    for (file, prim) in &files {
         let label = file.to_string();
         let mut app = compose_and_load(&Path::new("../../assets/").join(file), prim);
 
@@ -234,45 +230,38 @@ fn test_all_rover_files_project_canonical_structure() {
             app.world().get::<Mesh3d>(chassis).is_some(),
             "{label}: Chassis missing Mesh3d (body invisible!)"
         );
-        // Appearance INTENT, not a bound material: `LuncoRenderPlugin` (absent in a
-        // headless test) is what turns `PbrLook` into `MeshMaterial3d`.
-        // See docs/architecture/render-decoupling.md.
+        // USD may select a standard PBR look or a custom shader look; the render
+        // plugin binds the selected intent to a material in render builds.
         assert!(
-            app.world().get::<lunco_render::PbrLook>(chassis).is_some(),
-            "{label}: Chassis missing PbrLook (body would be invisible!)"
+            app.world().get::<lunco_render::PbrLook>(chassis).is_some()
+                || app.world().get::<ShaderLook>(chassis).is_some(),
+            "{label}: Chassis missing authored appearance intent (body would be invisible!)"
         );
 
-        // Steering allocation: every rover carries a `DriveMix` naming a kernel.
-        let mix = app
+        // The command policy and accepted input vocabulary are authored by the
+        // composed `Controls` scope. The Rust projection only materializes them.
+        let binding = app
             .world()
-            .get::<DriveMix>(rover)
-            .unwrap_or_else(|| panic!("{label}: missing DriveMix"));
-        if *ackermann {
-            assert_eq!(
-                mix.kernel, "linear",
-                "{label}: ackermann should use the linear kernel"
+            .get::<ControlBinding>(rover)
+            .unwrap_or_else(|| panic!("{label}: missing authored ControlBinding"));
+        let inputs = app
+            .world()
+            .get::<InputPorts>(rover)
+            .unwrap_or_else(|| panic!("{label}: missing authored InputPorts"));
+        for port in ["throttle", "steer", "brake"] {
+            assert!(
+                binding.ports().any(|bound| bound == port),
+                "{label}: Controls does not bind {port}"
             );
             assert!(
-                mix.entries.iter().any(|e| e.port == "steering"),
-                "{label}: missing steering term"
-            );
-            assert!(
-                mix.entries.iter().any(|e| e.port == "drive_left"),
-                "{label}: missing drive_left term"
-            );
-        } else {
-            assert_eq!(
-                mix.kernel, "skid",
-                "{label}: skid rover should use the skid kernel"
-            );
-            assert_eq!(
-                mix.ports,
-                vec!["drive_left".to_string(), "drive_right".to_string()],
-                "{label}: wrong skid ports"
+                inputs.values.contains_key(port),
+                "{label}: InputPorts does not expose {port}"
             );
         }
 
-        // Actuator ports
+        // Produced values are the authored Modelica controller's generic output
+        // surface. Wheel heading is a final joint target on the front knuckles,
+        // not a Rust-side vehicle policy.
         let actuators = app
             .world()
             .get::<OutputPorts>(rover)
@@ -284,10 +273,6 @@ fn test_all_rover_files_project_canonical_structure() {
         assert!(
             actuators.ports.contains_key("drive_right"),
             "{label}: actuators missing drive_right"
-        );
-        assert!(
-            actuators.ports.contains_key("steering"),
-            "{label}: actuators missing steering"
         );
         assert!(
             actuators.ports.contains_key("brake"),
@@ -340,6 +325,11 @@ fn test_all_rover_files_project_canonical_structure() {
                 .world()
                 .get::<WheelRaycast>(w_ent)
                 .expect("WheelRaycast query returned an entity without WheelRaycast");
+            assert_ne!(
+                wheel.heading_port,
+                Entity::PLACEHOLDER,
+                "{label}: {w_name} missing its authored heading signal endpoint"
+            );
             assert!(
                 (wheel.wheel_radius - 0.4).abs() < 0.01,
                 "{label}: {w_name} radius ~0.4"

@@ -96,11 +96,11 @@ pub use invariants::BigSpaceInvariantsPlugin;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
-    ActuatorDrivenJoint, CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath,
-    EmbeddedScenarioSource, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
-    PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter,
-    TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS,
-    SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
+    CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
+    HorizonShadowTerrain, NeedsGroundSettle, NextScene, PhysicsPoseAuthoritative,
+    ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind,
+    CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
+    TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
@@ -957,7 +957,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<NeedsGroundSettle>()
             .register_type::<PhysicsPoseAuthoritative>()
             .register_type::<SoiMigrant>()
-            .register_type::<ActuatorDrivenJoint>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
             // (log-level type), which shadows ours in glob-import scopes.
             .register_type::<crate::telemetry::Severity>()
@@ -978,10 +977,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<CameraFollow>()
             .register_type::<SimTick>();
 
-        // NOTE: the drive kernels, `DriveMix` and the `ControlKernelRegistry` all
-        // live in lunco-mobility — they are vehicle-domain types, and core stays
-        // domain-free. Mobility's plugin both defines and seeds them, so a minimal
-        // app that runs drive systems without the full core plugin still has them.
         // All always-on core/substrate resources live in one function so a
         // unit test can assert the full set is present without building the
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for

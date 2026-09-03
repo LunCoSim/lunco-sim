@@ -16,13 +16,11 @@
 //!
 //! See `docs/architecture/50-usd-driven-visuals.md`.
 //!
-//! ## Why this is not `ControlKernelRegistry`
+//! ## Why this is not a motion policy registry
 //!
-//! `lunco_mobility::kernels::ControlKernelRegistry` maps a name to a `fn` pointer because a
-//! `ControlKernel` is **pure** — inputs and params in, port writes out, no world
-//! access. A program driver is not: it reads a sensor and writes a `Transform`, so a
-//! `fn` pointer would have to take `&mut World` and give up parallelism for every
-//! driven prim.
+//! Motion allocation is authored in Modelica/Rhai and reaches the runtime as
+//! ordinary port values. Program drivers are not vehicle policy selectors: a
+//! driver reads its declared inputs and writes its declared outputs.
 //!
 //! So a driver is an ordinary Bevy **system**, registered through
 //! [`ProgramDriverAppExt::register_program_driver`] (the shape
@@ -31,8 +29,7 @@
 //! Same contract as the kernels, different storage, because the shape of the work
 //! differs.
 //!
-//! Cross-reference `TODO(behaviour-registry)` in [`crate::kernels`]: a driver is
-//! plausibly one of the "kinds" that eventually folds into one behaviour system.
+//! The same generic driver mechanism can serve any authored mechanism.
 
 use bevy::prelude::*;
 use std::collections::HashSet;
@@ -120,7 +117,7 @@ impl ProgramDriverAppExt for App {
 /// **A no-op with a warning, never a panic.** A scene authored against a newer
 /// runtime — or against a driver in a crate this binary did not link — must still
 /// open. Deduped per id, because the id does not change. Same contract as an unknown
-/// drive kernel in `lunco-mobility`.
+/// actuation policy in an application crate.
 ///
 /// Installed by the first [`ProgramDriverAppExt::register_program_driver`], so an app
 /// that registers NO drivers never runs it. That is deliberate: the `--no-ui` server

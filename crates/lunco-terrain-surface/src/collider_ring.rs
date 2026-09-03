@@ -1746,7 +1746,7 @@ pub fn settle_grounded_assemblies(
         // oracle as every other terrain consumer.
         // A dynamic physical wheel can be the first `NeedsGroundSettle` seed
         // encountered for a jointed vehicle. The raycast contact footprint,
-        // however, belongs to its DriveMix root. Resolve it from the seed and
+        // however, belongs to the vehicle root. Resolve it from the seed and
         // then across the whole assembly instead of assuming the arbitrary
         // dynamic member owns it. Probe-based vehicles MUST use only this geometry:
         // their high chassis has no terrain contact, so its generic collider

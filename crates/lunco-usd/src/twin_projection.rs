@@ -1333,7 +1333,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // despawns its synthesized `Port` children and visual child
             // while `UsdSimProcessed` survives, leaving a dead solved-torque
             // port and a dangling joint. Checked before the `string`
-            // fast-path: `lunco:driveKernel` is a string and must still resync.
+            // fast-path: authored scalar/string attributes still resync.
             if authored {
                 let claimed = world
                     .get_non_send::<CanonicalStages>()

@@ -9,7 +9,7 @@
 //!
 //! - **UsdBevyPlugin** — Spawns child entities for USD prims, attaches meshes + transforms
 //! - **UsdAvianPlugin** — Maps USD physics attributes to Avian3D components
-//! - **UsdSimPlugin** — Detects simulation schemas and creates wheel/FSW/steering components
+//! - **UsdSimPlugin** — Detects simulation schemas and creates wheel/FSW/joint components
 //!
 //! All three use deferred processing systems that run in the `Update` schedule **after**
 //! `sync_usd_visuals`, ensuring assets are fully loaded before any component mapping.
@@ -82,7 +82,7 @@ pub use lunco_usd_sim::{GroundActivationInFlight, GroundColliderPending, UsdSimP
 /// This is equivalent to adding all three subsystems individually:
 /// - `UsdBevyPlugin` — visual sync (meshes, transforms, hierarchy)
 /// - `UsdAvianPlugin` — physics mapping (RigidBody, Collider, Mass, Damping)
-/// - `UsdSimPlugin` — simulation mapping (WheelRaycast, FSW, DriveMix)
+/// - `UsdSimPlugin` — simulation mapping (WheelRaycast, FSW, authored ports)
 pub struct UsdPlugins;
 
 impl Plugin for UsdPlugins {

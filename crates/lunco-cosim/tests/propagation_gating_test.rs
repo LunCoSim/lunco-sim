@@ -7,7 +7,7 @@
 //!
 //! 1. **A client must still propagate into what it simulates.** Propagation is
 //!    the control DAC — a rover's `SetPorts` command reaches its actuators only
-//!    by being carried across `SimConnection`s into the wheel's `drive`/`steer`
+//!    by being carried across `SimConnection`s into the wheel's `drive`/`heading`
 //!    `Port`s. Gate that off for the whole process on `NetworkRole::Client` and
 //!    a predicted rover silently stops driving on clients while working
 //!    perfectly on the host.
@@ -112,7 +112,7 @@ fn client_propagates_into_owned_locally_target() {
 }
 
 /// **Failure mode 1, the actual wheel-drive case.** `lunco-usd-sim`'s
-/// `try_wire_wheel` targets bare `Port` entities (`p_drive` / `p_steer`), which
+/// `try_wire_wheel` targets bare `Port` entities (`p_drive` / `p_heading`), which
 /// have no `RigidBody` and so never enter replication membership
 /// (`apply_net_replication` requires one). They are local scaffolding and must
 /// keep propagating on a client. Same expectation, different branch of the
@@ -128,7 +128,7 @@ fn client_propagates_into_never_replicated_target() {
     assert_eq!(
         value_of(&app, target),
         7.0,
-        "a purely local Port (a wheel's drive/steer node) is not replicated and \
+        "a purely local Port (a wheel's drive/heading node) is not replicated and \
          must keep propagating on a client"
     );
 }

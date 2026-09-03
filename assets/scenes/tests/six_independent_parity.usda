@@ -26,21 +26,21 @@
 # instead of "the two realizations agree", it asserts "the authored allocation
 # produces the motion the authored allocation describes".
 #
-# WHAT IT GUARDS. This rover is the only asset in the fleet whose drive
-# allocation is fully AUTHORED rather than inferred from an Omniverse schema:
+# WHAT IT GUARDS. This rover is the asset in the fleet whose six-wheel command
+# mapping is fully AUTHORED rather than inferred from an Omniverse schema:
 #
 #     float outputs:drive_w0 = 0.0   # ... through outputs:drive_w5
 #
-#     def "DriveMix"
+#     def "Controller"
 #     {
 #         def "drive_w0" { double lunco:factor:throttle = 1.0
 #                          double lunco:factor:steer    = 1.0 }
 #         # ... w1, w2 the same; w3..w5 with lunco:factor:steer = -1.0
 #     }
 #
-# That is the `linear` kernel over six independent channels: left bank
+# That is an authored per-wheel program over six independent channels: left bank
 # (`w0..w2`) gets `throttle + steer`, right bank (`w3..w5`) gets
-# `throttle - steer`. Three consequences follow directly from those coefficients,
+# `throttle - steer`. Three consequences follow directly from those program outputs,
 # and the scenario asserts all three:
 #
 #   1. pure throttle drives all six equally  -> the rover runs STRAIGHT;
@@ -69,7 +69,7 @@
 def Xform "SixIndependentParity" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "One six-wheel independent-drive rover on flat ground, for the authored-driveMix motion-correctness regression test. Raycast-only: this rover has no physical drivetrain variant."
+    doc = "One six-wheel independent-drive rover on flat ground, for authored controller motion acceptance. Raycast-only: this rover has no physical drivetrain variant."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -105,6 +105,11 @@ def Xform "SixIndependentParity" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
@@ -128,7 +133,7 @@ def Xform "SixIndependentParity" (
     # ── The rover ────────────────────────────────────────────────────────────
     # NO variant selection, because the asset declares no variantSet. NO
     # per-instance overrides: the whole point is that the rover's own authored
-    # `DriveMix` scope is what gets measured. If you find yourself wanting to
+    # controller outputs are what gets measured. If you find yourself wanting to
     # `over` a wheel or a mass here, you are about to invalidate the test.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>

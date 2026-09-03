@@ -1,42 +1,47 @@
 within LunCo.Mobility;
 // Ackermann rover drivetrain: throttle in, common axle torque + steering out.
 //
-// The OPTIONAL Modelica drive law (`driveLaw = "modelica"` variant on
-// `ackermann_rover.usda`): a single first-order electrical/inertial motor lag
-// on the shared drive axle, so torque builds and decays over `tau_m` instead
-// of stepping. Unlike `RoverDrivetrain.mo` (skid: steer mixes into per-side
-// torque), an Ackermann rover steers with its FRONT KNUCKLES, not a torque
-// differential — so both sides get the SAME lagged throttle and `steer` passes
-// straight through to the steering port. The passthrough matters: the built-in
-// Ackermann linear kernel writes drive_left/drive_right/steering. The variant's
-// connected drive outputs make this model the authoritative allocator, so this
-// law must feed all three ports or the rover loses steering.
+// The model owns the steering geometry. It publishes the final signed heading
+// for each front knuckle, so the wheel endpoints receive a physical angle
+// rather than a vehicle-class command. The drive state remains a shared
+// motor/axle state and is published through generic torque ports.
 //
 // RUMOCA RULES (same as LegStrut.mo): branch-free equations — `der(x) = expr`
 // with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
 // `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
-// The outputs are NORMALIZED commands (−1..1); native USD connections publish
-// them onto the FSW ports.
+// Drive outputs are normalized demands (−1..1); heading outputs are radians.
+// Authored USD connections publish them onto the generic wheel and joint ports.
 
 model RoverAckermannDrivetrain
   extends LunCo.Icons.Mobility;
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";
+  parameter Real wheelbase = 2.45 "Front/rear axle spacing (m)";
+  parameter Real track = 2.0 "Front wheel centre spacing (m)";
+  parameter Real max_heading = 0.5 "Maximum front-wheel heading (rad)";
 
   input Real throttle "Normalized forward command, -1..1";
-  input Real steer "Normalized steer command, -1..1 (+right)";
+  input Real steer "Normalized right command, -1..1";
 
   // Common axle torque state, as a fraction of peak torque.
   Real t(start = 0) "Axle torque fraction";
+  Real heading_command "Signed joint heading command (rad)";
+  Real tangent_heading "Tangent of the signed joint heading";
 
   output Real drive_left "Normalized left-side drive, -1..1";
   output Real drive_right "Normalized right-side drive, -1..1";
-  output Real steering "Normalized steering command passthrough, -1..1";
+  output Real heading_fl "Final left-front joint heading (rad)";
+  output Real heading_fr "Final right-front joint heading (rad)";
 equation
-  // First-order lag toward the clamped throttle; steering is geometry, not
+  // First-order lag toward the clamped throttle; heading is geometry, not
   // torque, so it bypasses the motor lag entirely.
   der(t) = (max(-1.0, min(1.0, throttle)) - t) / tau_m;
   drive_left = t;
   drive_right = t;
-  steering = steer;
+  heading_command = -max(-1.0, min(1.0, steer)) * max_heading;
+  tangent_heading = tan(heading_command);
+  heading_fl = atan2(wheelbase * tangent_heading,
+                     wheelbase - 0.5 * track * tangent_heading);
+  heading_fr = atan2(wheelbase * tangent_heading,
+                     wheelbase + 0.5 * track * tangent_heading);
 end RoverAckermannDrivetrain;

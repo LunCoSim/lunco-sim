@@ -59,7 +59,7 @@ pub enum CosimSet {
 /// * it is **not replicated at all** ([`lunco_core::NetReplicate`] absent). This
 ///   clause is the load-bearing one for vessel control: the endpoints of a
 ///   rover's actuation graph are bare [`lunco_core::architecture::Port`] entities
-///   (`lunco-usd-sim`'s `try_wire_wheel` targets `p_drive`/`p_steer`), which have
+///   (`lunco-usd-sim`'s generic USD wiring targets wheel drive/heading ports), which have
 ///   no `RigidBody` and therefore never enter replication membership
 ///   (`apply_net_replication` requires one). They are local scaffolding whose
 ///   values only ever reach avian through the actuator systems, and those carry
@@ -669,11 +669,9 @@ pub fn propagate_connections(
         // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
         // dangling wire, and reporting it as one buried the real diagnostic:
         //
-        // * `demand` on a `Motor_*` and `torque` on a `Gearbox_*` are STRUCTURAL
-        //   endpoints. Those prims' data is folded into `WheelParams` at parse
-        //   time and the runtime path is InputPorts → DriveMix → wheel port;
-        //   nothing registers a backend for those names, by design. The USD wires
-        //   document the mechanical chain, and they should stay.
+        // * mechanical-network members are compiled into their containing
+        //   Modelica participant. Their internal wires are consumed by that
+        //   participant; only its declared boundary ports enter this fabric.
         // * `throttle`, `drive_left`, `drive_right` DO belong to real backends —
         //   the OBC's command inputs, a `.mo` model's declared inputs — but those
         //   backends only claim the entity once the model asset finishes loading

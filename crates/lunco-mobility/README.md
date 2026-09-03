@@ -6,12 +6,13 @@ Surface mobility and traction physics for LunCoSim planetary rovers.
 
 This crate implements high-performance physics models for surface vehicles, focusing on stability and realistic ground interaction.
 
-- **Raycast-Based Wheel Model** — Uses emulated suspension rays instead of complex mesh-to-mesh collision for high performance on irregular terrain. Traction is decomposed in the **actual contact plane** (the ray-hit normal), so leaning single-track vehicles (bikes/motorcycles) get correct lateral grip; the steer axis is configurable (`lunco:steerAxis`) for raked motorcycle forks.
+- **Raycast-Based Wheel Model** — Uses emulated suspension rays instead of complex mesh-to-mesh collision for high performance on irregular terrain. Traction is decomposed in the **actual contact plane** (the ray-hit normal), so leaning single-track vehicles (bikes/motorcycles) get correct lateral grip; the wheel heading axis is configurable (`lunco:wheel:headingAxis`) for raked motorcycle forks.
 - **Suspension Physics** — Spring-damper system (Hooke's Law) for realistic vehicle dynamics and oscillation suppression.
 - **Traction & Friction** — Coulomb friction model for longitudinal drive and lateral skid/slip behaviors.
-- **Steering Mixing** — a USD-authored `DriveMix` selects a registered allocation
-  kernel (`skid`, `linear`, or a project-provided kernel) for arbitrary motor
-  topologies, including true per-wheel independent drive.
+- **Authored motion realization** — Modelica/Rhai controllers publish final motor
+  demands, brake values, and joint headings through generic ports. The physics
+  layer realizes those values without knowing whether the vehicle is skid-steer,
+  Ackermann, crab, or independently driven.
 - **Differential Coupling** — `DifferentialCoupling`, an ideal per-substep holonomic gear that mirrors two rockers' pitch for rocker-bogie suspension (Avian has no gear joint).
 - **Joint-Based Suspension** — Prismatic joint support for vehicles with physical collision wheels.
 
@@ -25,7 +26,7 @@ Mobility logic runs in the `FixedUpdate` schedule, chain-linking suspension and 
 lunco-mobility/
   ├── WheelRaycast         — The core high-performance wheel component (contact-plane traction)
   ├── Suspension           — Spring-damper configuration for joints
-  ├── DriveMix             — USD-authored kernel-selected per-port allocation
+  ├── generic ports        — authored controller outputs and physical joint inputs
   ├── DifferentialCoupling — Per-substep rocker-bogie gear constraint
   └── systems.rs           — Ray-world intersection and force application logic
 ```

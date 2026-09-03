@@ -19,7 +19,7 @@ def Xform "RoverFrontCamera" (kind = "component")
 
         # Rover assets use -Z as forward.  Aim well beyond the chassis so the
         # view remains forward-looking on slopes and during steering.
-        custom double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
+        double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
         double3 xformOp:translate = (0.0, 0.85, -1.35)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 

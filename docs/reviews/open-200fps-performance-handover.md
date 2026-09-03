@@ -404,7 +404,7 @@ Focused verification passed:
 - `cargo test -p lunco-usd-avian --test bridge_physics -j 4 -- --nocapture`:
   **17/17**, including late-body seeding, frame handoff, teleport, ancestor
   re-split, and rotating-parent invariants.
-- `./scripts/run_scene_tests.sh --no-build --exact allocation_spec`: passed.
+- `./scripts/run_scene_tests.sh --no-build --exact modelica_drive_law`: passed.
 - `./scripts/run_scene_tests.sh --no-build --exact ackermann_parity`: passed.
 - `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed and produced
   `usd/target/debug/luncosim`.

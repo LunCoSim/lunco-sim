@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "SteeringKnuckle"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Front steering knuckle: a compact rigid body between the vehicle frame and
+# the wheel suspension carrier. The vehicle authors its hinge location and
+# controller connection; this component supplies the physical part and its
+# collision geometry.
+def Xform "SteeringKnuckle" (
+    kind = "component"
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    float physics:mass = 18.0
+    float3 physics:diagonalInertia = (0.35, 0.35, 0.35)
+
+    def Cube "Yoke" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:scale = (0.22, 0.16, 0.22)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.32, 0.35, 0.4)]
+    }
+}

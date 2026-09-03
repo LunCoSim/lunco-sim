@@ -224,7 +224,13 @@ pub struct Suspension {
 
 ### 3.2. USD Loading Resolution (`lunco-usd-sim`)
 
-**Detection is by applied schema, never by attribute presence.** A prim is a wheel because it applies `PhysxVehicleWheelAPI` (`reader.has_api_schema`), exactly as `PhysxVehicleContextAPI` / `…TankDifferentialAPI` / `…AckermannSteeringAPI` are detected; a prim is a strut visual because it applies `LunCoSuspensionVisualAPI`. Applying the API is the claim; the attributes are its parameters. Sniffing for an attribute instead conflates "declares itself a wheel" with "happens to carry a wheel-ish attr", and silently makes the schema optional.
+**Detection is by applied schema, never by attribute presence.** A prim is a
+wheel because it applies `PhysxVehicleWheelAPI` (`reader.has_api_schema`), and
+the vehicle context is identified by `PhysxVehicleContextAPI`; a prim is a
+strut visual because it applies `LunCoSuspensionVisualAPI`. Applying the API is
+the claim; the attributes are its parameters. Sniffing for an attribute instead
+conflates "declares itself a wheel" with "happens to carry a wheel-ish attr",
+and silently makes the schema optional.
 
 The loader then resolves a wheel's suspension via `resolve_suspension_params`, a two-step path:
 1. **Canonical (Relationship-based):** Pass 1 (`collect_joint_scan_read`) records every `PhysxVehicleWheelAttachmentAPI` prim's `physxVehicleWheelAttachment:wheel` → `:suspension` binding into a `wheel_attachment_targets` map, keyed by `(stage, wheel path)` — a prim path is unique only within its stage, so the same rover loaded twice repeats `/Rover/Wheel_FL`. When the wheel prim is processed in Pass 2, the resolver follows that binding and reads the suspension attrs off the referenced suspension prim.

@@ -11,8 +11,8 @@
 # one. Everything below composes onto the rover; `</DriveLaw.…>` paths
 # translate to the HOST rover root through the reference arc.
 #
-# What it does: replaces the authored `DriveMix` scope (the instant six-channel
-# skid mix) with a physical command→torque law. The physics is per-SIDE (one
+# What it does: replaces the authored per-wheel command allocation with a
+# physical command→torque law. The physics is per-SIDE (one
 # motor controller per bank, two states, not six) and identical to the skid
 # law's; `RoverSixIndependentDrivetrain.mo` differs from `RoverDrivetrain.mo`
 # only in publishing the six per-wheel names this vehicle declares
@@ -41,8 +41,8 @@ def Xform "DriveLaw" (
     float inputs:throttle = 0.0
     float inputs:steer = 0.0
 
-    # These connected outputs are the authoritative allocation. Their presence
-    # prevents derivation of a second, imperative DriveMix on the vessel.
+    # These connected outputs are the authoritative authored mapping. Their
+    # presence makes the six-channel fan-out explicit in USD.
     float outputs:drive_w0.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_w1.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_w2.connect = </DriveLaw/Drivetrain.outputs:drive_left>
@@ -62,7 +62,7 @@ def Xform "DriveLaw" (
         float outputs:drive_left
         float outputs:drive_right
         # `</DriveLaw.…>` = the host rover root after arc translation: the
-        # model reads the same FSW command ports the built-in kernels read.
+        # model reads the same authored command ports exposed by the OBC.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>
         float inputs:steer.connect = </DriveLaw.inputs:steer>
     }

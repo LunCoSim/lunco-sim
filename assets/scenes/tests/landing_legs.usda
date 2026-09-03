@@ -59,6 +59,11 @@ def Xform "LandingLegsTest" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 3.0, 0.0)

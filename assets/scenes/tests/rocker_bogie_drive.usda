@@ -62,6 +62,11 @@ def Xform "RockerBogieDrive" (
         prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (12.0, 0.0, 0.0)

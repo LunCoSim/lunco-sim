@@ -408,8 +408,8 @@ mod tests {
                 suspension_port: port,
                 drive_port: port,
                 speed_port: port,
-                steer_port: port,
-                steer_axis: DVec3::Y,
+                heading_port: port,
+                heading_axis: DVec3::Y,
                 wheel_radius: 0.5,
                 visual_entity: Some(visual),
                 last_normal_force: 100.0, // ≥1 ⇒ on_ground (with a hit present)
@@ -510,8 +510,8 @@ mod tests {
                     suspension_port: port,
                     drive_port: port,
                     speed_port,
-                    steer_port: port,
-                    steer_axis: DVec3::Y,
+                    heading_port: port,
+                    heading_axis: DVec3::Y,
                     wheel_radius: 0.4,
                     visual_entity: Some(visual),
                     // AIRBORNE: no normal force, no hit — the solved shaft torque

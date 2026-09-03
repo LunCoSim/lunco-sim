@@ -26,7 +26,7 @@ def Xform "AckermannRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI", "CollectionAPI:components"
+        "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis: a complete
@@ -34,6 +34,7 @@ def Xform "AckermannRover" (
     # commands at all. See `skid_rover.usda` for the full rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["drivetrain", "power"]
     variants = {
         string drivetrain = "raycast"
@@ -43,24 +44,14 @@ def Xform "AckermannRover" (
 {
     uniform bool lunco:spawnable = true
 
-    # --- Steering (PhysxVehicleAckermannSteeringAPI, applied above) ---
-    # The steer lock belongs to the VEHICLE, not to a wheel: it is one property of one
-    # steering system, and a rover's wheels do not each get an opinion about it. PhysX
-    # agrees — `physxVehicleWheel:maxSteerAngle` is deprecated in favour of this.
-    # RADIANS, as everywhere in PhysX (only the authoring wizard's UI is in degrees).
-    # 0.5 rad = 28.6°, the lock this rover has always driven with.
-    float physxVehicleAckermannSteering:maxSteerAngle = 0.5
-    # 0.0 = parallel steering. The wheels are steered by a shared angle today; full
-    # Ackermann geometry (inner wheel turns tighter) is not modelled yet.
-    float physxVehicleAckermannSteering:strength = 0.0
-
     float physics:mass = 1000.0
     # Symmetric box chassis: the body frame origin is the authored COM for both
     # raycast and joint realizations.
     float3 physics:centerOfMass = (0.0, 0.0, 0.0)
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    float outputs:steering = 0.0
+    float outputs:heading_fl = 0.0
+    float outputs:heading_fr = 0.0
     float outputs:brake = 0.0
 
     # Ground speed as a retained channel — the avian `speed` port on this body
@@ -134,7 +125,7 @@ def Xform "AckermannRover" (
         # The 6.8 kg.m2 value is the composed USD mechanical contract.
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </AckermannRover/Shaft_FL.outputs:torque>
-        float inputs:steer.connect = </AckermannRover.outputs:steering>
+        float inputs:heading.connect = </AckermannRover.outputs:heading_fl>
     }
     }
 
@@ -161,7 +152,7 @@ def Xform "AckermannRover" (
         # The 6.8 kg.m2 value is the composed USD mechanical contract.
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </AckermannRover/Shaft_FR.outputs:torque>
-        float inputs:steer.connect = </AckermannRover.outputs:steering>
+        float inputs:heading.connect = </AckermannRover.outputs:heading_fr>
     }
     }
 
@@ -220,8 +211,8 @@ def Xform "AckermannRover" (
     # --- Motors + reductions -------------------------------------------
     # One motor and one reduction per driven wheel — see `skid_rover.usda` for the
     # full rationale. Ackermann steers with the KNUCKLES, so all four wheels are
-    # driven from the same two per-side channels the built-in kernel writes; the
-    # steering command is a separate port and no motor listens to it.
+    # driven from the same two per-side channels the authored controller writes;
+    # wheel heading is a separate joint target and no motor listens to it.
     #
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     #   axle no-load speed = 2400 / 200 = 12 rad/s
@@ -416,6 +407,60 @@ def Xform "AckermannRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
+            # Front steering is a real two-stage mechanism:
+            # chassis -> yaw knuckle -> vertical suspension carrier -> wheel roll.
+            # The Modelica controller publishes heading_fl/heading_fr to the
+            # generic revolute-joint angle ports below.
+            def Xform "SteeringKnuckle_FL" (
+                prepend references = @lunco://components/mobility/steering_knuckle.usda@</SteeringKnuckle>
+            )
+            {
+                double3 xformOp:translate = (-1.0, -0.65, -1.225)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+            def Xform "SteeringKnuckle_FR" (
+                prepend references = @lunco://components/mobility/steering_knuckle.usda@</SteeringKnuckle>
+            )
+            {
+                double3 xformOp:translate = (1.0, -0.65, -1.225)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+            def PhysicsRevoluteJoint "Steering_FL_Hinge" (
+                prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+            )
+            {
+                rel physics:body0 = </AckermannRover>
+                rel physics:body1 = </AckermannRover/SteeringKnuckle_FL>
+                uniform token physics:axis = "Y"
+                float physics:lowerLimit = -30
+                float physics:upperLimit = 30
+                uniform token drive:angular:physics:type = "force"
+                float drive:angular:physics:stiffness = 1600.0
+                float drive:angular:physics:damping = 160.0
+                float drive:angular:physics:maxForce = 350.0
+                float inputs:angle.connect = </AckermannRover.outputs:heading_fl>
+            }
+            def PhysicsRevoluteJoint "Steering_FR_Hinge" (
+                prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+            )
+            {
+                rel physics:body0 = </AckermannRover>
+                rel physics:body1 = </AckermannRover/SteeringKnuckle_FR>
+                uniform token physics:axis = "Y"
+                float physics:lowerLimit = -30
+                float physics:upperLimit = 30
+                uniform token drive:angular:physics:type = "force"
+                float drive:angular:physics:stiffness = 1600.0
+                float drive:angular:physics:damping = 160.0
+                float drive:angular:physics:maxForce = 350.0
+                float inputs:angle.connect = </AckermannRover.outputs:heading_fr>
+            }
+            over "Suspension_FL_Slider" {
+                rel physics:body0 = </AckermannRover/SteeringKnuckle_FL>
+            }
+            over "Suspension_FR_Slider" {
+                rel physics:body0 = </AckermannRover/SteeringKnuckle_FR>
+            }
             over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
             over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
             over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
@@ -509,10 +554,10 @@ def Xform "AckermannRover" (
     }
 
     # --- Drive law -----------------------------------------------------------
-    # HOW throttle/steer become drive + steering is COMPOSITION, not an
-    # enumeration. The plain authored state is the instant built-in Ackermann
-    # linear kernel. For a solver-clocked shared-axle motor lag, compose the law
-    # on as a reference arc alongside the airframe:
+    # HOW throttle/steer become drive + heading is COMPOSITION, not an
+    # enumeration. The authored Modelica/Rhai controller publishes the drive
+    # and front-knuckle heading outputs. For another solver-clocked law, compose
+    # a program on the same generic port surface:
     #
     #   def "Rover" (
     #       prepend references = [
@@ -521,8 +566,7 @@ def Xform "AckermannRover" (
     #       ]
     #   ) {}
     #
-    # NOTE the built-in kernel here writes THREE ports (drive_left/drive_right/
-    # steering), so an Ackermann law must cover all three — steering as a model
-    # passthrough, since Ackermann steers with the knuckles, not a torque
-    # differential.
+    # The heading values are joint targets; Ackermann geometry and any other
+    # motion policy belong to the authored controller, not this asset's Rust
+    # runtime.
 }

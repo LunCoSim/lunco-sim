@@ -5,28 +5,20 @@
     metersPerUnit = 1
 )
 
-# Modelica DRIVE LAW for an ACKERMANN rover — the `driveLaw = "modelica"`
-# variant references this into the rover ROOT, exactly as `modelica_skid.usda`
-# does for the skid rovers: a variant CHOOSES a component, it never restates
-# one. Everything below composes onto the rover; `</DriveLaw.…>` paths
-# translate to the HOST rover root through the reference arc.
+# Modelica drive law for an Ackermann rover. The rover root references this
+# component so its composed model publishes generic drive and joint-heading
+# values through the authored port graph.
 #
-# What it does: replaces the instant built-in Ackermann linear kernel with a
-# physical command→torque law — `models/LunCo/Mobility/RoverAckermannDrivetrain.mo` integrates
-# ONE first-order motor lag on the shared axle (Ackermann steers with the front
-# knuckles, not a torque differential). Native USD connections project its
-# normalized outputs onto `drive_left`/`drive_right`/`steering`.
-# `steering` is a model passthrough: the built-in kernel this
-# law displaces writes all three ports, so the law must feed all three.
-# USD wires + Modelica physics; no numerical Rhai bridge.
+# What it does: `RoverAckermannDrivetrain.mo` integrates one first-order motor
+# state on the shared axle and computes final left/right front-knuckle headings
+# from the authored wheelbase and track. USD wires + Modelica physics; no
+# numerical Rhai bridge.
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
 # ── The law FORWARDS the vessel's outputs — see `modelica_skid.usda` ─────────
 #
-# `drive_left`/`drive_right`/`steering` are OUTPUTS of the rover root. A drive
-# law replaces their PRODUCER, so the connections below are output-to-output
-# forwards, not `inputs:` writes. The runtime materialises the forwards onto the
-# vessel's actuator ports; see the production-backed note in `modelica_skid.usda`.
+# The root drive and heading values are outputs. This component is their
+# producer, so the connections below are output-to-output forwards.
 def Xform "DriveLaw" (
     kind = "component"
 )
@@ -42,14 +34,15 @@ def Xform "DriveLaw" (
     float inputs:throttle = 0.0
     float inputs:steer = 0.0
 
-    # These connected outputs are the authoritative allocation. Their presence
-    # prevents derivation of a second, imperative DriveMix on the vessel.
+    # These connected outputs are the authored source for the vessel's generic
+    # wheel and steering-joint ports.
     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
-    float outputs:steering.connect = </DriveLaw/Drivetrain.outputs:steering>
+    float outputs:heading_fl.connect = </DriveLaw/Drivetrain.outputs:heading_fl>
+    float outputs:heading_fr.connect = </DriveLaw/Drivetrain.outputs:heading_fr>
 
-    # The physics: shared-axle first-order motor lag + steering passthrough,
-    # solver-clocked. In a CHILD prim because the rover root already binds the
+    # The physics: shared-axle first-order motor lag + heading geometry,
+    # solver-clocked. In a child prim because the rover root already binds the
     # OBC's model and `info:sourceAsset` is single-valued.
     def Scope "Drivetrain" (
         prepend apiSchemas = ["LunCoProgramAPI"]
@@ -59,9 +52,9 @@ def Xform "DriveLaw" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverAckermannDrivetrain.mo@
         float outputs:drive_left
         float outputs:drive_right
-        float outputs:steering
-        # `</DriveLaw.…>` = the host rover root after arc translation: the
-        # model reads the same FSW command ports the built-in kernels read.
+        float outputs:heading_fl
+        float outputs:heading_fr
+        # The translated reference reads the host rover's command ports.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>
         float inputs:steer.connect = </DriveLaw.inputs:steer>
     }

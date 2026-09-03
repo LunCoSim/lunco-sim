@@ -252,15 +252,15 @@ section.
 
 1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
 2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, and the Omniverse differential/steering APIs `PhysxVehicleTankDifferentialAPI` (skid) / `PhysxVehicleAckermannSteeringAPI`) and creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, a data-driven `DriveMix` (allocated by a named kernel in `lunco-mobility`'s `ControlKernelRegistry` — `skid`/`linear`), `DifferentialCoupling`, sensors, etc. Also wires output topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+3. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Rover Definitions
 
 #### Consolidated Base Files
-| File | Steering | Default Wheel Type |
+| File | Control/drive policy | Default Wheel Type |
 |------|----------|-------------------|
-| `skid_rover.usda` | `PhysxVehicleTankDifferentialAPI` (skid) | `raycast` |
-| `ackermann_rover.usda` | `PhysxVehicleAckermannSteeringAPI` | `raycast` |
+| `skid_rover.usda` | authored generic ports + Modelica/Rhai drive law | `raycast` |
+| `ackermann_rover.usda` | authored generic ports + Modelica/Rhai heading law | `raycast` |
 
 #### Wheel Type Declaration
 The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavior:
@@ -275,9 +275,10 @@ Raycast wheels need identity rotation so `RayCaster` casts straight down. The sy
 
 A raycast wheel decomposes traction in the **actual contact plane** (the ray-hit
 normal), so a leaning single-track vehicle (bike/motorcycle) gets correct lateral
-grip; for an upright wheel this is identical to the flat basis. The steer axis is
-`lunco:steerAxis` (float3, wheel-local; default `+Y`) — a raked motorcycle fork
-authors e.g. `(0, 0.91, 0.42)`.
+grip; for an upright wheel this is identical to the flat basis. The heading axis is
+`lunco:wheel:headingAxis` (float3, wheel-local; default `+Y`) — a raked motorcycle
+fork authors e.g. `(0, 0.91, 0.42)`. The final heading is an authored output, not a
+vehicle-type rule in Rust.
 
 ### Physics Joints
 

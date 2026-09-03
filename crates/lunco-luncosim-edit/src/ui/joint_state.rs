@@ -20,9 +20,9 @@
 //! - **Raycast wheels** (no avian joint): θ/ω are the canonical
 //!   `WheelRaycast::spin_angle` / `spin_velocity`; torque is read from the
 //!   solved drive [`Port`]. There is no UI-side motor curve.
-//! - **Steering**: steered wheels (either kind) carry a
-//!   [`lunco_hardware::SteeringActuator`]; its `output_angle` is the single
-//!   shared steer output both realizations consume, shown in the steer column.
+//! - **Wheel heading**: raycast wheels expose their authored heading input as a
+//!   scalar port. Physical steering is an ordinary revolute joint, so its angle
+//!   is shown by the same generic joint row.
 
 use avian3d::prelude::{AngularVelocity, JointBasis, JointFrame, RevoluteJoint, Rotation};
 use bevy::math::{DQuat, DVec3};
@@ -30,7 +30,6 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::architecture::Port;
 use lunco_cosim::JointTorqueActuator;
-use lunco_hardware::SteeringActuator;
 use lunco_mobility::WheelRaycast;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -75,8 +74,8 @@ pub struct JointStateRow {
     /// Torque (N·m) published by the authored mechanical network or an
     /// ordinary Avian position drive. `None` when no drive is present.
     pub torque: Option<f64>,
-    /// Steer angle (rad) for steered wheels ([`SteeringActuator::output_angle`]).
-    pub steer: Option<f64>,
+    /// Final heading command (rad) exposed by a raycast wheel's authored input.
+    pub heading: Option<f64>,
 }
 
 /// Live view-model for the Joint State panel. Producer:
@@ -179,13 +178,8 @@ pub fn populate_joint_state_view(
     q_name: Query<&Name>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
     q_catalog_id: Query<&lunco_core::CatalogEntryId>,
-    q_joints: Query<(
-        Entity,
-        &RevoluteJoint,
-        Option<&SteeringActuator>,
-        Option<&JointTorqueActuator>,
-    )>,
-    q_wheels: Query<(Entity, &WheelRaycast, Option<&SteeringActuator>)>,
+    q_joints: Query<(Entity, &RevoluteJoint, Option<&JointTorqueActuator>)>,
+    q_wheels: Query<(Entity, &WheelRaycast)>,
     q_bodies: Query<(&Rotation, &AngularVelocity)>,
     q_ports: Query<&Port>,
 ) {
@@ -205,7 +199,7 @@ pub fn populate_joint_state_view(
     view.rows.clear();
 
     // ── Avian revolute joints (physical wheels, suspension pins, doors) ──
-    for (joint_entity, joint, steer, torque_actuator) in q_joints.iter() {
+    for (joint_entity, joint, torque_actuator) in q_joints.iter() {
         // Membership: the jointed child body hangs under the selected vessel.
         if root_of(joint.body2, &q_child_of) != root && root_of(joint_entity, &q_child_of) != root {
             continue;
@@ -249,12 +243,12 @@ pub fn populate_joint_state_view(
                     None
                 }
             }),
-            steer: steer.map(|s| s.output_angle),
+            heading: None,
         });
     }
 
     // ── Raycast wheels (no avian joint; spin state is the wheel's own) ──
-    for (wheel_entity, wheel, steer) in q_wheels.iter() {
+    for (wheel_entity, wheel) in q_wheels.iter() {
         if root_of(wheel_entity, &q_child_of) != root {
             continue;
         }
@@ -270,7 +264,11 @@ pub fn populate_joint_state_view(
             omega: wheel.spin_velocity,
             target: None,
             torque,
-            steer: steer.map(|s| s.output_angle),
+            heading: q_ports
+                .get(wheel.heading_port)
+                .ok()
+                .map(|port| port.value)
+                .filter(|value| value.is_finite()),
         });
     }
 }
@@ -353,7 +351,7 @@ fn joint_state_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.strong("ω  rad/s");
             ui.strong("target  rad/s");
             ui.strong("τ  N·m");
-            ui.strong("steer  rad");
+            ui.strong("heading  rad");
             ui.end_row();
 
             for row in &view.rows {
@@ -363,7 +361,7 @@ fn joint_state_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 value_cell(ui, Some(row.omega));
                 value_cell(ui, row.target);
                 value_cell(ui, row.torque);
-                value_cell(ui, row.steer);
+                value_cell(ui, row.heading);
                 ui.end_row();
             }
         });

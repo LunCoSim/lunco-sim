@@ -379,7 +379,7 @@ def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
     float physxVehicleWheel:moi = 2.0
     float physxVehicleWheel:dampingRate = 0.45
     float physxVehicleWheel:maxBrakeTorque = 1500.0
-    double3 lunco:wheel:steerAxis = (0, 1, 0)
+    double3 lunco:wheel:headingAxis = (0, 1, 0)
 }
 def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {
     float physxVehicleTire:longitudinalStiffness = 9876.0

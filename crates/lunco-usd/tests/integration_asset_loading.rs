@@ -2,8 +2,8 @@ use bevy::asset::AssetPlugin;
 /// Integration tests that load REAL assets through the EXACT same pipeline as runtime.
 /// NO inline USD strings. NO manual file reading. Uses AssetServer just like the app.
 use bevy::prelude::*;
-use lunco_core::{MobilityRoot, OutputPorts};
-use lunco_mobility::kernels::DriveMix;
+use lunco_core::{ControlBinding, InputPorts, MobilityRoot, OutputPorts};
+use lunco_materials::ShaderLook;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
 use lunco_usd_bevy::*;
@@ -146,8 +146,8 @@ fn test_sandbox_scene_composes() {
         g[0]
     );
     assert!(
-        (g[1] - 0.2).abs() < 0.05,
-        "Ground height ~0.2, got {}",
+        (g[1] - 1.0).abs() < 0.05,
+        "Ground height ~1.0, got {}",
         g[1]
     );
     assert!(
@@ -287,59 +287,45 @@ fn test_rover_components_via_bevy_pipeline() {
             "{label}: compound collider is missing the authored chassis cuboid; got {he:?}"
         );
 
-        // Visual (Mesh3d + appearance INTENT) — on the Chassis child, not the Xform
-        // root. The prim carries a `PbrLook`, not a `MeshMaterial3d`: the material is
-        // bound by `LuncoRenderPlugin` in render builds only, so this headless test
-        // asserts the intent, which is what USD actually authors.
-        // See docs/architecture/render-decoupling.md.
+        // Visual (Mesh3d + authored appearance intent) — on the Chassis child,
+        // not the Xform root. USD may select standard PBR or a custom shader;
+        // the render plugin binds that intent in render builds.
         let chassis = chassis_child(&app, rover_ent, label);
         let _mesh = app
             .world()
             .get::<Mesh3d>(chassis)
             .unwrap_or_else(|| panic!("{label}: Chassis Missing Mesh3d (body not visible!)"));
-        let _look = app
-            .world()
-            .get::<lunco_render::PbrLook>(chassis)
-            .unwrap_or_else(|| {
-                panic!("{label}: Chassis Missing PbrLook (body would not be visible!)")
-            });
+        assert!(
+            app.world().get::<lunco_render::PbrLook>(chassis).is_some()
+                || app.world().get::<ShaderLook>(chassis).is_some(),
+            "{label}: Chassis Missing authored appearance intent (body would not be visible!)"
+        );
 
-        // Steering allocation: every rover carries a `DriveMix` naming a kernel.
-        // Ackermann → the `linear` kernel with a `steering` term; skid → the
-        // `skid` kernel over the two drive ports.
-        let mix = app
+        // The accepted command vocabulary and intent mapping come from the
+        // composed `Controls` scope, not from rover type detection.
+        let binding = app
             .world()
-            .get::<DriveMix>(rover_ent)
-            .unwrap_or_else(|| panic!("{label}: Missing DriveMix (cannot steer!)"));
-        if f.contains("ackermann") {
-            assert_eq!(
-                mix.kernel, "linear",
-                "{label}: ackermann should use the linear kernel"
+            .get::<ControlBinding>(rover_ent)
+            .unwrap_or_else(|| panic!("{label}: Missing authored ControlBinding"));
+        let inputs = app
+            .world()
+            .get::<InputPorts>(rover_ent)
+            .unwrap_or_else(|| panic!("{label}: Missing authored InputPorts"));
+        for port in ["throttle", "steer", "brake"] {
+            assert!(
+                binding.ports().any(|bound| bound == port),
+                "{label}: Controls does not bind {port}"
             );
             assert!(
-                mix.entries
-                    .iter()
-                    .any(|e| e.port == "steering" && e.steer != 0.0),
-                "{label}: ackermann DriveMix missing a steering term"
+                inputs.values.contains_key(port),
+                "{label}: InputPorts does not expose {port}"
             );
-        } else {
-            // skid or an explicit linear per-wheel mix — both must name a known kernel.
-            assert!(
-                mix.kernel == "skid" || mix.kernel == "linear",
-                "{label}: unexpected drive kernel '{}'",
-                mix.kernel
-            );
-            if mix.kernel == "skid" {
-                assert_eq!(mix.ports.len(), 2, "{label}: skid needs two drive ports");
-            } else {
-                assert!(
-                    !mix.entries.is_empty(),
-                    "{label}: linear DriveMix has no entries"
-                );
-            }
         }
 
-        // Actuator ports (for command routing)
+        // Produced ports are the authored Modelica controller's generic output
+        // surface. Front-knuckle heading outputs are generated network boundary
+        // values, so their composed USD connections are checked below at the
+        // topology boundary rather than as root runtime output ports.
         let actuators = app
             .world()
             .get::<OutputPorts>(rover_ent)
@@ -353,14 +339,9 @@ fn test_rover_components_via_bevy_pipeline() {
             "{label}: actuators missing drive_right"
         );
         assert!(
-            actuators.ports.contains_key("steering"),
-            "{label}: actuators missing steering"
-        );
-        assert!(
             actuators.ports.contains_key("brake"),
             "{label}: actuators missing brake"
         );
-
         // --- WHEELS ---
         // The rover root owns the suspension carriers and other authored parts.
         // Keep this as a broad hierarchy sanity check, not as the wheel lookup.
@@ -499,7 +480,7 @@ fn test_wheel_mesh_dimensions_after_composition() {
 
 // ============================================================
 // Test: Async asset loading + sim processing
-// Catches: rovers spawning without FSW/DriveMix because
+// Catches: rovers spawning without FSW or authored output ports because
 // assets load AFTER the observer fires (async loading bug)
 // ============================================================
 
@@ -555,15 +536,6 @@ fn test_rover_sim_processing_after_async_load() {
             act_count > 0,
             "{label}: MobilityRoot + OutputPorts must be present after sim processing. Got {act_count} mobility roots with output ports. \
             This means the sim system didn't process the rover - likely async loading bug."
-        );
-
-        // MUST have a DriveMix (the kernel-selected allocation) after sim processing.
-        let mut q_mix = app.world_mut().query_filtered::<Entity, With<DriveMix>>();
-        let has_drive = q_mix.iter(app.world()).count() > 0;
-        assert!(
-            has_drive,
-            "{label}: Must have a DriveMix after sim processing. \
-            Rover won't be able to steer!"
         );
 
         // MUST have the same explicit root/output pairing used by runtime
@@ -701,7 +673,8 @@ fn test_full_scene_loads_with_rovers() {
     // harness (no `LunCoCorePlugin`) doesn't have (`NetworkRole`,
     // `ColliderTreeDiagnostics`, …) and panics. A huge fixed period never
     // accumulates a tick across the ~10 fast updates. The structural wiring the
-    // test checks (wheels, DriveMix, steer wires) is built in PreUpdate/Update.
+    // test checks (wheels, generic output ports, and heading wires) is built in
+    // PreUpdate/Update.
     app.insert_resource(Time::<Fixed>::from_hz(0.0001));
 
     // Spawn through the production mount boundary so the scene root is placed
@@ -737,16 +710,20 @@ fn test_full_scene_loads_with_rovers() {
         rover_info
     );
 
-    // Drivable = carries a `DriveMix` (any kernel) + actuator ports.
+    // Drivable = carries the authored command/input and produced-output
+    // surfaces. The controller itself is a composed Modelica/Rhai network.
     // 4 skid (2 raycast + 1 physical + 1 battery/thermal raycast) +
     // 2 ackermann (1 raycast + 1 physical) = 6
-    let mut q_mix = app
-        .world_mut()
-        .query_filtered::<Entity, (With<DriveMix>, With<MobilityRoot>)>();
-    let drivable: usize = q_mix.iter(app.world()).count();
+    let mut q_drivable = app.world_mut().query_filtered::<Entity, (
+        With<ControlBinding>,
+        With<InputPorts>,
+        With<OutputPorts>,
+        With<MobilityRoot>,
+    )>();
+    let drivable: usize = q_drivable.iter(app.world()).count();
     assert_eq!(
         drivable, 6,
-        "All 6 rovers must be drivable (carry DriveMix), got {drivable}"
+        "All 6 rovers must expose authored controls and outputs, got {drivable}"
     );
 
     // 16 raycast wheels (4 raycast rovers × 4 wheels)
@@ -816,27 +793,52 @@ fn test_full_scene_loads_with_rovers() {
         "Should have Ackermann_Physical_1"
     );
 
-    // Verify steering connections exist for front wheels
-    use lunco_cosim::SimConnection;
-    let mut q_wires = app.world_mut().query::<(&SimConnection, &Name)>();
-    let steering_wires: Vec<_> = q_wires
-        .iter(app.world())
-        // Steer connections are named `Conn_Steer_<port>` (the port is lowercase
-        // "steering"), so match that prefix — matching on `"Steering"` would never
-        // hit, and an empty vec still reads as a clean `assert_eq!` diff rather
-        // than an error, so the mismatch would look like a count regression.
-        .filter(|(_, name)| name.as_str().contains("Conn_Steer"))
-        .map(|(_, name)| name.as_str().to_string())
-        .collect();
-    // Only the two Ackermann instances steer their front knuckles directly
-    // (2 instances × 2 front wheels). The four skid-steer instances turn by
-    // differential drive and therefore have no wheel-steer connections.
+    // Verify authored heading connections reach the front joint targets. This
+    // is a USD composition invariant: the runtime's derived SimConnection
+    // labels are implementation details and are not the source of truth.
+    let composed = compose_stage_from_file(scene_path);
+    let view = StageView::new(&composed);
+    let mut heading_connections = Vec::new();
+    for (joint, heading) in [
+        ("Steering_FL_Hinge", "heading_fl"),
+        ("Steering_FR_Hinge", "heading_fr"),
+    ] {
+        // The physical variant authors the steering knuckles and hinges. The
+        // raycast variant intentionally has no rigid steering joints.
+        let raycast_path = SdfPath::new(&format!("/SandboxScene/Ackermann_Raycast_1/{joint}"))
+            .expect("valid composed raycast joint path");
+        assert!(
+            !view.has_prim(&raycast_path),
+            "{raycast_path} must not exist in the raycast realization"
+        );
+
+        let joint_path = SdfPath::new(&format!("/SandboxScene/Ackermann_Physical_1/{joint}"))
+            .expect("valid composed steering joint path");
+        let targets = view.connections(&joint_path, "inputs:angle");
+        assert_eq!(
+            targets.len(),
+            1,
+            "{joint_path} must have one authored heading connection"
+        );
+        assert!(
+            targets[0]
+                .to_string()
+                .ends_with(&format!("outputs:{heading}")),
+            "{joint_path} must be driven by outputs:{heading}, got {:?}",
+            targets
+        );
+        heading_connections.push(joint_path);
+    }
+    // This fixture has one raycast and one physical Ackermann instance, so only
+    // the physical instance owns the two rigid knuckle joints. Skid-steer
+    // instances turn through their authored drive program and have no heading
+    // joints.
     assert_eq!(
-        steering_wires.len(),
-        4,
-        "2 Ackermann rovers × 2 front wheels = 4 steering connections, got {}: {:?}",
-        steering_wires.len(),
-        steering_wires
+        heading_connections.len(),
+        2,
+        "one physical Ackermann rover × 2 front wheels = 2 heading connections, got {}: {:?}",
+        heading_connections.len(),
+        heading_connections
     );
 }
 

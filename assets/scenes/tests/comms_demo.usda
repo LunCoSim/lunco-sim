@@ -84,6 +84,11 @@ def Xform "CommsDemoScene" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         # Framed on the rover (at ~(6, 1.4, 0)) from a 3/4 view, so the scene opens

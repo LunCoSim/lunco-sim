@@ -2229,9 +2229,8 @@ pub struct SetRhaiPolicy {
     /// Prim name under the mounted scene's `Policies` scope (the identity for
     /// hot-replace); defaults to a sanitized `seam` when empty.
     pub name: String,
-    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, a
-    /// `lunco:driveKernel` id a rover points at, or `"synth.<name>"` for a
-    /// generated Modelica source/unit/layout policy.
+    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or
+    /// `"synth.<name>"` for a generated Modelica source/unit/layout policy.
     pub seam: String,
     /// The rhai entry function name.
     pub entry: String,

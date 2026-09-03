@@ -23,8 +23,17 @@ def Xform "FreeFlightSpeedBoost" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
+        double lunco:avatar:flightSpeed = 23.1
+        double lunco:avatar:boostMultiplier = 10.0
+        double lunco:avatar:boostThreshold = 0.5
+        double lunco:avatar:inputDeadzone = 0.01
         double3 xformOp:translate = (0.0, 10.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

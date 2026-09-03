@@ -2,7 +2,7 @@
 //!
 //! The hook substrate ([`lunco_hooks`]) lets internal decisions be authored in
 //! rhai: the convergent **merge** order ([`MERGE_SEAM`]), the **authorization**
-//! gate, per-vehicle drive kernels, and any application-defined seam such as a
+//! gate, authored actuation policies, and any application-defined seam such as a
 //! generated Modelica synthesizer. A policy is an ordinary projected definition;
 //! this module owns activation for both standalone and networked applications.
 //!

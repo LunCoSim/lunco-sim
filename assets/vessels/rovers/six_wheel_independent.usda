@@ -12,15 +12,14 @@
 #   * G4 per-wheel binding: each wheel connects `inputs:drive` to its own port —
 #     a real USD connection, so it is path-translated through reference arcs and
 #     binds to its own instance's port rather than to a like-named prim.
-#   * G4b authored mix: a `DriveMix` child scope maps the DriveCommand
+#   * G4b authored controller: the Modelica/Rhai command policy maps
 #     (throttle, steer) onto all six channels — left bank `+steer`, right bank
-#     `−steer` (skid steering realised through six independent motors, not a
-#     2-port mix). One prim per sink port, one `lunco:factor:<source>` per
-#     command source, so every coefficient is individually overridable.
+#     `−steer` (skid motion realised through six independent motors). The
+#     per-wheel output connections are explicit, so every channel is editable.
 #
-# There is NO `PhysxVehicleTankDifferentialAPI` here: the drivetrain is the authored
-# mix, so adding a 7th wheel or re-routing a channel is a one-line USD edit.
-# `PhysxVehicleContextAPI` still provides the actuator-port control surface.
+# The drivetrain is the authored controller, so adding a 7th wheel or re-routing
+# a channel is a one-line USD edit. `PhysxVehicleContextAPI` still provides the
+# generic produced-port surface.
 
 def Xform "SixWheelIndependent" (
     doc = "Six-wheel lunar rover whose individual motor channels and drive mix are authored as USD connections."
@@ -37,6 +36,7 @@ def Xform "SixWheelIndependent" (
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_six_independent.usda@</DriveLaw>
 )
 {
     uniform bool lunco:spawnable = true
@@ -64,6 +64,7 @@ def Xform "SixWheelIndependent" (
     float outputs:drive_w3 = 0.0
     float outputs:drive_w4 = 0.0
     float outputs:drive_w5 = 0.0
+    float outputs:brake = 0.0
 
     # --- Power: the independent channels share one authored electrical rail ---
     # The source and all six motor/mechanical islands are in one collection, so
@@ -159,22 +160,6 @@ def Xform "SixWheelIndependent" (
     # An absent factor is 0, so a term states only what it responds to. Retuning
     # one wheel is an `over` on one prim — no other term is touched, and the
     # steer sign per bank is still stated in exactly one place per wheel.
-    def "DriveMix"
-    {
-        def "drive_w0" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = 1.0 }
-        def "drive_w1" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = 1.0 }
-        def "drive_w2" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = 1.0 }
-        def "drive_w3" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = -1.0 }
-        def "drive_w4" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = -1.0 }
-        def "drive_w5" (prepend apiSchemas = ["LunCoDriveMixTermAPI"]) { double lunco:factor:throttle = 1.0
-                         double lunco:factor:steer    = -1.0 }
-    }
-
     def Cube "Chassis" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
@@ -294,8 +279,8 @@ def Xform "SixWheelIndependent" (
     # SIX motors, SIX channels: this is the rover the independent-drive story is
     # about, and each motor's `inputs:demand` wires to exactly the port its wheel
     # connects `inputs:drive` to — `drive_w0..drive_w5`, in that order. Nothing is
-    # renumbered; the `DriveMix` scope above is still the only place the steer sign
-    # per bank is stated.
+    # renumbered; the drive-law output connections above are the only place the
+    # bank routing is stated.
     #
     # The Modelica motor, gearbox, and shaft solve the electrical and rotational
     # state once. A weak or hot wheel is an authored Modelica input opinion on
@@ -518,8 +503,8 @@ def Xform "SixWheelIndependent" (
 
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become the six wheel channels is COMPOSITION, not an
-    # enumeration. The plain authored state is the `DriveMix` scope above (the
-    # instant six-channel skid mix). For a solver-clocked per-side motor lag,
+    # enumeration. The plain authored state is the per-wheel command surface
+    # above. For a solver-clocked per-side motor lag,
     # compose the law on as a reference arc alongside the airframe:
     #
     #   def "Rover" (
