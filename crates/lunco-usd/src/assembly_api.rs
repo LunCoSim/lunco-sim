@@ -11,7 +11,7 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
-use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::{usd_data::UsdDataExt, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
 use crate::document::UsdDocument;
@@ -88,7 +88,7 @@ fn document_snapshot(
     }))
 }
 
-fn canonical_stage_for_document<'a>(
+pub(crate) fn canonical_stage_for_document<'a>(
     world: &'a World,
     doc: DocumentId,
 ) -> Option<&'a lunco_usd_bevy::CanonicalStage> {
@@ -105,6 +105,93 @@ fn canonical_stage_for_document<'a>(
         .get(stage_id)
 }
 
+fn composed_attribute_inspection(
+    world: &World,
+    doc: DocumentId,
+    document: &UsdDocument,
+    path: &SdfPath,
+) -> (
+    bool,
+    Option<String>,
+    bool,
+    Vec<String>,
+    Vec<serde_json::Value>,
+) {
+    // The document is the synchronous authoring boundary. The canonical stage
+    // is a derived projection and may still be settling the newest generation.
+    // Read document-owned paths here so a command response and its immediate
+    // inspection observe the same committed USD composition.
+    let composed = document.composed_arc();
+    if composed.spec(path).is_some() {
+        let attributes = composed
+            .iter()
+            .filter_map(|(property, spec)| {
+                if property.prim_path() != *path || spec.ty != openusd::sdf::SpecType::Attribute {
+                    return None;
+                }
+                let type_name = match spec.get("typeName") {
+                    Some(openusd::sdf::Value::Token(type_name)) => type_name.to_string(),
+                    _ => return None,
+                };
+                let value = spec
+                    .get("default")
+                    .cloned()
+                    .and_then(|value| lunco_usd_bevy::author::value_to_literal(&type_name, value));
+                Some(serde_json::json!({
+                    "name": property.name(),
+                    "type": type_name,
+                    "value": value,
+                }))
+            })
+            .collect();
+        return (
+            true,
+            composed.prim_type_name(path),
+            composed.prim_is_active(path),
+            composed
+                .prim_children(path)
+                .into_iter()
+                .map(|child| child.to_string())
+                .collect(),
+            attributes,
+        );
+    }
+
+    // Paths introduced by references and other external composition arcs are
+    // available only on the fully resolved live stage.
+    if let Some(stage) = canonical_stage_for_document(world, doc) {
+        let reader = stage.view();
+        let attributes = reader
+            .attr_names(path)
+            .into_iter()
+            .filter_map(|name| {
+                let type_name = reader.attr_type_name(path, &name)?;
+                let value = reader
+                    .attr_value(path, &name)
+                    .and_then(|value| lunco_usd_bevy::author::value_to_literal(&type_name, value));
+                Some(serde_json::json!({
+                    "name": name,
+                    "type": type_name,
+                    "value": value,
+                }))
+            })
+            .collect();
+        return (
+            reader.has_prim(path),
+            reader.type_name(path),
+            reader.is_active(path),
+            reader
+                .children(path)
+                .into_iter()
+                .map(|child| child.to_string())
+                .collect(),
+            attributes,
+        );
+    }
+
+    (false, None, false, Vec::new(), Vec::new())
+}
+
 /// Read-only query for one explicit open USD document.
 ///
 /// Parameters:
@@ -115,8 +202,11 @@ fn canonical_stage_for_document<'a>(
 ///
 /// `path` is optional. Without it, the response describes document identity,
 /// authored layers, revisions, dependencies, and journal position. With it,
-/// the response additionally reports the composed local prim type, activity,
-/// and immediate children.
+/// the response additionally reports the composed prim type, activity,
+/// immediate children, and each composed attribute's exact USD declaration
+/// and default literal. The declaration comes from OpenUSD's `typeName`,
+/// preserving roles and array shape that are not represented by `sdf::Value`
+/// variants.
 pub struct InspectUsdDocumentProvider;
 
 impl ApiQueryProvider for InspectUsdDocumentProvider {
@@ -192,17 +282,15 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                     format!("invalid USD prim path `{raw_path}`"),
                 );
             };
-            let composed = document.composed_arc();
+            let (exists, type_name, active, children, attributes) =
+                composed_attribute_inspection(world, doc, document, &path);
             response["prim"] = serde_json::json!({
                 "path": raw_path,
-                "exists": composed.spec(&path).is_some(),
-                "type": composed.prim_type_name(&path),
-                "active": composed.prim_is_active(&path),
-                "children": composed
-                    .prim_children(&path)
-                    .into_iter()
-                    .map(|child| child.to_string())
-                    .collect::<Vec<_>>(),
+                "exists": exists,
+                "type": type_name,
+                "active": active,
+                "children": children,
+                "attributes": attributes,
             });
         }
 

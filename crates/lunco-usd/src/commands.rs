@@ -46,7 +46,7 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
 // document/file command surface below is headless-safe. Gate only this.
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
@@ -1125,8 +1125,9 @@ struct PendingUsdDiscards {
 }
 
 /// Emitted after a browser-originated USD file has been admitted to the
-/// canonical document registry. The viewport owns the presentation response;
-/// the headless document pipeline only publishes this lifecycle fact.
+/// canonical document registry so the UI viewport can claim the presentation
+/// lease. Headless document opens have no presentation event.
+#[cfg(feature = "ui")]
 #[derive(Event, Clone, Copy, Debug)]
 pub(crate) struct BrowserUsdDocumentReady {
     /// The admitted document to bind to the editor preview lease.
@@ -1309,6 +1310,7 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 }
                 #[cfg(not(feature = "ui"))]
                 let _ = user_notice;
+                #[cfg(feature = "ui")]
                 if load.open_preview {
                     world.trigger(BrowserUsdDocumentReady { doc });
                 }
@@ -2224,15 +2226,19 @@ fn on_apply_usd_op(
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
         let paths_for_error = paths.clone();
-        let result = world
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .apply_mutation(
-                doc,
-                match parent_gen {
-                    Some(parent) => lunco_doc::Mutation::local_against(parent, op),
-                    None => lunco_doc::Mutation::local(op),
-                },
-            );
+        let result = match validate_live_attribute_types(world, doc, std::slice::from_ref(&op)) {
+            Ok(()) => world
+                .resource_mut::<DocumentRegistry<UsdDocument>>()
+                .apply_mutation(
+                    doc,
+                    match parent_gen {
+                        Some(parent) => lunco_doc::Mutation::local_against(parent, op),
+                        None => lunco_doc::Mutation::local(op),
+                    },
+                )
+                .map_err(|reject| lunco_doc::DocumentError::Internal(reject.to_string())),
+            Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
+        };
         let outcome = result
             .map(|mut ack| {
                 claim_user_document_if_projected(world, doc);
@@ -2424,6 +2430,7 @@ fn apply_ops_as_change_set_result(
     ops: Vec<UsdOp>,
     parent_gen: Option<u64>,
 ) -> Result<(Ack, usize), String> {
+    validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();
     let paths: Vec<String> = ops.iter().flat_map(UsdOp::affected_paths).collect();
     let mut target_layers = Vec::new();
@@ -2463,6 +2470,59 @@ fn apply_ops_as_change_set_result(
         journal.as_ref(),
     ));
     Ok((ack, total))
+}
+
+/// Validate typed attribute operations against the already-mounted composed
+/// stage before changing the document layer. The document owns local SDF
+/// declarations; this is the complementary check for referenced, payloaded,
+/// and variant-composed declarations that do not exist in that document's
+/// authored data. Keeping the check before the registry mutation preserves the
+/// document/stage transaction when OpenUSD would reject a role or array-shape
+/// mismatch (for example `color3f` versus `color3f[]`).
+fn validate_live_attribute_types(
+    world: &World,
+    doc: DocumentId,
+    ops: &[UsdOp],
+) -> Result<(), String> {
+    let Some(stage) = crate::assembly_api::canonical_stage_for_document(world, doc) else {
+        return Ok(());
+    };
+    let view = stage.view();
+    for op in ops {
+        let (path, name, requested) = match op {
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetConnection {
+                path,
+                name,
+                type_name,
+                ..
+            } => (path, name, type_name),
+            _ => continue,
+        };
+        let sdf_path = openusd::sdf::Path::new(path).map_err(|error| {
+            format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
+        })?;
+        let Some(declared) = view.attr_type_name(&sdf_path, name) else {
+            continue;
+        };
+        if declared != *requested {
+            return Err(format!(
+                "typed USD edit `{path}.{name}` requests `{requested}`, but the composed stage declares `{declared}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn apply_ops_as_change_set(

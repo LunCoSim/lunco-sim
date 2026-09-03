@@ -239,6 +239,12 @@ Use the smallest existing typed intent that expresses the change:
 
 - `transform`, `attribute`, `schema`, `variant`, `relationship`, and
   `connection` lower to `ApplyUsdOp`/`ApplyUsdOps`.
+- Dynamic shader parameters are authored on the bound USD `Shader` prim as
+  `inputs:<name>`. Resolve the composed Shader and exact declared `typeName`
+  first; preserve USD roles and array shape, validate the literal with the
+  shared USD parser, and submit one grouped edit for a multi-field change. The
+  same resolver is used by `SetObjectProperty`; never guess a geometry
+  `primvars:` destination from a parameter name.
 - `add_prim`, `remove_prim`, `move_prim`, `payload`, and `active` expose the
   existing typed structural USD operations. They require an explicit target,
   exact paths, and the inspected generation; they never replace a layer's raw

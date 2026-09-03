@@ -461,10 +461,10 @@ contrast, bind a UsdShade material whose shader names a real WGSL file, and its
 knobs are ordinary `inputs:` you can tune. Reach for a shader when the surface has
 *structure* (cells, busbars); reach for `displayColor` when it just has a colour.
 
-Binding is the **only** way to dress a prim with a shader. There is no
-`primvars:materialType` and no `primvars:shaderPath` — both were LunCo inventions for
-a thing UsdShade already expresses, and both are deleted. A `Material` composes,
-round-trips, and opens in usdview; a bespoke primvar does none of that.
+Binding is the **only** way to dress a prim with a shader. Use a composed
+`UsdShade.Material`/`UsdShade.Shader` network and its
+`info:wgsl:sourceAsset`; the same network composes, round-trips, and opens in
+usdview.
 
 Beware one trap: `info:wgsl:sourceAsset` must name a whole shader with a `@fragment`
 entry point. Point it at a shader *library* like `pbr_lit.wgsl` (which only exports

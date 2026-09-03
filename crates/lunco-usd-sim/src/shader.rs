@@ -162,9 +162,9 @@ fn apply_usd_shader_material_read(
     if !shader_has_fragment_entry(&shader_path) {
         warn!(
             "[shader] prim {} → '{}' has no `@fragment` entry point (it looks \
-             like a shader LIBRARY, not a material shader). Keeping the \
-             PbrLook to avoid an invalid render pipeline. Point \
-             primvars:shaderPath at a whole shader (one with `@fragment fn …`).",
+             like a shader LIBRARY, not a material shader). The authored Shader \
+             network is not projected; bind a whole shader through \
+             `info:wgsl:sourceAsset` (one with `@fragment fn …`).",
             prim_path.path, shader_path
         );
         return;

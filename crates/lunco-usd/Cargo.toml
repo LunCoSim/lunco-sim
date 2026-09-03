@@ -70,9 +70,9 @@ bevy = { workspace = true, features = ["bevy_pbr"] }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-modelica = { path = "../lunco-modelica" }
 lunco-mobility = { path = "../lunco-mobility" }
-# Wheels author `primvars:materialType = "shader"`, so the headless
-# entity-pipeline tests must register `Assets<ShaderMaterial>` or
-# `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).
+# The headless entity-pipeline tests must register the same material intent
+# used by the composed USD Shader networks or `process_usd_sim_prims` defers
+# every wheel forever (no WheelRaycast).
 lunco-materials = { path = "../lunco-materials" }
 # `LinkNode` / `LinkOccluder` — `tests/link_occlusion.rs` asserts that the authored
 # comms scene still produces the components the link kernel solves over. The kernel's
