@@ -4454,6 +4454,15 @@ fn local_avatar_state_error(requested: Option<Entity>) -> String {
     }
 }
 
+fn controller_avatar_state_error(requested: Option<Entity>) -> String {
+    match requested {
+        Some(entity) => {
+            format!("requested avatar {entity:?} has no local controller input state")
+        }
+        None => "the authoritative LocalAvatar has no local controller input state".to_string(),
+    }
+}
+
 fn replace_avatar_diagnostic(
     diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     message: Option<String>,
@@ -4473,20 +4482,34 @@ fn replace_avatar_diagnostic(
 }
 
 /// Possesses a vessel with an instant camera transition.
-#[on_command(PossessVessel)]
-fn on_possess_command(
-    trigger: On<PossessVessel>,
-    mut commands: Commands,
-    q_avatar: Query<
+#[derive(bevy::ecs::system::SystemParam)]
+struct PossessAvatarQueries<'w, 's> {
+    camera: Query<
+        'w,
+        's,
         (
             Entity,
-            &Transform,
-            &ChildOf,
-            Option<&ControllerLink>,
+            &'static Transform,
+            &'static ChildOf,
+            Option<&'static ControllerLink>,
             Has<lunco_core::CinematicCameraLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
+    controller: Query<'w, 's, (), (With<Avatar>, With<ActionState<UserIntent>>)>,
+}
+
+#[on_command(PossessVessel)]
+fn on_possess_command(
+    trigger: On<PossessVessel>,
+    mut commands: Commands,
+    possession_avatars: PossessAvatarQueries,
+    // Camera readiness and control readiness are separate lifecycle facts. A
+    // scene/perspective handoff can temporarily remove `LocalAvatar` (and its
+    // camera components) while the avatar still owns its ActionState. The
+    // controller link must be able to survive that handoff; otherwise a
+    // possession command is accepted and authority is published, but semantic
+    // intents have no consumer.
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -4543,22 +4566,15 @@ fn on_possess_command(
     // an implicit lookup.
     if !cmd.bind_camera {
         if let Some(requested) = cmd.avatar {
-            match resolve_requested_or_local_avatar(Some(requested), local_avatar.as_deref()) {
-                Ok(avatar_ent) if q_avatar.get(avatar_ent).is_ok() => {
-                    commands.entity(avatar_ent).try_insert(ControllerLink {
-                        vessel_entity: cmd.target,
-                    });
-                }
-                Ok(_) => {
-                    replace_avatar_diagnostic(
-                        &mut diagnostics,
-                        Some(local_avatar_state_error(Some(requested))),
-                    );
-                }
-                Err(message) => {
-                    warn!(target = ?cmd.target, "[possess] refused: {message}");
-                    replace_avatar_diagnostic(&mut diagnostics, Some(message));
-                }
+            if possession_avatars.controller.contains(requested) {
+                commands.entity(requested).try_insert(ControllerLink {
+                    vessel_entity: cmd.target,
+                });
+            } else {
+                replace_avatar_diagnostic(
+                    &mut diagnostics,
+                    Some(controller_avatar_state_error(Some(requested))),
+                );
             }
         }
         return;
@@ -4572,26 +4588,38 @@ fn on_possess_command(
             return;
         }
     };
+    if !possession_avatars.controller.contains(avatar_ent) {
+        let message = controller_avatar_state_error(cmd.avatar);
+        warn!(target = ?cmd.target, "[possess] refused: {message}");
+        replace_avatar_diagnostic(&mut diagnostics, Some(message));
+        return;
+    }
+    // Bind the shared semantic controller before the camera query. The camera
+    // may still be between scene/perspective states, but the avatar's intent
+    // source is already valid and must not lose a possession transition.
+    commands.entity(avatar_ent).try_insert(ControllerLink {
+        vessel_entity: cmd.target,
+    });
+
     let Ok((avatar_ent, cam_tf, _child_of, existing_link, cinematic_lock)) =
-        q_avatar.get(avatar_ent)
+        possession_avatars.camera.get(avatar_ent)
     else {
         let message = local_avatar_state_error(cmd.avatar);
-        warn!(target = ?cmd.target, "[possess] refused: {message}");
+        warn!(target = ?cmd.target, "[possess] camera bind deferred: {message}");
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
     };
     replace_avatar_diagnostic(&mut diagnostics, None);
 
-    // Idempotent: already controlling this exact target — no-op.
+    // A possession command may still establish control, but it cannot replace
+    // the pose owner of a cinematic camera. The caller must explicitly release
+    // the authored camera path before requesting an interactive camera bind.
     if let Some(link) = existing_link {
         if link.vessel_entity == cmd.target {
             return;
         }
     }
 
-    // A possession command may still establish control, but it cannot replace
-    // the pose owner of a cinematic camera. The caller must explicitly release
-    // the authored camera path before requesting an interactive camera bind.
     if cinematic_lock {
         commands.entity(avatar_ent).try_insert(ControllerLink {
             vessel_entity: cmd.target,
@@ -5846,6 +5874,46 @@ mod tests {
         assert_eq!(diagnostics.findings[0].producer, "avatar-camera");
         assert!(diagnostics.findings[0].message.contains("requested avatar"));
         assert!(app.world().get::<OrbitCamera>(requested_avatar).is_none());
+    }
+
+    #[test]
+    fn possession_binds_controller_during_camera_handoff() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::SyncApplyGuard>()
+            .init_resource::<lunco_core::SessionRegistry>()
+            .init_resource::<lunco_core::session::SessionRbac>()
+            .init_resource::<lunco_core::LocalSession>()
+            .add_observer(on_possess_command);
+
+        // During a scene/perspective handoff the camera-owned `LocalAvatar`
+        // marker, Transform, and parent can be absent for one lifecycle tick.
+        // The semantic controller source is still alive and must be enough for
+        // an interactive possession to install its shared link before the
+        // camera state is available.
+        let avatar = app
+            .world_mut()
+            .spawn((Avatar, ActionState::<lunco_core::UserIntent>::default()))
+            .id();
+        let rover = app
+            .world_mut()
+            .spawn(lunco_core::InputPorts::new(&["throttle"]))
+            .id();
+
+        app.world_mut().trigger(PossessVessel {
+            avatar: Some(avatar),
+            target: rover,
+            bind_camera: true,
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world()
+                .get::<ControllerLink>(avatar)
+                .unwrap()
+                .vessel_entity,
+            rover,
+            "control binding must not wait for camera readiness"
+        );
     }
 
     #[test]
