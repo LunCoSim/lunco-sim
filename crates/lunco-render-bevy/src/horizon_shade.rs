@@ -58,6 +58,7 @@ pub(crate) fn build(app: &mut App) {
         )
             .chain()
             .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+            .after(lunco_environment::finalize_sun_render_state)
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
 }

@@ -729,6 +729,31 @@ pub fn world_pose<F: QueryFilter>(
     Ok((GridPos(pos), GridRot(rot)))
 }
 
+/// Return whether an entity or one of its BigSpace ancestors has a component
+/// matching the caller's change filter.
+///
+/// The walk follows the same authoritative `ChildOf` chain and depth bound as
+/// [`world_pose`]. Callers should pass a filter containing the spatial inputs
+/// their projection consumes (`Transform`, `CellCoord`, `Grid`, or `ChildOf`)
+/// so a stable hierarchy can reuse a cached pose without rebuilding it.
+pub fn world_pose_changed<F: QueryFilter>(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_changed: &Query<(), F>,
+) -> bool {
+    let mut current = entity;
+    for _ in 0..32 {
+        if q_changed.get(current).is_ok() {
+            return true;
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            return false;
+        };
+        current = child_of.parent();
+    }
+    true
+}
+
 /// Compose `entity`'s pose in the coordinate frame of its ancestor `target_grid`.
 ///
 /// This is deliberately different from [`world_pose`]. It stops at the target

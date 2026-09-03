@@ -4002,7 +4002,9 @@ fn any_unprojected_celestial(
 fn install_authored_sun_state_seed(app: &mut App) {
     app.add_systems(
         PostUpdate,
-        seed_authored_sun_state.after(TransformSystems::Propagate),
+        seed_authored_sun_state
+            .after(TransformSystems::Propagate)
+            .before(lunco_environment::finalize_sun_render_state),
     );
 }
 

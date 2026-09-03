@@ -1145,6 +1145,7 @@ impl Plugin for HorizonShadowPlugin {
             PostUpdate,
             start_shadow_cache_bake
                 .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+                .after(crate::finalize_sun_render_state)
                 .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
         );
     }

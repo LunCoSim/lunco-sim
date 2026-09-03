@@ -129,14 +129,18 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
 For terrain sun and shadow consumers, keep `SunState` as the semantic source
-and use `SunRenderState` for the single render projection. Any conversion of
-that direction through a terrain `GlobalTransform` belongs after
-`BigSpaceSystems::PropagateLowPrecision` in `PostUpdate`: static material
-wiring, horizon-cache validity/bake decisions, and streamed-tile shadow intent
-binding all consume that finalized frame. Put streamed-tile binding in the
-public `TerrainSurfaceSet::RenderShadowBinding` phase so it cannot observe a
-previous-frame terrain transform. Do not repair a stale projection with an
-offset or another per-frame transform writer.
+and use `SunRenderState` for the single render projection. Project the light's
+local pose before BigSpace propagation, then publish `SunRenderState` from the
+finalized scene-sun `GlobalTransform` after
+`BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction
+through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:
+static material wiring, horizon-cache validity/bake decisions, and
+streamed-tile shadow intent binding all consume that finalized frame. Put
+streamed-tile binding in the public `TerrainSurfaceSet::RenderShadowBinding`
+phase so it cannot observe a previous-frame terrain transform. Do not repair a
+stale projection with an offset or another per-frame transform writer. The
+semantic-to-light projection is change-gated by `SunState.revision` and the
+changed BigSpace ancestor chains, so stable frames do not rebuild f64 poses.
 
 ## Do not patch symptoms
 
