@@ -273,10 +273,7 @@ mod tests {
 
         let mut world = World::new();
         let mut registry = ModelicaDocumentRegistry::default();
-        registry.allocate_with_origin(
-            generated.source.clone(),
-            generated.origin.clone(),
-        );
+        registry.allocate_with_origin(generated.source.clone(), generated.origin.clone());
         registry.allocate_with_origin(authored.source.clone(), authored.origin.clone());
         world.insert_resource(registry);
 

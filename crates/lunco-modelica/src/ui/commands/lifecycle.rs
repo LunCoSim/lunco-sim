@@ -768,6 +768,21 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             focus_in_memory_doc(world, name);
             return;
         }
+        let lower = path.to_ascii_lowercase();
+        // A filesystem USD path can look like a Modelica tree id to the
+        // permissive ClassRef parser (especially when it contains slashes).
+        // Let the USD OpenFile observer own those extensions; otherwise an
+        // assembly inspection opens a bogus Modelica document, switches the
+        // active editor, and reports a misleading parse/reload failure.
+        let is_usd = std::path::Path::new(&lower)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| matches!(ext, "usda" | "usd" | "usdc"))
+            .unwrap_or(false);
+        if is_usd {
+            return;
+        }
+
         // Everything else (bundled://, file://, raw .mo path) flows
         // through the typed ClassRef + single `open_class` entry.
         if let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
@@ -775,7 +790,6 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             return;
         }
 
-        let lower = path.to_ascii_lowercase();
         let is_modelica = std::path::Path::new(&lower)
             .extension()
             .and_then(|s| s.to_str())
