@@ -2308,6 +2308,7 @@ fn wiring_due(
             Added<ModelicaModel>,
             Added<SimComponent>,
             Added<lunco_core::GlobalEntityId>,
+            Added<lunco_core::OutputPorts>,
             Added<lunco_core::PortSurface>,
             Added<lunco_core::PortSurfaceReady>,
         )>,
@@ -2522,6 +2523,7 @@ pub fn rewire_usd_connections(
             // diagnostics quite correctly report no broken edge.
             Added<SimComponent>,
             Added<lunco_core::GlobalEntityId>,
+            Added<lunco_core::OutputPorts>,
             // A generic physical surface can be installed after a broader
             // endpoint marker (for example a rigid body) already exists. The
             // surface itself is the authoritative transition for its named
@@ -2552,6 +2554,7 @@ pub fn rewire_usd_connections(
         Or<(
             With<lunco_core::PortSurfaceReady>,
             With<lunco_core::PortSurface>,
+            With<lunco_core::OutputPorts>,
             With<SimComponent>,
         )>,
     >,
@@ -4845,7 +4848,13 @@ pub(crate) fn install(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            CosimUpdateSet::Scene,
+            // Physics projection publishes the generic body/joint/wheel
+            // surfaces (including synthesized wheel ports) in deferred ECS
+            // commands.  Co-sim scene discovery must observe that completed
+            // projection before it derives and binds USD connections; otherwise
+            // the first binding epoch targets the source prim instead of its
+            // authored OutputPorts/PortSurface contract.
+            CosimUpdateSet::Scene.after(crate::UsdSimSet::Projection),
             CosimUpdateSet::Projection,
             CosimUpdateSet::Wiring,
         )

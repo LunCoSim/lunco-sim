@@ -81,7 +81,7 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
 }
 
 #[test]
-fn nav_setpoint_turns_toward_a_behind_goal_before_driving_forward() {
+fn nav_setpoint_reverses_toward_a_behind_goal() {
     let (throttle, steer, brake, arrived) = nav_setpoint(
         GridPos(DVec3::ZERO),
         Vec3::NEG_Z,
@@ -91,13 +91,32 @@ fn nav_setpoint_turns_toward_a_behind_goal_before_driving_forward() {
     );
 
     assert!(
-        throttle.abs() < 1e-6,
-        "a behind goal requires a turn phase, got throttle={throttle}"
+        throttle < -0.59,
+        "a straight-behind goal must use reverse drive, got throttle={throttle}"
     );
     assert!(
-        steer.abs() > 0.99,
-        "a straight-behind goal requires a deterministic hard turn, got steer={steer}"
+        steer.abs() < 1e-6,
+        "a straight-behind goal needs no steering, got steer={steer}"
     );
+    assert_eq!(brake, 0.0);
+    assert!(!arrived);
+}
+
+#[test]
+fn nav_setpoint_keeps_a_side_goal_in_forward_drive_band() {
+    let (throttle, steer, brake, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        Vec3::NEG_Z,
+        GridPos(DVec3::new(8.0, 0.0, 0.0)),
+        0.6,
+        2.0,
+    );
+
+    assert!(
+        throttle > 0.0,
+        "a broadside goal must not flip reverse on a tiny heading error, got throttle={throttle}"
+    );
+    assert!(steer > 0.9, "a right-side goal must steer right, got steer={steer}");
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 }

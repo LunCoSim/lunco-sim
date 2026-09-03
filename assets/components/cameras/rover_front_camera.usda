@@ -1,31 +1,28 @@
 #usda 1.0
 (
-    defaultPrim = "RoverFrontCamera"
+    defaultPrim = "FrontCamera"
     upAxis = "Y"
     metersPerUnit = 1
 )
 
-# Shared forward-facing rover camera.  Rover assets mount this component once;
-# the mounted-camera projection turns the nested USD camera into a precise
-# grid-direct follower of the rover body.
-def Xform "RoverFrontCamera" (kind = "component")
+# Shared forward-facing rover camera. Rover assets mount this typed component
+# once as their authored `FrontCamera` child; the mounted-camera projection
+# turns it into a precise grid-direct follower of the rover body.
+def Camera "FrontCamera" (
+    prepend apiSchemas = ["LunCoCameraAPI"]
+)
 {
-    def Camera "FrontCamera" (
-        prepend apiSchemas = ["LunCoCameraAPI"]
-    )
-    {
-        uniform token lunco:cameraPose = "mounted"
-        uniform token lunco:cameraRole = "viewport"
+    uniform token lunco:cameraPose = "mounted"
+    uniform token lunco:cameraRole = "viewport"
 
         # Rover assets use -Z as forward.  Aim well beyond the chassis so the
         # view remains forward-looking on slopes and during steering.
-        double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
-        double3 xformOp:translate = (0.0, 0.85, -1.35)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+    double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
+    double3 xformOp:translate = (0.0, 0.85, -1.35)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
 
         # A navigation view: wider than a photographic 50 mm lens while
         # keeping enough perspective for terrain and wheel clearance.
-        float focalLength = 24.0
-        float2 clippingRange = (0.1, 100000.0)
-    }
+    float focalLength = 24.0
+    float2 clippingRange = (0.1, 100000.0)
 }

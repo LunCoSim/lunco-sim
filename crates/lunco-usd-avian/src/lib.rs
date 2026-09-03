@@ -1982,7 +1982,34 @@ fn read_joint_spec(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
+    read_joint_spec_with_policy(reader, path, true)
+}
+
+/// Read a joint for the authored physics linter, including an explicitly
+/// `lunco:lintOnly` fixture.  Such a fixture is still part of the composed
+/// authoring that the linter must inspect, but it is not a runtime joint.  The
+/// distinction is intentional: a malformed test asset must not become a live
+/// constraint merely because the test needs to prove that the linter catches
+/// it.
+pub(crate) fn read_joint_spec_for_lint(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+) -> Option<PendingUsdJoint> {
+    read_joint_spec_with_policy(reader, path, false)
+}
+
+fn read_joint_spec_with_policy(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    path: &SdfPath,
+    skip_lint_only: bool,
+) -> Option<PendingUsdJoint> {
     let view = reader;
+    // `lintOnly` is a narrow authoring contract for deliberately malformed
+    // fixtures. It is checked only by the runtime reader; the linter calls the
+    // companion entry point above so it still sees and evaluates the fixture.
+    if skip_lint_only && view.boolean(path, "lunco:lintOnly") == Some(true) {
+        return None;
+    }
     // `physics:jointEnabled` (schema default true) is the spec's own way to say a
     // joint is not simulated. It matters now that COMPONENTS own their mount
     // joints: a host that wants the mechanism inert — `ground_station.usda` parks
@@ -4594,7 +4621,7 @@ mod joint_reader_tests {
     //! `upperLimit` (degrees → radians), local anchors, and `UsdPhysicsDriveAPI`.
     //! This is the headless-verifiable half of the rework (the read); joint
     //! *dynamics* need a rover boot.
-    use super::read_joint_spec;
+    use super::{read_joint_spec, read_joint_spec_for_lint};
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
     use lunco_usd_bevy::{compose_file_to_stage, StageView};
@@ -4803,6 +4830,44 @@ def PhysicsPrismaticJoint "Spring" (
         let stage = compose_file_to_stage(&f).expect("compose stage");
         assert!(
             read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Plain").unwrap()).is_none()
+        );
+    }
+
+    #[test]
+    fn lint_only_joint_is_not_projected_but_is_still_read_by_linter() {
+        let source = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Hull" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Link" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsPrismaticJoint "FixtureSpring" (
+    prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+)
+{
+    bool lunco:lintOnly = true
+    rel physics:body0 = </Hull>
+    rel physics:body1 = </Link>
+    uniform token physics:axis = "Y"
+    uniform token drive:linear:physics:type = "force"
+    float drive:linear:physics:stiffness = 4000.0
+}
+"#;
+        let stage = lunco_usd_bevy::CanonicalStage::from_recipe(
+            &lunco_usd_bevy::StageRecipe::from_source("lint_only.usda", source),
+        )
+        .expect("compose lint-only fixture");
+        let view = StageView::new(&stage);
+        let path = SdfPath::new("/FixtureSpring").expect("joint path");
+
+        assert!(
+            read_joint_spec(&view, &path).is_none(),
+            "a lint-only malformed joint must never enter runtime projection"
+        );
+        assert!(
+            read_joint_spec_for_lint(&view, &path).is_some(),
+            "the linter must inspect the same composed joint authoring"
         );
     }
 

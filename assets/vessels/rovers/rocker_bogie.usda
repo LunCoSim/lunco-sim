@@ -33,7 +33,6 @@ def Xform "RockerBogie" (
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
@@ -43,6 +42,12 @@ def Xform "RockerBogie" (
     }
 )
 {
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
+    {
+    }
+
     uniform bool lunco:spawnable = true
     # --- VEHICLE MASS & DAMPING ---
     #

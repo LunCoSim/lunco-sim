@@ -32,9 +32,15 @@
 //! Holds are keyed by a `&'static str` reason, so several subsystems can hold
 //! concurrently and each releases only its own; physics runs when the set is empty.
 
+use avian3d::dynamics::joints::EntityConstraint;
+use avian3d::dynamics::solver::{
+    solver_body::{SolverBody, SolverBodyInertia},
+    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
+};
 use avian3d::prelude::{
-    AngularVelocity, ComputedCenterOfMass, CustomPositionIntegration, LinearVelocity, Physics,
-    Position, RigidBody, Rotation,
+    AngularVelocity, ComputedCenterOfMass, ContactGraph, CustomPositionIntegration, JointDisabled,
+    LinearVelocity, Physics, Position, PrismaticJoint, RigidBody, RigidBodyColliders,
+    RigidBodyDisabled, Rotation, Sensor,
 };
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
@@ -991,6 +997,79 @@ fn correct_prismatic_limit_position(
     }
 }
 
+/// Complete the native contact/joint coupling for touching prismatic joints.
+///
+/// Avian prepares joint state before the substep loop and solves the native
+/// joint before contact relaxation. Reusing that prepared native constraint
+/// after contact relaxation gives a contact impulse one fixed Gauss-Seidel
+/// return path through a long joint. This is deliberately a generic solver
+/// boundary: it only considers native prismatic joints and touching,
+/// non-sensor contacts, and it never inspects a scene path or authored asset.
+fn solve_contact_prismatic_joint(
+    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
+    mut joints: Query<
+        (&mut PrismaticJoint, &mut PrismaticJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    collider_lists: Query<&RigidBodyColliders>,
+    disabled_bodies: Query<(), With<RigidBodyDisabled>>,
+    sensors: Query<(), With<Sensor>>,
+    contact_graph: Res<ContactGraph>,
+    time: Res<Time>,
+) {
+    let delta_secs = time.delta_secs_f64();
+    let mut dummy_body1 = SolverBody::DUMMY;
+    let mut dummy_body2 = SolverBody::DUMMY;
+
+    for (mut joint, mut solver_data) in &mut joints {
+        let [entity1, entity2] = joint.entities();
+        let has_contact = [entity1, entity2].into_iter().any(|body| {
+            let Ok(colliders) = collider_lists.get(body) else {
+                return false;
+            };
+            colliders.into_iter().any(|collider| {
+                contact_graph.contact_pairs_with(collider).any(|pair| {
+                    pair.is_touching()
+                        && !sensors.contains(pair.collider1)
+                        && !sensors.contains(pair.collider2)
+                        && pair
+                            .body1
+                            .is_some_and(|body| !disabled_bodies.contains(body))
+                        && pair
+                            .body2
+                            .is_some_and(|body| !disabled_bodies.contains(body))
+                })
+            })
+        });
+        if !has_contact {
+            continue;
+        }
+
+        let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
+        let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity1) } {
+            body1 = body.into_inner();
+            inertia1 = inertia;
+        }
+        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(entity2) } {
+            body2 = body.into_inner();
+            inertia2 = inertia;
+        }
+        match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
+            std::cmp::Ordering::Greater => inertia1 = &SolverBodyInertia::DUMMY,
+            std::cmp::Ordering::Less => inertia2 = &SolverBodyInertia::DUMMY,
+            std::cmp::Ordering::Equal => {}
+        }
+
+        joint.solve(
+            [body1, body2],
+            [inertia1, inertia2],
+            &mut solver_data,
+            delta_secs,
+        );
+    }
+}
+
 /// Project relative angular velocity for native prismatic joints.
 ///
 /// Avian's XPBD prismatic constraint projects orientation changes, but its
@@ -1105,6 +1184,14 @@ impl Plugin for PhysicsGatePlugin {
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
             // so a granted step coincides with a step that actually runs.
             .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
+            .add_systems(
+                avian3d::prelude::SubstepSchedule,
+                solve_contact_prismatic_joint
+                    .before(correct_prismatic_limit_position)
+                    .in_set(
+                        avian3d::dynamics::solver::xpbd::XpbdSolverSystems::SolveUserConstraints,
+                    ),
+            )
             .add_systems(
                 avian3d::prelude::SubstepSchedule,
                 correct_prismatic_limit_position.in_set(

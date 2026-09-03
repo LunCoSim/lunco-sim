@@ -26,7 +26,6 @@ def Xform "Rucheyok" (
     # this rover has wheels, a solar panel and a battery and accepts no commands
     # at all. See `../skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
 )
 {
@@ -34,13 +33,12 @@ def Xform "Rucheyok" (
 
     # Rucheyok is authored at its own larger scale. Keep the shared camera
     # contract, but place its local offset at the front-top of this chassis.
-    over "RoverFrontCamera"
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
     {
-        over "FrontCamera"
-        {
-            custom double3 lunco:cameraLookAt = (0.0, 5.0, -40.0)
-            double3 xformOp:translate = (0.0, 5.5, -8.0)
-        }
+        custom double3 lunco:cameraLookAt = (0.0, 5.0, -40.0)
+        double3 xformOp:translate = (0.0, 5.5, -8.0)
     }
 
     # Mass & damping live on the rigid body root.

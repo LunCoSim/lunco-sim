@@ -38,7 +38,6 @@ def Xform "SixWheelRover" (
     # difficulty variants (`variants/rover_*.usda`) inherit it through this base
     # and need nothing of their own. See `skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
@@ -48,17 +47,15 @@ def Xform "SixWheelRover" (
     }
 )
 {
-    uniform bool lunco:spawnable = true
-
-    # Six-wheel-specific operator camera: keep the shared forward look and
-    # projection contract, but lower the local eye above the flat chassis so
-    # the onboard view carries more wheel/terrain context without changing
-    # every rover that reuses the camera component.
-    over "FrontCamera"
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
     {
         double3 xformOp:translate = (0.0, 0.55, -1.35)
         custom double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
     }
+
+    uniform bool lunco:spawnable = true
 
     float physics:mass = 1400.0
     # The two bank actuator ports, as attributes the wheels CONNECT to. Declaring
