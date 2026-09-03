@@ -132,7 +132,11 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        double3 xformOp:scale = (0.95, 0.5, 1.5)
+        # USD reference opinions replace the referenced xformOp value; they do
+        # not multiply it. Widen only the authored X envelope to 1.90 m so the
+        # body-side rocker bearings meet the ±0.99 m rocker pivot frames while
+        # preserving the established 0.50 m height and 1.50 m body length.
+        double3 xformOp:scale = (1.9, 0.5, 1.5)
         # NASA-ish white-grey — the science-platform archetype. Colour is
         # `primvars:displayColor` and nothing else; the hull shader consumes it
         # as the base paint.

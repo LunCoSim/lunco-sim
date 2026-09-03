@@ -86,6 +86,30 @@ fn wheel_shader_contract_ok(path) {
         && record.attrs["inputs:dust_color"] == ()
 }
 
+fn chassis_rocker_seat_ok() {
+    let body_path = ROOT + "/Body";
+    let body_extents = assembly_audit::axis_aligned_cube_half_extents(body_path);
+    if body_extents == () {
+        return false;
+    }
+    let bearing_extents = [0.16, 0.16, 0.16];
+    let pivot_extents = [0.12, 0.12, 0.12];
+    assembly_audit::composed_transform_contract(
+        body_path, [1.9, 0.5, 1.5], ["xformOp:scale"], EPS
+    ) && assembly_audit::seat_pairs([
+        [
+            body_path, body_extents,
+            ROOT + "/RockerBearingL", bearing_extents,
+            ROOT + "/RockerL/RockerPivotHub", pivot_extents, EPS,
+        ],
+        [
+            body_path, body_extents,
+            ROOT + "/RockerBearingR", bearing_extents,
+            ROOT + "/RockerR/RockerPivotHub", pivot_extents, EPS,
+        ],
+    ])
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -111,6 +135,9 @@ fn on_tick(me) {
     failures.push(t_true(
         authored_feed_pose_ok(),
         "the shared feed indicator is not centered on the LinkAperture bore axis"));
+    failures.push(t_true(
+        chassis_rocker_seat_ok(),
+        "the composed chassis envelope does not seat both rocker pivots"));
     // Every link and axle is checked as a composed USD cylinder. The endpoint
     // contract is represented by the shared link/axle translations, lengths,
     // and axis declarations; checking all eight links catches either side's
