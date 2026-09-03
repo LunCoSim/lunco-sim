@@ -158,7 +158,7 @@ license = "Apache-2.0"
 # If a build break surfaces something that was silently relying on a
 # default-on feature, add it here with a `# used by …` comment rather
 # than re-enabling `default` (which un-strips the lot).
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { version = "0.19.1", default-features = false, features = [
     # ── 2D / UI-only core. Anything 3D-shaped (PBR, GLTF, scenes,
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
@@ -205,7 +205,7 @@ bevy_egui = { version = "0.41", features = ["serde"] }
 # Runtime-authored View HUD templates. Both target Bevy 0.19; they are optional
 # so the headless luncosim server does not link Bevy UI/text presentation.
 bevy_hui = "0.7"
-bevy_flair = "0.8"
+bevy_flair = "0.8.1"
 # `mouse_interaction` (default) fires a gizmo drag on ANY left-press held over
 # the gizmo, with no handle check. Selection here is Shift+left-click and the
 # gizmo renders ON the selected object, so that driver made the selecting click
@@ -368,14 +368,14 @@ cid = { version = "0.11", default-features = false, features = ["alloc", "serde"
 multihash-codetable = { version = "0.2", default-features = false, features = ["sha2"] }
 
 # ── Bevy sub-crates — pinned to the exact `bevy` version above ────────
-# These ship in lock-step with bevy; a skewed minor (e.g. bevy_reflect
-# "0.19" resolving ahead of bevy "0.19.0") risks subtle ABI/derive
+# These ship in lock-step with bevy; a skewed release (e.g. bevy_reflect
+# "0.19" resolving ahead of bevy "0.19.1") risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
-bevy_reflect = "0.19.0"
-bevy_mesh = "0.19.0"
-bevy_shader = "0.19.0"
-bevy_asset = "0.19.0"
-bevy_picking = "0.19.0"
+bevy_reflect = "0.19.1"
+bevy_mesh = "0.19.1"
+bevy_shader = "0.19.1"
+bevy_asset = "0.19.1"
+bevy_picking = "0.19.1"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:
