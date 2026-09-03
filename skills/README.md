@@ -71,6 +71,7 @@ one directly when doing that kind of task by hand.
 | Skill | Use it when you want to… |
 |---|---|
 | [**nightly-changelog**](nightly-changelog/SKILL.md) | Prepare a traceable nightly changelist and GitHub release notes from the latest timestamped nightly tag. |
+| [**write-github-issue**](write-github-issue/SKILL.md) | Draft, open, or review a GitHub issue — search the repo first, cite a real file, route architecture proposals to a `docs/architecture/` PR instead |
 
 ## Cross-cutting conventions (baked into every skill)
 
