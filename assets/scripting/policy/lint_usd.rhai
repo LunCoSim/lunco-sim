@@ -51,6 +51,15 @@
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
 //
+//   facts.vehicle_parts[]  #{ path, type, vehicle, body, purpose, collision_api,
+//                              collision_state, wheel_projector,
+//                              render_excluded_by_proxy, visual_only,
+//                              shape_valid, contract }
+//       every renderable gprim below an assembly body. contract is the
+//       composed result of the same collision/purpose/projector ownership the
+//       runtime uses: collider, projector, visual-only, or a malformed
+//       missing/unsupported contract.
+//
 //   facts.unsupported_program_prims[]  paths authored as unsupported `LunCoProgram`
 //       concrete type. This narrow fact exists because an unregistered concrete
 //       type has no applied schemas and therefore cannot appear in `facts.prims`.
@@ -155,6 +164,35 @@ fn collision_enabled_without_api(facts) {
     out
 }
 
+/// Every renderable gprim below a vehicle assembly must have one collision
+/// owner. Standard wheel projectors and purpose/disabled metadata are explicit
+/// alternatives; an unannotated visual shape is a silently dropped part.
+fn vehicle_part_collision_contract(facts) {
+    let out = [];
+    for part in facts.vehicle_parts {
+        if part.contract == "collider"
+            || part.contract == "projector"
+            || part.contract == "visual-only" {
+            continue;
+        }
+        let message = "vehicle part has no usable collision owner: ";
+        if part.contract == "missing-collider-api" {
+            message += "apply PhysicsCollisionAPI for a solid representative, or author physics:collisionEnabled=false or purpose=guide for intentional visual-only geometry.";
+        } else if part.contract == "unsupported-collider" {
+            message += "its PhysicsCollisionAPI geometry cannot be built by the USD-to-Avian reader; author a supported collider representative.";
+        } else {
+            message += "physics:collisionEnabled is malformed; author a boolean value.";
+        }
+        out.push(finding(
+            "vehicle-part-collision-contract",
+            "error",
+            part.path,
+            message,
+        ));
+    }
+    out
+}
+
 /// Whether a component collection uses the standard generated Modelica owner.
 /// The fact producer resolves omitted selectors to the canonical owner name.
 fn is_modelica_network(scope) {
@@ -166,6 +204,7 @@ fn lint_usd(facts) {
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
+    for f in vehicle_part_collision_contract(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }
     for f in connector_requires_network_root(facts) { out.push(f); }

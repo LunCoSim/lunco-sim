@@ -65,6 +65,10 @@ never break the thing it is diagnosing.**
 facts.bodies[]  #{ path, type, kinematic, simulated, collider, subtree_collider,
                    host_body, jointed }
 facts.joints[]  #{ path, type, bodies[], missing[] }
+facts.vehicle_parts[] #{ path, type, vehicle, body, purpose, collision_api,
+                         collision_state, wheel_projector,
+                         render_excluded_by_proxy, visual_only, shape_valid,
+                         contract }
 facts.stage     #{ meters_per_unit_authored, fixed_hz, physics_substeps,
                    substep_dt }
 facts.drives[]  #{ path, joint_type, body0, body1, realization,
@@ -105,6 +109,16 @@ policy before a run.
 `prims` is the escape hatch that makes the rhai half real: a rule about a schema
 nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
+
+`vehicle_parts` is the composed collision contract for every renderable gprim
+under a `kind = "assembly"` rigid-body root. `contract` is `collider` for a
+supported enabled `PhysicsCollisionAPI` shape, `projector` for an owning
+`PhysxVehicleWheelAPI`, and `visual-only` only when the part explicitly opts out
+with `physics:collisionEnabled = false`, inherited `purpose = "guide"`, or
+render geometry excluded by a body's `purpose = "proxy"` shape. An ordinary
+renderable vehicle gprim with no one of those owners is an authoring error; the
+fact is composed from the same purpose, schema, and collider builder used by
+the Avian projection.
 
 ## Explicit authoring/preflight only
 
@@ -157,6 +171,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `nested-body-no-joint` | error | a body inside a body that no joint names — it will fall out of the vehicle. **The motor bug.** Exempt: disabled bodies, and `PhysxVehicleWheelAPI` wheels, which the drivetrain realizes (jointed in `physical`, raycast-driven in `raycast`) |
 | `joint-target-not-a-body` | error | `physics:body0/1` names a prim that resolves to **no body at all** — the joint is dropped at load and the mechanism is silently rigid. Naming a non-body that sits *under* a body is fine and is how every mounted mechanism attaches (below) |
 | `collision-enabled-without-api` | error | ordinary geometry authors `physics:collisionEnabled=true` without `PhysicsCollisionAPI`, so the USD-to-Avian reader ignores the intended solid shape. Terrain and PhysX wheels use their owning projectors instead |
+| `vehicle-part-collision-contract` | error | a renderable gprim under an assembly body has no usable collider, wheel projector, or explicit visual-only intent; unsupported enabled shapes are reported too |
 | `connector-requires-network-root` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |

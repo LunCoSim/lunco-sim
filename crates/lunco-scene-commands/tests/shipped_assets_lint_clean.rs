@@ -291,6 +291,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("gear_drives", empty()),
         ("wheel_attachments", empty()),
         ("invalid_wheel_attachments", empty()),
+        ("vehicle_parts", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
@@ -347,6 +348,7 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("gear_drives", empty()),
         ("wheel_attachments", empty()),
         ("invalid_wheel_attachments", empty()),
+        ("vehicle_parts", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);

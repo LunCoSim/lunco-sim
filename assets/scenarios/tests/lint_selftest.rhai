@@ -171,6 +171,21 @@ fn on_tick(me) {
             "collision-enabled-without-api did not name the schema the author must apply"));
     }
 
+    let vehicle_contract = by_rule(findings, "vehicle-part-collision-contract");
+    f.push(t_true(vehicle_contract.len() == 1,
+        "vehicle-part-collision-contract fired " + vehicle_contract.len() +
+        " time(s), expected exactly 1 (/LintSelftest/Vehicle/LooseMotor)"));
+    if vehicle_contract.len() == 1 {
+        f.push(t_true(vehicle_contract[0].subject == "/LintSelftest/Vehicle/LooseMotor",
+            "vehicle-part-collision-contract named " + vehicle_contract[0].subject +
+            ", expected the unannotated visible loose motor"));
+        f.push(t_true(vehicle_contract[0].severity == "error",
+            "vehicle-part-collision-contract is severity " + vehicle_contract[0].severity +
+            ", expected error because an unowned vehicle part is silently dropped"));
+        f.push(t_true(vehicle_contract[0].message.contains("PhysicsCollisionAPI"),
+            "vehicle-part-collision-contract did not name the solid collision owner"));
+    }
+
     let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");
     f.push(t_true(negative_stiffness.len() == 1,
         "joint-drive-negative-stiffness fired " + negative_stiffness.len() +

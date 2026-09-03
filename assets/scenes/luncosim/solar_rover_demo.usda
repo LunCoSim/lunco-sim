@@ -152,6 +152,11 @@ def Xform "SolarRoverTest" (
             color3f[] primvars:displayColor = [(0.4, 0.4, 0.42)]
             float physics:mass = 2.0
 
+            # The panel assembly below supplies this body's contact shape. The
+            # rotating housing is visual support, not a second overlapping
+            # contact shape; keep that intent explicit in the composed vehicle.
+            bool physics:collisionEnabled = false
+
             # The complete reusable panel: visual, collision, mass, and its
             # independent electrical source facet. The assembly below decides
             # whether that pin is wired to the battery bus.

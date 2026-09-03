@@ -355,6 +355,16 @@ owner-level exceptions because their terrain and vehicle projectors construct
 those shapes through their own contracts. `collision-enabled-without-api` is
 an error, not a runtime fallback.
 
+Every renderable gprim under a composed `kind = "assembly"` vehicle must also
+state who owns its collision contract. A supported enabled
+`PhysicsCollisionAPI` shape is the ordinary owner; `PhysxVehicleWheelAPI` is the
+wheel-projector owner. Intentional decoration must explicitly author
+`physics:collisionEnabled = false` or an inherited `purpose = "guide"`. When a
+body has a `purpose = "proxy"` shape, its `purpose = "render"` geometry is the
+visual description and is excluded from collision. Leaving visible vehicle
+geometry unannotated is an error reported by `vehicle-part-collision-contract`,
+not an invitation for a runtime fallback.
+
 Hierarchy is namespace. **The joint is what attaches** — nesting a body without
 one is the motor bug (`nested-body-no-joint`), and nesting one *with* a joint is
 how a foot mounts on a leg and a wheel on a chassis. Both directions of that rule

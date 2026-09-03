@@ -12,7 +12,7 @@
 # running" look identical — and a silent linter is worse than none, because it
 # reads as a clean bill of health.
 #
-# Three deliberate faults, one per shipped rule in
+# Deliberate faults cover the shipped rules in
 # `assets/scripting/policy/lint_usd.rhai`:
 #
 #   LooseMotor   a body inside a body that no joint names   → nested-body-no-joint
@@ -35,6 +35,8 @@
 #                The USD-sim reader refuses the coupling; policy must surface it.
 #   MissingCollisionAPI  collisionEnabled=true without a collision schema
 #                The physics reader ignores the prim, so the intent must fail lint.
+#   Vehicle/LooseMotor  visible vehicle geometry with no collision owner or
+#                visual-only declaration → vehicle-part-collision-contract
 #
 # and one CORRECT construction that must stay silent:
 #
@@ -125,6 +127,7 @@ def Xform "LintSelftest" (
     # A vehicle: one body, its collider on a child, one correctly jointed wheel —
     # and one part that quietly declared itself a second body.
     def Xform "Vehicle" (
+        kind = "assembly"
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
