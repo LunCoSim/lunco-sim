@@ -23,8 +23,10 @@
 //!
 //! # The fact table
 //!
-//! Only physics-relevant prims are described — bodies and joints — so a
-//! 4000-prim scene hands policy a few dozen entries:
+//! Vehicle geometry is also described — only renderable gprims below an
+//! assembly body — so policy can distinguish a real collider, an owner-level
+//! wheel projector, and explicitly visual-only decoration without scanning
+//! materials or controllers:
 //!
 //! ```text
 //! #{
@@ -32,6 +34,9 @@
 //!   bodies: [ #{ path, type, kinematic, simulated, collider, subtree_collider,
 //!                host_body, jointed, collider_min, collider_max } ],
 //!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
+//!   vehicle_parts: [ #{ path, type, vehicle, body, purpose, collision_api,
+//!                        collision_state, wheel_projector, visual_only,
+//!                        shape_valid, contract } ],
 //!   telemetry_declarations: [ #{ path, targets[], target_exists,
 //!                                direct_surface, source_valid } ],
 //!   prims: [ #{ path, type, parent, schemas[], attributes[],
@@ -70,10 +75,10 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
+use lunco_usd_bevy::{StageView, UsdRead, program::ProgramGraph};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
+use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.
@@ -264,6 +269,169 @@ fn vec3_h(v: Option<Vec3>) -> H {
     }
 }
 
+/// Geometry types projected by the shared USD visual reader. Physics coverage
+/// is about renderable vehicle parts, not every schema-bearing scope, material,
+/// light, or controller prim.
+fn is_vehicle_geometry_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Cube"
+            | "Sphere"
+            | "Cylinder"
+            | "Cone"
+            | "Capsule"
+            | "Plane"
+            | "Mesh"
+            | "BasisCurves"
+            | "NurbsCurves"
+            | "NurbsPatch"
+    )
+}
+
+/// Find the nearest path in candidates, including path itself.
+fn nearest_path_in_set(candidates: &HashSet<String>, path: &SdfPath) -> Option<String> {
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            return None;
+        }
+        let value = p.to_string();
+        if candidates.contains(&value) {
+            return Some(value);
+        }
+        cur = p.parent();
+    }
+    None
+}
+
+/// Whether the runtime compound reader sees a proxy description for body.
+/// The walk stops at nested bodies, exactly as collider ownership does, so a
+/// child wheel or articulated link cannot make its host body's render mesh
+/// look intentionally excluded from collision.
+fn body_has_proxy(
+    reader: &StageView<'_>,
+    sorted: &[String],
+    bodies: &HashSet<String>,
+    body: &str,
+) -> bool {
+    let prefix = body.to_string() + "/";
+    let start = sorted.partition_point(|s| s.as_str() < prefix.as_str());
+    for s in &sorted[start..] {
+        if !s.starts_with(&prefix) {
+            break;
+        }
+        if inside_nested_body(bodies, body, s) {
+            continue;
+        }
+        let Ok(p) = SdfPath::new(s) else { continue };
+        if is_vehicle_geometry_type(&reader.prim_type_name(&p).unwrap_or_default())
+            && lunco_usd_bevy::effective_purpose(reader, &p) == lunco_usd_bevy::Purpose::Proxy
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Composed collision coverage facts for every renderable part below a
+/// vehicle assembly. The runtime has two legitimate owners beyond an ordinary
+/// PhysicsCollisionAPI: a wheel projector and standard purpose metadata. All
+/// other geometry must either have a usable collider or explicitly author its
+/// visual-only status with physics:collisionEnabled = false or purpose.
+fn vehicle_part_facts(
+    reader: &StageView<'_>,
+    paths: &[SdfPath],
+    bodies: &HashSet<String>,
+    vehicle_roots: &HashSet<String>,
+    proxy_bodies: &HashSet<String>,
+) -> Vec<H> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let type_name = reader.prim_type_name(path)?;
+            if !is_vehicle_geometry_type(&type_name) {
+                return None;
+            }
+            let vehicle = nearest_path_in_set(vehicle_roots, path)?;
+            let body = nearest_path_in_set(bodies, path).unwrap_or_default();
+            let collision_api = reader.has_api_schema(path, ptok::API_COLLISION);
+            let wheel_projector = reader.has_api_schema(path, "PhysxVehicleWheelAPI");
+            let collision_state = if collision_api {
+                match super::read_authored_bool_or_default(
+                    reader,
+                    path,
+                    ptok::A_COLLISION_ENABLED,
+                    true,
+                ) {
+                    Ok(true) => "enabled",
+                    Ok(false) => "disabled",
+                    Err(()) => "malformed",
+                }
+            } else {
+                match reader.boolean(path, ptok::A_COLLISION_ENABLED) {
+                    Some(true) => "enabled_without_api",
+                    Some(false) => "disabled",
+                    None if reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED) => {
+                        "malformed"
+                    }
+                    None => "missing",
+                }
+            };
+            let purpose = lunco_usd_bevy::effective_purpose(reader, path);
+            let render_excluded_by_proxy =
+                purpose == lunco_usd_bevy::Purpose::Render && proxy_bodies.contains(&body);
+            let visual_only = purpose == lunco_usd_bevy::Purpose::Guide
+                || collision_state == "disabled"
+                || render_excluded_by_proxy;
+            let covered =
+                wheel_projector || (collision_api && collision_state == "enabled" && !visual_only);
+            let shape_valid = if covered && collision_api {
+                matches!(super::build_collider_from_usd(reader, path), Ok(Some(_)))
+            } else {
+                true
+            };
+            let contract = if wheel_projector {
+                "projector"
+            } else if visual_only {
+                "visual-only"
+            } else if !collision_api {
+                "missing-collider-api"
+            } else if collision_state != "enabled" {
+                "malformed-collision-enabled"
+            } else if !shape_valid {
+                "unsupported-collider"
+            } else {
+                "collider"
+            };
+            Some(H::map([
+                ("path", H::str(path.to_string())),
+                ("type", H::str(type_name)),
+                ("vehicle", H::str(vehicle)),
+                ("body", H::str(body)),
+                (
+                    "purpose",
+                    H::str(match purpose {
+                        lunco_usd_bevy::Purpose::Default => "default",
+                        lunco_usd_bevy::Purpose::Render => "render",
+                        lunco_usd_bevy::Purpose::Proxy => "proxy",
+                        lunco_usd_bevy::Purpose::Guide => "guide",
+                    }),
+                ),
+                ("collision_api", H::Bool(collision_api)),
+                ("collision_state", H::str(collision_state)),
+                ("wheel_projector", H::Bool(wheel_projector)),
+                (
+                    "render_excluded_by_proxy",
+                    H::Bool(render_excluded_by_proxy),
+                ),
+                ("visual_only", H::Bool(visual_only)),
+                ("shape_valid", H::Bool(shape_valid)),
+                ("contract", H::str(contract)),
+            ]))
+        })
+        .collect()
+}
+
 /// Generic USD facts for the authored telemetry contract. The runtime accepts
 /// an omitted target only when the declaration prim itself publishes the
 /// requested port; a metadata Scope must name its measured prim explicitly.
@@ -333,9 +501,7 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
             Err(lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia) => {
                 ("derived", 0.0, 0.0)
             }
-            Err(lunco_physics::ForceDriveMotorError::InvalidCoefficients) => {
-                ("invalid", 0.0, 0.0)
-            }
+            Err(lunco_physics::ForceDriveMotorError::InvalidCoefficients) => ("invalid", 0.0, 0.0),
         };
         let stiffness = drive.stiffness.unwrap_or(0.0);
         let damping = drive.damping.unwrap_or(0.0);
@@ -572,6 +738,21 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
 
     let mut sorted: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
     sorted.sort();
+
+    let vehicle_roots: HashSet<String> = paths
+        .iter()
+        .filter(|p| {
+            reader.kind(p).as_deref() == Some("assembly")
+                && reader.has_api_schema(p, ptok::API_RIGID_BODY)
+        })
+        .map(ToString::to_string)
+        .collect();
+    let proxy_bodies: HashSet<String> = bodies
+        .iter()
+        .filter(|body| body_has_proxy(reader, &sorted, &bodies, body))
+        .cloned()
+        .collect();
+    let vehicle_parts = vehicle_part_facts(reader, &paths, &bodies, &vehicle_roots, &proxy_bodies);
 
     let mut body_facts: Vec<H> = Vec::new();
     let mut unsupported_program_prims: Vec<H> = Vec::new();
@@ -992,6 +1173,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("collections", H::Array(collections)),
         ("network_roots", H::Array(network_roots)),
         ("prims", H::Array(prims)),
+        ("vehicle_parts", H::Array(vehicle_parts)),
         (
             "collision_enabled_without_api",
             H::Array(collision_enabled_without_api),
@@ -1059,6 +1241,78 @@ def Scope "Root"
         );
     }
 
+    #[test]
+    fn vehicle_part_facts_require_a_collision_owner_or_explicit_visual_only_intent() {
+        let f = facts(
+            r#"#usda 1.0
+def Xform "Vehicle" (
+    kind = "assembly"
+    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+)
+{
+    def Cube "Hull" (prepend apiSchemas = ["PhysicsCollisionAPI"]) {}
+    def Cylinder "Decoration"
+    {
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "Missing" {}
+    def Cube "Proxy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        uniform token purpose = "proxy"
+    }
+    def Cube "Render"
+    {
+        uniform token purpose = "render"
+    }
+    def Cylinder "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"])
+    {
+        bool physics:collisionEnabled = true
+    }
+}
+"#,
+        );
+        let parts = entries(&f, "vehicle_parts");
+        let contract = |path| field(vehicle_part(&parts, path), "contract");
+        assert_eq!(contract("/Vehicle/Hull"), &H::str("collider"));
+        assert_eq!(contract("/Vehicle/Decoration"), &H::str("visual-only"));
+        assert_eq!(
+            contract("/Vehicle/Missing"),
+            &H::str("missing-collider-api")
+        );
+        assert_eq!(contract("/Vehicle/Proxy"), &H::str("collider"));
+        assert_eq!(contract("/Vehicle/Render"), &H::str("visual-only"));
+        assert_eq!(
+            field(
+                vehicle_part(&parts, "/Vehicle/Render"),
+                "render_excluded_by_proxy"
+            ),
+            &H::Bool(true)
+        );
+        assert_eq!(contract("/Vehicle/Wheel"), &H::str("projector"));
+    }
+
+    #[test]
+    fn vehicle_part_facts_reject_an_unsupported_enabled_collider() {
+        let f = facts(
+            r#"#usda 1.0
+def Xform "Vehicle" (
+    kind = "assembly"
+    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+)
+{
+    def NurbsPatch "Unsupported" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        bool physics:collisionEnabled = true
+    }
+}
+"#,
+        );
+        let parts = entries(&f, "vehicle_parts");
+        let part = vehicle_part(&parts, "/Vehicle/Unsupported");
+        assert_eq!(field(part, "shape_valid"), &H::Bool(false));
+        assert_eq!(field(part, "contract"), &H::str("unsupported-collider"));
+    }
+
     fn field<'a>(item: &'a H, key: &str) -> &'a H {
         let H::Map(m) = item else {
             panic!("not a map: {item:?}")
@@ -1081,6 +1335,13 @@ def Scope "Root"
             .iter()
             .find(|p| field(p, "path") == &H::str(path))
             .unwrap_or_else(|| panic!("no prim fact for {path}"))
+    }
+
+    fn vehicle_part<'a>(facts: &'a [H], path: &str) -> &'a H {
+        facts
+            .iter()
+            .find(|part| field(part, "path") == &H::str(path))
+            .unwrap_or_else(|| panic!("no vehicle part fact for {path}"))
     }
 
     const ROVER_WITH_LOOSE_MOTOR: &str = "#usda 1.0\n\

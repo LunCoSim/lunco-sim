@@ -129,15 +129,17 @@ Three stages, first failure short-circuits:
 > are not layers, so a broken mesh path passes); suspension-inherited wheel
 > attrs — the reader is called with no attachment suspension, so a wheel that
 > only validates once its suspension arc composes at spawn time is judged
-> without it; and **collider geometry**, which is where mechanism bugs live.
+> without it; and **collider relationships**, which are where many mechanism
+> bugs live. The composed USD lint does catch an unowned renderable vehicle
+> gprim and an enabled collider shape that the runtime reader cannot build.
 >
-> That last one is a limit worth knowing. Validation is per-prim and
-> schema-shaped, so it cannot see that two colliders on the same vehicle overlap,
-> or that a strut hangs lower than the foot that is supposed to carry it — facts
-> about composed transforms and extents, not about attributes. Clearance is a
-> **runtime** check: run the scene under `luncosim test` and assert the mechanism
-> moved (see [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
-> A vehicle can validate perfectly and still land on its shins.
+> That remaining limit is worth knowing. The static lint cannot see that two
+> colliders on the same vehicle overlap, or that a strut hangs lower than the
+> foot that is supposed to carry it — facts about assembled motion and contact,
+> not just ownership and shape support. Clearance is a **runtime** check: run
+> the scene under `luncosim test` and assert the mechanism moved (see
+> [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
+> A vehicle can pass static validation and still land on its shins.
 
 ### `.wgsl` — cannot fail, read the warnings
 
@@ -195,6 +197,7 @@ and will fall out of the vehicle. …
 
 The USD rules include `nested-body-no-joint` (error), `joint-target-not-a-body` (error),
 `collision-enabled-without-api` (error),
+`vehicle-part-collision-contract` (error),
 `dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),
 `conditionally-stable-joint-drive` (error),
 `joint-drive-negative-stiffness`
