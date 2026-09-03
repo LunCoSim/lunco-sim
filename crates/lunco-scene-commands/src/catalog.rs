@@ -10,10 +10,10 @@
 //!
 //! Two questions, two different costs:
 //!
-//! - *Which files exist?* — [`lunco_assets::discovery`], synchronous. The native
-//!   build walks the directory; the web build reads a manifest baked at build
-//!   time, because HTTP has no `readdir` and a bundle's contents genuinely ARE a
-//!   build-time fact.
+//! - *Which files exist?* — [`lunco_assets::discovery`], executed on Bevy's
+//!   async compute pool on native. The native build walks the directory; the web
+//!   build reads a manifest baked at build time, because HTTP has no `readdir`
+//!   and a bundle's contents genuinely ARE a build-time fact.
 //! - *What does a file say about itself?* — requires **reading it**, which on the
 //!   web is an HTTP fetch. That is not a build-time fact: it is the content of a
 //!   file we ship, and it can be read from the file we ship.
@@ -22,12 +22,13 @@
 //! [`crate::spawn_meta`] for the full account, and [`lunco_assets::asset_read`]
 //! for the bytes.
 //!
-//! The shape is dispatch/drain: [`dispatch_usd_scan`] starts one read per
-//! newly-discovered asset (Startup, and whenever the open-Twin set changes), and
-//! [`drain_usd_scan`] publishes the completed batch into [`AssetMetaStore`] and,
-//! if it is a part, [`SpawnCatalog`].  Publication is batch-atomic: the palette
-//! never exposes a half-scanned catalog while the remaining USD files are still
-//! being fetched.
+//! The shape is dispatch/drain: [`dispatch_catalog_listing`] moves one shared
+//! USD/WGSL/Modelica/Python enumeration off the update schedule, then starts one
+//! read per newly-discovered USD asset. [`drain_catalog_listing`] publishes
+//! shader names and [`drain_usd_scan`] publishes metadata and spawn entries;
+//! the program picker consumes its projection with [`take_program_listing`].
+//! Publication is batch-atomic: the palette never exposes a half-scanned USD
+//! catalog while the remaining files are still being fetched.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -374,19 +375,40 @@ impl AssetMetaStore {
 
 /// One asset's bytes, read and parsed.
 struct Scanned {
+    generation: u64,
     asset: AssetFile,
     meta: SpawnMeta,
+}
+
+/// One completed shared filesystem/manifest listing. A generation identifies
+/// the exact manifest/Twin-root snapshot that produced it, so a scan finishing
+/// after a Twin closes cannot publish entries from that old authority.
+struct CatalogListing {
+    generation: u64,
+    manifest_ready: bool,
+    usd: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
+    shaders: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
+    programs: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
 }
 
 /// The in-flight metadata scan.
 ///
 /// Reading an asset is **async** — on the web it is an HTTP fetch, and there is
 /// no honest way to make that synchronous. So the scan is a dispatch/drain pair:
-/// [`dispatch_usd_scan`] fires one read per newly-discovered asset, and
+/// the listing drain fires one read per newly-discovered asset, and
 /// [`drain_usd_scan`] folds the results into [`AssetMetaStore`] + [`SpawnCatalog`]
 /// as they land.
 #[derive(Resource)]
 pub struct CatalogScan {
+    listing_tx: crossbeam_channel::Sender<CatalogListing>,
+    listing_rx: crossbeam_channel::Receiver<CatalogListing>,
+    listing_generation: u64,
+    metadata_generation: u64,
+    program_listing: Option<(
+        u64,
+        bool,
+        Result<Vec<AssetFile>, lunco_assets::TwinRootsError>,
+    )>,
     tx: crossbeam_channel::Sender<Scanned>,
     rx: crossbeam_channel::Receiver<Scanned>,
     /// Asset paths already dispatched. An asset is read ONCE per rescan — the
@@ -401,8 +423,14 @@ pub struct CatalogScan {
 
 impl Default for CatalogScan {
     fn default() -> Self {
+        let (listing_tx, listing_rx) = crossbeam_channel::unbounded();
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
+            listing_tx,
+            listing_rx,
+            listing_generation: 0,
+            metadata_generation: 0,
+            program_listing: None,
             tx,
             rx,
             dispatched: Default::default(),
@@ -414,13 +442,154 @@ impl Default for CatalogScan {
 }
 
 impl CatalogScan {
-    /// Forget what has been read, so the next [`dispatch_usd_scan`] re-reads
+    /// Forget what has been read, so the next USD listing dispatch re-reads
     /// every asset. Backs the manual `RescanSpawnCatalog` command — the point of
     /// which is to pick up *edits* to files already seen.
     pub fn forget(&mut self) {
         self.dispatched.clear();
         self.replace_on_publish = true;
     }
+}
+
+/// Move the shared asset enumeration off the frame schedule.
+///
+/// The include flags select which catalog projections should be published from
+/// this listing. Every requested projection is collected by one walk, so
+/// opening a Twin never traverses the same root once per catalog. A newer
+/// dispatch supersedes an older one; the drain drops stale generations.
+pub fn dispatch_catalog_listing(
+    manifest: &lunco_assets::discovery::AssetManifest,
+    roots: &lunco_assets::twin_source::TwinRoots,
+    scan: &mut CatalogScan,
+    include_usd: bool,
+    include_shaders: bool,
+    include_programs: bool,
+) -> bool {
+    if !include_usd && !include_shaders && !include_programs {
+        return false;
+    }
+
+    scan.listing_generation = scan.listing_generation.wrapping_add(1);
+    let generation = scan.listing_generation;
+    if include_usd {
+        scan.metadata_generation = generation;
+        scan.batch_remaining = 0;
+        scan.staged.clear();
+    }
+    let manifest = manifest.clone();
+    let roots = roots.clone();
+    let tx = scan.listing_tx.clone();
+    let extensions: Vec<&'static str> = [
+        include_usd.then_some("usda"),
+        include_shaders.then_some("wgsl"),
+        include_programs.then_some("mo"),
+        include_programs.then_some("py"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let fut = async move {
+        let listing = match lunco_assets::discovery::list_assets_with_extensions(
+            &manifest,
+            &roots,
+            &extensions,
+        ) {
+            Ok(assets) => {
+                let (usd, shaders): (Vec<_>, Vec<_>) = assets
+                    .into_iter()
+                    .partition(|asset| asset.rel.ends_with(".usda"));
+                let (shaders, programs): (Vec<_>, Vec<_>) = shaders
+                    .into_iter()
+                    .partition(|asset| asset.rel.ends_with(".wgsl"));
+                CatalogListing {
+                    generation,
+                    manifest_ready: manifest.ready(),
+                    usd: include_usd.then_some(Ok(usd)),
+                    shaders: include_shaders.then_some(Ok(shaders)),
+                    programs: include_programs.then_some(Ok(programs)),
+                }
+            }
+            Err(error) => CatalogListing {
+                generation,
+                manifest_ready: manifest.ready(),
+                usd: include_usd.then_some(Err(error.clone())),
+                shaders: include_shaders.then_some(Err(error.clone())),
+                programs: include_programs.then_some(Err(error)),
+            },
+        };
+        let _ = tx.send(listing);
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    bevy::tasks::AsyncComputeTaskPool::get().spawn(fut).detach();
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(fut);
+    true
+}
+
+/// Publish completed listings and start the USD metadata reads they describe.
+/// This is intentionally separate from `maintain_catalogs`: the latter only
+/// compares cheap resource state and dispatches work, while this system is the
+/// sole main-thread publication boundary.
+pub fn drain_catalog_listing(
+    mut scan: ResMut<CatalogScan>,
+    settings: Res<lunco_settings::DownloadSettings>,
+    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
+) {
+    let mut current = None;
+    for listing in scan.listing_rx.try_iter() {
+        if listing.generation == scan.listing_generation {
+            current = Some(listing);
+        }
+    }
+    let Some(listing) = current else {
+        return;
+    };
+
+    if let Some(usd) = listing.usd {
+        match usd {
+            Ok(assets) => {
+                scan.metadata_generation = listing.generation;
+                scan.batch_remaining = 0;
+                scan.staged.clear();
+                start_usd_reads(&assets, &mut scan, &settings, listing.generation);
+            }
+            Err(error) => {
+                error!("CATALOG: Twin registry unavailable during USD scan: {error}");
+            }
+        }
+    }
+    if let Some(shader_assets) = listing.shaders {
+        match shader_assets {
+            Ok(assets) => {
+                let added = assets
+                    .into_iter()
+                    .filter(|asset| shaders.add(asset.asset_path.clone()))
+                    .count();
+                if added > 0 {
+                    info!("SHADER_CATALOG: published +{added} shader(s)");
+                }
+            }
+            Err(error) => error!("SHADER_CATALOG: Twin registry unavailable: {error}"),
+        }
+    }
+    if let Some(programs) = listing.programs {
+        scan.program_listing = Some((listing.generation, listing.manifest_ready, programs));
+    }
+}
+
+/// Take the current program listing for the UI's source picker. The listing is
+/// produced by the same traversal as the other catalogs; only this consumer
+/// turns it into `ProgramChoice` values.
+pub fn take_program_listing(
+    scan: &mut CatalogScan,
+) -> Option<Result<(bool, Vec<AssetFile>), lunco_assets::TwinRootsError>> {
+    let (generation, manifest_ready, result) = scan.program_listing.take()?;
+    if generation != scan.listing_generation {
+        return None;
+    }
+    Some(result.map(|assets| (manifest_ready, assets)))
 }
 
 /// Read one discovered asset's metadata. The single read path, both platforms:
@@ -465,38 +634,32 @@ pub async fn read_asset_meta(
     }
 }
 
-/// Fire an async read for every project `*.usda` not yet dispatched. Returns how
-/// many reads were started.
-///
-/// Enumeration is still synchronous — [`lunco_assets::discovery`] answers "what
-/// files exist" from the filesystem (native) or the shipped manifest (web).
-/// It is only the *contents* that need I/O.
-pub fn dispatch_usd_scan(
-    manifest: &lunco_assets::discovery::AssetManifest,
-    roots: &lunco_assets::twin_source::TwinRoots,
+/// Fire an async read for every listed project `*.usda` not yet dispatched.
+/// Returns how many reads were started.
+fn start_usd_reads(
+    assets: &[AssetFile],
     scan: &mut CatalogScan,
     settings: &lunco_settings::DownloadSettings,
+    generation: u64,
 ) -> usize {
     let mut started = 0;
-    let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
-        Ok(assets) => assets,
-        Err(error) => {
-            error!("CATALOG: Twin registry unavailable during USD scan: {error}");
-            return 0;
-        }
-    };
     let settings = settings.clone();
-    for asset in assets {
+    for asset in assets.iter().filter(|asset| asset.rel.ends_with(".usda")) {
         if !scan.dispatched.insert(asset.asset_path.clone()) {
             continue;
         }
+        let asset = asset.clone();
         let tx = scan.tx.clone();
         let settings = settings.clone();
         let fut = async move {
             let meta = read_asset_meta(&asset, &settings).await;
             // Receiver lives in a resource for the app's lifetime; a send error
             // just means shutdown raced us.
-            let _ = tx.send(Scanned { asset, meta });
+            let _ = tx.send(Scanned {
+                generation,
+                asset,
+                meta,
+            });
         };
         // Native: off the main thread. Web: `spawn_local`, because a browser
         // `fetch` future is `!Send` and cannot go on a task pool at all.
@@ -519,6 +682,9 @@ pub fn drain_usd_scan(
 ) {
     let completed: Vec<_> = scan.rx.try_iter().collect();
     for result in completed {
+        if result.generation != scan.metadata_generation {
+            continue;
+        }
         scan.staged.push(result);
         scan.batch_remaining = scan.batch_remaining.saturating_sub(1);
     }
@@ -558,7 +724,7 @@ pub fn drain_usd_scan(
         a_key.cmp(&b_key)
     });
     let mut added = 0;
-    for Scanned { asset, meta } in scan.staged.drain(..) {
+    for Scanned { asset, meta, .. } in scan.staged.drain(..) {
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;
         }
@@ -792,6 +958,7 @@ mod tests {
     #[test]
     fn drain_assigns_collision_ids_by_source_order_not_completion_order() {
         let scanned = |source: &str| Scanned {
+            generation: 0,
             asset: AssetFile {
                 asset_path: source.into(),
                 stem: "rover".into(),

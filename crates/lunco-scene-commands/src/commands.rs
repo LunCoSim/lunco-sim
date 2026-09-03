@@ -66,12 +66,11 @@ pub fn on_rescan_spawn_catalog(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut scan: ResMut<crate::catalog::CatalogScan>,
-    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
         scan.forget();
-        let n = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan, &settings);
-        info!("RESCAN_SPAWN_CATALOG: re-reading {n} USD asset(s)");
+        crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, true, false, false);
+        info!("RESCAN_SPAWN_CATALOG: scheduled USD asset listing");
     }
 }
 
@@ -3563,32 +3562,6 @@ pub fn on_import_shader(
 #[Command(default)]
 pub struct RescanShaders {}
 
-/// THE shader scanner: register every project `*.wgsl` (engine library + open
-/// Twins) into the picker catalog via the shared `lunco_assets::discovery`
-/// walk — the same single scanner the spawn catalog uses for `*.usda`. No
-/// filter: the picker lists all shaders and flags any whose `@engine` inputs a
-/// part can't provide. Idempotent (`add` dedups). Returns the count added.
-pub fn scan_wgsl_into_catalog(
-    manifest: &lunco_assets::discovery::AssetManifest,
-    roots: &lunco_assets::twin_source::TwinRoots,
-    catalog: &mut lunco_materials::ShaderCatalog,
-) -> usize {
-    let mut n = 0;
-    let assets = match lunco_assets::discovery::list_assets(manifest, roots, "wgsl") {
-        Ok(assets) => assets,
-        Err(error) => {
-            error!("SHADER_CATALOG: Twin registry unavailable: {error}");
-            return 0;
-        }
-    };
-    for a in assets {
-        if catalog.add(a.asset_path) {
-            n += 1;
-        }
-    }
-    n
-}
-
 /// The ONE catalog-population system. Scans the engine library once, then
 /// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
 /// files appear) — twin-open is async, so a guarded `Update` check is more
@@ -3604,18 +3577,16 @@ pub fn scan_wgsl_into_catalog(
 /// The catalog uses resource change detection instead of a write-once scan latch.
 /// This lets a manifest that arrives late trigger its first real scan.
 ///
-/// The two catalogs differ in what they need from a file. Shaders are catalogued by
-/// *name* — enumeration is the whole job, so it finishes here. Spawnables are
-/// catalogued by what the USD *says* (`lunco:spawnable`), which means reading it:
-/// this only *dispatches* those reads, and `drain_usd_scan` folds them in as
-/// they complete.
+/// The projections differ in what they need from a file. Shaders and program
+/// sources are catalogued by name, so `drain_catalog_listing` and its consumers
+/// publish them directly. Spawnables are catalogued by what the USD *says*
+/// (`lunco:spawnable`), which means reading it: the same drain only dispatches
+/// those reads, and `drain_usd_scan` folds them in as they land.
 pub fn maintain_catalogs(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut scan: ResMut<crate::catalog::CatalogScan>,
-    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut last_twins: Local<Vec<String>>,
-    settings: Res<lunco_settings::DownloadSettings>,
 ) {
     let Some(roots) = twin_roots.as_deref() else {
         return;
@@ -3634,11 +3605,8 @@ pub fn maintain_catalogs(
     }
     *last_twins = names;
 
-    let s = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan, &settings);
-    let w = scan_wgsl_into_catalog(&manifest, roots, &mut shaders);
-    if s > 0 || w > 0 {
-        info!("CATALOG_SCAN: reading {s} USD asset(s), +{w} shader(s)");
-    }
+    crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, true, true, true);
+    info!("CATALOG_SCAN: scheduled shared asset listing");
 }
 
 /// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
@@ -3647,11 +3615,11 @@ pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     manifest: Res<lunco_assets::discovery::AssetManifest>,
-    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+    mut scan: ResMut<crate::catalog::CatalogScan>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
-        let n = scan_wgsl_into_catalog(&manifest, roots, &mut catalog);
-        info!("RESCAN_SHADERS: +{n} shader(s)");
+        crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, false, true, false);
+        info!("RESCAN_SHADERS: scheduled WGSL asset listing");
     }
 }
 
@@ -3861,7 +3829,12 @@ impl Plugin for SpawnCommandPlugin {
         // the app looks, not a frame later.
         app.add_systems(
             Update,
-            (maintain_catalogs, crate::catalog::drain_usd_scan).chain(),
+            (
+                maintain_catalogs,
+                crate::catalog::drain_catalog_listing,
+                crate::catalog::drain_usd_scan,
+            )
+                .chain(),
         );
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         // Resources this plugin's OWN systems read, so it stands alone without the
