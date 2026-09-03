@@ -13,7 +13,7 @@ fn on_start(me) {
     // layer alone. Ordinals duplicated into scripts are how this track ended up
     // titled "2 ·" while toasting "S3".
     focus_panel("command_deck");
-    spotlight("panel.right_inspector", "Check Command Deck before you drive.");
+    spotlight("panel.command_deck", "Check Command Deck before you drive.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
     hint("Select the rover. Click Possess in Inspector or Command Deck.");
 }
@@ -21,7 +21,7 @@ fn on_start(me) {
 fn b1_driving_started(me) {
     clear_spotlight();
     focus_panel("telemetry_browser");
-    spotlight("panel.side_browser", "Read speed and wheel signals in the left dock while you drive.");
+    spotlight("panel.telemetry_browser", "Read speed and wheel signals in the left dock while you drive.");
     hint("Drive with " + input_hint("forward") + " / " + input_hint("backward") + ". Steer with " + input_hint("left") + " / " + input_hint("right") + ". Brake with " + input_hint("brake") + ".\n\nOpen Telemetry and watch the rover as you approach the ramp.");
 }
 

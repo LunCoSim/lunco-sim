@@ -55,7 +55,7 @@ use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
-use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly};
+use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 pub mod commands;
 pub use commands::*;
@@ -1068,6 +1068,26 @@ fn release_possession_authority(
     }
 }
 
+/// Scene-owned USD prims are the identity boundary for vessel claims. Clear
+/// their session ownership while the outgoing projection still exists, before
+/// Bevy applies the deferred despawns. The replacement scene may reuse the
+/// same deterministic global ids without inheriting authority from the prior
+/// scene.
+fn clear_scene_possession_claims(
+    mut registry: ResMut<lunco_core::SessionRegistry>,
+    q_scene_prims: Query<(&lunco_core::GlobalEntityId, &UsdPrimPath)>,
+) {
+    let mut released = 0;
+    for (gid, _) in q_scene_prims.iter() {
+        if registry.clear_gid(gid.get()).is_some() {
+            released += 1;
+        }
+    }
+    if released > 0 {
+        info!("[auth] scene teardown released {released} USD vessel claim(s)");
+    }
+}
+
 /// Client-side correction: drop control of any vessel the synced ownership table
 /// no longer attributes to us (we lost a possession race, or the host force-
 /// released us). Keeps "only one owner" true even when an optimistic local bind
@@ -1119,6 +1139,7 @@ impl Plugin for LunCoAvatarPlugin {
         // not the command handlers (those go through `register_commands!`).
         app.add_observer(record_possession_authority);
         app.add_observer(release_possession_authority);
+        app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
         // global `Pointer<Click>` observer (egui occlusion handled by the
         // framework), replacing the old `ScenePointer`-gated Update system.
@@ -5769,7 +5790,41 @@ fn sync_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn scene_teardown_clears_claims_for_usd_prims_only() {
+        let mut world = World::new();
+        world.insert_resource(lunco_core::SessionRegistry::default());
+        let scene_gid = 41;
+        let persistent_gid = 42;
+        world.spawn((
+            lunco_core::GlobalEntityId::from_raw(scene_gid),
+            UsdPrimPath::default(),
+        ));
+        world.spawn(lunco_core::GlobalEntityId::from_raw(persistent_gid));
+        {
+            let mut registry = world.resource_mut::<lunco_core::SessionRegistry>();
+            registry
+                .claim(lunco_core::SessionId::LOCAL, scene_gid)
+                .unwrap();
+            registry
+                .claim(lunco_core::SessionId::LOCAL, persistent_gid)
+                .unwrap();
+        }
+
+        world
+            .run_system_once(clear_scene_possession_claims)
+            .unwrap();
+
+        let registry = world.resource::<lunco_core::SessionRegistry>();
+        assert_eq!(registry.owner_of(scene_gid), None);
+        assert_eq!(
+            registry.owner_of(persistent_gid),
+            Some(lunco_core::SessionId::LOCAL)
+        );
+    }
 
     #[test]
     fn focus_refuses_an_explicit_non_local_avatar_without_entity_order_fallback() {

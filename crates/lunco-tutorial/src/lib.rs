@@ -2900,11 +2900,11 @@ mod tests {
             hud.title = "Clear presentation".into();
             hud.hint = "A stale hint".into();
             hud.objectives = "A stale objective".into();
-            hud.spotlight = Some(("panel.right_inspector".into(), "Stale ring".into()));
+            hud.spotlight = Some(("panel.command_deck".into(), "Stale ring".into()));
             hud.tour = Some(lunco_workbench::tutorial_overlay::TourStep {
                 index: 0,
                 total: 1,
-                anchor: "panel.right_inspector".into(),
+                anchor: "panel.command_deck".into(),
                 title: "Stale tour".into(),
                 body: "Stale card".into(),
             });

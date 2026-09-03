@@ -14,13 +14,13 @@ fn steps() {
         // 2
         #{ anchor: "panel.center",          focus: (),             title: "Move around",            body: "Move with " + input_hint("forward") + "/" + input_hint("backward") + ". Strafe with " + input_hint("left") + "/" + input_hint("right") + ". Adjust height with " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + ". Click Next after moving around the rover.", require: "cmd:TutorialNext" },
         // 3
-        #{ anchor: "panel.side_browser",    focus: (),             title: "Select an object",       body: "In Entities, click the Rover. The selected object becomes the subject of Inspector.", require: "cmd:SelectEntity" },
+        #{ anchor: "panel.entity_list",     focus: "entity_list",     title: "Select an object",       body: "In Entities, click the Rover. The selected object becomes the subject of Inspector.", require: "cmd:SelectEntity" },
         // 4
-        #{ anchor: "panel.right_inspector", focus: "spawn",          title: "Spawn an object",        body: "Open Spawn in the right dock. Click a rover, prop, or structure, then place it in the scene. Cancel with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
+        #{ anchor: "panel.spawn_palette",   focus: "spawn_palette",   title: "Spawn an object",        body: "Open Spawn in the right dock. Click a rover, prop, or structure, then place it in the scene. Cancel with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
         // 5
-        #{ anchor: "panel.right_inspector", focus: (),             title: "Take control",           body: "Select the rover. Click Possess in Inspector or Command Deck to give it your driving inputs.", require: "cmd:PossessVessel" },
+        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Take control",           body: "Select the rover. Open Command Deck and click Possess to give it your driving inputs.", require: "cmd:PossessVessel" },
         // 6
-        #{ anchor: "panel.right_inspector", focus: (),             title: "Release control",        body: "Press " + input_hint("cancel") + " to release the rover and return to free flight.", require: "cmd:ReleaseVessel" },
+        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Release control",        body: "Press " + input_hint("cancel") + " to release the rover and return to free flight.", require: "cmd:ReleaseVessel" },
         // 7
         #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:TutorialNext" },
         // 8

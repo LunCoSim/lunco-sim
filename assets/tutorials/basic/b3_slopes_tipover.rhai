@@ -13,7 +13,7 @@ fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     focus_panel("sandbox_inspector");
-    spotlight("panel.right_inspector", "Select the Hauler and read its mass and centre of mass.");
+    spotlight("panel.sandbox_inspector", "Select the Hauler and read its mass and centre of mass.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
     hint("Select the Hauler. Read its mass and centre of mass in Inspector, then click Possess.");
 }

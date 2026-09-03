@@ -191,8 +191,13 @@ spotlight. Unattended gates omit this presentation-only command. lunica ids incl
 `model_view.compile_buttons` (needs a model open); instance panel
 `panel.modelica_plot` — spotlight but don't `focus`. Full list: `assets/tutorials/lunica/README.md`.
 
-For luncosim, use `panel.center`, `panel.side_browser`,
-`panel.right_inspector`, and `panel.bottom` for workbench docks. File → Network
+For luncosim, use `panel.center` and the generic slot anchors
+`panel.side_browser`, `panel.right_inspector`, and `panel.bottom` only when the
+lesson is about that whole region. When the copy names a panel, use its exact
+registered anchor and focus pair, for example `panel.entity_list` with
+`entity_list`, `panel.telemetry_browser` with `telemetry_browser`,
+`panel.sandbox_inspector` with `sandbox_inspector`, or `panel.command_deck` with
+`command_deck`. File → Network
 and the other title-bar menus expose `menu.network`, `menu.time`, `menu.help`,
 and `toolbar.run`; perspective tabs use
 `menu.perspective.<registered-perspective-id>`, such as

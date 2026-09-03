@@ -212,6 +212,12 @@ UI projection plugins that read workbench resources install
 the Workbench owner for `WorkbenchLayout` and `HelpAnchors`; its composition
 contract is valid both standalone and inside an existing workbench host.
 
+Panel landmarks use the registered panel id as their canonical anchor:
+`panel.<id>`. The Workbench publishes that exact rect for both docked and
+explicit side-panel rendering. Generic slot anchors (`panel.side_browser`,
+`panel.right_inspector`, and `panel.bottom`) remain only for lessons that name
+the whole slot; tutorial copy that names a panel must use the exact panel key.
+
 ## 4. Workspaces
 
 A workspace is a named task-specific UI configuration. LunCoSim ships with

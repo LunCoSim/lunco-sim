@@ -161,6 +161,11 @@ parsed Modelica contract does not match the authored scene.
   intent→port `Controls` scope (next section) when they possess. Camera-follow
   without taking control: `follow(entity)` (inserts a chase camera, no `ControllerLink`).
 
+Scene replacement clears possession claims for outgoing USD prims at the shared
+`SceneTeardown` boundary. Because claims use stable `GlobalEntityId` values, a
+replacement projection may reuse an id without inheriting the previous scene's
+driver; persistent non-scene ids are not cleared by that sweep.
+
 ### Autopilots must drive like humans
 
 An autopilot is only a different policy. It must acquire authority with
