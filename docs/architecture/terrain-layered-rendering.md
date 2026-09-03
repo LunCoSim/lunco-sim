@@ -10,6 +10,71 @@ overlays (slope, minerals), a lat/lon graticule, and **time-dependent maps**
 (connectivity, illumination) — as a single extensible, live-tunable, USD-authored
 system, without a bespoke shader per layer.
 
+## Terrain material decision record (2026-09-03)
+
+The current source inventory has three terrain-capable shader contracts, plus
+one general-purpose regolith material. Runtime ownership matters here: the
+streamed CDLOD path and the non-authored fallback are selected in this
+checkout, while `terrain_layered.wgsl` remains a maintained static-mesh
+contract covered by shader tests but is not selected by an in-repository scene.
+
+| Path | Authoritative source | Current contract | Design defect to remove |
+|---|---|---|---|
+| Streamed DEM | `assets/shaders/terrain_geomorph.wgsl` | CDLOD vertex morphing, DEM/layer maps, one anti-aliased close detail layer, lunar photometry, and the pre-baked horizon cache | Its intentionally small fragment path can read visibly different from the static path at close and middle distances when the same site changes between streamed and static presentation. |
+| Static layered DEM | `assets/shaders/terrain_layered.wgsl` | DEM-anchored procedural macro/mid/fine detail, authored raster layers, lunar photometry, and the horizon-shadow path | The additional procedural layers and raster blend make it a separate visual contract rather than the same base material used by streamed tiles; no local authored scene currently selects it. |
+| Non-authored terrain fallback | `assets/shaders/terrain_shadow.wgsl` | Plain authored/display albedo, scene PBR, and heightfield sun visibility | It is a truthful fallback for a terrain that has no authored material, but it is not a suitable third visual mode for an authored DEM. |
+
+`assets/shaders/regolith.wgsl` is excluded from this inventory: it is the
+general `ShaderMaterial` for ordinary regolith meshes, not a terrain source
+selection. `assets/shaders/terrain_debug.wgsl` is already the separate
+diagnostic material and must remain outside the production material contract.
+
+### Decision
+
+The production target is one authored DEM appearance contract with one
+diagnostic replacement:
+
+1. A shared DEM base owns lunar albedo, DEM normal, authored-map presence,
+   anti-aliased detail, roughness, and sun visibility. Streamed and static
+   delivery may retain different vertex stages, but they must not choose
+   different physical surface laws or distance-dependent colour/normal rules.
+2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
+   slope are analysis data, not branches or uniforms added to the production
+   material.
+3. `terrain_shadow.wgsl` remains the automatic fallback for non-authored
+   terrain. It is not a user-selectable DEM quality mode, and it must not hide
+   missing authored source data.
+
+The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules are the
+authoritative owners for shared procedural transfer and lunar photometry. The
+next implementation step is to make both DEM delivery paths consume that same
+base contract; it must not duplicate a second shader-side fallback or move
+terrain selection into Rust. USD-authored `UsdShade` source and map roles remain
+the source of intent, while the existing terrain reconciler supplies only the
+engine-derived products that USD did not author.
+
+### Distance and evidence contract
+
+| Distance | Required appearance | Allowed work |
+|---|---|---|
+| Near | DEM relief plus authored normal when present; restrained micro-detail; stable CSM/horizon visibility; no tiled or plastic look | Detail is shown only while its projected footprint supports it. |
+| Middle | Same albedo/roughness law and DEM relief; authored surface maps remain registered; no shader-path or LOD seam | Procedural detail fades analytically by footprint, not by mesh depth or morph state. |
+| Far | Stable albedo and large-scale relief with horizon visibility; no noisy high-frequency detail or mode switch | Use the existing derived/authored map source contract and pre-baked horizon cache. |
+
+Missing authored maps have one semantic: the source-presence/weight contract
+selects the documented derived product or the base material. A missing tile or
+map is not converted into a second visual fallback. Height, collider,
+streaming, and lighting/time ownership remain unchanged by this decision.
+
+The shared performance reference is the open High-quality Apollo target:
+200 FPS sustained, 5.0 ms p95 frame time. It is a budget to measure against,
+not a claim about this shader pass. The optimization checkout currently has no
+maintained DEM graphics fixture or settled near/middle/far capture set, so this
+design pass records the source-level decision and does not claim visual
+acceptance. A production capture must be added only when a repo-owned DEM
+fixture is available; the dirty external Summer Space School scene is not a
+safe substitute for a reproducible fixture.
+
 ## The principle: one pipeline, not one shader per layer
 
 A slope overlay, a mineral map, an elevation ramp, and a comms-connectivity map
