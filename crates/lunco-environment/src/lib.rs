@@ -66,8 +66,8 @@ pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_
 /// GUI cannot silently disagree about the direction.
 pub mod solar;
 pub use solar::{
-    compute_local_solar, inject_local_solar_into_cosim, project_sun_state_to_light, LocalSolar,
-    SunRenderState, SunState,
+    compute_local_solar, finalize_sun_render_state, inject_local_solar_into_cosim,
+    project_sun_state_to_light, LocalSolar, SunRenderState, SunState,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -784,9 +784,15 @@ impl Plugin for EnvironmentPlugin {
         // scene cannot inherit the outgoing scene's direction.
         app.add_systems(lunco_core::SceneTeardown, clear_environment_sun_state);
 
-        // Semantic sun state is the provider boundary. The render light is a
-        // projection and is never read back by solar consumers.
+        // Semantic sun state is the provider boundary. The light's local pose
+        // is projected before BigSpace propagation; its finalized world
+        // direction is published afterwards for render consumers.
         app.add_systems(Update, project_sun_state_to_light);
+        app.add_systems(
+            PostUpdate,
+            finalize_sun_render_state
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision),
+        );
 
         // Earthshine follows Earth's phase — the ONE writer of the fill's
         // illuminance. In `Update` rather than `FixedUpdate`: it is a render

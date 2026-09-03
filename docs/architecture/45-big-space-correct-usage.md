@@ -151,14 +151,16 @@ authored site grid, and do not move the terrain or physics frame to compensate
 for a visual pattern.
 
 The same render boundary applies to terrain sun consumers. `SunState` remains
-the semantic source and `SunRenderState` is projected before BigSpace
-propagation; every consumer that converts that direction through a terrain
-`GlobalTransform` runs after `PropagateLowPrecision`. This includes static
-terrain material wiring, horizon-cache bake decisions, and streamed-tile cache
-validity. Streamed-tile shadow intent is then bound through
+the semantic source: its light-local pose is projected before BigSpace
+propagation, and `SunRenderState` is published from the finalized scene-sun
+`GlobalTransform` afterward. Every consumer that converts that direction
+through a terrain `GlobalTransform` runs after `PropagateLowPrecision`. This
+includes static terrain material wiring, horizon-cache bake decisions, and
+streamed-tile cache validity. Streamed-tile shadow intent is then bound through
 `TerrainSurfaceSet::RenderShadowBinding`, so the tile material never combines a
 finalized mesh transform with a previous-frame terrain-local sun direction.
-There is one projection boundary and no render-frame correction or offset.
+The finalizer rejects a light/frame disagreement; there is one projection
+boundary and no render-frame correction or offset.
 
 ## Physics boundary
 

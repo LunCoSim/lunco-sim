@@ -308,6 +308,7 @@ pub(crate) fn register(app: &mut App) {
         PostUpdate,
         wire_tile_shadow_cache
             .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+            .after(lunco_environment::finalize_sun_render_state)
             .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding),
     );
 }
