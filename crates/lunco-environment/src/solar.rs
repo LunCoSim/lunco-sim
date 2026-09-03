@@ -20,7 +20,7 @@
 //! later, exactly as `GravityProvider` carries the gravity model — the
 //! [`LocalSolar`] cache already gives each entity its own slot for that.
 
-use bevy::prelude::*;
+use bevy::{math::DQuat, prelude::*};
 
 use crate::Earthshine;
 use lunco_cosim::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONNECTOR};
@@ -327,6 +327,31 @@ fn replace_sun_diagnostic(
     }
 }
 
+#[derive(Default)]
+#[doc(hidden)]
+pub struct SunProjectionCache {
+    scene_sun: Option<Entity>,
+    sun_parent: Option<Entity>,
+    active_frame: Option<Entity>,
+    sun_revision: Option<u64>,
+    frame_rotation: Option<DQuat>,
+    parent_rotation: Option<DQuat>,
+    initialized: bool,
+}
+
+fn spatial_rotation(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&big_space::prelude::Grid>,
+    q_spatial: &Query<
+        (Option<&big_space::prelude::CellCoord>, &Transform),
+        Without<bevy::light::DirectionalLight>,
+    >,
+) -> Result<DQuat, lunco_core::coords::CoordinateError> {
+    lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial)
+        .map(|(_, rotation)| rotation.0)
+}
+
 pub fn project_sun_state_to_light(
     sun: Option<Res<SunState>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
@@ -339,6 +364,7 @@ pub fn project_sun_state_to_light(
     >,
     mut q_sun: Query<
         (
+            Entity,
             &mut Transform,
             &mut bevy::light::DirectionalLight,
             Option<&ChildOf>,
@@ -348,21 +374,30 @@ pub fn project_sun_state_to_light(
             Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
+    q_changed: Query<
+        (),
+        (
+            Without<bevy::light::DirectionalLight>,
+            Or<(
+                Changed<Transform>,
+                Changed<big_space::prelude::CellCoord>,
+                Changed<ChildOf>,
+                Changed<big_space::prelude::Grid>,
+            )>,
+        ),
+    >,
+    mut projection_cache: Local<SunProjectionCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let active_scene = mount
         .as_deref()
         .is_some_and(|mount| mount.active_root().is_some());
-    let sun_count = q_sun.iter().count();
-    if active_scene && sun_count != 1 {
-        let message = if sun_count == 0 {
-            "active scene has no unscoped scene sun; author exactly one UsdLux DistantLight"
-                .to_string()
-        } else {
-            format!(
-                "active scene has {sun_count} unscoped scene suns; author exactly one UsdLux DistantLight"
-            )
-        };
+    let mut suns = q_sun.iter_mut();
+    let Some((scene_sun, mut transform, mut light, parent)) = suns.next() else {
+        if !active_scene {
+            return;
+        }
+        *projection_cache = SunProjectionCache::default();
         replace_sun_diagnostic(
             &mut diagnostics,
             Some(lunco_core::RuntimeDiagnostic {
@@ -370,11 +405,32 @@ pub fn project_sun_state_to_light(
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "environment-sun".to_string(),
                 subject: "scene-sun".to_string(),
-                message,
+                message:
+                    "active scene has no unscoped scene sun; author exactly one UsdLux DistantLight"
+                        .to_string(),
             }),
         );
         return;
+    };
+    if suns.next().is_some() {
+        *projection_cache = SunProjectionCache::default();
+        if active_scene {
+            replace_sun_diagnostic(
+                &mut diagnostics,
+                Some(lunco_core::RuntimeDiagnostic {
+                    code: "sun-contract".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-sun".to_string(),
+                    subject: "scene-sun".to_string(),
+                    message:
+                        "active scene has multiple unscoped scene suns; author exactly one UsdLux DistantLight"
+                            .to_string(),
+                }),
+            );
+        }
+        return;
     }
+    drop(suns);
     let mut diagnostics = diagnostics;
     replace_sun_diagnostic(&mut diagnostics, None);
     let Some(direction_to_sun) = sun.as_deref().and_then(|state| state.direction_to_sun) else {
@@ -408,44 +464,6 @@ pub fn project_sun_state_to_light(
         }
         return;
     };
-    let Ok((_, frame_rotation)) =
-        lunco_core::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
-    else {
-        if active_scene {
-            replace_sun_diagnostic(
-                &mut diagnostics,
-                Some(lunco_core::RuntimeDiagnostic {
-                    code: "physics-frame".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-sun".to_string(),
-                    subject: "semantic-sun".to_string(),
-                    message: format!(
-                        "ActivePhysicsFrame {:?} has no complete BigSpace pose",
-                        active_frame.0
-                    ),
-                }),
-            );
-        }
-        return;
-    };
-    let direction_to_sun_world = frame_rotation.0 * direction_to_sun.as_dvec3();
-    if !direction_to_sun_world.is_finite() || direction_to_sun_world.length_squared() < 1.0e-24 {
-        if active_scene {
-            replace_sun_diagnostic(
-                &mut diagnostics,
-                Some(lunco_core::RuntimeDiagnostic {
-                    code: "sun-state".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-sun".to_string(),
-                    subject: "semantic-sun".to_string(),
-                    message:
-                        "semantic SunState direction is non-finite or zero after frame projection"
-                            .to_string(),
-                }),
-            );
-        }
-        return;
-    }
     if sun
         .as_deref()
         .and_then(|state| state.irradiance_lux)
@@ -465,16 +483,77 @@ pub fn project_sun_state_to_light(
         }
         return;
     }
-    let direction_to_sun_world = direction_to_sun_world.normalize();
-    let parent_rotation = match q_sun.single() {
-        Ok((_, _, Some(parent))) => match q_parents.get(parent.parent()) {
-            Ok(_) => match lunco_core::coords::world_pose(
-                parent.parent(),
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            ) {
-                Ok((_, rotation)) => Some(rotation.0),
+    let Some(direction_to_sun) = SunState::normalized_direction(direction_to_sun) else {
+        if active_scene {
+            replace_sun_diagnostic(
+                &mut diagnostics,
+                Some(lunco_core::RuntimeDiagnostic {
+                    code: "sun-state".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-sun".to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message: "semantic SunState direction is non-finite or zero".to_string(),
+                }),
+            );
+        }
+        return;
+    };
+    let sun_parent = parent.map(ChildOf::parent);
+    let sun_revision = sun.as_deref().map(|state| state.revision);
+    let frame_changed = !projection_cache.initialized
+        || projection_cache.active_frame != Some(active_frame.0)
+        || lunco_core::coords::world_pose_changed(active_frame.0, &q_parents, &q_changed);
+    let parent_changed = !projection_cache.initialized
+        || projection_cache.sun_parent != sun_parent
+        || sun_parent.is_some_and(|parent| {
+            lunco_core::coords::world_pose_changed(parent, &q_parents, &q_changed)
+        });
+    let sun_changed = !projection_cache.initialized
+        || projection_cache.scene_sun != Some(scene_sun)
+        || projection_cache.sun_revision != sun_revision
+        || transform.is_changed()
+        || light.is_changed();
+    if !(frame_changed || parent_changed || sun_changed) {
+        return;
+    }
+    let frame_rotation = match (!frame_changed)
+        .then_some(projection_cache.frame_rotation)
+        .flatten()
+    {
+        Some(rotation) => rotation,
+        None => match spatial_rotation(active_frame.0, &q_parents, &q_grids, &q_spatial) {
+            Ok(rotation) => rotation,
+            Err(_) => {
+                if active_scene {
+                    replace_sun_diagnostic(
+                        &mut diagnostics,
+                        Some(lunco_core::RuntimeDiagnostic {
+                            code: "physics-frame".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "environment-sun".to_string(),
+                            subject: "semantic-sun".to_string(),
+                            message: format!(
+                                "ActivePhysicsFrame {:?} has no complete BigSpace pose",
+                                active_frame.0
+                            ),
+                        }),
+                    );
+                }
+                return;
+            }
+        },
+    };
+    let parent_rotation = match sun_parent {
+        None => None,
+        Some(parent) => {
+            let cached_rotation = (!parent_changed)
+                .then_some(projection_cache.parent_rotation)
+                .flatten();
+            match cached_rotation
+                .map(Ok)
+                .unwrap_or_else(|| spatial_rotation(parent, &q_parents, &q_grids, &q_spatial))
+            {
+                Ok(rotation) => Some(rotation),
                 Err(_) => {
                     replace_sun_diagnostic(
                         &mut diagnostics,
@@ -488,28 +567,28 @@ pub fn project_sun_state_to_light(
                     );
                     return;
                 }
-            },
-            Err(_) => {
-                replace_sun_diagnostic(
-                    &mut diagnostics,
-                    Some(lunco_core::RuntimeDiagnostic {
-                        code: "sun-parent".to_string(),
-                        severity: lunco_core::DiagnosticSeverity::Error,
-                        producer: "environment-sun".to_string(),
-                        subject: "scene-sun".to_string(),
-                        message: "scene sun has a parent without a complete BigSpace topology"
-                            .to_string(),
-                    }),
-                );
-                return;
             }
-        },
-        Ok((_, _, None)) => None,
-        Err(_) => return,
+        }
     };
-    let Ok((mut transform, mut light, _)) = q_sun.single_mut() else {
+    let direction_to_sun_world = frame_rotation * direction_to_sun.as_dvec3();
+    if !direction_to_sun_world.is_finite() || direction_to_sun_world.length_squared() < 1.0e-24 {
+        if active_scene {
+            replace_sun_diagnostic(
+                &mut diagnostics,
+                Some(lunco_core::RuntimeDiagnostic {
+                    code: "sun-state".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-sun".to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message:
+                        "semantic SunState direction is non-finite or zero after frame projection"
+                            .to_string(),
+                }),
+            );
+        }
         return;
-    };
+    }
+    let direction_to_sun_world = direction_to_sun_world.normalize();
     // A root light has no parent-local rotation: its Transform is already in
     // the world frame. A child light must use the live parent projection above.
     let emit_direction = match parent_rotation {
@@ -529,6 +608,15 @@ pub fn project_sun_state_to_light(
             light.illuminance = irradiance;
         }
     }
+    *projection_cache = SunProjectionCache {
+        scene_sun: Some(scene_sun),
+        sun_parent,
+        active_frame: Some(active_frame.0),
+        sun_revision,
+        frame_rotation: Some(frame_rotation),
+        parent_rotation,
+        initialized: true,
+    };
 }
 
 /// Publish the render sun only after BigSpace has finalized the scene light's
@@ -827,6 +915,61 @@ mod tests {
         assert!(
             light.forward().abs_diff_eq(expected.normalize(), 1.0e-5),
             "sun light must use the current f64 frame pose: got {:?}, expected {:?}",
+            light.forward(),
+            expected
+        );
+
+        app.world_mut()
+            .get_mut::<Transform>(frame)
+            .unwrap()
+            .rotation = Quat::IDENTITY;
+        app.update();
+
+        let light = app.world().get::<Transform>(sun).unwrap();
+        assert!(
+            light.forward().abs_diff_eq(Vec3::Z, 1.0e-5),
+            "a changed frame ancestor must invalidate the cached pose: got {:?}",
+            light.forward()
+        );
+    }
+
+    #[test]
+    fn sun_light_projection_resolves_a_big_space_root_parent() {
+        let mut app = App::new();
+        let frame = app
+            .world_mut()
+            .spawn((big_space::prelude::Grid::default(), Transform::default()))
+            .id();
+        let parent_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let parent = app
+            .world_mut()
+            .spawn((
+                big_space::prelude::Grid::default(),
+                Transform::from_rotation(parent_rotation),
+            ))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(SunState {
+            direction_to_sun: Some(Vec3::NEG_Z),
+            ..Default::default()
+        });
+        let sun = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                DirectionalLight::default(),
+                ChildOf(parent),
+            ))
+            .id();
+        app.add_systems(Update, project_sun_state_to_light);
+
+        app.update();
+
+        let light = app.world().get::<Transform>(sun).unwrap();
+        let expected = parent_rotation.inverse() * Vec3::Z;
+        assert!(
+            light.forward().abs_diff_eq(expected, 1.0e-5),
+            "a valid BigSpace root parent must participate in the light projection: got {:?}, expected {:?}",
             light.forward(),
             expected
         );

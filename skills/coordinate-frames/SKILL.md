@@ -138,7 +138,9 @@ static material wiring, horizon-cache validity/bake decisions, and
 streamed-tile shadow intent binding all consume that finalized frame. Put
 streamed-tile binding in the public `TerrainSurfaceSet::RenderShadowBinding`
 phase so it cannot observe a previous-frame terrain transform. Do not repair a
-stale projection with an offset or another per-frame transform writer.
+stale projection with an offset or another per-frame transform writer. The
+semantic-to-light projection is change-gated by `SunState.revision` and the
+changed BigSpace ancestor chains, so stable frames do not rebuild f64 poses.
 
 ## Do not patch symptoms
 

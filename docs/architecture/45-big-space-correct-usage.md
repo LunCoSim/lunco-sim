@@ -159,8 +159,11 @@ includes static terrain material wiring, horizon-cache bake decisions, and
 streamed-tile cache validity. Streamed-tile shadow intent is then bound through
 `TerrainSurfaceSet::RenderShadowBinding`, so the tile material never combines a
 finalized mesh transform with a previous-frame terrain-local sun direction.
-The finalizer rejects a light/frame disagreement; there is one projection
-boundary and no render-frame correction or offset.
+The projection is change-gated by the semantic revision, active frame identity,
+the exact BigSpace ancestor chains, and the light's authored local transform;
+unchanged frames do not rebuild f64 world poses. The finalizer rejects a
+light/frame disagreement; there is one projection boundary and no render-frame
+correction or offset.
 
 ## Physics boundary
 
