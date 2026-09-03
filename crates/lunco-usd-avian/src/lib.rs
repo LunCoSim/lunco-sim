@@ -841,6 +841,14 @@ fn collect_child_colliders_from_usd(
     // nested-body boundary (see `gather_compound_candidates`).
     let mut candidates = Vec::new();
     gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
+    // `PhysicsCollisionAPI` is valid on the rigid-body prim itself. When that
+    // body also has descendants, its own shape must become the identity member
+    // of the compound; otherwise the presence of any child silently discards
+    // part of the authored collision contract. Its local transform is already
+    // the ECS body's transform, so the shape is untransformed in body space.
+    if !candidates.is_empty() && reader.has_api_schema(parent_path, ptok::API_COLLISION) {
+        candidates.insert(0, (parent_path.clone(), Transform::IDENTITY));
+    }
 
     // `UsdGeomImageable.purpose` decides which of a body's descendants are its
     // COLLISION geometry, when the body carries more than one description of its
@@ -912,19 +920,25 @@ fn collect_child_colliders_from_usd(
         // child's compound-local rotation so the Y-axis collider lines
         // up with the authored axis (mirrors what lunco-usd-bevy does
         // for the entity Transform — same canonical `usd_axis_to_quat`).
-        if let Some(ty) = reader.type_name(&child_path) {
-            if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                let Some(axis_tok) = read_primitive_axis(reader, &child_path, &ty) else {
-                    continue;
-                };
-                // Pre-rotate by the stage convention: the `axis` token names an
-                // axis of the STAGE's frame while the collider is built in the
-                // canonical one (identical to what usd-bevy does for the visual
-                // Transform, so mesh and collider can't disagree on a Z-up stage).
-                let q_axis =
-                    convention.orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
-                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                    child_tf.rotation *= q_axis;
+        // The body root is different: its axis is already on the ECS body
+        // transform, so applying it again inside the compound would rotate the
+        // root shape twice.
+        let is_body_shape = child_path.as_str() == parent_path.as_str();
+        if !is_body_shape {
+            if let Some(ty) = reader.type_name(&child_path) {
+                if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
+                    let Some(axis_tok) = read_primitive_axis(reader, &child_path, &ty) else {
+                        continue;
+                    };
+                    // Pre-rotate by the stage convention: the `axis` token names an
+                    // axis of the STAGE's frame while the collider is built in the
+                    // canonical one (identical to what usd-bevy does for the visual
+                    // Transform, so mesh and collider can't disagree on a Z-up stage).
+                    let q_axis =
+                        convention.orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
+                    if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                        child_tf.rotation *= q_axis;
+                    }
                 }
             }
         }
@@ -933,9 +947,12 @@ fn collect_child_colliders_from_usd(
         // carries the complete scale from the body boundary to this prim;
         // unlike a standalone collider, a compound child has no ECS entity on
         // which Avian could propagate intermediate Xform scales.
-        if let Some(collider) =
-            build_collider_from_usd_at_scale(reader, &child_path, child_tf.scale)
-        {
+        let scale = if is_body_shape {
+            Vec3::ONE
+        } else {
+            child_tf.scale
+        };
+        if let Some(collider) = build_collider_from_usd_at_scale(reader, &child_path, scale) {
             let pos = Position(DVec3::new(
                 child_tf.translation.x as f64,
                 child_tf.translation.y as f64,
@@ -5257,6 +5274,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 mod collider_ownership_tests {
     use super::*;
     use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use std::collections::HashMap;
 
     #[test]
     fn malformed_compound_child_transform_is_rejected_not_identity() {
@@ -5598,6 +5616,93 @@ def Xform "Rig"
             "a body's collider child must stay a compound piece"
         );
         assert_eq!(body, None);
+    }
+
+    /// A reference can contribute the body root's own collision shape as well as
+    /// descendant shapes. Both are part of that one USD rigid body; dropping the
+    /// root when a child exists makes the composed body smaller than its authored
+    /// collision contract.
+    #[test]
+    fn composed_reference_keeps_body_and_descendant_collision_shapes() {
+        let root_id = "scene.usda".to_string();
+        let child_id = "child.usda".to_string();
+        let scene = r#"#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Scene"
+{
+    def "Assembly" (
+        prepend references = @child.usda@</Part>
+    )
+    {
+    }
+}
+"#;
+        let child = r#"#usda 1.0
+(
+    defaultPrim = "Part"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Cube "Part" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+)
+{
+    double size = 2.0
+
+    def Cube "EndCap" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+"#;
+        let recipe = StageRecipe {
+            root_id: root_id.clone(),
+            bytes: HashMap::from([
+                (root_id.clone(), scene.as_bytes().to_vec()),
+                (child_id, child.as_bytes().to_vec()),
+            ]),
+        };
+
+        let live = CanonicalStage::from_recipe(&recipe).expect("compose referenced body");
+        let assembly = SdfPath::new("/Scene/Assembly").unwrap();
+        let live_view = live.view();
+        assert!(live_view.has_prim(&SdfPath::new("/Scene/Assembly/EndCap").unwrap()));
+        let live_shapes = collect_child_colliders_from_usd(&live_view, &assembly)
+            .expect("live composed reference has valid collision transforms");
+        assert_eq!(
+            live_shapes.len(),
+            2,
+            "live composition must keep root and child shapes"
+        );
+        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+
+        let child_recipe = StageRecipe {
+            root_id: "child.usda".to_string(),
+            bytes: HashMap::from([("child.usda".to_string(), child.as_bytes().to_vec())]),
+        };
+        let prepared = UsdStageAsset::from_recipe(child_recipe).expect("prepare referenced body");
+        let instance = prepared
+            .projection_plan
+            .for_instance("/Scene/PreparedAssembly")
+            .expect("remap referenced body plan");
+        let instance_root = SdfPath::new("/Scene/PreparedAssembly").unwrap();
+        assert!(instance.has_prim(&SdfPath::new("/Scene/PreparedAssembly/EndCap").unwrap()));
+        let prepared_shapes = collect_child_colliders_from_usd(&instance, &instance_root)
+            .expect("prepared reference has valid collision transforms");
+        assert_eq!(
+            prepared_shapes.len(),
+            2,
+            "prepared composition must keep root and child shapes"
+        );
+        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]
