@@ -12,7 +12,7 @@
 #   - Two bogies (BogieL/R) hinge to the rear of the rockers on the X axis.
 #   - Six wheels (FL/FR/ML/MR/RL/RR) reference the reusable motorized wheel components.
 #   - The differential coupling enforces: θ_left + θ_right → 0.
-#   - Controllable via keyboard/UI through PhysxVehicleAckermannSteeringAPI.
+#   - Controllable via the authored generic control and drive-law ports.
 #
 # FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
@@ -26,7 +26,7 @@ def Xform "RockerBogie" (
         "PhysicsMassAPI",
         "PhysicsArticulationRootAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI",
+        "LunCoCatalogAPI",
         "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
@@ -34,6 +34,7 @@ def Xform "RockerBogie" (
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = {
         string power = "infinite"
@@ -55,11 +56,6 @@ def Xform "RockerBogie" (
     # hardware gives the Perseverance-class vehicle mass. Difficulty tiers change
     # only their authored drive and tire properties.
     float physics:mass = 720.0
-    # 0.5 rad steering lock; strength 0.0 deliberately keeps the simple parallel
-    # steering used by the current wheel actuator while retaining the authored
-    # Ackermann vehicle contract.
-    float physxVehicleAckermannSteering:maxSteerAngle = 0.5
-    float physxVehicleAckermannSteering:strength = 0.0
     # ── THERE IS NO AIR. DRAG LIVES IN THE PARTS. ───────────────────────────
     # Body damping is a fluid model: a force proportional to velocity, applied to
     # the hull. It is kept near zero so the Mars-rover behavior comes from wheel
@@ -91,7 +87,8 @@ def Xform "RockerBogie" (
     # `six_wheel_rover.usda` has always carried.
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    float outputs:steering = 0.0
+    float outputs:heading_fl = 0.0
+    float outputs:heading_fr = 0.0
     float outputs:brake = 0.0
 
     # --- Telemetry: the vehicle's own ground speed ---
@@ -437,7 +434,7 @@ def Xform "RockerBogie" (
             # The 6.8 kg.m2 value is the composed USD mechanical contract.
             float physxVehicleWheel:moi = 6.8
             float inputs:drive.connect = </RockerBogie/RockerL/Shaft_FL.outputs:torque>
-            float inputs:steer.connect = </RockerBogie.outputs:steering>
+            float inputs:heading.connect = </RockerBogie.outputs:heading_fl>
         }
 
         # Motor + reduction for the front-left wheel. A CHILD OF THE ROCKER, not of
@@ -629,7 +626,7 @@ def Xform "RockerBogie" (
             # The 6.8 kg.m2 value is the composed USD mechanical contract.
             float physxVehicleWheel:moi = 6.8
             float inputs:drive.connect = </RockerBogie/RockerR/Shaft_FR.outputs:torque>
-            float inputs:steer.connect = </RockerBogie.outputs:steering>
+            float inputs:heading.connect = </RockerBogie.outputs:heading_fr>
         }
 
         # Wheel index 1 is odd ⇒ `drive_right`. Mirror of the left rocker.
@@ -1254,10 +1251,9 @@ def Xform "RockerBogie" (
 
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become actuator values is COMPOSITION, not an
-    # enumeration. The plain authored state is the built-in linear Ackermann
-    # kernel: both drive banks receive throttle and the steering port drives the
-    # front wheel actuators. For a solver-clocked per-side motor lag, compose an
-    # authored drive law on this same vehicle:
+    # enumeration. The authored controller publishes the generic drive outputs
+    # consumed by both banks. For a solver-clocked per-side motor law, compose an
+    # authored program on this same vehicle:
     #
     #   def "Rover" (
     #       prepend references = [

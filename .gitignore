@@ -6,6 +6,11 @@ target/
 .cache/
 extern/
 
+# Downloaded and derived terrain products. Source URLs, hashes, and processing
+# policy belong in Assets.toml; the potentially large payloads never do.
+terrain/*/materials/
+**/.bakekey
+
 # Web bundle output (final shippable wasm + JS + HTML)
 dist/
 

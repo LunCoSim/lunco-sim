@@ -224,7 +224,9 @@ multi-domain architecture before introducing a new graph owner.
   do not show a numeric percentage for that scheduler hand-off. Phase changes
   are discrete status events and active work uses the existing progress entry.
 - Baked artifacts and the twin cache are gitignored by policy
-  (`terrain/*/materials/`, `.bakekey` stamps, `.cache/`) — never commit them.
+  (`terrain/*/materials/`, any `.bakekey` stamp, `.cache/`, and `extern/`) —
+  never commit downloaded or derived payloads. Keep only the `Assets.toml`
+  declaration, source URL/hash, ROI, and processing configuration in Git.
 
 ## Gotchas
 

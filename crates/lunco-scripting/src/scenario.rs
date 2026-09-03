@@ -360,8 +360,8 @@ pub struct ScenarioIntrospection<V> {
 /// identity itself.
 ///
 // TODO(hooks): evaluate folding this onto the `lunco-hooks` registry (the
-// language-neutral internal-hook substrate that backs `MergePolicy`,
-// `rbac.authorize`, and `ScriptedDriveKernel`). NOT done yet — deliberately —
+// language-neutral internal-hook substrate that backs `MergePolicy` and
+// `rbac.authorize`). NOT done yet — deliberately —
 // because the two are different shapes and a forced migration is lateral churn on
 // a working system with no clear win:
 //   - `lunco-hooks` = STATELESS, GLOBAL policy functions keyed by a `HookId`

@@ -19,7 +19,6 @@ The hardware layer operates in the `FixedUpdate` schedule to ensure deterministi
 
 ```
 lunco-hardware/
-  ├── SteeringActuator        — Authored steering-frame projection
   ├── AngularVelocitySensor   — Rotation-measurement component
   └── systems.rs              — Bridge logic between Ports and Avian3D
 ```
@@ -29,11 +28,9 @@ lunco-hardware/
 ```rust
 app.add_plugins(LunCoHardwarePlugin);
 
-// Spawning the hardware plugin
-commands.spawn((
-    SteeringActuator::default(),
-    RigidBody::Dynamic,
-));
+// Hardware components are generic port/sensor boundaries. A mechanical
+// actuator is authored by the connected Modelica/Rhai network.
+commands.spawn((AngularVelocitySensor::default(), RigidBody::Dynamic));
 ```
 
 ## See Also

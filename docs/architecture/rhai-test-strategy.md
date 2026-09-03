@@ -32,9 +32,9 @@ requires a routed control rover to move before accepting the no-route hold.
 
 The generic command path and hot-reload generation check remain in
 `rhai_rover_live_test.rs`; those are runtime-mechanism contracts and still
-belong in Rust. The mobility allocation split in `allocation_spec.rhai` is the
-model for future moves: exact unobservable kernel arithmetic stays Rust, while
-its live consequence moves to an authored control fixture.
+belong in Rust. Motion allocation is no longer a Rust or test-only kernel: each
+vehicle's authored Modelica/Rhai program owns its output ports and its live
+scene test owns the observable motion result.
 
 The second review also removed the Rust integration copy of
 `appending_waypoints_while_running_resumes_route_and_drives_the_new_legs` from
@@ -188,11 +188,10 @@ production binary.
 
 ### Rover loader boundary
 
-The rover loader tests follow the same split. `allocation_spec.rhai`,
-`drivetrain_parity.rhai`, and `ackermann_parity.rhai` already own the public
-runtime outcomes: control-surface allocation, wheel-realization parity,
-steering, and real motion. Adding another Rhai copy of those assertions would
-duplicate the acceptance gate.
+The rover loader tests follow the same split. The authored drivetrain and
+controller scenarios own public runtime outcomes: wheel-realization parity,
+authored output allocation, steering, and real motion. Adding another copy of
+those assertions would duplicate the acceptance gate.
 
 The Rust tests in `crates/lunco-usd/tests/rover_structure.rs` and
 `integration_asset_loading.rs` therefore retain only the projection claims that

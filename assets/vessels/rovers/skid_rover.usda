@@ -9,7 +9,7 @@
 #
 # **Pixar/Omniverse-correct structure**: an `Xform` root holds the
 # vehicle/physics schemas (`PhysicsRigidBodyAPI`, `PhysicsMassAPI`,
-# `PhysxVehicleContextAPI`, `PhysxVehicleTankDifferentialAPI`); a child
+# `PhysxVehicleContextAPI`); a child
 # `Cube "Chassis"` carries `PhysicsCollisionAPI` + the visual mesh +
 # its own `xformOp:scale` for chassis dimensions; sibling
 # `Cylinder` wheels carry `PhysxVehicleWheelAPI`.
@@ -47,7 +47,7 @@ def Xform "SkidRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI", "CollectionAPI:components"
+        "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE. Its `inputs:` ports (`throttle`/`steer`/`brake`) ARE the set of
@@ -58,6 +58,7 @@ def Xform "SkidRover" (
     # driven by human, autopilot, script or API.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
     prepend variantSets = ["drivetrain", "power", "generation", "thermal"]
     variants = {
         string drivetrain = "raycast"
@@ -90,7 +91,6 @@ def Xform "SkidRover" (
     # spawn catalog — keeps spawn height as USD data, not Rust category logic).
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    float outputs:steering = 0.0
     float outputs:brake = 0.0
 
     # Ground speed as a retained channel — the avian `speed` port on this body
@@ -545,22 +545,9 @@ def Xform "SkidRover" (
     }
 
     # --- Drive law -----------------------------------------------------------
-    # HOW throttle/steer become per-side drive is COMPOSITION, not an enumeration.
-    # The plain authored state below is the instant built-in skid kernel. To fly a
-    # solver-clocked first-order motor lag instead, compose the drive law on as a
-    # reference arc, exactly like the OBC above:
-    #
-    #   def "Rover" (
-    #       prepend references = [
-    #           @lunco://vessels/rovers/skid_rover.usda@</SkidRover>,
-    #           @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>,
-    #       ]
-    #   ) {}
-    #
-    # A drive law is just a `LunCoProgramAPI` on the vessel and the file extension
-    # picks the engine, so there is nothing for a closed variant list to add — it
-    # could only ever name the laws that existed when this file was written.
-    # The wheel drive connections below select the port pair the skid law writes.
+    # HOW throttle/steer become per-side drive is authored by the composed
+    # Modelica/Rhai controller. Its output connections below select the port pair
+    # consumed by the wheel network; no vehicle-type policy is implemented here.
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law (which decides how commands become drive) and

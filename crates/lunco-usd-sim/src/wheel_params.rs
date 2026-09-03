@@ -28,7 +28,7 @@
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | lateral stiffness graph | `physxVehicleTire:lateralStiffnessGraph` + `restLoad` | yes |
 //! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
-//! | steer axis | `lunco:wheel:steerAxis` | yes |
+//! | heading axis | `lunco:wheel:headingAxis` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
 //!
 //! The mechanical network is the one source of drive torque and shaft speed for
@@ -48,7 +48,6 @@ use bevy::asset::AssetId;
 use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
-use lunco_hardware::SteeringActuator;
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
 use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
@@ -316,8 +315,8 @@ pub struct WheelParams {
     /// cone; Avian's generic tangent friction is disabled for jointed tire
     /// contacts so it cannot double-count this force.
     pub friction_mu: f64,
-    /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
-    pub steer_axis: DVec3,
+    /// Raked wheel-heading axis, wheel-local (`lunco:wheel:headingAxis`).
+    pub heading_axis: DVec3,
     /// Suspension compliance; `None` ⇒ none resolves. A raycast wheel treats
     /// that as a hard asset error, a joint wheel does not need it.
     pub suspension: Option<SuspensionParams>,
@@ -393,14 +392,14 @@ impl WheelParams {
         let moment_of_inertia =
             read_required_real(reader, wheel, "physxVehicleWheel:moi", &mut missing);
 
-        let steer_axis = match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:steerAxis")
-        {
-            Some(v) => DVec3::new(v[0], v[1], v[2]),
-            None => {
-                missing.push("lunco:wheel:steerAxis".to_owned());
-                DVec3::Y
-            }
-        };
+        let heading_axis =
+            match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:headingAxis") {
+                Some(v) => DVec3::new(v[0], v[1], v[2]),
+                None => {
+                    missing.push("lunco:wheel:headingAxis".to_owned());
+                    DVec3::Y
+                }
+            };
 
         if !missing.is_empty() {
             return Err(missing);
@@ -419,7 +418,7 @@ impl WheelParams {
             rest_load,
             min_validated_speed,
             friction_mu,
-            steer_axis,
+            heading_axis,
         );
         validate_wheel_schema_hints(
             reader,
@@ -485,7 +484,7 @@ impl WheelParams {
             lateral_stiffness_graph,
             min_validated_speed,
             friction_mu,
-            steer_axis,
+            heading_axis,
             suspension,
         })
     }
@@ -495,7 +494,7 @@ impl WheelParams {
         &self,
         drive_port: Entity,
         speed_port: Entity,
-        steer_port: Entity,
+        heading_port: Entity,
         visual_entity: Option<Entity>,
     ) -> WheelRaycast {
         let mut wheel = WheelRaycast {
@@ -503,7 +502,7 @@ impl WheelParams {
             visual_entity,
             drive_port,
             speed_port,
-            steer_port,
+            heading_port,
             ..Default::default()
         };
         self.apply_to_raycast(&mut wheel);
@@ -523,7 +522,7 @@ impl WheelParams {
         wheel.lateral_stiffness_graph = self.lateral_stiffness_graph;
         wheel.min_validated_speed = self.min_validated_speed;
         wheel.brake_torque_max = self.brake_torque_max;
-        wheel.steer_axis = self.steer_axis;
+        wheel.heading_axis = self.heading_axis;
     }
 
     /// Write the suspension compliance into an existing `Suspension`.
@@ -697,7 +696,7 @@ fn validate_wheel_values(
     rest_load: f64,
     min_validated_speed: f64,
     friction_mu: f64,
-    steer_axis: DVec3,
+    heading_axis: DVec3,
 ) {
     validate_positive(errors, "physxVehicleWheel:radius", radius);
     validate_positive(errors, "physxVehicleWheel:width", width);
@@ -723,9 +722,9 @@ fn validate_wheel_values(
     validate_positive(errors, "physxVehicleTire:restLoad", rest_load);
     validate_nonnegative(errors, "lunco:tire:minValidatedSpeed", min_validated_speed);
     validate_nonnegative(errors, "physics:dynamicFriction", friction_mu);
-    if !(steer_axis.is_finite() && steer_axis.length_squared() > 0.0) {
+    if !(heading_axis.is_finite() && heading_axis.length_squared() > 0.0) {
         errors.push(format!(
-            "lunco:wheel:steerAxis must be finite and non-zero, got {steer_axis:?}"
+            "lunco:wheel:headingAxis must be finite and non-zero, got {heading_axis:?}"
         ));
     }
 }
@@ -820,7 +819,7 @@ pub fn claims_edit(
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
-    if attr == "lunco:wheel:steerAxis" {
+    if attr == "lunco:wheel:headingAxis" {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
     if attr.starts_with("lunco:suspension:") || attr.starts_with("physxVehicleSuspension:") {
@@ -841,29 +840,6 @@ pub fn claims_edit(
     ) {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAttachmentAPI");
     }
-    // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
-    // place; a subtree refresh of the whole rover root would tear down live
-    // physics bodies.
-    if attr == "physxVehicleAckermannSteering:maxSteerAngle"
-        || attr == "physxVehicleAckermannSteering:strength"
-        || attr == "lunco:driveKernel"
-    {
-        return true;
-    }
-    // A connection transform on a `DriveMix` term prim (`lunco:factor:throttle`
-    // and friends). `resync_wheels_for_stage` re-derives EVERY vehicle root of
-    // the stage, so claiming the edit on the term prim resyncs the mix it
-    // belongs to without the caller resolving the owning vessel. The prefix is
-    // shared with the co-simulation port graph, so the claim is scoped to prims
-    // under a `DriveMix` scope — a factor on a cosim connection is not a wheel
-    // edit and must keep the normal refresh path.
-    if attr.starts_with("lunco:factor:") {
-        return prim
-            .as_str()
-            .rsplit_once('/')
-            .and_then(|(parent, _)| parent.rsplit_once('/'))
-            .is_some_and(|(_, scope)| scope == "DriveMix");
-    }
     false
 }
 
@@ -873,13 +849,9 @@ struct WheelUpdate {
     entity: Entity,
     physical: bool,
     params: WheelParams,
-    /// Steering lock from the wheel's vehicle, when it has a steering system.
-    max_steer_angle: Option<f64>,
-    /// Ackermann correction strength from the owning vehicle.
-    ackermann_strength: f64,
 }
 
-/// Re-derive every spawned wheel (and vehicle-root drive mix) of `stage` from
+/// Re-derive every spawned wheel of `stage` from
 /// the live composed stage, IN PLACE. Resyncs ALL wheels of the stage rather
 /// than only the edited prim: suspension/tire attrs may be authored on a
 /// separate referenced prim (attachment topology), vehicle-level attrs fan out
@@ -891,7 +863,7 @@ struct WheelUpdate {
 /// scene. The resync raises the shared runtime fault and safety hold after the
 /// stage borrow is released; it never continues with stale wheel parameters.
 pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
-    // 1. Collect this stage's spawned wheels + vehicle roots (plain data out).
+    // 1. Collect this stage's spawned wheels (plain data out).
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
     {
         let mut q = world.query::<(
@@ -907,19 +879,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             rows.push((e, prim.path.clone(), pw.is_some()));
         }
     }
-    let mut vehicles: Vec<(Entity, String)> = Vec::new();
-    {
-        // `MobilityRoot` identifies the vehicle root. Deliberately not
-        // `DriveMix`: a root whose mix failed to derive still needs to appear in
-        // this list, because the re-derive below is exactly what can give it one.
-        let mut q = world.query::<(Entity, &UsdPrimPath, &lunco_core::MobilityRoot)>();
-        for (e, prim, _) in q.iter(world) {
-            if prim.stage_handle.id() == id {
-                vehicles.push((e, prim.path.clone()));
-            }
-        }
-    }
-    if rows.is_empty() && vehicles.is_empty() {
+    if rows.is_empty() {
         return;
     }
 
@@ -927,7 +887,6 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     //    the appliers below mutate the world (same pattern as
     //    `refresh_domes_live`).
     let mut updates: Vec<WheelUpdate> = Vec::new();
-    let mut mixes: Vec<(Entity, Option<lunco_mobility::kernels::DriveMix>)> = Vec::new();
     let mut failures: Vec<(Option<Entity>, String, String)> = Vec::new();
     {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
@@ -960,29 +919,10 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
-                    let (max_steer_angle, ackermann_strength) =
-                        match crate::steering_vehicle_of(&view, path) {
-                            Some(vehicle) => {
-                                match crate::steering_vehicle_params(&view, &vehicle) {
-                                    Ok((max, strength)) => (Some(max), strength),
-                                    Err(reason) => {
-                                        failures.push((
-                                            Some(*entity),
-                                            path.clone(),
-                                            format!("invalid Ackermann steering: {reason}"),
-                                        ));
-                                        continue;
-                                    }
-                                }
-                            }
-                            None => (None, 0.0),
-                        };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
                         params,
-                        max_steer_angle,
-                        ackermann_strength,
                     });
                 }
                 Err(missing) => failures.push((
@@ -991,10 +931,6 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                     format!("missing or invalid required attributes: {missing:?}"),
                 )),
             }
-        }
-        for (e, path) in &vehicles {
-            let Ok(sp) = SdfPath::new(path) else { continue };
-            mixes.push((*e, crate::derive_drive_mix(&view, &sp, path)));
         }
     }
 
@@ -1036,13 +972,6 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                     0.0,
                 );
                 ray.max_distance = lunco_mobility::suspension_ray_max_distance(susp.rest_length);
-            }
-            if let (Some(lock), Some(mut steer)) = (
-                u.max_steer_angle,
-                world.get_mut::<SteeringActuator>(u.entity),
-            ) {
-                steer.max_steer_angle = lock;
-                steer.ackermann_strength = u.ackermann_strength;
             }
             continue;
         }
@@ -1099,9 +1028,9 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             };
             world.entity_mut(u.entity).insert(collider);
         }
-        // …and the joint-side authored steering numbers, on the synthesized
-        // joint whose `body2` is this wheel. Torque remains on the solved
-        // mechanical port and therefore needs no parameter copy here.
+        // Update the synthesized wheel-joint torque boundary. Heading joints
+        // are independent authored revolute joints and are not part of this
+        // wheel-parameter resynchronization.
         let mut joint_entity: Option<Entity> = None;
         {
             let mut q = world.query::<(Entity, &RevoluteJoint)>();
@@ -1117,27 +1046,10 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             actuator.brake_torque = u.params.brake_torque_max;
             actuator.rotational_inertia = u.params.axle_inertia();
         }
-        if let (Some(lock), Some(mut steer)) =
-            (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))
-        {
-            steer.max_steer_angle = lock;
-            steer.ackermann_strength = u.ackermann_strength;
-        }
-    }
-    for (e, mix) in mixes {
-        if let Some(mix) = mix {
-            world.entity_mut(e).insert(mix);
-        } else {
-            world
-                .entity_mut(e)
-                .remove::<lunco_mobility::kernels::DriveMix>();
-        }
     }
     info!(
-        "[wheel resync] stage {:?}: re-derived {} wheel(s), {} vehicle root(s) in place",
-        id,
-        wheel_count,
-        vehicles.len()
+        "[wheel resync] stage {:?}: re-derived {} wheel(s) in place",
+        id, wheel_count,
     );
 }
 
@@ -1210,7 +1122,7 @@ mod tests {
             "physxVehicleTire:restLoad",
             "lunco:tire:minValidatedSpeed",
             "physics:dynamicFriction",
-            "lunco:wheel:steerAxis",
+            "lunco:wheel:headingAxis",
         ] {
             assert!(
                 errors.iter().any(|error| error.starts_with(name)),

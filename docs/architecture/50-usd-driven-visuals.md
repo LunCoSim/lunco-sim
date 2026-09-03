@@ -107,7 +107,7 @@ The test is what the number means. If it is a dimension, scale the prim. If it i
 parameter the appearance is a function of, wire it to a shader —
 [`visualize-physics-with-shaders`](../../skills/visualize-physics-with-shaders/SKILL.md).
 
-## Binding a name to Rust — `ProgramDriverRegistry`
+## Binding authored policy to the runtime
 
 `LunCoProgramAPI` names its implementation one of two ways, mirroring `UsdShade.Shader`'s own
 `info:id` (a named built-in the renderer implements) versus `info:sourceAsset` (external
@@ -118,20 +118,11 @@ source):
 | `uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@` | the behaviour-tree engine (`.btxml` canonical; `.xml` accepted for interop) |
 | `uniform token info:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
 
-Same prim type, same discovery, same per-instance params. The registry follows
-`ControlKernelRegistry` (`lunco-core/src/kernels.rs`) — a `Resource` holding a
-`HashMap<String, fn>`, seeded idempotently in the owning plugin's `build`, with three
-properties that are not optional:
-
-- **built-in wins**, a script hook is the open fallback
-- **an unknown id is a fail-safe no-op with a deduped warning** — never a panic
-- USD *selects*; it does not *define*
-
-This is the pattern `lunco:driveKernel` already ships. It is not new machinery.
-
-> `kernels.rs` cites `register_commands!` as the same pattern. It is not — that macro
-> dispatches by Rust *type* via bevy observers and has no string key. `ControlKernelRegistry`
-> and `PortRegistry` are the name-dispatch precedents.
+Same prim type, same discovery, same per-instance params. Vehicle behavior does
+not dispatch through a Rust registry: USD composes a Modelica/Rhai program and
+the program publishes named port values. Rust projects those generic values into
+physics and rendering. `PortRegistry` remains the name-dispatch boundary for
+inspection and command transport; it does not select a vehicle steering mode.
 
 A driver reads its parameters from `ScriptParams`, the same `lunco:param:*` map a rhai
 script reads through `param(me, key, default)` — **not** off the USD reader. A driver is
@@ -175,9 +166,9 @@ invent a possession-based shadow policy.
 Read on the **gprim**, not the shader: two prims sharing one material can disagree about
 casting, and `material:binding` is not the place to say so.
 
-> Reach for a vendor name before minting one. This repo already consumes NVIDIA's
-> `PhysxRigidBodyAPI`, `PhysxGearJoint` and `PhysxVehicleTankDifferentialAPI` — Omniverse
-> compatibility is the existing posture, not a new one.
+> Reach for a vendor name before minting one. This repo consumes NVIDIA's
+> `PhysxRigidBodyAPI` and `PhysxGearJoint`; rover motion remains an authored
+> program over generic joints and ports rather than a vendor vehicle mode.
 
 ## Unlit is not yours to author
 

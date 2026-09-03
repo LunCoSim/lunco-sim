@@ -14,7 +14,7 @@
 //!
 //! ```text
 //!   Domain crate (lunco-modelica, lunco-mobility, etc.)
-//!     ├── Defines entity component (ModelicaModel, DriveMix, etc.)
+//!     ├── Defines entity component (ModelicaModel, joint/port state, etc.)
 //!     ├── Defines viewer panel (DiagramPanel, CodeEditor, etc.)
 //!     └── Panel watches WorkbenchState.selected_entity
 //!           │

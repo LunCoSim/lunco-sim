@@ -471,8 +471,8 @@ pub struct PhysicsStateReady;
 /// possession boundary; an avatar's own surface is reserved for free flight.
 ///
 /// Written through the shared port substrate (`SetPorts` → `PortRegistry`)
-/// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a
-/// Modelica bridge, …).
+/// and consumed by the authored mechanical controller or free-flight
+/// realization.
 ///
 /// NOTE: the command port named `"brake"` here is NOT the output port named
 /// `"brake"` in [`OutputPorts`]. They carry different values — an analog command
@@ -561,8 +561,8 @@ pub fn owning_input_ports<'w>(
 ///
 /// This is the produced-value half of a control surface, and is a different
 /// thing from [`InputPorts`]: those are the logical input values a human or
-/// script issues, while these are runtime registers written by an imperative
-/// producer such as a drive kernel. The names and topology still come from
+/// script issues, while these are runtime endpoints written by the authored
+/// Modelica/Rhai controller network. The names and topology still come from
 /// authored USD `outputs:*` attributes; this component only stores the runtime
 /// endpoint for each one.
 ///

@@ -5,36 +5,23 @@
     metersPerUnit = 1
 )
 
-# Modelica DRIVE LAW for a skid rover — the `driveLaw = "modelica"` variant
-# references this into the rover ROOT, exactly as the `drivetrain` variants
-# reference their components: a variant CHOOSES a component, it never restates
-# one. Everything below composes onto the rover; `</DriveLaw.…>` paths
-# translate to the HOST rover root through the reference arc.
+# Modelica drive law for a skid rover. The rover root references this component
+# so the composed model publishes wheel demands consumed by generic wheel
+# ports. Everything below composes onto the host rover through the reference arc.
 #
-# What it does: replaces the instant built-in skid mixing with a physical
-# command→torque law — `models/LunCo/Mobility/RoverDrivetrain.mo` integrates a first-order
-# motor lag per side on the solver clock. Native USD connections project the
-# outputs onto the rover ports; no tick script participates.
+# What it does: `RoverDrivetrain.mo` integrates a first-order motor state per
+# side on the solver clock. Native USD connections publish its outputs onto the
+# rover's generic wheel ports; no tick script participates.
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
 # ── The law FORWARDS the vessel's output; it does not write an input ─────────
 #
-# `drive_left` on a rover root is an OUTPUT — the mixed command every wheel
-# consumes (`inputs:demand.connect = </SkidRover.outputs:drive_left>`). A drive
-# law replaces the PRODUCER of that signal, so the connection to author is an
-# OUTPUT-TO-OUTPUT forward: the root's output resolves to the law's output.
+# `drive_left` on a rover root is an output consumed by wheel drive inputs. The
+# drive law is its producer, so this is an output-to-output forward.
 #
 #     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
 #
-# This file used to author `inputs:drive_left.connect` instead, which cannot
-# work: a connection names a consumer's input and a producer's output, and there
-# is no `inputs:` half of `drive_left` on the root to write into. The measured
-# result was a rover that travelled 0.00 m while its control reached 2.13 m/s —
-# `apply_drive_mix` stood the built-in down exactly as asked and nothing took its
-# place. The same forwarding idiom is already used by `skid_rover.usda`'s own
-# network root with an explicit component collection and member connections.
-#
-# ── Why the model stays in a CHILD prim ──────────────────────────────────────
+# ── Why the model stays in a child prim ──────────────────────────────────────
 #
 # Not for tidiness — the rover root is already taken. It references
 # `components/avionics/obc.usda`, so it ALREADY carries `LunCoProgramAPI` and an
@@ -42,10 +29,8 @@
 # stronger, so a second `info:sourceAsset` here would be silently overridden and
 # the drive law would never bind at all. One prim, one model.
 #
-# `derive_usd_connections` materialises these forwards onto the vessel's actuator
-# ports. The production parity fixture proves the Modelica law owns the command:
-# it retains the authored first-order lag while converging to the built-in
-# kernel's terminal speed.
+# The generated network materialises these forwards onto the vessel's generic
+# wheel ports.
 def Xform "DriveLaw" (
     kind = "component"
 )
@@ -62,8 +47,8 @@ def Xform "DriveLaw" (
     float inputs:throttle = 0.0
     float inputs:steer = 0.0
 
-    # These connected outputs are the authoritative allocation. Their presence
-    # prevents derivation of a second, imperative DriveMix on the vessel.
+    # These connected outputs are the authored source for the vessel's wheel
+    # demand ports.
     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
     float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
 
@@ -76,8 +61,7 @@ def Xform "DriveLaw" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
         float outputs:drive_left
         float outputs:drive_right
-        # `</DriveLaw.…>` = the host rover root after arc translation: the
-        # model reads the same FSW command ports the built-in kernels read.
+        # The translated reference reads the host rover's command ports.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>
         float inputs:steer.connect = </DriveLaw.inputs:steer>
     }

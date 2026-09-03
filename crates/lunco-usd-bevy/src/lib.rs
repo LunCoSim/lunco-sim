@@ -1691,6 +1691,11 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             Ok(())
         };
         if let Err(err) = material_result {
+            eprintln!(
+                "[usd-bevy test-diagnostic] {} has malformed authored material attribute `{}`",
+                sdf_path.as_str(),
+                err.attribute
+            );
             error!(
                 "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
                 sdf_path.as_str(),
@@ -1744,9 +1749,9 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // `Controls` child scope: each child prim's NAME is the intent, with
         // `string lunco:port` + `double lunco:factor`. Authored inline OR pulled in
         // from a shared profile class (`inherits = </_RoverControl>`); either way
-        // it's already composed into this live stage. When absent, the
-        // controller stamps a topology default at possess. Fully data-driven: a
-        // vessel declares what its inputs actuate with no Rust change.
+        // it's already composed into this live stage. When absent, no keyboard
+        // adapter is attached; direct named-port writes and authored programs
+        // can still operate only on explicitly projected surfaces.
         if let Some(controls) = reader
             .children(&sdf_path)
             .into_iter()

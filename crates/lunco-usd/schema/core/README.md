@@ -24,22 +24,19 @@ forum) — it ships only inside a Kit / Isaac Sim install at
 file was written. It was reconstructed from the authoritative Omni Physics
 schema reference (v107.2), which is generated from that exact file.
 
-**Scope is deliberately minimal** — only the vehicle APIs this project uses
-(`Context`, `AckermannSteering`, `TankDifferential`, `Wheel`, `Engine`,
-`Suspension`) or needs per the suspension spec (doc 53: `WheelAttachment`,
-`SuspensionCompliance`, `Tire`). NVIDIA's full vehicle family (~15+ APIs) is
-larger; add those only when a feature consumes them.
+**Scope is deliberately minimal** — only the generic vehicle context and the
+`Wheel`, `Engine`, `Suspension`, `WheelAttachment`, `SuspensionCompliance`, and
+`Tire` APIs this project consumes or needs per the suspension spec (doc 53).
+Motion policy is authored through generic Modelica/Rhai ports, so this schema
+does not encode a steering or differential type.
 
 **This is a RECONSTRUCTION, and its risk is not a wrong name for a real property
 — it is a convincing name for one that does not exist.** No amount of internal
 consistency detects that. A worked example lives in the drift test as a negative
-assertion: `physxVehicleAckermannSteering:maxWheelAngleDegrees` is in no NVIDIA
-schema or document (PhysX steering is radians; the real property is
-`maxSteerAngle`), yet it reads as plausible. Treat every name in this file as
-unverified until the verbatim swap, and prefer authoring against a name you have
-confirmed against NVIDIA's docs. `PhysxVehicleSteeringAPI` — the non-Ackermann
-steering API and the documented replacement for the deprecated per-wheel
-`maxSteerAngle` — is absent from this file entirely, for the same reason.
+assertion: every property in this reconstruction must be confirmed against the
+verbatim Kit schema before it is used for authoring. Treat every name in this
+file as unverified until the verbatim swap, and prefer authoring against a name
+you have confirmed against NVIDIA's docs.
 
 **Replace with the verbatim file when a Kit install is available.** Copy
 `extsPhysics/omni.physx/schema.usda` over this one. The drift test

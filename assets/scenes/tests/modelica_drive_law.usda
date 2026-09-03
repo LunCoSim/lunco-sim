@@ -5,52 +5,20 @@
     metersPerUnit = 1
 )
 
-# ── Modelica drive-law rig ───────────────────────────────────────────────────
-#
-# The SAME rover asset twice on ONE flat ground, differing in exactly one thing:
-# whether its command→torque mixing is done by the built-in Rust kernel or by
-# `LunCo.Mobility.RoverDrivetrain`, the Modelica model.
-#
-# WHY THIS SCENE EXISTS. The Modelica drive laws under
-# `components/mobility/drive_laws/` were UNREACHABLE. Each one documents itself
-# as "the `driveLaw = "modelica"` variant references this into the rover ROOT",
-# but no rover in the fleet authors a `driveLaw` variantSet — so nothing composed
-# them, no scene selected them, and no test touched them. `RoverDrivetrain.mo`
-# and `RoverAckermannDrivetrain.mo` could have been deleted, or silently broken
-# by a refactor, and every gate in the repo would have stayed green.
-#
-# That is exactly what happened when the two models moved into `LunCo/Mobility/`:
-# the parity scenes exercise the Rust kernels, so they could not have noticed.
-# This scene closes that hole by doing what the missing variant would do —
-# referencing the drive-law component onto the rover root.
-#
-# ── THE CONTROL ──────────────────────────────────────────────────────────────
-#
-# `RoverBuiltin` is not decoration. If the Modelica program failed to load, or
-# its connected drive outputs failed to stand the built-in mixing down, the
-# Modelica rover would simply be driven by the built-in kernel — and a test that
-# only asked "did it move?" would pass while proving nothing. The control makes
-# that indistinguishable case detectable, because the two laws differ in a way
-# that is measurable:
-#
-#   the built-in kernel mixes INSTANTLY; `RoverDrivetrain.mo` integrates a
-#   first-order lag `der(tl) = (cmd_l - tl) / tau_m` with tau_m = 0.15 s
-#
-# So under a step throttle the Modelica rover must LAG the control early on, and
-# both must converge to the same terminal speed once the transient has passed.
-# "Lags early, matches late" is a signature the built-in kernel cannot produce.
+# Positive acceptance fixture for an authored Modelica drivetrain.
+# The skid rover composes its controller and mechanical network through the
+# authored DriveLaw reference arc. The attached Rhai scenario checks that the
+# resulting generic output surface is live and produces motion.
 
 def Xform "ModelicaDriveLaw" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "One skid rover driven by the Modelica drive law, one by the built-in kernel, on identical flat ground."
+    doc = "One skid rover driven by its authored Modelica controller on flat ground."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
 
-    # One ground prim, not two pads: the surface must be bit-identical under both
-    # rovers or a mixing comparison becomes a terrain comparison.
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
@@ -74,6 +42,11 @@ def Xform "ModelicaDriveLaw" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
@@ -81,40 +54,27 @@ def Xform "ModelicaDriveLaw" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # ── The subject: mixing done by the Modelica model ───────────────────────
-    #
-    # TWO reference arcs onto one prim, which is how the absent variant would
-    # have composed it: the rover, then the drive-law overlay that stands the
-    # built-in kernel down and wires the model's outputs onto the rover's drive
-    # ports. Nothing is restated here — a variant chooses a component, it never
-    # re-authors one, and neither does this scene.
-    def Xform "RoverModelica" (
-        prepend references = [
-            @lunco://vessels/rovers/skid_rover.usda@</SkidRover>,
-            @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
-        ]
+    def Camera "DriveLawCam" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        double3 xformOp:translate = (-25.0, 1.0, 50.0)
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
+        double3 xformOp:translate = (0.0, 45.0, 170.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 24.0
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    def Xform "RoverModelica" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
         {
             color3f[] primvars:displayColor = [(0.20, 0.60, 0.90)]
-        }
-    }
-
-    # ── The control: the same rover, built-in mixing, nothing overlaid ───────
-    def Xform "RoverBuiltin" (
-        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
-    )
-    {
-        double3 xformOp:translate = (25.0, 1.0, 50.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        over "Chassis"
-        {
-            color3f[] primvars:displayColor = [(0.85, 0.55, 0.15)]
         }
     }
 

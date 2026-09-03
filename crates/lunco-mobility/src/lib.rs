@@ -18,12 +18,9 @@
 //! 3. **Numeric Stability**: The raycast realization projects a single ray to
 //!    avoid wheel snagging on irregular procedural terrain.
 //!
-//! ## Control Mixing Models
-//! The crate supports hotswappable steering architectures:
-//! - **Differential (Skid) Drive**: Common for heavy loaders and excavators;
-//!   turns by varying velocity between left and right tracks.
-//! - **Ackermann Steering**: Standard for high-speed mobility; pivots leading
-//!   wheels to maintain a common center of rotation, reducing tire scrub.
+//! Motion allocation is not a Rust policy. Modelica/Rhai programs publish the
+//! final drive torques and wheel headings through generic ports; this crate
+//! realizes those values as wheel, suspension, tire, and brake mechanics.
 
 use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
 use avian3d::dynamics::solver::xpbd::{solve_xpbd_joint, XpbdSolverSystems};
@@ -31,16 +28,12 @@ use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{safe_stop_control_surface, InputPorts, MobilityRoot, OutputPorts};
+use lunco_core::{InputPorts, MobilityRoot, OutputPorts};
 use std::collections::HashSet;
 
 mod jointed_tire;
-/// Control kernels live here rather than in core (see the nothing-into-core
-/// rule).
-pub mod kernels;
 mod sensing;
 mod wheel_spin;
 pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
@@ -60,7 +53,7 @@ fn mark_wheel_ports_causal(
     let Ok(wheel) = query.get(trigger.entity) else {
         return;
     };
-    for port in [wheel.drive_port, wheel.steer_port] {
+    for port in [wheel.drive_port, wheel.heading_port] {
         if port != Entity::PLACEHOLDER {
             commands
                 .entity(port)
@@ -82,12 +75,8 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<WheelRaycast>()
             .register_type::<JointedWheelTire>()
             .register_type::<TireLateralStiffnessGraph>()
-            // `DriveMix` is the kernel-selected allocation spec. Registered
-            // here with the kernels it selects between; it is a vehicle-domain
-            // type and core carries no domain.
-            .register_type::<DriveMix>()
             .register_type::<DifferentialCoupling>()
-            .register_type::<SteerBaseRotation>()
+            .register_type::<WheelHeadingBaseRotation>()
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
             .register_type::<RaycastWheelMassFolded>()
@@ -139,13 +128,13 @@ impl Plugin for LunCoMobilityPlugin {
                 (
                     apply_wheel_suspension,
                     update_suspension_visuals,
-                    // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
+                    // HEADING, then SOLVE THE TIRE, then APPLY IT. Heading first so the
                     // contact basis is this tick's heading; the spin solve produces the
                     // patch force; `apply_wheel_drive` only hands it to the body. The
-                    // old order (drive → steer → spin) meant the chassis force was
-                    // built from last tick's steer angle and from a spin it could not
+                    // previous ordering (drive → heading → spin) meant the chassis
+                    // force was built from last tick's heading and from a spin it could not
                     // see, which is what forced the two independent force fudges.
-                    apply_wheel_steering,
+                    apply_wheel_heading,
                     update_wheel_spin,
                     apply_wheel_drive,
                     apply_jointed_tire_forces,
@@ -178,24 +167,13 @@ impl Plugin for LunCoMobilityPlugin {
                         lunco_physics::physics_is_live,
                     ),
             );
-        // Own the control-allocation kernel registry here (the plugin that runs
-        // `apply_drive_mix`), seeded with the built-in `skid`/`linear` kernels —
-        // so any app running the drive systems has it, without depending on the
-        // full core plugin. Flight-kernel crates register additively the same way.
-        if !app.world().contains_resource::<ControlKernelRegistry>() {
-            app.insert_resource(ControlKernelRegistry::with_defaults());
-        }
-
-        // Mix the FSW's logical input ports (written via the shared port backend) into
-        // the actuator command `Port`s BEFORE propagation carries them across the
-        // wires (and before the wheel systems, which run
-        // `.after(ControlDacSet)`). The
-        // input surface is derived from USD `Controls` bindings (never a Rust
-        // literal) by `sync_input_ports`, ordered before the mix so a
-        // freshly-loaded vessel is drivable the same tick its binding lands.
+        // Keep command-surface synchronization and braking in the generic
+        // substrate. Drive allocation is an authored Modelica/Rhai network;
+        // there is deliberately no Rust vehicle policy between these ports and
+        // the generic cosimulation propagation pass.
         app.add_systems(
             FixedUpdate,
-            (sync_input_ports, apply_vehicle_brake, apply_drive_mix)
+            (sync_input_ports, apply_vehicle_brake)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -220,7 +198,7 @@ impl Plugin for LunCoMobilityPlugin {
         // it must run regardless of the pause/speed state of the virtual clock.
         app.add_systems(
             lunco_core::RollbackReplay,
-            (sync_input_ports, apply_vehicle_brake, apply_drive_mix)
+            (sync_input_ports, apply_vehicle_brake)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -229,13 +207,13 @@ impl Plugin for LunCoMobilityPlugin {
             (
                 apply_wheel_suspension,
                 update_suspension_visuals,
-                // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
+                // HEADING, then SOLVE THE TIRE, then APPLY IT. Heading first so the
                 // contact basis is this tick's heading; the spin solve produces the
                 // patch force; `apply_wheel_drive` only hands it to the body. The
-                // old order (drive → steer → spin) meant the chassis force was
-                // built from last tick's steer angle and from a spin it could not
+                // previous ordering (drive → heading → spin) meant the chassis
+                // force was built from last tick's heading and from a spin it could not
                 // see, which is what forced the two independent force fudges.
-                apply_wheel_steering,
+                apply_wheel_heading,
                 update_wheel_spin,
                 apply_wheel_drive,
             )
@@ -964,8 +942,8 @@ pub struct WheelRaycast {
     pub drive_port: Entity,
     /// Port mapping for the measured shaft speed fed back to the solved network.
     pub speed_port: Entity,
-    /// Port mapping for steering angle actuation.
-    pub steer_port: Entity,
+    /// Port mapping for the final wheel heading command.
+    pub heading_port: Entity,
     /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
     /// Entity for the visual mesh to be transformed.
@@ -998,12 +976,12 @@ pub struct WheelRaycast {
     pub min_validated_speed: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
-    /// Steering rotation axis in the wheel's local frame
-    /// (USD `lunco:wheel:steerAxis`, required).
+    /// Heading rotation axis in the wheel's local frame
+    /// (USD `lunco:wheel:headingAxis`, required).
     /// `+Y` (yaw) reproduces a flat-ground car steer; a motorcycle's
     /// raked steering head tilts this (e.g. `(0, cos θ, sin θ)`) so the front
     /// wheel steers about the fork axis, not vertical.
-    pub steer_axis: DVec3,
+    pub heading_axis: DVec3,
 }
 
 /// **USD is the sole source of a wheel's physical numbers.**
@@ -1017,15 +995,15 @@ pub struct WheelRaycast {
 /// the world is therefore visibly inert (no drive, no grip) instead of quietly
 /// plausible — which is the point.
 ///
-/// `steer_axis` is `+Y` because a zero vector is not a rotation axis at all;
-/// `lunco:wheel:steerAxis` is required and overwrites it.
+/// `heading_axis` is `+Y` because a zero vector is not a rotation axis at all;
+/// `lunco:wheel:headingAxis` is required and overwrites it.
 impl Default for WheelRaycast {
     fn default() -> Self {
         Self {
             suspension_port: Entity::PLACEHOLDER,
             drive_port: Entity::PLACEHOLDER,
             speed_port: Entity::PLACEHOLDER,
-            steer_port: Entity::PLACEHOLDER,
+            heading_port: Entity::PLACEHOLDER,
             wheel_radius: 0.0,
             visual_entity: None,
             last_normal_force: 0.0,
@@ -1040,7 +1018,7 @@ impl Default for WheelRaycast {
             min_validated_speed: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
-            steer_axis: DVec3::Y,
+            heading_axis: DVec3::Y,
         }
     }
 }
@@ -1465,36 +1443,34 @@ fn apply_wheel_drive(
     }
 }
 
-/// A steered wheel's base (authored mount) local rotation, captured before the
-/// first steer write. `apply_wheel_steering` composes the steer quat on top of
-/// this instead of assigning `Transform::rotation` wholesale — the wholesale
-/// write erased any authored camber/toe/rake every tick, so a mount authored
-/// with a lean snapped upright the moment steering ran.
+/// A raycast wheel's base (authored mount) local rotation, captured before the
+/// first authored heading write. Heading is a final scalar produced by the
+/// controller; this component only preserves the authored camber/toe/rake while
+/// realizing that scalar on a wheel that has no rigid-body joint.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
-pub struct SteerBaseRotation(pub Quat);
+pub struct WheelHeadingBaseRotation(pub Quat);
 
-/// Applies the steered angle to a raycast front wheel's transform. The angle
-/// itself (rate-limited servo slew + Ackermann inner/outer geometry) is computed
-/// by the SHARED [`lunco_hardware::SteeringActuator`] system — the exact same
-/// model the physical joint wheel uses — so steering is identical across wheel
-/// kinds and the logic lives in one place (DRY). This system only reads the
-/// computed `output_angle` and rotates the wheel about its steer axis, composed
-/// onto the captured [`SteerBaseRotation`]; the visual mesh rotation
-/// (steer + roll spin) is composed in `update_wheel_spin`.
-fn apply_wheel_steering(
+/// Realize a controller-produced wheel heading for a raycast wheel.
+///
+/// Physical wheels receive the same authored scalar through a standard
+/// `PhysicsRevoluteJoint` `angle` port. A raycast wheel has no joint, so this
+/// small realization rotates its physics probe and visual basis. It performs
+/// no command interpretation, rate limiting, or vehicle-type dispatch; those
+/// belong to the authored controller.
+fn apply_wheel_heading(
     mut commands: Commands,
     mut q_wheels: Query<(
         Entity,
         &mut Transform,
         &WheelBodyMount,
-        &lunco_hardware::SteeringActuator,
         &WheelRaycast,
-        Option<&SteerBaseRotation>,
+        Option<&WheelHeadingBaseRotation>,
     )>,
+    q_ports: Query<&Port>,
     q_chassis: Query<&RigidBody, With<RigidBody>>,
 ) {
-    for (entity, mut transform, mount, steer, wheel, base) in q_wheels.iter_mut() {
+    for (entity, mut transform, mount, wheel, base) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
         // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
         // local steer ports are stale and would point the wheels wrong.
@@ -1505,33 +1481,28 @@ fn apply_wheel_steering(
         }
         // The mount's authored rotation, captured on first run — before this
         // system has ever written the transform, so it IS the authored value.
+        let Ok(heading) = q_ports.get(wheel.heading_port) else {
+            continue;
+        };
+        if !heading.value.is_finite() {
+            continue;
+        }
         let base_rotation = match base {
             Some(b) => b.0,
             None => {
                 let b = transform.rotation;
-                commands.entity(entity).try_insert(SteerBaseRotation(b));
+                commands
+                    .entity(entity)
+                    .try_insert(WheelHeadingBaseRotation(b));
                 b
             }
         };
-        // Steer about the wheel's steer axis, in the MOUNT frame — so a raked
-        // motorcycle fork tilts the axis with the mount. Default `+Y` reproduces
-        // the flat yaw steer.
-        let raw = wheel.steer_axis.as_vec3();
-        let axis = if raw.length_squared() > 1e-12 {
-            raw.normalize()
-        } else {
-            Vec3::Y
-        };
-        transform.rotation =
-            base_rotation * Quat::from_axis_angle(axis, -steer.output_angle as f32);
+        // Rotate about the authored wheel-local heading axis. The input is the
+        // final angle in radians, not a normalized vehicle command.
+        let axis = wheel.heading_axis.as_vec3().normalize();
+        transform.rotation = base_rotation * Quat::from_axis_angle(axis, heading.value as f32);
     }
 }
-
-// A vessel's command-to-actuator allocation is the data-driven
-// `lunco_core::kernels::DriveMix { kernel, ports, entries }`, whose `kernel`
-// names a self-registered `ControlKernel` (`skid` / `linear` / future flight
-// allocators). `apply_drive_mix` resolves and runs the selected kernel without
-// a per-architecture component taxonomy.
 
 /// Drive interpretation for an authored `PhysicsDriveAPI` relation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
@@ -1868,17 +1839,16 @@ fn sync_input_ports(
     }
 }
 
-// ── Vehicle brake and drive allocation ───────────────────────────────────────
+// ── Vehicle brake boundary ────────────────────────────────────────────────────
 
 /// Apply the vessel-wide brake command independently of drive allocation.
 ///
-/// Every vehicle control surface has an [`OutputPorts`] index, whether its
-/// drive outputs are allocated by an imperative [`DriveMix`] or by authored
-/// co-simulation wiring. Braking is a mechanism shared by both cases: it owns
+/// Every vehicle control surface has an [`OutputPorts`] index. Braking is a
+/// mechanism shared by all authored drive networks: it owns
 /// [`InputPorts::brake_active`] (used by the tire solve) and the discrete
-/// `brake` actuator port. Tying either fact to `DriveMix` would incorrectly
-/// disable brakes—and the mobility chassis itself—when Modelica owns drive
-/// allocation.
+/// `brake` actuator port. The drive allocation and steering laws remain in the
+/// authored Modelica/Rhai network; this function only realizes the brake input
+/// at the generic vehicle boundary.
 fn apply_vehicle_brake(
     mut q: Query<(&mut InputPorts, &OutputPorts)>,
     mut q_ports: Query<&mut Port>,
@@ -1890,108 +1860,6 @@ fn apply_vehicle_brake(
                 port.value = if inputs.brake_active { 1.0 } else { 0.0 };
             }
         }
-    }
-}
-
-/// System allocating each rover's input ports (`throttle`/`steer`/`brake`, read
-/// from [`InputPorts::values`]) to its actuator [`Port`]s (indexed by
-/// [`OutputPorts`]), via the
-/// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
-/// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
-/// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
-/// before being written to the port. Runs every fixed tick before wire propagation.
-fn apply_drive_mix(
-    mut q: Query<(Entity, &mut InputPorts, &OutputPorts, &DriveMix)>,
-    registry: Res<ControlKernelRegistry>,
-    mut q_ports: Query<&mut Port>,
-    mut unknown: Local<std::collections::HashSet<String>>,
-) {
-    for (entity, mut inputs, actuators, mix) in q.iter_mut() {
-        // Read this vehicle's logical command inputs off the command surface.
-        let throttle = inputs.cmd("throttle");
-        let steer = inputs.cmd("steer");
-
-        // While braking, force throttle/steer to 0 and drive the brake gate (1.0)
-        // so brake-coefficient ports engage and drive ports zero out — matching the
-        // old per-branch behaviour, now uniform across kernels.
-        let drive_inputs = if inputs.brake_active {
-            kernels::DriveInputs {
-                throttle: 0.0,
-                steer: 0.0,
-                brake: 1.0,
-            }
-        } else {
-            kernels::DriveInputs {
-                throttle,
-                steer,
-                brake: 0.0,
-            }
-        };
-
-        // Allocate command → normalized port writes. A built-in registry kernel
-        // (`skid`/`linear`/…) wins; otherwise `mix.kernel` names a scripted (rhai)
-        // drive kernel — a `lunco_hooks` hook that computes the per-port outputs
-        // itself ("control policy in rhai", `lunco:driveKernel`). An unknown name
-        // with no matching hook leaves the vessel explicitly stopped and braked.
-        let outputs = match registry.get(&mix.kernel) {
-            Some(kernel) => kernel(drive_inputs, mix),
-            None => {
-                // Scripted kernel: hand the hook the vessel's real command surface
-                // (`inputs.values`, un-gated — the script owns its brake policy), not the
-                // built-in kernels' fixed throttle/steer/brake projection.
-                let scripted = scripted_drive_mix(&mix.kernel, &inputs.values);
-                if scripted.is_empty() && unknown.insert(mix.kernel.clone()) {
-                    warn!("[apply_drive_mix] unknown drive kernel '{}' on {:?} — no built-in and no rhai hook; vessel not actuated", mix.kernel, entity);
-                }
-                scripted
-            }
-        };
-
-        if outputs.is_empty() {
-            // A failed scripted kernel must not leave the previous actuator
-            // registers latched.  Neutralise the complete surface and engage
-            // the brake gate before the next propagation tick.
-            safe_stop_control_surface(Some(&mut *inputs), Some(actuators), &mut q_ports);
-            continue;
-        }
-
-        for (port, value) in outputs {
-            if let Some(port_id) = actuators.get(&port) {
-                if let Ok(mut p) = q_ports.get_mut(port_id) {
-                    p.value = value.clamp(-1.0, 1.0);
-                }
-            }
-        }
-    }
-}
-
-/// Invoke a **scripted (rhai) drive kernel** by hook id. Hands the hook the vessel's
-/// **actual input surface** — its declared [`InputPorts::values`] map, keyed by
-/// whatever ports that vehicle accepts (a rover's `throttle`/`steer`/`brake`, a
-/// lander's `throttle`/`pitch`/`roll`/`yaw`, …) — NOT a fixed Rust key set. The
-/// command vocabulary is data, so a scripted kernel reads exactly the ports the
-/// vessel exposes and the script owns its own policy (incl. how `brake` gates).
-/// Reads back a `port → value` map in `[-1, 1]` (clamped defensively). Empty on an
-/// absent or faulted hook: the complete actuator surface is explicitly neutralised
-/// and braked by [`safe_stop_control_surface`].
-/// Host-side; a predicted client needs the identical hook, so the scripted-policy
-/// plane (`lunco_networking`) distributes + registers it on every peer.
-fn scripted_drive_mix(
-    hook_id: &str,
-    inputs: &std::collections::HashMap<String, f64>,
-) -> Vec<(String, f64)> {
-    use lunco_hooks::HookValue;
-    let ctx = HookValue::map(
-        inputs
-            .iter()
-            .map(|(k, v)| (k.clone(), HookValue::Float(*v))),
-    );
-    match lunco_hooks::invoke(hook_id, &[ctx]) {
-        Some(Ok(HookValue::Map(entries))) => entries
-            .into_iter()
-            .filter_map(|(k, v)| v.as_f64().map(|f| (k, f.clamp(-1.0, 1.0))))
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -2251,7 +2119,7 @@ mod force_law_tests {
     }
 
     #[test]
-    fn authored_allocator_vehicle_keeps_the_shared_brake_without_drive_mix() {
+    fn authored_brake_command_reaches_the_generic_brake_port() {
         let mut app = App::new();
         app.add_systems(Update, apply_vehicle_brake);
 
@@ -2273,7 +2141,6 @@ mod force_law_tests {
 
         assert!(app.world().get::<InputPorts>(vehicle).unwrap().brake_active);
         assert_eq!(app.world().get::<Port>(brake_port).unwrap().value, 1.0);
-        assert!(app.world().get::<DriveMix>(vehicle).is_none());
     }
 
     // ── Single-track lean: contact-plane traction basis ─────────────────────
@@ -2334,64 +2201,6 @@ mod force_law_tests {
         // the native revolute joint must read the same DOF there.
         let swung = DQuat::from_axis_angle(DVec3::Z, 0.7) * DQuat::from_axis_angle(DVec3::X, 0.3);
         assert!((angle_about_axis(swung, axis) - 0.3).abs() < 1e-9);
-    }
-
-    // (drive-mix parse + kernel projection now live in `kernels`.)
-
-    // ── scripted (rhai) drive kernel: hook-driven mixing, by DriveMix.kernel id ──
-    #[test]
-    fn scripted_drive_mix_maps_command_to_ports() {
-        use lunco_hooks::{HookResult, HookValue, RegisteredHook, ScriptHook};
-        use std::collections::HashMap;
-        use std::sync::Arc;
-
-        // A native stand-in for a rhai kernel: tank mix over the vessel's OWN command
-        // ports (a rover exposes `throttle`/`steer`) — left=t+s, right=t-s.
-        struct TankKernel;
-        impl ScriptHook for TankKernel {
-            fn invoke(&self, args: &[HookValue]) -> HookResult {
-                let t = args[0]
-                    .get("throttle")
-                    .and_then(HookValue::as_f64)
-                    .unwrap_or(0.0);
-                let s = args[0]
-                    .get("steer")
-                    .and_then(HookValue::as_f64)
-                    .unwrap_or(0.0);
-                Ok(HookValue::map([
-                    ("drive_left", HookValue::Float((t + s).clamp(-1.0, 1.0))),
-                    ("drive_right", HookValue::Float((t - s).clamp(-1.0, 1.0))),
-                ]))
-            }
-        }
-        lunco_hooks::register(RegisteredHook {
-            id: "test.kernel.tank".into(),
-            backend: "rust".into(),
-            deterministic: true,
-            hook: Arc::new(TankKernel),
-        });
-
-        let inputs: HashMap<String, f64> = [
-            ("throttle".into(), 1.0),
-            ("steer".into(), 0.5),
-            ("brake".into(), 0.0),
-        ]
-        .into();
-        let mut out = scripted_drive_mix("test.kernel.tank", &inputs);
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        // t+s = 1.5 → clamped to 1.0; t-s = 0.5.
-        assert_eq!(
-            out,
-            vec![
-                ("drive_left".to_string(), 1.0),
-                ("drive_right".to_string(), 0.5)
-            ]
-        );
-
-        // Absent hook → empty (fail-safe coast; ports left untouched).
-        assert!(scripted_drive_mix("test.kernel.absent", &inputs).is_empty());
-
-        lunco_hooks::unregister("test.kernel.tank");
     }
 
     // ── suspension_force_mag: bounded, never negative, damps both ways ───────
@@ -2851,7 +2660,7 @@ mod suspension_visuals_tests {
                 WheelRaycast {
                     suspension_port: Entity::PLACEHOLDER,
                     drive_port: Entity::PLACEHOLDER,
-                    steer_port: Entity::PLACEHOLDER,
+                    heading_port: Entity::PLACEHOLDER,
                     wheel_radius: 0.4,
                     visual_entity: Some(visual),
                     ..default()

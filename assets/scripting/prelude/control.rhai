@@ -3,7 +3,8 @@
 //
 // Control is the ONE generic `SetPorts` command: a batch of named input-port
 // writes on the vessel's FlightSoftware command surface (`throttle`/`steer`/
-// `brake`). A `DriveMix` + kernel then projects those onto the actuator ports.
+// `brake`). The authored Modelica/Rhai controller then maps those commands onto
+// motor, brake, and joint ports.
 // There are no dedicated rover command verbs. Like the keyboard path, we write EVERY
 // command port every tick (0 when unused) so a released setpoint — especially a
 // prior `brake` — zeroes out cleanly instead of sticking.
@@ -17,9 +18,8 @@ fn drive(rover, forward, steer) {
         seq: 0, tick: 0 })
 }
 
-/// Stop a rover this tick: full brake. Writes ONLY `brake` — the drive mix forces
-/// throttle/steer to 0 whenever `brake > 0.5`, so an arrived/idle rover emits no
-/// throttle/steer setpoint at all (it's purely braking, not "driving forward 0").
+/// Stop a rover this tick: full brake. Writes ONLY `brake`; the authored
+/// controller decides how that command is coordinated with its motor ports.
 /// `drive()` re-writes `brake = 0` next time it's called, so the brake never
 /// sticks. `seq`/`tick` default to 0 (host-local, like `drive`).
 fn brake(rover) {

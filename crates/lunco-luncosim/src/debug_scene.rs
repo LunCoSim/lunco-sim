@@ -61,7 +61,7 @@
 //!
 //! Via **telemetry**, not by scraping stdout.
 //!
-//! The scenario contract (`assets/scenarios/*_parity.rhai`) ends in
+//! The scenario contract (`assets/scenarios/tests/*.rhai`) ends in
 //! `emit("<CHANNEL>", "PASS" | "FAIL")`, and rhai's `emit` fires a real
 //! `TelemetryEvent` on the shared bus (`bridge_core::emit` →
 //! `world.trigger(TelemetryEvent { .. })`). An observer here catches it — a
@@ -72,8 +72,8 @@
 //!
 //! We match on the PAYLOAD (`TelemetryValue::String("PASS"/"FAIL")`), not on a
 //! hardcoded channel name, because each scene names its own channel
-//! (`DRIVETRAIN_PARITY`, `ACKERMANN_PARITY`, `SIX_INDEPENDENT_MOTION`,
-//! `ALLOCATION_SPEC`, …). The channel name is reported in the summary so it is
+//! (`DRIVETRAIN_PARITY`, `ACKERMANN_CONTROLLER`, `SIX_INDEPENDENT_MOTION`,
+//! …). The channel name is reported in the summary so it is
 //! never ambiguous WHICH check answered. `--verdict-channel <NAME>` pins it if a
 //! scene ever emits two.
 //!

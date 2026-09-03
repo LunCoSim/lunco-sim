@@ -25,9 +25,8 @@
 //! (sequence waypoints, fallbacks, when-to-brake) is the **glue**, authored as DATA
 //! ([`BehaviorSpec`]) — so rhai/JSON can define it and **hot-swap it on the fly**
 //! (the [`SetAutopilotBehavior`] command replaces the tree at runtime). The leaf
-//! primitives are **Rust** ([`nav_setpoint`] steering math) — computation stays in
-//! Rust; rhai stays glue-only. With no behaviour attached, the autopilot falls back
-//! to constant `throttle`/`steer` setpoints.
+//! primitives are **Rust** ([`nav_setpoint`] vector math) — computation stays in
+//! Rust; the authored behaviour supplies the vehicle's output policy.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -1466,7 +1465,7 @@ pub fn nav_setpoint(
     let dot = fwd.dot(to);
     if dot < 0.0 {
         // A goal behind the rover is a heading error, not a request for reverse
-        // motion. With throttle released, the skid-steer drive kernel pivots on
+        // motion. With throttle released, the authored drive program pivots on
         // the spot. Exactly behind is symmetric, so use the same deterministic
         // left-turn tie-break as the authored `steer_to` helper.
         let steer = if cy >= 0.0 { -1.0 } else { 1.0 };

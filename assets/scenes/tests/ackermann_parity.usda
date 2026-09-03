@@ -16,21 +16,15 @@
 #
 # The sibling of `drivetrain_parity.usda`, which does the same for the SKID
 # rover. This file exists because the skid rig cannot cover the steered-axle
-# path at all: a skid rover has no steering actuator, so nothing in the existing
-# gate exercises the `steering` actuator port, the `SteeringActuator` slew, or
-# the `linear` allocation that feeds them. Every one of those is shared between
-# the two wheel realizations and every one of them can diverge between them.
+# path at all. The scenario exercises authored heading outputs and the generic
+# physical revolute joints that realize them.
 #
 # WHAT IS DIFFERENT ABOUT AN ACKERMANN ROVER. A skid rover turns by driving one
-# side harder than the other — steering is a consequence of the DRIVE
-# allocation. An Ackermann rover turns by pointing its front wheels: the
-# allocation writes a dedicated `steering` port
-# (`drive_left=1,0 drive_right=1,0 steering=0,1`, the `linear` kernel), and the
-# drive ports carry no steering term at all. That has a sharp, falsifiable
-# signature the scenario asserts: at ZERO throttle with FULL steer an Ackermann
-# rover must NOT rotate, because there is no drive to turn it with. A skid rover
-# pivots on the spot under exactly that command. If allocation ever regresses to
-# a differential mix, that check fires.
+# side harder than the other. An Ackermann rover turns by commanding the front
+# wheel heading joints independently. The authored model output network defines
+# that mapping; the runtime only realizes generic heading and drive ports. The
+# scenario checks the positive contract: heading outputs exist, wheel joints are
+# wired, and commanded travel occurs.
 #
 # THE SHARED NETWORK. Both realizations read the same authored motor/gearbox/shaft
 # solve. Parity with each other is necessary but
@@ -48,7 +42,7 @@
 def Xform "AckermannParity" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Two instances of the same Ackermann rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the steered-axle drivetrain parity regression test."
+    doc = "Two instances of the same Ackermann rover — raycast and joint drivetrain realizations — on identical flat ground, for authored-output and generic-joint motion acceptance."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -89,6 +83,11 @@ def Xform "AckermannParity" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
@@ -114,8 +113,8 @@ def Xform "AckermannParity" (
     # Identical `xformOp:translate` in Y and Z; only X (lane) and the variant
     # selection differ. Do NOT add per-instance mass, wheel, friction, or
     # STEER-LOCK overrides here — an override on one side silently invalidates
-    # the test, and `physxVehicleAckermannSteering:maxSteerAngle` is exactly the
-    # kind of number someone will be tempted to tune per instance. The livery
+    # the test, and the authored Modelica controller is exactly the kind of
+    # policy that must not be tuned per instance. The livery
     # `over "Chassis"` is display-only (the hull shader consumes displayColor)
     # and does not touch physics.
 

@@ -14,6 +14,15 @@ def Camera "LunarSurfaceCamera" (
     prepend apiSchemas = ["LunCoCameraAPI"]
 )
 {
+    # This component is referenced only by interactive avatar cameras. The
+    # binding remains authored data, so changing the avatar command vocabulary
+    # does not require a Rust change.
+    def "Controls" (
+        prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+    )
+    {
+    }
+
     # Match the sandbox free-flight camera's former ~45° vertical view. USD's
     # 50 mm default is a narrow photographic lens, not a navigation camera.
     float focalLength = 18

@@ -91,11 +91,11 @@ fn api_schemas_compose() {
     let view = cs.view();
     let ok = view.has_api_schema(
         &SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap(),
-        "PhysxVehicleTankDifferentialAPI",
+        "PhysxVehicleContextAPI",
     );
     assert!(
         ok,
-        "Skid_Physical_1 must compose PhysxVehicleTankDifferentialAPI"
+        "Skid_Physical_1 must compose the generic PhysxVehicleContextAPI"
     );
 }
 
@@ -153,13 +153,13 @@ fn standalone_rover_reader_is_complete() {
         );
     }
 
-    // Vehicle-type detection.
+    // Generic mobility-owner detection.
     assert!(
         view.has_api_schema(
             &SdfPath::new("/SkidRover").unwrap(),
-            "PhysxVehicleTankDifferentialAPI"
+            "PhysxVehicleContextAPI"
         ),
-        "SkidRover must compose PhysxVehicleTankDifferentialAPI"
+        "SkidRover must compose PhysxVehicleContextAPI"
     );
 
     // Wheel parameters the sim reads. Native USD types are preserved by the
@@ -187,10 +187,14 @@ fn standalone_rover_reader_is_complete() {
 fn drivetrain_physical_variant_brings_joints() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
-    for (rover, _drive) in [
-        ("Skid_Physical_1", "PhysxVehicleTankDifferentialAPI"),
-        ("Ackermann_Physical_1", "PhysxVehicleAckermannSteeringAPI"),
-    ] {
+    for rover in ["Skid_Physical_1", "Ackermann_Physical_1"] {
+        assert!(
+            view.has_api_schema(
+                &SdfPath::new(&format!("/SandboxScene/{rover}")).unwrap(),
+                "PhysicsArticulationRootAPI"
+            ),
+            "{rover} must compose the generic articulation root"
+        );
         for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let hinge = format!("/SandboxScene/{rover}/{w}_Hinge");
             assert!(
@@ -230,9 +234,8 @@ fn drivetrain_variants_share_the_axle_mount() {
     );
 }
 
-/// apiSchemas compose from TWO sources at once: the base rover's vehicle drive
-/// (via the reference) and the `physical` variant's `PhysicsArticulationRootAPI`
-/// — neither is re-listed on the scene instance anymore.
+/// Generic mobility and articulation capabilities compose from the base rover
+/// and the physical variant — neither is re-listed on the scene instance.
 #[test]
 fn drivetrain_physical_composes_articulation_and_drive() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");
@@ -243,8 +246,8 @@ fn drivetrain_physical_composes_articulation_and_drive() {
         "ArticulationRootAPI must compose from the physical variant"
     );
     assert!(
-        view.has_api_schema(&skid, "PhysxVehicleTankDifferentialAPI"),
-        "DriveSkidAPI must compose from the base rover across the reference"
+        view.has_api_schema(&skid, "PhysxVehicleContextAPI"),
+        "PhysxVehicleContextAPI must compose from the base rover across the reference"
     );
 }
 

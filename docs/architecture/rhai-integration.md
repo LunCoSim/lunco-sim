@@ -173,7 +173,7 @@ Representative commands already covering the user's surface:
 
 | Subsystem | Commands (file:line) |
 |---|---|
-| Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); `DriveMix` allocates them to actuators (`lunco-cosim/src/lib.rs`, `lunco-mobility::apply_drive_mix`) |
+| Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); authored Modelica/Rhai programs publish final drive and wheel-heading outputs through the same generic port graph |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
 | Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SelectUsdPrim` (`lunco-luncosim-edit/src/selection.rs`) |
@@ -317,8 +317,8 @@ typed task-kind parser and the existing `lunco-behavior` composites.
 
 ## 5. Navigation primitives
 
-`SetPorts` is the only actuator (writes `throttle`/`steer` inputs → `DriveMix` →
-port propagation → wheel physics); everything goal-shaped builds on it. The native set
+`SetPorts` is the only high-level actuator (writes `throttle`/`steer` inputs → authored
+program outputs → port propagation → wheel physics); everything goal-shaped builds on it. The native set
 (registered as rhai verbs), all deterministic, emitting `SetPorts` each tick:
 
 ```rust

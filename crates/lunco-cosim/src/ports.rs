@@ -299,7 +299,8 @@ const PORT_BACKEND: PortBackend = PortBackend {
 /// Generic runtime output surface backed by child [`Port`] entities.
 ///
 /// Imperative producers use this when their authored `outputs:*` values are
-/// not owned by a `SimComponent` (for example a drive kernel). The producer's
+/// not owned by a `SimComponent` (for example an authored drivetrain program).
+/// The producer's
 /// output names remain visible to the common port registry, but they are
 /// read-only here: commands enter through [`InputPorts`], and a producer owns
 /// the writes to its outputs.

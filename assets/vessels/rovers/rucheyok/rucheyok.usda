@@ -19,7 +19,7 @@ def Xform "Rucheyok" (
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI", "CollectionAPI:components"
+        "LunCoCatalogAPI", "CollectionAPI:components"
     ]
     # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
@@ -27,6 +27,7 @@ def Xform "Rucheyok" (
     # at all. See `../skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
     prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
+    prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
 )
 {
     uniform bool lunco:spawnable = true
@@ -46,7 +47,6 @@ def Xform "Rucheyok" (
     float physics:mass = 800.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
-    float outputs:steering = 0.0
     float outputs:brake = 0.0
 
     # Intent->port control (stage 2): shared rover profile as a child `references`

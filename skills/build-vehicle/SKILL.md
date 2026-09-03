@@ -64,7 +64,7 @@ contract without checking its consumer and test.
 | Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from the rover-root network — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
-| Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Modelica motor-lag drivetrain, one per steering family (see below) |
+| Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Authored Modelica controller and generic drive/heading outputs |
 | Drivetrain realization | `mobility/physical_drivetrain.usda` | the `physical` variant: articulation root + per-wheel revolute joints. The `raycast` variant is EMPTY — a raycast wheel is the absence of a joint. Wheel MOUNTS are never authored here: the wheel prim is the axle in both realizations, so it belongs to the rover, outside the variantSet. |
 
 ## Minimal rover
@@ -74,7 +74,7 @@ def Xform "MyRover" (
     kind = "assembly"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI", "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"]
+        "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -102,18 +102,15 @@ def Xform "MyRover" (
 }
 ```
 
-- `PhysxVehicleContextAPI` on the root ⇒ `MobilityRoot` + `OutputPorts` + authored ports;
-  `MobilityRoot` identifies the vehicle and `OutputPorts` only indexes its
-  produced actuator values
-  (`throttle`/`steer`/`brake` intake; `drive_left`/`drive_right`/`steering`).
-- `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
-  `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels
-  = `physxVehicleWheelAttachment:index < 2`.
+- `PhysxVehicleContextAPI` on the root ⇒ `MobilityRoot` + `OutputPorts` + authored
+  ports; `MobilityRoot` identifies the vehicle and `OutputPorts` indexes the
+  generic command/output surface.
+- Vehicle motion policy is authored in the composed Modelica/Rhai controller.
+  Skid, Ackermann, crab, and independent-wheel modes are programs that publish
+  different named outputs; they are not Rust type dispatch.
 - Wheel→port wiring is a USD connection: each wheel connects
-  `float inputs:drive.connect` to a `float outputs:<port>` declared on the root,
-  and the mix onto those ports is authored as a `DriveMix` child scope — one
-  prim per sink port with a `double lunco:factor:<source>` per command source
-  (six_wheel_independent shows the full stack).
+  `float inputs:drive.connect` and, where applicable, a heading-joint input to
+  an authored `float outputs:<port>` on the controller/network boundary.
 
 ## Wheel physics: one parameter set, two realizations
 
@@ -176,7 +173,7 @@ Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
 respawn**: `wheel_params::claims_edit` recognises the attribute (any
 `lunco:wheel:` / `lunco:suspension:` / `lunco:tire:` / `physxVehicle*:` prefix,
 and authored Modelica `inputs:*` are re-read by the domain projection,
-`lunco:driveKernel`, and `lunco:factor:*` on a `DriveMix` term prim)
+authored Modelica `inputs:*`/`outputs:*` and wheel heading attributes)
 and `resync_wheels_for_stage` updates the live components — same entities, joints
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
 next document change would overwrite you.
@@ -189,22 +186,21 @@ reusable beyond one mission or presentation. A scene-specific vehicle should
 reference the shared components rather than make the shared library depend on a
 one-off scene.
 
-Build the smallest **builtin-drive, raycast** rover path before adding Modelica,
-power, thermal, autonomy, or a physical drivetrain. For a lunar presentation,
-start with the existing `skid_rover` on the shared `lunar_surface` base: it has
-the complete command surface and the least moving runtime parts. The first
-acceptance gate is `scenes/tests/drivetrain_parity.usda`: its scenario settles,
-drives straight, and steers both builtin-drive realizations, then emits the
-real verdict `DRIVETRAIN PARITY: PASS|FAIL`. A rover that merely composes, or
-two rovers that are both stationary, do not pass.
+Build the smallest authored-controller, raycast rover path before adding power,
+thermal, autonomy, or a physical drivetrain. For a lunar presentation, start
+with the existing `skid_rover` on the shared `lunar_surface` base: it has the
+complete command surface and the least moving runtime parts. The first
+acceptance gate is `scenes/tests/drivetrain_parity.usda`: its Rhai scenario
+settles, drives both wheel realizations, and emits the real verdict
+`DRIVETRAIN PARITY: PASS|FAIL`. A rover that merely composes, or two rovers
+that are both stationary, do not pass.
 
 Only after that gate passes, add one concern at a time:
 
 1. terrain/course and presentation cameras;
 2. the vehicle-specific assembly or rocker-bogie morphology;
-3. a Modelica drive-law overlay, proved by `scenes/tests/modelica_drive_law.usda`
-   (`MODELICA DRIVE LAW: PASS|FAIL` proves the expected transient lag, not merely
-   movement);
+3. the authored Modelica drive law, proved by `scenes/tests/modelica_drive_law.usda`
+   (`MODELICA DRIVE LAW: PASS|FAIL` proves the composed output surface and motion);
 4. battery, generation, thermal, then autonomy/story behaviour.
 
 Do not combine these stages. A failed rover with a new terrain, Modelica model,
@@ -267,27 +263,23 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   realizations self-limit at the motor/gearbox axle no-load speed · radius
   (see *Wheel physics* above).
 - `tire` (per wheel) = **regolith | hard | cleated | worn | bald** — grip+look.
-- `driveLaw` = **builtin | modelica** — how throttle/steer become drive port
-  values. Exists on ALL rovers; ONE law component per steering family, chosen
-  by what ports the built-in kernel it displaces writes:
+- `driveLaw` = **modelica | rhai** — how throttle/steer become final drive and
+  heading port values. Exists on ALL driveable rovers; one authored controller
+  program owns the mapping for its vehicle:
   * `drive_laws/modelica_skid.usda` (skid_rover, six_wheel_rover,
     rocker_bogie): `RoverDrivetrain.mo` integrates a per-side motor lag on
     the solver clock; native USD connections publish `drive_left`/`drive_right`.
   * `drive_laws/modelica_ackermann.usda` (ackermann_rover):
-    `RoverAckermannDrivetrain.mo`, ONE shared-axle lag + a `steering`
-    passthrough — the built-in Ackermann kernel writes three ports, so the
-    law covers all three.
+    `RoverAckermannDrivetrain.mo` publishes the front wheel heading outputs and
+    the drive outputs consumed by the raycast or physical realization.
   * `drive_laws/modelica_six_independent.usda` (six_wheel_independent): the
     SAME `RoverDrivetrain.mo` (the law is per-side; fan-out is wiring, not
     physics) with a bridge writing `drive_w0..w2` = left, `drive_w3..w5` =
     right.
-  Allocation ownership is derived from the selected allocator's complete
-  composed USD output wiring. When every output port the allocator owns has an
-  authored producer, that producer (here the Modelica program) owns allocation
-  and no imperative `DriveMix` is installed. With no such connections the
-  authored built-in allocation applies. A partial set is invalid authoring and
-  fails safe; it never falls through to a second controller. The whole law is
-  USD + `.mo` + `.rhai` — no sentinel hook or type-specific Rust path. Wheels stay
+  Allocation ownership is the composed controller's complete authored output
+  wiring. A partial or missing controller contract is an authoring error; it is
+  not replaced by a second controller. The whole law is USD + `.mo` + `.rhai` —
+  no sentinel hook or type-specific Rust path. Wheels stay
   port-name-agnostic throughout: each listens to its `lunco:drivePort` (or
   the index-parity default, even ⇒ drive_left / odd ⇒ drive_right); a drive
   law is a VEHICLE-level component that writes those ports by name.

@@ -33,7 +33,7 @@
 #            │  writes ports by name
 #            ▼
 #   OBC  inputs:throttle ─┐
-#        inputs:steer  ───┼──► apply_drive_mix ──► wheel drive ports
+#        inputs:steer  ───┼──► authored drive program ──► wheel drive ports
 #        inputs:brake  ───┘
 #
 # THE VOCABULARY IS THESE PORTS. The set of `inputs:` names authored here IS the set

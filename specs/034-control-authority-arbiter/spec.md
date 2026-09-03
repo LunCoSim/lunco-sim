@@ -14,12 +14,16 @@
 
 A rover jitters when a script and a human drive it at the same time.
 
-Post-merge, control is the **one generic command** `SetPorts` (`crates/lunco-cosim/src/lib.rs:255`): a batch of named input-port writes on a vessel's `InputPorts` surface (`throttle`/`steer`/`brake`). A static `DriveMix` + kernel then projects that surface onto actuator ports in `apply_drive_mix` (`crates/lunco-mobility/src/lib.rs:1115`, a `FixedUpdate` system). Two emitters write that same input surface every fixed tick:
+Post-merge, control is the **one generic command** `SetPorts` (`crates/lunco-cosim/src/lib.rs:255`): a batch of named input-port writes on a vessel's `InputPorts` surface (`throttle`/`steer`/`brake`). The composed Modelica/Rhai controller then projects that surface onto authored actuator and joint-heading outputs through generic ports. Two emitters write that same input surface every fixed tick:
 
 - **Human keyboard** — `drive_from_bindings` (`crates/lunco-controller/src/lib.rs:86`) emits one `SetPorts` per fixed tick per `ControllerLink`, writing *every* bound port (0 when idle).
 - **Rhai autopilot** — the prelude `drive()` / `nav_to()` verbs (`assets/scripting/prelude/control.rhai`, `nav.rhai`) are called by native task leaves while the task is active; production mission policy does not use an `on_tick` control loop.
 
-Both land through `on_set_ports` (`lunco-cosim/src/lib.rs:300`) into the same FSW input ports. `apply_drive_mix` then reads whatever value is currently in those ports. When the two disagree, the last write of the tick wins and the setpoint flips tick-to-tick → the wheels oscillate.
+Both land through `on_set_ports` into the same authored FSW input ports. The
+vehicle's Modelica/Rhai program consumes those ports and publishes its declared
+actuator outputs. When two authorities disagree, the last write of the tick
+wins and the authored output can flip tick-to-tick, so the authority arbiter
+must keep a single owner.
 
 ### Why the existing ownership doesn't already fix it
 
@@ -42,7 +46,7 @@ The merge deleted `DriveRover`/`BrakeRover`, but `assets/scripting/prelude/contr
 5. No new control taxonomy: reuse `SessionRegistry`, `authorize`, `AuthorityRole::AiAgent`, `rbac.authorize`, and `SetScriptedPolicy`. (Matches the standing "less Rust / more dynamic registries" direction.)
 
 **Non-goals**
-- Changing `SetPorts`, `apply_drive_mix`, `DriveMix`, kernels, or the physics/actuator model. Arbitration is entirely at "which session owns the vessel."
+- Changing `SetPorts`, the authored controller program, or the physics/actuator model. Arbitration is entirely at "which session owns the vessel."
 - A per-frame arbiter system with holder state / idle grace / expiry (explicitly rejected — that was rev 1).
 - Multi-operator cross-session conflict beyond what possession + `authorize` already give.
 

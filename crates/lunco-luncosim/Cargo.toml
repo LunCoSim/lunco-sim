@@ -316,10 +316,6 @@ networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api"
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]
-# Drive-actuation chain tracing — off by default. Build with `--features
-# drive-diag` to trace the DriveCommand → port → wheel-force path when a rover
-# won't move / snaps back; see lunco-mobility's `drive_diag!`.
-drive-diag = ["lunco-mobility/drive-diag"]
 python = ["lunco-scripting/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the

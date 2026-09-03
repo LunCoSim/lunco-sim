@@ -271,6 +271,11 @@ def Xform "SandboxScene" (
         # is EV100 16 at ISO 100 / f16, authored on the standard UsdGeomCamera
         # rather than inherited from a process-wide lighting resource.
         float exposure:time = 0.00390625
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
@@ -314,8 +319,7 @@ def Xform "SandboxScene" (
     # wheel type.
     #
     # Matrix: 2 steering types × 2 drivetrains = 4 variants
-    #   - skid_rover.usda       → PhysxVehicleTankDifferentialAPI
-    #   - ackermann_rover.usda  → PhysxVehicleAckermannSteeringAPI
+    #   - rover assets         → generic PhysxVehicleContextAPI + authored ports
     #   - `variants = { string drivetrain = "physical" }` selects the
     #     joint-based drivetrain from the asset's `drivetrain` variantSet
     #     (raycast | physical); omitting it falls back to `raycast`. The

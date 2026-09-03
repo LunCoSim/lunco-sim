@@ -105,19 +105,19 @@ def Cylinder "Wheel" (
     # them with no fallback, so a wheel that composes this file has its handling and one
     # that does not is a hard error — never a wheel silently running on Rust defaults.
     #
-    # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
-    # system, not of a wheel (a skid rover's wheels do not steer at all). It is
-    # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
+    # Steering is NOT here: wheel heading is a generic joint/port property. The
+    # controller source owns any steering geometry or lock for its vehicle.
     # Former calibration knobs are intentionally absent. The tire force is the
     # real contact slip `k·(ω·r − v)` out of the spin solve
     # (`lunco_mobility::update_wheel_spin`), so a second traction multiplier or
     # travel-speed drag would be a duplicate model rather than a wheel property.
-    double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
+    double3 lunco:wheel:headingAxis = (0, 1, 0)     # heading axis, wheel-local: vertical yaw
     # Mechanical network boundary. `drive` is solved torque in N.m and
     # `shaft_speed` is the measured wheel speed in rad/s. Their runtime
     # endpoints are projected from these authored names without a wheel/motor
     # special case.
     float inputs:drive
+    float inputs:heading
     float outputs:shaft_speed
 
     # --- Tires ---

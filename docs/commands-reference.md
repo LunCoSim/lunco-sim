@@ -3322,7 +3322,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `name` | `String` |  Prim name under the mounted scene's `Policies` scope (the identity for  hot-replace); defaults to a sanitized `seam` when empty. |
-| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, a  `lunco:driveKernel` id a rover points at, or `"synth.<name>"` for a  generated Modelica source/unit/layout policy. |
+| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or `"synth.<name>"` for a generated Modelica source/unit/layout policy. |
 | `entry` | `String` |  The rhai entry function name. |
 | `source` | `String` |  The rhai source defining `entry` (+ helpers). |
 | `deterministic` | `bool` |  Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)  must be `true`; the host-only authorize gate may be `false`. |

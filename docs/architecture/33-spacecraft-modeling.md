@@ -144,27 +144,19 @@ now USD-authorable:
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.
 
-**G4b — authored mix  [DONE]:** a `DriveMix` child scope on the rover root
-declares a **linear per-port mix** — one prim per sink port, named for the
-actuator port it writes, carrying a `double lunco:factor:<source>` per command
-source (`throttle`/`steer`/`brake`, the ports the OBC publishes). Each term prim
-IS a connection, so the linear transform is per CONNECTION — SSP's
-`<Connection><LinearTransformation/></Connection>` in USD form, and the reason
-a factor keyed only by sink port cannot express it (`drive_w0` takes throttle at
-+1 AND steer at +1). An absent factor is 0; every coefficient is individually
-overridable through an `over` and survives reference and variant arcs. Read into
-a data-driven `DriveMix` component (`lunco-mobility`; allocated by the `linear`
-kernel in `ControlKernelRegistry`). The kernel projects the drive inputs onto
-every named port (`value = fwd·f + steer·s + brake·b`,
-clamped, scaled to i16), taking precedence over the built-in skid/Ackermann
-routing. Covers skid, Ackermann-style, and true **per-wheel independent** drive
-(each wheel its own port + coefficients). While braking, forward/steer are forced
-to 0 so only brake-coefficient ports stay live (matches the skid/Ackermann
+**G4b — authored motion program [DONE]:** each rover exposes a generic command
+surface (`throttle`/`steer`/`brake`) and authors its final drive and wheel-heading
+outputs in Modelica/Rhai. A program may express skid, Ackermann, crab, or
+independent-wheel motion by wiring the outputs it needs; no vehicle-specific
+allocation component or Rust kernel is required. The same generic graph also
+supports physical wheel motor torque and revolute-joint heading targets. Braking
+is an authored policy that may suppress drive outputs and assert brake outputs;
+the runtime realizes those values without interpreting the vehicle mode.
 branches). Proof: `assets/vessels/rovers/six_wheel_independent.usda` — six custom
 `drive_w0..w5` ports, each wheel bound to its own, skid-steered through all six
-independent channels with no `PhysxVehicleTankDifferentialAPI`. Parse + projection
-unit-tested. (Nonlinear mixes — e.g. exact Ackermann geometry — would still want
-a rhai hook; the linear table covers the stated skid/per-wheel cases.)
+independent channels with no vehicle-type drivetrain API. Parse + projection
+unit-tested. Nonlinear and mode-specific mixes are authored programs over the
+same generic ports.
 
 ### G5 — Differential / coupling constraint for rocker-bogie  **[DONE — verified]**
 Rocker-bogie = chassis + rocker + bogie links via revolute joints **plus a
@@ -221,7 +213,7 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
 - **Also read:** `physxVehicleWheel:radius` / `:width` / `:mass` / `:moi` /
   `:maxBrakeTorque`, and the authored motor/gearbox/shaft network,
   `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
-  `lunco:wheel:steerAxis`; drive torque and shaft speed are solved by the
+  `lunco:wheel:headingAxis`; drive torque and shaft speed are solved by the
   authored motor/gearbox/shaft network.
 - **The one non-required number is a derivation, not a default:**
   `physxVehicleWheel:moi` unauthored (or 0) means "solid cylinder", i.e. `½·m·r²`
@@ -343,8 +335,8 @@ to the old basis — existing rovers are unchanged (unit-tested + live: a six-wh
 rover rests at `speed 0`, no drift). For a leaning bike the basis follows the
 cambered contact plane, so drive + lateral grip are computed correctly. Unit-tested
 (`force_law_tests::contact_basis_*`). The **raked steering-head axis** is now
-USD-authorable too: `lunco:steerAxis` (float3, wheel-local) sets the steer
-rotation axis — default `+Y` (flat car steer, identical to the old
+USD-authorable too: `lunco:wheel:headingAxis` (float3, wheel-local) sets the
+heading rotation axis — default `+Y` (flat car steer, identical to the
 `from_rotation_y`), a motorcycle fork authors e.g. `(0, 0.91, 0.42)` for a ~25°
 rake. **Remaining for full fidelity** (deferred): gyroscopic precession — balance
 itself is a *controller* (already expressible via the torque + attitude/rate

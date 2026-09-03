@@ -174,11 +174,10 @@ those bypass possession, arbitration, and the authored input contract.
 A vessel is **possessable + drivable** when it carries two things:
 
 1. **An actuation surface** — the command ports a pilot or AI writes. A rover gets
-   `throttle/steer/brake` from `PhysxVehicleContextAPI` (the projection stamps a
-   separate `MobilityRoot` and `OutputPorts`, plus a `DriveMix` chosen by the
-   drivetrain schema, e.g. `PhysxVehicleTankDifferentialAPI`); a cosim vessel gets its
-   `.mo` inputs (`external_throttle`, `pitch`, …). This surface is topology-derived; you
-   don't hand-write it.
+   `throttle/steer/brake` from its composed USD/model network (the projection stamps
+   a separate `MobilityRoot` and `OutputPorts`); a cosim vessel gets its `.mo` inputs
+   (`external_throttle`, `pitch`, …). This surface is topology-derived; you don't
+   hand-write it.
 2. **A `Controls` scope** — the intent→port map (stage 2 of control), read into a
    `lunco_core::ControlBinding`. Without it a vessel can be possessed but **keyboard
    input does nothing** — `drive_from_bindings` skips a bindingless vessel. (API /

@@ -93,7 +93,7 @@ pub struct UsdPrimKind(pub String);
 /// (re)insert camera-mode components onto, an entity carrying this marker.
 /// Lives in `lunco-core` so `lunco-avatar` and `lunco-usd-bevy` can agree on
 /// the contract without depending on each other (same pattern as
-/// [`ActuatorDrivenJoint`]).
+/// [`HorizonShadowTerrain`]).
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct CinematicCameraLock;
@@ -127,27 +127,6 @@ pub struct NeedsGroundSettle;
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct PhysicsPoseAuthoritative;
-
-/// Marker: this revolute joint's **motor is owned by an external actuator**
-/// (a velocity drive or a frame-steer), not by the cosim joint backend.
-///
-/// Every `RevoluteJoint` is auto-exposed as a cosim model with an `angle` port,
-/// and [`lunco_cosim::apply_joint_drives`] position-holds that joint's
-/// `motor.target_position` toward the commanded `angle`. That is correct for a
-/// mast/panel posed by a wire or the Inspector slider, but **wrong** for a rover
-/// wheel: those are driven by a solved mechanical torque boundary and steered by
-/// `SteeringActuator` (a frame rotation). If both wrote the same
-/// `motor`, the position-hold would zero the velocity command every tick and
-/// freeze the wheel.
-///
-/// So `apply_joint_drives` skips any joint carrying this marker; the external
-/// actuator is the single owner of its motor. `lunco_hardware` stamps it
-/// automatically when a `SteeringActuator` is added. Lives in `lunco-core` so the
-/// cosim backend and the hardware actuators can agree on the contract without
-/// depending on each other (same pattern as [`HorizonShadowTerrain`]).
-#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct ActuatorDrivenJoint;
 
 /// A `GridAnchor` that participates in cross-Grid SOI migration.
 ///

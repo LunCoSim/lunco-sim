@@ -34,6 +34,11 @@ def Xform "AvatarTerrainCollision" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 xformOp:translate = (0.0, 3.0, 0.0)

@@ -67,7 +67,7 @@ already manually clocked and runs at the speed the CPU permits.
 - `server` — lean headless build: API + networking host, NO `ui`. Build with
   `--no-default-features --features server`. Skips `celestial`.
 - `celestial` — bundled Earth texture + Artemis-II ephemeris (10s of MB).
-- `recording`, `tracy`, `net-diag`, `drive-diag` — opt-in diagnostics/tools.
+- `recording`, `tracy`, `net-diag` — opt-in diagnostics/tools.
 
 The simulation-facing asset and component features (`mesh`/`light`/`window`)
 stay enabled in headless builds. Headless mode omits `RenderPlugin` and its

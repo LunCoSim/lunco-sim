@@ -14,12 +14,10 @@
 
         https://docs.omniverse.nvidia.com/kit/docs/omni_physics/107.2/dev_guide/schemas/physxschema.html
 
-    SCOPE: only the vehicle APIs this project uses or needs per
-    docs/architecture/53-usd-suspension-specification.md. NVIDIA's full PhysX
-    vehicle family is larger (~15+ APIs: Brakes, Steering, MultiWheelDifferential,
-    Autobox, Clutch, Gears, EngineDrive, …) — add those here only if/when a
-    feature consumes them, to avoid reconstructing attrs that go unused and
-    unverifed.
+    SCOPE: only the generic vehicle context and wheel/suspension/tire APIs this
+    project uses or needs per docs/architecture/53-usd-suspension-specification.md.
+    Motion policies are authored in Modelica/Rhai and are not represented by a
+    vehicle-type schema here.
 
     TODO: replace this reconstructed file with a verbatim copy of
     `extsPhysics/omni.physx/schema.usda` from a Kit/Isaac-Sim install when one
@@ -49,62 +47,6 @@ class "PhysxVehicleContextAPI" (
     }
 )
 {
-    int physxVehicleContext:vehicleDifferentialType = 0 (
-        customData = {
-            string userDocBrief = """The type of differential (4-wheel drive, tank drive, etc.). See the
-    PhysX PhysxVehicleDifferentialTypeEnum for the full token list."""
-        }
-        displayName = "Vehicle Differential Type"
-    )
-}
-
-class "PhysxVehicleAckermannSteeringAPI" (
-    customData = {
-        string userDocBrief = """Applied to a vehicle prim. Carries the Ackermann steering geometry for a
-    vehicle that steers by angling its front wheels (as opposed to skid steering)."""
-    }
-)
-{
-    float physxVehicleAckermannSteering:strength = 0.0 (
-        customData = {
-            string userDocBrief = """Ackermann correction strength. 0.0 is parallel steering (no Ackermann);
-    1.0 is full Ackermann geometry. Intermediate values blend."""
-        }
-        displayName = "Strength"
-    )
-    float physxVehicleAckermannSteering:maxSteerAngle = 0.0 (
-        customData = {
-            double min = 0
-            double max = 1.2
-            string unit = "rad"
-            string userDocBrief = """Maximum steer angle at full steer input, RADIANS. Replaces the
-    deprecated per-wheel physxVehicleWheel:maxSteerAngle. Drives the steering-knuckle
-    motor on the wheels of the steered axle."""
-        }
-        displayName = "Max Steer Angle"
-    )
-}
-
-class "PhysxVehicleTankDifferentialAPI" (
-    customData = {
-        string userDocBrief = """Applied to a vehicle prim. Tank/skid-steer differential: drives each
-    track/wheel side independently for skid-steer yaw, rather than angling wheels."""
-    }
-)
-{
-    float physxVehicleTankDifferential:tankTrackWheelSeparation = 0.0 (
-        customData = {
-            string userDocBrief = """Track / wheel-side separation, metres. Used by the tank differential to
-    resolve yaw rate from the left/right track speed difference."""
-        }
-        displayName = "Tank Track Wheel Separation"
-    )
-    float physxVehicleTankDifferential:tankTrackWheelBase = 0.0 (
-        customData = {
-            string userDocBrief = """Track / wheel-side base, metres. Used by the tank differential."""
-        }
-        displayName = "Tank Track Wheel Base"
-    )
 }
 
 class "PhysxVehicleWheelAPI" (
@@ -165,20 +107,6 @@ class "PhysxVehicleWheelAPI" (
         }
         displayName = "Max Brake Torque"
     )
-    float physxVehicleWheel:maxSteerAngle = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED and NOT read. The steer lock belongs to the vehicle's
-    steering system: author physxVehicleAckermannSteering:maxSteerAngle on a prim
-    applying PhysxVehicleAckermannSteeringAPI."""
-        }
-        displayName = "Max Steer Angle"
-    )
-    float physxVehicleWheel:toeAngle = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Static toe angle, radians. Use PhysxVehicleSuspensionComplianceAPI."""
-        }
-        displayName = "Toe Angle"
-    )
 }
 
 class "PhysxVehicleSuspensionAPI" (
@@ -222,36 +150,6 @@ class "PhysxVehicleSuspensionAPI" (
     from the vehicle's total mass and wheel count."""
         }
         displayName = "Sprung Mass"
-    )
-    float physxVehicleSuspension:maxCompression = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Max compression, metres. Ignored if travelDistance is authored."""
-        }
-        displayName = "Max Compression"
-    )
-    float physxVehicleSuspension:maxDroop = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Max droop, metres. Ignored if travelDistance is authored."""
-        }
-        displayName = "Max Droop"
-    )
-    float physxVehicleSuspension:camberAtRest = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Camber at rest, radians. Use PhysxVehicleSuspensionComplianceAPI."""
-        }
-        displayName = "Camber at Rest"
-    )
-    float physxVehicleSuspension:camberAtMaxCompression = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Camber at max compression, radians. Use ComplianceAPI."""
-        }
-        displayName = "Camber at Max Compression"
-    )
-    float physxVehicleSuspension:camberAtMaxDroop = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Camber at max droop, radians. Use ComplianceAPI."""
-        }
-        displayName = "Camber at Max Droop"
     )
 }
 

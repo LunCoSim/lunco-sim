@@ -13,7 +13,12 @@ def Camera "VisualReviewCamera" (
     prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
 )
 {
-    uniform bool lunco:avatar = true
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
+        uniform bool lunco:avatar = true
     uniform token lunco:cameraMode = "freeflight"
     double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
     double3 xformOp:translate = (0.0, 18.0, 82.0)

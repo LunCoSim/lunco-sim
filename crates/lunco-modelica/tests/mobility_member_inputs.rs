@@ -12,10 +12,10 @@
 //! These models take no bound defaults (`input Real throttle "…"`, no `= 0.0`),
 //! so they should never have been exposed to that specific bug — but "should
 //! not be" is the wrong standard for a change that silently produces a working-
-//! looking rover. The relocation is checked here directly, because **no scene
-//! test covers it**: `driveLaw = "modelica"` is an opt-in variant that no scene
-//! in `assets/scenes/tests/` selects, so the parity scenes exercise the Rust
-//! kernels and would stay green no matter what this move broke.
+//! looking rover. The relocation is checked here directly at the Modelica
+//! compiler boundary, while the authored scene tests cover the live controller
+//! path. Keeping this source-level check in Rust catches a package/member
+//! compiler regression before a runtime scenario is launched.
 
 use lunco_modelica::ModelicaCompiler;
 

@@ -77,11 +77,9 @@ const CORE_SCHEMAS: &[(&str, &str)] = &[
     ("usdLux", include_str!("../schema/core/usdLux.usda")),
     ("usdPhysics", include_str!("../schema/core/usdPhysics.usda")),
     // Reconstructed PhysX vehicle schema subset (canonical NVIDIA names; see the
-    // file header for provenance + the swap-later TODO). The vehicle APIs the
-    // loader detects (`PhysxVehicleContextAPI`, `…AckermannSteeringAPI`,
-    // `…TankDifferentialAPI`) and the suspension/wheel/compliance APIs the spec
-    // (doc 53) needs are all defined here, so they stop being unregistered
-    // typeNames the registry is blind to.
+    // file header for provenance + the swap-later TODO). It contains only the
+    // generic vehicle context and wheel/suspension/tire properties consumed by
+    // the projection layer. Motion policy is authored through generic ports.
     (
         "physxSchema",
         include_str!("../schema/core/physxSchema.usda"),
@@ -825,7 +823,6 @@ mod tests {
             "physxVehicleTire:longitudinalStiffness",
             "physxVehicleSuspension:springStrength",
             "physxVehicleSuspension:springDamperRate",
-            "physxVehicleAckermannSteering:maxSteerAngle",
         ] {
             let hint = reg.ui_hint(name).unwrap_or_else(|| {
                 panic!(
@@ -1407,25 +1404,6 @@ class "RigUnitsAPI" (
                 .unwrap()
                 .type_name,
             "float4[]",
-        );
-
-        // Steering: the lock angle lives on the steering API, in RADIANS. PhysX
-        // deprecated the per-wheel `physxVehicleWheel:maxSteerAngle` in favour of
-        // this, and only the Kit authoring wizard's UI field is in degrees.
-        assert_eq!(
-            reg.property("physxVehicleAckermannSteering:maxSteerAngle")
-                .expect("canonical Ackermann steer lock")
-                .type_name,
-            "float",
-        );
-        // `maxWheelAngleDegrees` is attested in NO NVIDIA schema or doc: a
-        // reconstructed file's risk is not just a wrong name for a real property but a
-        // plausible name for one that does not exist. Pinned absent so it cannot return.
-        assert!(
-            reg.property("physxVehicleAckermannSteering:maxWheelAngleDegrees")
-                .is_none(),
-            "maxWheelAngleDegrees is not a PhysX property; the lock is \
-             physxVehicleAckermannSteering:maxSteerAngle, in radians"
         );
 
         // Non-canonical PhysX names must be absent: their presence would mean the

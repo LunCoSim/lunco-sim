@@ -52,6 +52,11 @@ def Xform "SixWheelTest" (
     {
         # Retain the standard avatar shape as inert scene data; the authored
         # track presents the rover's mounted operator camera.
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)

@@ -24,7 +24,8 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   participant reads/writes through; the cosim engine registers the built-in backends.
 - **`InputPorts` / `OutputPorts`** — an imperative producer's authored command
   inputs and runtime outputs. `InputPorts` accepts writes; `OutputPorts` is
-  read-only and exposes values written by a producer such as a drive kernel.
+  read-only and exposes values written by an authored program such as a
+  Modelica drivetrain.
   A mobility root is identified separately by `lunco_core::MobilityRoot`;
   `OutputPorts` is never used as a vehicle marker.
   Generated Modelica outputs remain on `SimComponent` and are not copied into

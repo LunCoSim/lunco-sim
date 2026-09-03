@@ -55,6 +55,46 @@ def "RoverControls"
     }
 }
 
+# ── Local avatar: forward/back/left/right plus vertical elevation and boost.
+def "AvatarControls"
+{
+    def "forward"
+    {
+        uniform string lunco:port = "forward"
+        uniform double lunco:factor = 1
+    }
+    def "backward"
+    {
+        uniform string lunco:port = "forward"
+        uniform double lunco:factor = -1
+    }
+    def "left"
+    {
+        uniform string lunco:port = "side"
+        uniform double lunco:factor = -1
+    }
+    def "right"
+    {
+        uniform string lunco:port = "side"
+        uniform double lunco:factor = 1
+    }
+    def "yaw_left"
+    {
+        uniform string lunco:port = "up"
+        uniform double lunco:factor = -1
+    }
+    def "yaw_right"
+    {
+        uniform string lunco:port = "up"
+        uniform double lunco:factor = 1
+    }
+    def "speed_boost"
+    {
+        uniform string lunco:port = "speed_boost"
+        uniform double lunco:factor = 1
+    }
+}
+
 # ── Cosim-flown lander: forward/back -> pitch, left/right -> roll, yaw_left/right
 #    (Q/E) -> yaw, thrust -> external throttle. Ports match Modelica
 #    `SimComponent.inputs`; Action remains the autopilot shortcut and is not a

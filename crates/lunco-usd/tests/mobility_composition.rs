@@ -314,12 +314,6 @@ fn wheel_resync_claims_are_prim_scoped() {
         &wheel,
         "physxVehicleSuspension:springStrength"
     ));
-    assert!(claims_edit(&view, &root, "lunco:driveKernel"));
-    assert!(claims_edit(
-        &view,
-        &root,
-        "physxVehicleAckermannSteering:maxSteerAngle"
-    ));
     assert!(!claims_edit(&view, &chassis, "primvars:displayColor"));
     assert!(!claims_edit(&view, &root, "lunco:spawnable"));
 }
@@ -379,7 +373,7 @@ fn six_wheel_camera_composes_its_lowered_mount_offset() {
         "the six-wheel asset must override only its mounted camera eye height"
     );
     assert_eq!(
-        view.value_vec3(&camera, "lunco:cameraLookAt"),
+        view.vec3_f64(&camera, "lunco:cameraLookAt"),
         Some([0.0, 0.75, -12.0]),
         "the six-wheel override must retain the shared forward look target"
     );

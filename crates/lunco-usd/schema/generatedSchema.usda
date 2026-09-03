@@ -759,6 +759,18 @@ class "LunCoAvatarAPI" (
         doc = """Initial camera pitch, radians. Overridden by a derived aim when
         `lunco:cameraLookAt` is authored."""
     )
+    float lunco:avatar:flightSpeed = 23.1 (
+        doc = "Free-flight speed in metres per second."
+    )
+    float lunco:avatar:boostMultiplier = 10.0 (
+        doc = "Multiplier applied while the authored speed_boost input is active."
+    )
+    float lunco:avatar:boostThreshold = 0.5 (
+        doc = "Normalized speed_boost command threshold that activates the multiplier."
+    )
+    float lunco:avatar:inputDeadzone = 0.01 (
+        doc = "Absolute command magnitude below which an avatar axis is idle."
+    )
 }
 
 class "LunCoCameraAPI" (
@@ -866,8 +878,8 @@ class "LunCoWheelAPI" (
     unauthored knob was indistinguishable from a deliberate one."""
 )
 {
-    double3 lunco:wheel:steerAxis (
-        doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
+    double3 lunco:wheel:headingAxis (
+        doc = """Wheel-heading axis, wheel-local. `(0, 1, 0)` is a vertical yaw
         axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
     )
 }
@@ -1517,48 +1529,6 @@ class "LunCoMountPlugAPI" (
         doc = """The prim whose frame is the part's plug — the frame snapped onto
         the socket, composed relative to the part's root. Unauthored = the part
         advertises no plug and cannot snap."""
-    )
-}
-
-# --- Drive mixing ------------------------------------------------------------
-
-class "LunCoDriveKernelAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """A SCRIPTED drive kernel on a vehicle root: the named rhai hook
-    computes the per-port drive outputs, taking precedence over the built-in
-    skid/linear `DriveMix` term schema below."""
-)
-{
-    string lunco:driveKernel = "" (
-        doc = "The `lunco_hooks` hook id that computes the mix. Empty = built-in."
-    )
-}
-
-class "LunCoDriveMixTermAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """ONE term of a built-in drive mix — a child prim of a vehicle's
-    `DriveMix` scope, named for the port it drives. Each factor is that control's
-    contribution to the port; a term declaring no factor at all is skipped (the
-    port would never be driven).
-
-    Only these THREE named factors are schema: the co-simulation wire transforms
-    (`lunco:factor:<connection>` / `lunco:offset:<connection>`) are per-wire
-    parameters, named per connection like a model's `inputs:`, so no fixed schema
-    can declare them — they are correctly `custom`."""
-)
-{
-    double lunco:factor:throttle = 0 (
-        doc = "Throttle intent contribution to this term's port."
-    )
-    double lunco:factor:steer = 0 (
-        doc = "Steer intent contribution to this term's port."
-    )
-    double lunco:factor:brake = 0 (
-        doc = "Brake intent contribution to this term's port."
     )
 }
 
