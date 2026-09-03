@@ -1,4 +1,4 @@
-//! Co-sim connection diagnostics — the machine-readable form of the dangling-wire
+//! Co-sim connection diagnostics — the machine-readable form of the wiring
 //! log lines that [`crate::systems::propagate::propagate_connections`] emits.
 //!
 //! The interaction report asked for `GET /api/diagnostics` so a caller can *poll*
@@ -45,14 +45,15 @@ pub struct BrokenConnection {
     pub dropped_value: f64,
 }
 
-/// A cycle in the current co-simulation fabric.
+/// A force-producing feedback cycle in the current co-simulation fabric.
 ///
-/// This is deliberately separate from [`BrokenConnection`]. A cycle is a
-/// topology diagnostic: the fixed-step master can execute it with a
-/// one-step delay, while a missing input port means a declared wire never
-/// reached an endpoint. Mixing the two makes a healthy scenario look like it
-/// has a dangling wire and makes API/test consumers guess from a synthetic
-/// port name.
+/// This is deliberately separate from [`BrokenConnection`]. Explicit causal
+/// feedback that does not reach a force or torque input is valid dynamic
+/// behavior and is not included here. A force-producing cycle remains visible
+/// so the client-prediction safety contract cannot be mistaken for a missing
+/// input port. Mixing the two makes a healthy scenario look like it has a
+/// dangling wire and makes API/test consumers guess from a synthetic port
+/// name.
 #[derive(Debug, Clone)]
 pub struct AlgebraicLoopDiagnostic {
     /// Canonical participant chosen for this loop's stable identity.
@@ -90,8 +91,9 @@ pub struct CosimDiagnostics {
     /// Targets that dropped their write after their endpoint contract became
     /// terminal. Rebuilt each propagation tick.
     pub broken: Vec<BrokenConnection>,
-    /// Topology cycles in the current wiring fabric. These are not missing
-    /// ports and therefore never enter [`Self::faults`].
+    /// Force-producing feedback cycles in the current wiring fabric. Ordinary
+    /// causal cycles are valid dynamic feedback and are not included. These
+    /// entries are not missing ports and therefore never enter [`Self::faults`].
     pub algebraic_loops: Vec<AlgebraicLoopDiagnostic>,
     /// Wires that have NEVER successfully written, keyed by `(entity, port)` so a
     /// wire that drops on a thousand ticks is one entry.

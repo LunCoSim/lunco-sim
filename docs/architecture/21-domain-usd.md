@@ -254,6 +254,22 @@ section.
 2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
 3. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
+### Compound collision ownership
+
+`UsdAvianPlugin` reads the composed stage, including referenced descendants, when
+it builds a rigid body's one Avian compound collider. A prim carrying both
+`PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` contributes its own shape at
+identity in body space; collision-enabled descendants contribute their
+root-relative transforms. The body's ECS transform owns the root prim's scale,
+rotation, and placement exactly once. Nested rigid bodies remain separate
+ownership boundaries, and their shapes are not folded into the ancestor.
+
+This rule applies equally to the live composed reader and the prepared,
+path-remapped plan used for runtime reference instances. Consequently, a
+reference does not lose a body-root shape merely because the referenced asset
+also contains child colliders, and all composed prim paths remain available to
+the existing joint, Modelica, and collision-filter resolution paths.
+
 ### Rover Definitions
 
 #### Consolidated Base Files

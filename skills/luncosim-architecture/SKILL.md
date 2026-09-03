@@ -377,10 +377,13 @@ current default.
   Literal top-level Rhai constants are supported inside policy helper functions
   by the shared hook binding, so presentation policy can remain editable without
   adding Rust-side layout parameters.
-- A cyclic set of separately co-simulated components is explicit: the runtime
-  may report its one-step delay. Do not silence that warning or add a Rhai
-  polling bridge. If zero-delay continuous feedback is required, synthesize one
-  Modelica network and solve it as one system.
+- A cyclic set of separately co-simulated components connected by typed scalar
+  `SimConnection`s is explicit causal feedback: the fixed-step exchange may
+  have a one-step delay, but it is not an unresolved algebraic loop and must not
+  emit an algebraic-loop warning. Do not add a Rhai polling bridge. If
+  zero-delay continuous feedback is required, synthesize one Modelica network
+  and solve it as one system; force-producing cycles remain subject to the
+  explicit realtime-safety contract.
 
 ## Replace a superseded contract cleanly
 
@@ -421,7 +424,8 @@ scene through the real executable. Report separately:
 - contract and topology accepted;
 - solver/runtime behavior observed;
 - visual behavior observed; and
-- warnings that remain, especially algebraic-loop delays.
+- warnings that remain, especially rejected force-loop diagnostics or solver
+  warnings.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.
