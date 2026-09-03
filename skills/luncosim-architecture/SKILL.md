@@ -64,6 +64,16 @@ second program registry. An empty port contract is a valid source-only
 attachment, but it is not a running scalar cosim participant; the author must
 declare the interface before wiring or stepping it.
 
+### Shared asset catalog discovery
+
+Asset enumeration belongs to `lunco_assets::discovery` and runs through the
+shared asynchronous catalog listing owned by `lunco-scene-commands`. USD,
+WGSL, Modelica, and Python projections are published from one root snapshot;
+they must not add a second filesystem walk or a UI-thread scan. A new
+manifest/Twin snapshot advances the listing generation, reopens the USD read
+set, and drops older metadata completions. This keeps a Twin opened during an
+initial scan complete without allowing stale work to populate its catalog.
+
 For derived 3D annotations such as a waypoint route, keep one change-gated
 projection snapshot between authored/runtime facts and presentation consumers.
 Resolve authored identities through the authoritative binding map, express all

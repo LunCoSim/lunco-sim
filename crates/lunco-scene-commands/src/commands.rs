@@ -93,8 +93,8 @@ pub fn on_detach_joint(trigger: On<DetachJoint>, mut commands: Commands) {
 /// Dock/release actuator. A vessel exposes a `release` command PORT; when it rises
 /// past 0.5 the fixed joint attaching this vessel to another body is detached, once.
 /// Driven exactly like throttle/steer: `Release` intent (KeyG) → the `_LanderControl`
-/// profile's `release`→`release` binding → `SetPorts` → this port. Replaces the old
-/// hardcoded G-to-detach special case; it works for any possessed vessel + dock joint.
+/// profile's `release`→`release` binding → `SetPorts` → this port. It works for
+/// any possessed vessel and dock joint.
 #[derive(bevy::prelude::Component, Default, bevy::prelude::Reflect)]
 #[reflect(Component)]
 pub struct ReleaseActuator {
@@ -182,8 +182,8 @@ fn attach_release_actuator(
 }
 
 /// Edge-detect the `release` command → detach the fixed joint attaching this vessel
-/// to another body. The principled generalization of the old G-to-detach: any
-/// possessed vessel, any dock joint, no per-scene name matching.
+/// to another body. It operates on any possessed vessel and dock joint without
+/// per-scene name matching.
 fn joint_release_system(
     mut vessels: Query<(&mut ReleaseActuator, &UsdPrimPath)>,
     joints: Query<(Entity, &avian3d::prelude::FixedJoint)>,
@@ -517,8 +517,7 @@ pub fn apply_replicated_spawns(
         diagnostics.replace_producer("scene-spawn", std::iter::empty());
     }
     // Drain in place — the loop body touches only `commands`/`catalog`/
-    // `asset_server`, never `pending`, so the old `.collect::<Vec<_>>()`
-    // was a pure-waste allocation (CQ-216).
+    // `asset_server`, never `pending`.
     for job in pending.0.drain(..) {
         let Some(entry) = catalog.get(&job.entry_id) else {
             warn!("REPL_SPAWN: unknown entry '{}'", job.entry_id);
@@ -3754,10 +3753,8 @@ impl Plugin for SpawnCommandPlugin {
         // without the GUI dataset plugin.
         lunco_settings::ensure_download_settings(app);
         // Every `#[Command]` this crate owns — type + observer in one call, so a
-        // verb can't end up observable-but-unconstructible (the old split wired
-        // the observer by hand and then patched the type registry separately, and
-        // whenever the second half was forgotten the command silently vanished
-        // from the HTTP API / rhai / `discover_schema`).
+        // verb is available consistently through the HTTP API, Rhai, and
+        // `discover_schema`.
         register_all_commands(app);
         // Runtime waypoint creation and collision-sensor arrival are shared by
         // the GUI click path and the deterministic headless scene runner.
@@ -3821,9 +3818,7 @@ impl Plugin for SpawnCommandPlugin {
         // THE single catalog-population system: scans project USD → spawn
         // catalog and WGSL → shader catalog via the shared `lunco_assets`
         // discovery walk, once at first run and again only when the open-Twin
-        // set changes (guarded — no per-frame disk walk). Replaces the old
-        // per-catalog scanners (`populate_dynamic_spawn_catalog`,
-        // `auto_scan_twin_shaders`, `discover_shaders`).
+        // set changes (guarded — no per-frame disk walk).
         // Enumerate → dispatch reads → fold results in. `drain` runs after
         // `maintain` so a read that completes between frames lands the moment
         // the app looks, not a frame later.
@@ -3872,13 +3867,9 @@ impl Plugin for SpawnCommandPlugin {
             },
         );
         app.init_resource::<lunco_materials::ShaderCatalog>();
-        // Client: instantiate host-replicated spawns. The rest of the old netcode
-        // chain (interp / kinematic-pin / predict / reconcile / rollback) moved to
-        // `lunco_networking::prediction::NetcodePredictionPlugin`; this one system
-        // stayed because it spawns from the editor's `SpawnCatalog`. It was the
-        // chain's FIRST system, and that ordering is preserved across the crate
-        // boundary by the shared `lunco_core::NetcodeSet` (the prediction half runs
-        // in `NetcodeSet::Predict`, configured `.after(InstantiateSpawns)` there).
+        // Client: instantiate host-replicated spawns before prediction consumes
+        // the resulting entities. The shared `lunco_core::NetcodeSet` preserves
+        // this ordering across the crate boundary.
         // No-op in single-player (the queue stays empty).
         app.add_systems(
             Update,
@@ -4463,6 +4454,8 @@ mod tests {
         // UsdCommandsPlugin inserts DocumentRegistry<UsdDocument> + the `on_apply_usd_op`
         // observer that processes the `ApplyUsdOp` our producer dispatches.
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(persist_move_to_runtime_layer);
         app.add_observer(persist_rotation_to_runtime_layer);
@@ -4708,6 +4701,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
         let doc = {
             let mut reg = app
                 .world_mut()

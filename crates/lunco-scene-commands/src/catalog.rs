@@ -442,6 +442,16 @@ impl Default for CatalogScan {
 }
 
 impl CatalogScan {
+    fn begin_usd_snapshot(&mut self, generation: u64) {
+        // Reads from the prior asset-root snapshot may still complete, but
+        // their generation is rejected by the drain. The new snapshot must
+        // reopen its path gate so it owns a complete read set.
+        self.dispatched.clear();
+        self.metadata_generation = generation;
+        self.batch_remaining = 0;
+        self.staged.clear();
+    }
+
     /// Forget what has been read, so the next USD listing dispatch re-reads
     /// every asset. Backs the manual `RescanSpawnCatalog` command — the point of
     /// which is to pick up *edits* to files already seen.
@@ -472,9 +482,7 @@ pub fn dispatch_catalog_listing(
     scan.listing_generation = scan.listing_generation.wrapping_add(1);
     let generation = scan.listing_generation;
     if include_usd {
-        scan.metadata_generation = generation;
-        scan.batch_remaining = 0;
-        scan.staged.clear();
+        scan.begin_usd_snapshot(generation);
     }
     let manifest = manifest.clone();
     let roots = roots.clone();
@@ -1152,11 +1160,9 @@ mod tests {
         );
     }
 
-    /// The bake this replaced keyed its tables on the engine-relative path and
-    /// fell back to "not spawnable" on a miss — so a stale table silently
-    /// dropped assets from the web palette. The store is keyed on `asset_path`
-    /// (what the catalogue and the UI both hold), and an unread asset is
-    /// distinguishable from one that authored nothing.
+    /// The store is keyed on `asset_path` (what the catalogue and the UI both
+    /// hold), and an unread asset is distinguishable from one that authored
+    /// nothing.
     #[test]
     fn test_meta_store_absent_vs_authored_nothing() {
         let mut store = AssetMetaStore::default();
@@ -1181,6 +1187,15 @@ mod tests {
         assert!(!scan.dispatched.insert("a.usda".into()));
         scan.forget();
         assert!(scan.dispatched.insert("a.usda".into()));
+    }
+
+    #[test]
+    fn a_new_usd_listing_restarts_reads_for_its_snapshot() {
+        let mut scan = CatalogScan::default();
+        scan.dispatched.insert("a.usda".into());
+        scan.begin_usd_snapshot(2);
+        assert!(scan.dispatched.is_empty());
+        assert_eq!(scan.metadata_generation, 2);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
