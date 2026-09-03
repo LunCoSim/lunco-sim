@@ -582,7 +582,8 @@ for the design.
 The USD Assembly Editor's `InspectUsdViewport` query follows the same owner
 rule. It reports the focused preview/view pair and all explicit USD preview
 leases with their document, edit target, projected generation, independent view
-ids, and each view's projection/orbit state. Pair it with `ListOpenDocuments` and a captured screenshot to
+ids, each view's projection/orbit state, and the session's `projection_ready`
+boundary. Pair it with `ListOpenDocuments` and a captured screenshot to
 identify the exact open item before issuing a typed authoring command.
 
 The UI-owned `InspectUsdSelection` query reports the selection context for the

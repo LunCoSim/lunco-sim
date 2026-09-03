@@ -40,10 +40,10 @@ maintain a second resolver, document store, or history log.
 The UI-only `InspectUsdViewport` query belongs to `UsdViewportPlugin`, not the
 headless document layer. It reports the focused `UsdPreviewId`/view pair and
 all open preview and view handles, including each session's explicit document,
-edit target, and projection generation. Agents use it with
-`CaptureScreenshot` to identify exactly what is visible before submitting a
-typed edit; tab labels and filesystem names are presentation text, not
-identity.
+edit target, projection generation, and `projection_ready` state. Agents use
+it with `CaptureScreenshot` to identify exactly what is visible and wait for
+the explicit ready state before submitting a typed edit; tab labels and
+filesystem names are presentation text, not identity.
 
 `CreateUsdProposal` validates an explicit typed `UsdOp` plan against a cloned
 document and keeps it outside authored USD for review. Its

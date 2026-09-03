@@ -70,6 +70,15 @@ name convention, or ECS-only grouping state is introduced.
   frame-wide cap by default. A view is activated only after its panel publishes
   geometry inside that budget; zero-valued limits are invalid and produce no
   render target rather than an unbounded allocation.
+  Preview projection has an explicit readiness boundary. A new or changed
+  session remains pending until its preview root and all of its projected USD
+  descendants are structurally synced and that subtree's USD projection queue
+  and asynchronous mesh phase are empty. `InspectUsdViewport` reports
+  `projection_ready`; editor selection, view models, gizmos, and authoring
+  commands do not consume a pending projection. Preview presentation owns one
+  session-local light: authored scene-wide `DistantLight` and `DomeLight`
+  prims stay out of an isolated preview, while local `SphereLight` and
+  `RectLight` prims remain assembly content.
   A click on a `.usda`, `.usd`, or `.usdc` file in any open Twin resolves that file at the emitting
   Twin's path, admits it through the existing async `OpenFile` pipeline, then
   opens/focuses the stable editor session; it never becomes `LoadScene`.

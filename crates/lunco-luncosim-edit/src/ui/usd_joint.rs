@@ -237,6 +237,9 @@ pub fn produce_usd_joint_view(
         view.doc = Some(session.doc());
         view.edit_target = Some(session.edit_target().clone());
         view.generation = session.projected_generation();
+        if !session.projection_ready() {
+            continue;
+        }
 
         let Some(entity) = crate::ui::selected_entity_in_preview(
             session,

@@ -72,7 +72,10 @@ use lunco_render::{
     scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
     RenderQualityProfile, RenderingQualitySettings,
 };
-use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::{
+    PendingUsdMesh, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdStageRevision,
+    UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed, UsdVisualSynced,
+};
 use lunco_workbench::{
     CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRects, PanelScrollPolicy,
     PanelSlot, PendingTabCloses, ScenePickGate, SceneTarget, TabId, WorkbenchAppExt,
@@ -140,6 +143,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "doc": session.doc(),
                     "edit_target": session.edit_target().as_str(),
                     "projected_generation": session.projected_generation(),
+                    "projection_ready": session.projection_ready(),
                     "focused": viewport.focused_preview_id() == Some(session.id()),
                     "views": views,
                 })
@@ -252,6 +256,9 @@ impl Plugin for UsdViewportPlugin {
                 propagate_preview_render_layer,
                 frame_preview_views,
                 resize_viewport_image,
+                reconcile_preview_projection_state
+                    .run_if(preview_projection_inputs_changed)
+                    .after(lunco_usd_bevy::UsdVisualProjectionSet),
             ),
         );
         register_all_commands(app);
@@ -457,6 +464,7 @@ pub struct UsdPreviewSession {
     stage_handle: Handle<UsdStageAsset>,
     render_layer: usize,
     projected_generation: u64,
+    projection_ready: bool,
     primary_view: UsdPreviewViewId,
 }
 
@@ -487,6 +495,12 @@ impl UsdPreviewSession {
 
     pub fn projected_generation(&self) -> u64 {
         self.projected_generation
+    }
+
+    /// Whether the current document generation has completed the preview's
+    /// structural USD projection and all queued CPU mesh work.
+    pub fn projection_ready(&self) -> bool {
+        self.projection_ready
     }
 }
 
@@ -750,13 +764,17 @@ impl UsdViewportState {
         self.sessions.get_mut(&id)
     }
 
-    pub(crate) fn mark_projected_generation(&mut self, doc: DocumentId, generation: u64) {
+    /// Invalidate preview presentation before a document generation is
+    /// projected. A stale generation must not remain editable while its USD
+    /// entities are being rebuilt.
+    pub(crate) fn invalidate_projection(&mut self, doc: DocumentId) {
         for session in self
             .sessions
             .values_mut()
             .filter(|session| session.doc == doc)
         {
-            session.projected_generation = generation;
+            session.projected_generation = 0;
+            session.projection_ready = false;
         }
     }
 }
@@ -777,6 +795,161 @@ struct UsdViewportMeasured {
 struct UsdPreviewViewMeasured {
     view: UsdPreviewViewId,
     over_scene: bool,
+}
+
+/// Return true when a preview's authoritative USD projection inputs changed.
+///
+/// The readiness reconciler is not a render-loop scan. It wakes for session
+/// lifecycle changes and for the same USD queue/mesh markers owned by
+/// `lunco-usd-bevy`; removal readers are drained here so a completed async mesh
+/// also wakes the state transition.
+fn preview_projection_inputs_changed(
+    revision: Option<Res<UsdStageRevision>>,
+    changed: Query<
+        (),
+        Or<(
+            Added<UsdPrimPath>,
+            Changed<UsdPrimPath>,
+            Added<UsdVisualSynced>,
+            Changed<UsdVisualSynced>,
+            Added<UsdAwaitingStage>,
+            Changed<UsdAwaitingStage>,
+            Added<UsdVisualProjectionQueued>,
+            Changed<UsdVisualProjectionQueued>,
+            Added<UsdVisualMeshPending>,
+            Changed<UsdVisualMeshPending>,
+            Added<UsdVisualSyncFailed>,
+            Changed<UsdVisualSyncFailed>,
+        )>,
+    >,
+    mut removed_paths: RemovedComponents<UsdPrimPath>,
+    mut removed_awaiting: RemovedComponents<UsdAwaitingStage>,
+    mut removed_queued: RemovedComponents<UsdVisualProjectionQueued>,
+    mut removed_meshes: RemovedComponents<UsdVisualMeshPending>,
+    mut removed_failures: RemovedComponents<UsdVisualSyncFailed>,
+) -> bool {
+    // `UsdViewportState` also stores camera orbit/focus data. Its change tick
+    // must not wake this structural scan when a user merely navigates a view.
+    // The existing USD projection revision is the event-like signal for live
+    // stage edits; marker changes cover the bounded queue and async mesh fence.
+    let removed_paths = removed_paths.read().next().is_some();
+    let removed_awaiting = removed_awaiting.read().next().is_some();
+    let removed_queued = removed_queued.read().next().is_some();
+    let removed_meshes = removed_meshes.read().next().is_some();
+    let removed_failures = removed_failures.read().next().is_some();
+    revision.is_some_and(|revision| revision.is_changed())
+        || !changed.is_empty()
+        || removed_paths
+        || removed_awaiting
+        || removed_queued
+        || removed_meshes
+        || removed_failures
+}
+
+/// Reconcile each preview lease's generation against the completed USD visual
+/// projection. Document sync owns generation changes; this UI owner only marks
+/// a generation ready after the preview root and every projected descendant
+/// have cleared the USD visual queue and CPU mesh phase.
+fn reconcile_preview_projection_state(
+    mut state: ResMut<UsdViewportState>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    roots: Query<
+        (
+            Entity,
+            &UsdPrimPath,
+            Has<UsdVisualSynced>,
+            Has<UsdVisualSyncFailed>,
+            Has<UsdAwaitingStage>,
+            Has<UsdVisualProjectionQueued>,
+            Has<UsdVisualMeshPending>,
+            Has<PendingUsdMesh>,
+        ),
+        With<UsdPreviewOnly>,
+    >,
+    prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Has<UsdVisualSynced>,
+        Has<UsdAwaitingStage>,
+        Has<UsdVisualProjectionQueued>,
+        Has<UsdVisualMeshPending>,
+        Has<PendingUsdMesh>,
+        Has<UsdVisualSyncFailed>,
+    )>,
+    parents: Query<&ChildOf>,
+) {
+    let sessions: Vec<_> = state
+        .sessions()
+        .map(|session| {
+            (
+                session.id(),
+                session.doc(),
+                session.scene_root(),
+                session.stage_handle().id(),
+            )
+        })
+        .collect();
+
+    for (preview, doc, root, stage_id) in sessions {
+        let root_ready = roots.get(root).is_ok_and(
+            |(_, path, synced, failed, awaiting, queued, mesh_pending, pending_mesh)| {
+                path.stage_handle.id() == stage_id
+                    && synced
+                    && !failed
+                    && !awaiting
+                    && !queued
+                    && !mesh_pending
+                    && !pending_mesh
+            },
+        );
+        let descendants_ready = root_ready
+            && prims
+                .iter()
+                .filter(|(_, path, ..)| path.stage_handle.id() == stage_id)
+                .all(
+                    |(entity, _, synced, awaiting, queued, mesh_pending, pending_mesh, failed)| {
+                        preview_entity_belongs_to_root(entity, root, &parents)
+                            && synced
+                            && !awaiting
+                            && !queued
+                            && !mesh_pending
+                            && !pending_mesh
+                            && !failed
+                    },
+                );
+        let generation = registry.host(doc).map(|host| host.document().generation());
+        let Some(session) = state.session_mut(preview) else {
+            continue;
+        };
+        if descendants_ready {
+            if let Some(generation) = generation {
+                if !session.projection_ready || session.projected_generation != generation {
+                    session.projected_generation = generation;
+                    session.projection_ready = true;
+                }
+            }
+        } else {
+            session.projection_ready = false;
+            session.projected_generation = 0;
+        }
+    }
+}
+
+fn preview_entity_belongs_to_root(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
+    if entity == root {
+        return true;
+    }
+    let mut current = entity;
+    for _ in 0..1024 {
+        let Ok(parent) = parents.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+        if current == root {
+            return true;
+        }
+    }
+    false
 }
 
 /// Pointer input emitted by the viewport panel. Camera state and the camera
@@ -976,6 +1149,7 @@ fn create_preview_session(
         stage_handle,
         render_layer,
         projected_generation: 0,
+        projection_ready: false,
         primary_view,
     })
 }
@@ -2085,17 +2259,13 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
             path: String::new(),
         });
     }
-    let generation = world
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .host(doc)
-        .map(|h| h.document().generation())
-        .unwrap_or(0);
     if let Some(session) = world
         .resource_mut::<UsdViewportState>()
         .session_mut(preview)
     {
         session.stage_handle = handle;
-        session.projected_generation = generation;
+        session.projected_generation = 0;
+        session.projection_ready = false;
     }
 }
 

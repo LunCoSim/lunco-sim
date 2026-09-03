@@ -231,6 +231,10 @@ fn produce_usd_canvas_session(
     if state.doc != Some(doc) || state.stage_id != Some(stage_id) {
         state.clear();
     }
+    if !session.projection_ready() {
+        state.clear();
+        return;
+    }
     state.edit_target = Some(session.edit_target().clone());
     state.generation = session.projected_generation();
 

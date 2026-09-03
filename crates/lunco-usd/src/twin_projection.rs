@@ -822,6 +822,17 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             continue;
         }
 
+        #[cfg(feature = "ui")]
+        if let Some(mut viewport) =
+            world.get_resource_mut::<crate::ui::viewport::UsdViewportState>()
+        {
+            // Document generation is not visual readiness. Invalidate every
+            // preview lease before the canonical stage applies this generation;
+            // the viewport marks it ready only after the USD queue and async
+            // mesh phase have both settled.
+            viewport.invalidate_projection(doc);
+        }
+
         // Author-once: the scene's live stage is keyed by the cached
         // `twin://name/rel` UsdStageAsset id (AssetServer dedups by path). We
         // replay the **typed ops** the document recorded since the last sync
@@ -936,12 +947,6 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .get_mut(&doc)
         {
             s.synced_generation = Some(cur_gen);
-        }
-        #[cfg(feature = "ui")]
-        if let Some(mut viewport) =
-            world.get_resource_mut::<crate::ui::viewport::UsdViewportState>()
-        {
-            viewport.mark_projected_generation(doc, cur_gen);
         }
         if synced.is_some() && Some(cur_gen) != overlay_synced {
             world.write_message(TwinProjectionSettle {

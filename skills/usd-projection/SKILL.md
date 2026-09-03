@@ -88,6 +88,15 @@ focused-session projection restored from editor-owned session selection, not a
 document identity. Panel writes use the session's explicit `DocumentId`,
 `LayerId`, and projection generation.
 
+Preview projection is a presentation scope over the same composed stage. It
+owns one session-local light and excludes authored scene-wide
+`DistantLight`/`DomeLight` prims from that render layer; authored local
+`SphereLight`/`RectLight` prims remain part of the assembly. A preview is
+ready only after its root and descendants are synced and that subtree's visual
+queue plus asynchronous mesh phase have settled. Consumers use the typed
+`projection_ready` state from `InspectUsdViewport`; they do not infer
+readiness from a document generation or camera state.
+
 When an agent needs to answer “what is visible?” or edit the item a user has
 open, call the UI-owned `InspectUsdViewport` query (or
 `assembly_edit::viewport()`) and correlate its explicit preview/view handles

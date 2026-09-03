@@ -103,6 +103,9 @@ pub fn produce_usd_param_view(
         session_view.entity = None;
         session_view.path.clear();
         session_view.params.clear();
+        if !session.projection_ready() {
+            continue;
+        }
 
         // A drilled prim-backed subpart wins over the primary: Alt+Shift+click
         // a wheel of the selected rover and this session edits the wheel's own

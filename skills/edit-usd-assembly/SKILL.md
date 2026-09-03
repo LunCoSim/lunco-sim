@@ -139,6 +139,11 @@ the active simulation viewport.
    pixels, and caps visible views at 8,388,608 pixels per frame by default.
    These are presentation budgets, not authored USD values; invalid zero limits
    leave the target inactive.
+   Wait for `InspectUsdViewport` to report `projection_ready: true` before
+   selecting a prim or issuing an authoring command. The flag becomes true only
+   after the preview root and all projected descendants have cleared their USD
+   projection and asynchronous mesh phases; `projected_generation` is valid for
+   edits only at that boundary.
 
    Navigate the focused view with primary/left-drag pan, secondary/right-drag
    orbit, middle-drag pan, and wheel zoom. The toolbar and agents use the same

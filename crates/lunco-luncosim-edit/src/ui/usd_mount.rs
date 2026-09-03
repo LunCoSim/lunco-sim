@@ -141,6 +141,9 @@ pub fn produce_usd_mount_view(
         session_view.host_path.clear();
         session_view.items.clear();
         session_view.diagnostics.clear();
+        if !session.projection_ready() {
+            continue;
+        }
 
         let Some(entity) = crate::ui::selected_entity_in_preview(
             session,
