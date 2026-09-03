@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**204 commands** across **27** crates. All documented.
+**205 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -38,7 +38,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Co-simulation**
 
-- [`lunco-cosim`](#lunco-cosim) (2 commands)
+- [`lunco-cosim`](#lunco-cosim) (3 commands)
 
 **Vessels, mobility & control**
 
@@ -1661,7 +1661,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ReleasePort`
 
- Release one manual input-port hold before its normal timeout.
+ Release one manual input-port intent and hand that port back to its wiring.
 
  This is a discrete command beside the high-frequency [`SetPorts`] control
  stream. The reflected `Entity` field keeps API, Rhai, UI, and network
@@ -1673,6 +1673,23 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  The entity whose hold is released. |
 | `name` | `String` |  Input-port name. |
+
+#### `ReleaseControl`
+
+ Release the complete vehicle control intent and apply its safe state.
+
+ Authored command inputs are neutralized in one transaction: rover
+ throttle/steer become zero and its brake is engaged; lander attitude, thrust,
+ and RCS inputs become zero. A direct hold on a Modelica command is cleared too,
+ while plant parameters and sensor inputs outside the command surface remain
+ untouched. The safe values remain held until a new owner writes them, so a
+ wired controller cannot resurrect a released command on the next tick.
+
+- *defined in:* `crates/lunco-cosim/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The vehicle whose complete control intent is released. |
 
 #### `SetPorts`
 
@@ -1688,11 +1705,19 @@ actually call, with the fields the deserializer actually accepts. See the
    `roll`/`yaw`) via the [`SimComponent`] backend,
  - a crane/door/factory arm exposes whatever input ports it declares.
 
+Each named value persists at the receiver across fixed ticks until replacement
+or explicit `ReleasePort`/`ReleaseControl`; this persistence applies to the
+vehicle command surface, not to unrelated plant parameters or sensor inputs.
+
  The same command is emitted by the keyboard input path
  (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
  so every surface drives every controllable thing identically. `seq`/`tick`
  carry the prediction bookkeeping (host ack + client input log); it rides
  `SyncChannel::ControlStream` over the network.
+
+ Each accepted value persists at the receiver across fixed ticks until that
+ port is replaced or released; use [`ReleaseControl`] for the vehicle-wide
+ safe state.
 
 - *defined in:* `crates/lunco-cosim/src/lib.rs`
 
@@ -3478,7 +3503,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 204 commands from the runtime schema; scanned 688 .rs files for docs (0 parse failure(s) skipped).
+<!-- 205 commands from the runtime schema; scanned 688 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

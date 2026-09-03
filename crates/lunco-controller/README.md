@@ -71,6 +71,12 @@ The default W/S/A/D/Q/E labels are only the current `input_bindings` projection.
 UI help resolves them from `InputBindingsSettings`, so remapping changes the
 display without introducing a second control scheme.
 
+`SetPorts` latches each named command value at the shared port receiver, so a
+one-shot API/Rhai write remains deterministic across fixed ticks. Use
+`ReleasePort` for one input or `ReleaseControl` to engage the complete safe
+vehicle state; the keyboard path continues to emit its resolved binding batch
+and therefore replaces or neutralizes its own values as intents change.
+
 ## See Also
 
 - `lunco-mobility` — Consumes the bound `SetPorts` inputs and projects them onto the authored actuator ports.

@@ -6,8 +6,8 @@
 //! divergent branches deterministically). This plane is deliberately separate
 //! from the others, by replication *semantics*:
 //!
-//! - **Command** plane — ephemeral control/structural *intent* (SetPorts…),
-//!   replayed once. Authored document edits do NOT ride it.
+//! - **Command** plane — ephemeral control/structural *intent* (SetPorts and
+//!   ReleaseControl…), replayed once. Authored document edits do NOT ride it.
 //! - **State** plane — continuous physics pose/velocity, overwrite + interpolate.
 //! - **Content** plane — immutable file bytes by CID.
 //! - **Journal** plane (this) — authored, mergeable document *history*.

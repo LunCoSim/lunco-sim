@@ -961,15 +961,8 @@ pub struct LunCoAvatarPlugin;
 pub struct AvatarSceneHandoffSet;
 
 fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
-    commands.trigger(lunco_cosim::SetPorts {
+    commands.trigger(lunco_cosim::ReleaseControl {
         target: vessel_entity,
-        writes: vec![
-            ("throttle".into(), 0.0),
-            ("steer".into(), 0.0),
-            ("brake".into(), 1.0),
-        ],
-        seq: 0,
-        tick: 0,
     });
 }
 

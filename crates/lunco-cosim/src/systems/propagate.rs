@@ -634,19 +634,13 @@ pub fn propagate_connections(
     // Targets that DID take their write this tick — the proof a wire is real, and
     // the only thing that can retract a fault (see below).
     let mut landed: Vec<(Entity, String)> = Vec::new();
-    // Manual holds outrank the fabric — see `crate::PortHolds`. Expired first (on
-    // the REAL clock, so a paused or warped sim cannot extend a hold), then
-    // snapshotted, because the write loop below owns `&mut World`.
-    let now_real = world
-        .get_resource::<Time<bevy::time::Real>>()
-        .map(|time| time.elapsed_secs_f64())
-        .unwrap_or(0.0);
+    // Manual holds outrank the fabric — see `crate::PortHolds`. They are
+    // explicit control intents, so they remain live across fixed ticks and are
+    // cleared only by ReleasePort, the vehicle safe-stop command, or lifecycle
+    // teardown.
     let held: std::collections::HashMap<(Entity, String), f64> =
         match world.get_resource_mut::<crate::PortHolds>() {
-            Some(mut holds) if !holds.is_empty() => {
-                holds.expire(now_real);
-                holds.snapshot()
-            }
+            Some(holds) if !holds.is_empty() => holds.snapshot(),
             _ => Default::default(),
         };
     for (i, t) in compiled.targets.iter().enumerate() {
@@ -845,15 +839,15 @@ mod wire_order_tests {
         );
     }
 
-    /// A HOLD outranks the wire into the same port, and hands it back when it
-    /// expires.
+    /// A persisted intent outranks the wire into the same port, and hands it
+    /// back only when explicitly released.
     ///
     /// This is the failure the hold exists for: writing a wired input directly
     /// "succeeds" and is overwritten by the very next propagation tick, so a
     /// setpoint on a driven port lasts under 16 ms and looks, from the caller's
     /// side, exactly like a port that does not exist.
     #[test]
-    fn a_hold_outranks_its_wire_until_it_expires() {
+    fn a_hold_outranks_its_wire_until_explicit_release() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
@@ -903,7 +897,7 @@ mod wire_order_tests {
         // Hold it somewhere else. The wire keeps producing 7.0 every tick.
         world
             .resource_mut::<crate::PortHolds>()
-            .hold(sink, "demand", -1.0, 100.0);
+            .hold(sink, "demand", -1.0);
         world.run_system_once(propagate_connections).unwrap();
         assert_eq!(
             demand(&world),
@@ -911,16 +905,16 @@ mod wire_order_tests {
             "a live hold outranks the wire — this is what makes a setpoint on a driven port stick"
         );
 
-        // Past its deadline the port goes back to its wiring, with no release
-        // call: an abandoned hold must not leave a vehicle stuck.
+        // The intent remains live across arbitrary fixed ticks. An explicit
+        // release hands the port back to its authored wire.
         world
-            .resource_mut::<Time<bevy::time::Real>>()
-            .advance_by(std::time::Duration::from_secs(200));
+            .resource_mut::<crate::PortHolds>()
+            .release(sink, "demand");
         world.run_system_once(propagate_connections).unwrap();
-        assert_eq!(demand(&world), 7.0, "an expired hold releases the port");
+        assert_eq!(demand(&world), 7.0, "an explicit release restores the wire");
         assert!(
             world.resource::<crate::PortHolds>().is_empty(),
-            "the expired entry is dropped, not merely ignored"
+            "the released entry is dropped, not merely ignored"
         );
     }
 

@@ -261,6 +261,7 @@ Domain authors touch a tiny API — never a socket, backend, or serializer:
 app.sync::<Transform>(SyncClass::Continuous);                   // → M2 (role decided at runtime)
 app.sync::<NetworkAuthority>(SyncClass::Discrete);              // → M2 replicated / M3
 app.declare_channel::<SetPorts>(SyncChannel::ControlStream);    // → M4/M3 (reuses #[Command])
+app.declare_channel::<ReleaseControl>(SyncChannel::CommandBus); // → M3 lifecycle release
 commands.spawn((MyBundle, Provenance::Content { namespace:"usd", source, path }));  // → M1
 // keep something local: do nothing — Local is the DEFAULT (undeclared never crosses the layer)
 ```

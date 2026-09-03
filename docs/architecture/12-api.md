@@ -246,10 +246,10 @@ Commands are typed — each domain crate defines its own command structs. The AP
 ### Example: Drive a Rover
 
 Control is a single generic command — `SetPorts` writes the vessel's named input
-ports. A wheeled rover exposes `throttle`/`steer`/`brake`; re-send each tick (the
-command carries no persistent setpoint). The composed Modelica/Rhai controller
-reads those inputs and publishes final motor and wheel-heading outputs through
-the authored port graph.
+ports. A wheeled rover exposes `throttle`/`steer`/`brake`; each accepted value
+persists at the receiver until replacement or an explicit `ReleasePort`/
+`ReleaseControl`. The composed Modelica/Rhai controller reads those inputs and
+publishes final motor and wheel-heading outputs through the authored port graph.
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \

@@ -282,10 +282,12 @@ mutation paths.
 ## 4. Layer B — scenario runtime (the checkpoints/goals problem)
 
 ### 4.1 The task-tree contract
-rhai is synchronous and `SetPorts` carries no persistent setpoint, so a mission
-must re-emit actuator commands while it is active. The canonical script surface
+rhai is synchronous and a mission must keep its control policy active while it
+is running, but `SetPorts` itself persists each accepted named value at the
+receiver until replacement or explicit release. The canonical script surface
 is a cooperative task tree: `task(me)` returns pure data once, and the native
-behavior kernel advances one deterministic step per fixed tick.
+behavior kernel advances one deterministic step per fixed tick; lifecycle code
+uses `ReleasePort` or `ReleaseControl` when the task yields control.
 
 ```rhai
 fn task(me) {

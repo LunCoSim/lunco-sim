@@ -184,6 +184,12 @@ impl Plugin for CoSimPlugin {
                 "ReleasePort",
                 lunco_core::session::CommandPolicy::OWNED_CONTROL,
             );
+        app.world_mut()
+            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .register(
+                "ReleaseControl",
+                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+            );
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
             .register_type::<ForceActuator>()
@@ -204,8 +210,9 @@ impl Plugin for CoSimPlugin {
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<diagnostics::CosimDiagnostics>();
-        // Manual setpoints that outrank the wiring fabric until they expire —
-        // without it, a `SetPorts` write on a WIRED input lives less than one tick.
+        // Manual control intents that outrank the wiring fabric until an
+        // explicit release — without it, a `SetPorts` write on a WIRED input
+        // lives less than one tick.
         app.init_resource::<connection::PortHolds>();
         // A lifecycle command may retire a producer after its SetPorts trigger
         // was emitted but before its deferred write lands. Keep that stale write
@@ -648,7 +655,7 @@ mod binding_lifecycle_tests {
         }
         app.world_mut()
             .resource_mut::<PortHolds>()
-            .hold(entity, "throttle", 0.5, 100.0);
+            .hold(entity, "throttle", 0.5);
         app.world_mut()
             .resource_mut::<ControlWriteFence>()
             .block(entity);
@@ -687,6 +694,9 @@ mod binding_lifecycle_tests {
 /// so every surface drives every controllable thing identically. `seq`/`tick`
 /// carry the prediction bookkeeping (host ack + client input log); it rides
 /// `SyncChannel::ControlStream` over the network.
+/// Each accepted value persists at the receiver across fixed ticks until that
+/// port is replaced or released; use [`ReleaseControl`] for the vehicle-wide
+/// safe state.
 #[Command]
 pub struct SetPorts {
     /// The entity whose input ports are written.
@@ -707,7 +717,7 @@ pub struct SetPorts {
     pub tick: u64,
 }
 
-/// Release one manual input-port hold before its normal timeout.
+/// Release one manual input-port intent and hand that port back to its wiring.
 ///
 /// This is a discrete command beside the high-frequency [`SetPorts`] control
 /// stream. The reflected `Entity` field keeps API, Rhai, UI, and network
@@ -719,6 +729,21 @@ pub struct ReleasePort {
     pub target: Entity,
     /// Input-port name.
     pub name: String,
+}
+
+/// Release the complete vehicle control intent and apply its safe state.
+///
+/// Every authored command input is cleared in one transaction: rover
+/// throttle/steer become zero and its brake is engaged; lander attitude/thrust
+/// and RCS inputs become zero. A direct hold on a Modelica command is cleared
+/// too. Plant parameters and sensor inputs outside the command surface are left
+/// untouched. The safe values remain held until a new owner writes them, so a
+/// wired controller cannot resurrect a released command on the next tick.
+#[Command]
+pub struct ReleaseControl {
+    /// The vehicle whose complete control intent is released.
+    #[authz_target]
+    pub target: Entity,
 }
 
 /// Observer for [`SetPorts`]: applies each `(name, value)` via the
@@ -776,22 +801,12 @@ fn on_set_ports(
         }
         // A setpoint on a WIRED input has to outrank the wire, or the next
         // propagation tick overwrites it and the caller sees a write that
-        // "succeeded" and did nothing. The hold expires on its own
-        // (`DEFAULT_HOLD_SECS`), so a stream of setpoints keeps control while an
-        // abandoned one hands the port back to its wiring.
-        let now_real = world
-            .get_resource::<Time<bevy::time::Real>>()
-            .map(|time| time.elapsed_secs_f64())
-            .unwrap_or(0.0);
+        // "succeeded" and did nothing. The hold is the persistent control
+        // intent and ends only through an explicit release or lifecycle clear.
         for (port, value) in &writes {
             if reg.write_port(world, target, port, *value) {
                 if let Some(mut holds) = world.get_resource_mut::<connection::PortHolds>() {
-                    holds.hold(
-                        target,
-                        port.clone(),
-                        *value,
-                        now_real + connection::DEFAULT_HOLD_SECS,
-                    );
+                    holds.hold(target, port.clone(), *value);
                 }
                 // A landing write retracts any earlier fault for this port —
                 // the backend may have come up late (model load order), which
@@ -863,4 +878,204 @@ fn on_release_port(
     Ok(Ack::new(OpId::new()))
 }
 
-register_commands!(on_set_ports, on_release_port);
+/// Apply the one authoritative safe-stop transaction for every vehicle control
+/// surface. The command-world closure is necessary because port backends use
+/// `&mut World`; it also gives a stale `SetPorts` write the same lifecycle fence
+/// as possession and autopilot release.
+#[on_command(ReleaseControl)]
+fn on_release_control(
+    trigger: On<ReleaseControl>,
+    registry: Res<lunco_core::ports::PortRegistry>,
+    mut holds: ResMut<connection::PortHolds>,
+    mut fence: ResMut<connection::ControlWriteFence>,
+    q_inputs: Query<&lunco_core::InputPorts>,
+    mut commands: Commands,
+) {
+    let target = trigger.event().target;
+    fence.block(target);
+    let registry = registry.clone();
+    let mut input_names = holds.entity_port_names(target);
+    if let Ok(command_surface) = q_inputs.get(target) {
+        input_names.extend(command_surface.values.keys().cloned());
+    }
+    // Remove old values before the deferred backend transaction. A queued
+    // SetPorts from the outgoing owner sees the fence and cannot re-arm it.
+    holds.clear_entity(target);
+    input_names.sort();
+    input_names.dedup();
+    commands.queue(move |world: &mut World| {
+        let inputs: Vec<(String, f64)> = input_names
+            .into_iter()
+            .map(|name| {
+                // `brake` is the only declared command with an engaged safe
+                // value; every other command is a neutral zero.
+                let value = if name == "brake" { 1.0 } else { 0.0 };
+                (name, value)
+            })
+            .collect();
+        for (name, value) in &inputs {
+            registry.write_port(world, target, name, *value);
+        }
+        if let Some(mut command_surface) = world.get_mut::<lunco_core::InputPorts>(target) {
+            command_surface.safe_stop();
+        }
+        if let Some(mut holds) = world.get_resource_mut::<connection::PortHolds>() {
+            for (name, value) in &inputs {
+                holds.hold(target, name.clone(), *value);
+            }
+        }
+
+        // The logical input backend is covered by the registry above. Output
+        // actuator ports are also neutralized immediately when the authored
+        // endpoint publishes them, matching the existing hard-stop contract.
+        let actuator_ports = world
+            .get::<lunco_core::OutputPorts>(target)
+            .map(|outputs| outputs.ports.clone())
+            .unwrap_or_default();
+        for (name, entity) in actuator_ports {
+            if let Some(mut port) = world.get_mut::<lunco_core::Port>(entity) {
+                port.value = if name == "brake" { 1.0 } else { 0.0 };
+            }
+        }
+    });
+}
+
+register_commands!(on_set_ports, on_release_port, on_release_control);
+
+#[cfg(test)]
+mod control_intent_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn release_control_latches_intent_until_explicit_release() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let throttle_output = app.world_mut().spawn(lunco_core::Port::default()).id();
+        let brake_output = app.world_mut().spawn(lunco_core::Port::default()).id();
+        let target = app
+            .world_mut()
+            .spawn((
+                lunco_core::InputPorts::new(&[
+                    "throttle",
+                    "steer",
+                    "brake",
+                    "external_throttle",
+                    "pitch",
+                    "roll",
+                    "yaw",
+                    "rcs_translation",
+                ]),
+                lunco_core::OutputPorts::new(HashMap::from([
+                    ("throttle".to_string(), throttle_output),
+                    ("brake".to_string(), brake_output),
+                ])),
+            ))
+            .id();
+
+        let writes = vec![
+            ("throttle".to_string(), 0.75),
+            ("steer".to_string(), -0.25),
+            ("brake".to_string(), 0.0),
+            ("external_throttle".to_string(), 0.6),
+            ("pitch".to_string(), -0.3),
+            ("roll".to_string(), 0.2),
+            ("yaw".to_string(), -0.1),
+            ("rcs_translation".to_string(), 0.4),
+        ];
+        app.world_mut().trigger(SetPorts {
+            target,
+            writes: writes.clone(),
+            seq: 0,
+            tick: 1,
+        });
+        app.world_mut().flush();
+
+        for (name, value) in &writes {
+            assert_eq!(
+                app.world()
+                    .get::<lunco_core::InputPorts>(target)
+                    .unwrap()
+                    .cmd(name),
+                *value,
+                "SetPorts must apply the initial command"
+            );
+        }
+
+        // The receiver-side intent survives ordinary updates; it is not a
+        // one-tick write that the propagation schedule can erase.
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::InputPorts>(target)
+                .unwrap()
+                .cmd("external_throttle"),
+            0.6
+        );
+
+        // A release fences a queued stale SetPorts before it can re-arm the
+        // outgoing value, then leaves the neutral values held for the wiring
+        // fabric.
+        app.world_mut().trigger(SetPorts {
+            target,
+            writes,
+            seq: 0,
+            tick: 2,
+        });
+        app.world_mut().trigger(ReleaseControl { target });
+        app.world_mut().flush();
+
+        let inputs = app.world().get::<lunco_core::InputPorts>(target).unwrap();
+        assert_eq!(inputs.cmd("throttle"), 0.0);
+        assert_eq!(inputs.cmd("steer"), 0.0);
+        assert_eq!(inputs.cmd("brake"), 1.0);
+        assert_eq!(inputs.cmd("external_throttle"), 0.0);
+        assert_eq!(inputs.cmd("pitch"), 0.0);
+        assert_eq!(inputs.cmd("roll"), 0.0);
+        assert_eq!(inputs.cmd("yaw"), 0.0);
+        assert_eq!(inputs.cmd("rcs_translation"), 0.0);
+        assert!(inputs.brake_active);
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::Port>(throttle_output)
+                .unwrap()
+                .value,
+            0.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::Port>(brake_output)
+                .unwrap()
+                .value,
+            1.0
+        );
+
+        let holds = app.world().resource::<PortHolds>().snapshot();
+        assert_eq!(holds.get(&(target, "throttle".to_string())), Some(&0.0));
+        assert_eq!(holds.get(&(target, "brake".to_string())), Some(&1.0));
+        assert_eq!(
+            holds.get(&(target, "external_throttle".to_string())),
+            Some(&0.0)
+        );
+
+        // The fence opens at the next fixed/update boundary; an explicit new
+        // owner command can then replace the safe intent.
+        app.world_mut().run_schedule(FixedFirst);
+        app.world_mut().trigger(SetPorts {
+            target,
+            writes: vec![("throttle".to_string(), 0.5)],
+            seq: 0,
+            tick: 3,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::InputPorts>(target)
+                .unwrap()
+                .cmd("throttle"),
+            0.5
+        );
+    }
+}

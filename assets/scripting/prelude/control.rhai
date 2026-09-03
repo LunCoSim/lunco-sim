@@ -1,29 +1,37 @@
-// ── Rover control (re-emit every tick: the FSW command surface has no persistent
-// setpoint) ──
+// ── Vehicle control (SetPorts stores a persistent intent until release) ──
 //
 // Control is the ONE generic `SetPorts` command: a batch of named input-port
 // writes on the vessel's FlightSoftware command surface (`throttle`/`steer`/
 // `brake`). The authored Modelica/Rhai controller then maps those commands onto
 // motor, brake, and joint ports.
-// There are no dedicated rover command verbs. Like the keyboard path, we write EVERY
-// command port every tick (0 when unused) so a released setpoint — especially a
-// prior `brake` — zeroes out cleanly instead of sticking.
+// There are no rover-specific drive verbs. `SetPorts` is a level-triggered
+// command: each named input persists through fixed ticks until it is replaced
+// or explicitly released. Controllers may still re-emit a live setpoint each
+// tick when their policy changes it; persistence is what makes a one-shot
+// command deterministic rather than a one-tick pulse.
 
-/// Drive a rover this tick: `forward` throttle + `steer` in [-1, 1], brake
-/// released. `seq`/`tick` default to 0 — fine for host-local scenarios; networked
-/// control should thread real sequence/tick numbers.
+/// Drive a rover: `forward` throttle + `steer` in [-1, 1], brake released.
+/// The complete setpoint persists until another command or `brake`/release.
+/// `seq`/`tick` default to 0 — fine for host-local scenarios; networked control
+/// should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
     cmd("SetPorts", #{ target: rover,
         writes: [["throttle", forward], ["steer", steer], ["brake", 0.0]],
         seq: 0, tick: 0 })
 }
 
-/// Stop a rover this tick: full brake. Writes ONLY `brake`; the authored
-/// controller decides how that command is coordinated with its motor ports.
-/// `drive()` re-writes `brake = 0` next time it's called, so the brake never
-/// sticks. `seq`/`tick` default to 0 (host-local, like `drive`).
+/// Release a vehicle's complete control intent and apply its safe state. This
+/// zeros throttle, steering, landing thrust, attitude, and RCS inputs, and
+/// engages a rover brake. The safe values persist until a new owner writes them.
+/// `seq`/`tick` are owned by the lifecycle command and are not needed here.
 fn brake(rover) {
-    cmd("SetPorts", #{ target: rover, writes: [["brake", 1.0]], seq: 0, tick: 0 })
+    cmd("ReleaseControl", #{ target: rover })
+}
+
+/// Explicitly release the complete vehicle control intent without relying on a
+/// scenario's next tick or on the wiring fabric to neutralize it.
+fn release_control(vehicle) {
+    cmd("ReleaseControl", #{ target: vehicle })
 }
 
 // ── Scene / world manipulation shortcuts (all generic cmd() under the hood) ──
