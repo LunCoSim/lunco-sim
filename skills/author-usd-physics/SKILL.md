@@ -362,6 +362,13 @@ directions — USD and avian agree:
 | collider under a **nested** body | that nested body's piece — never the parent's |
 | a nested body | a SEPARATE body; a **joint** attaches it, or it falls off |
 
+The body prim may also carry `PhysicsCollisionAPI`. If it has a collision shape
+and descendants, both the body-root shape and every eligible descendant shape
+belong to the same compound. The root shape is identity-local to the body; its
+authored transform is applied by the body's ECS transform once, while child
+transforms are accumulated from the body frame. This remains true when the
+body arrives through a reference or a prepared runtime-instance projection.
+
 `physics:collisionEnabled=true` is an opt-in on an already-declared collider;
 it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
 must carry both. `LunCoTerrainAPI` and `PhysxVehicleWheelAPI` are the explicit

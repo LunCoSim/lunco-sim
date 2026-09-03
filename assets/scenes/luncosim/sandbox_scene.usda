@@ -451,7 +451,10 @@ def Xform "SandboxScene" (
         }
     )
     {
-        double3 xformOp:translate = (-25.0, 5.0, 0.0)
+        # This articulated physical rover starts on the authored wheel-support
+        # plane. Dropping the knuckle/suspension chain from y=5 lets it free-fall
+        # before the joints are settled and can trip the terminal escape hold.
+        double3 xformOp:translate = (-25.0, 1.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         # Per-instance livery: this scene parks several copies of the
