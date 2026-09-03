@@ -439,6 +439,7 @@ fn preview_authoring_context(
     let sessions: Vec<_> = world
         .resource::<lunco_usd::ui::viewport::UsdViewportState>()
         .sessions()
+        .filter(|session| session.projection_ready())
         .map(|session| {
             (
                 session.scene_root(),
@@ -474,8 +475,11 @@ fn authoring_context(
     world: &mut World,
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
-    preview_authoring_context(world, entity)
-        .or_else(|| resolve_doc_for_entity(world, entity).map(|doc| (doc, LayerId::root(), 0)))
+    if lunco_usd_bevy::is_preview_only_entity(world, entity) {
+        preview_authoring_context(world, entity)
+    } else {
+        resolve_doc_for_entity(world, entity).map(|doc| (doc, LayerId::root(), 0))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1260,7 +1264,7 @@ pub fn delete_selected_on_intent(
 /// projection of the existing viewport, document registry, and proposal
 /// review state; it does not infer a document from an ECS entity.
 fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    let Some((preview, doc, edit_target, projected_generation)) = ctx
+    let Some((preview, doc, edit_target, projected_generation, projection_ready)) = ctx
         .resource::<lunco_usd::ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             viewport.focused_session().map(|session| {
@@ -1269,6 +1273,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     session.doc(),
                     session.edit_target().clone(),
                     session.projected_generation(),
+                    session.projection_ready(),
                 )
             })
         })
@@ -1304,7 +1309,11 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.small(format!("target {}", edit_target.as_str()));
         });
         ui.horizontal_wrapped(|ui| {
-            ui.small(format!("projected generation {projected_generation}"));
+            if projection_ready {
+                ui.small(format!("projected generation {projected_generation}"));
+            } else {
+                ui.small("USD projection pending");
+            }
             if let Some((generation, base_revision, dirty)) = document_state {
                 ui.small(format!("document generation {generation}"));
                 ui.small(format!("base revision {base_revision}"));
@@ -1352,6 +1361,9 @@ fn focused_preview_transform_context(
     let prim = ctx.get::<UsdPrimPath>(entity)?;
     let viewport = ctx.resource::<lunco_usd::ui::viewport::UsdViewportState>()?;
     let session = viewport.focused_session()?;
+    if !session.projection_ready() {
+        return None;
+    }
     if prim.stage_handle.id() != session.stage_handle().id() || prim.path.is_empty() {
         return None;
     }

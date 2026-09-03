@@ -549,6 +549,9 @@ fn preview_drag_owner(
     q_parents: &Query<&ChildOf>,
 ) -> Option<GizmoDragOwner> {
     let session = viewport?.focused_session()?;
+    if !session.projection_ready() {
+        return None;
+    }
     let prim = q_paths.get(entity).ok()?;
     if prim.stage_handle.id() != session.stage_handle().id()
         || prim.path.is_empty()

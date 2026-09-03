@@ -140,6 +140,13 @@ pub use light::{
 /// system that processes USD prims into Bevy entities with meshes and transforms.
 pub struct UsdBevyPlugin;
 
+/// Systems in this set finish the bounded USD visual queue for the current
+/// update. Consumers that expose a render-ready state must run after this set,
+/// so a document generation cannot be reported ready between structural
+/// projection and asynchronous CPU mesh commit.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct UsdVisualProjectionSet;
+
 /// The authored camera pose and persistent origin projection are inserted into
 /// BigSpace's propagation pipeline before floating-origin recentering and
 /// high-precision propagation. Keeping these systems as sibling sets of
@@ -434,10 +441,12 @@ impl Plugin for UsdBevyPlugin {
                         .after(canonical::sync_canonical_stages),
                     process_queued_usd_visuals
                         .run_if(any_queued_usd_visuals)
-                        .after(sync_usd_visuals),
+                        .after(sync_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
-                        .after(process_queued_usd_visuals),
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
                     retry_awaiting_usd_visuals_after_quality_change
                         .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
                         // A quality update can coincide with the asset-loaded
@@ -1409,6 +1418,11 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             asset_server,
             prim_path.stage_handle.id(),
             quality,
+            if preview_only {
+                light::LightProjectionScope::Preview
+            } else {
+                light::LightProjectionScope::Scene
+            },
         );
 
         // UsdGeomCamera (`def Camera`) → camera intent (see `camera.rs`). The

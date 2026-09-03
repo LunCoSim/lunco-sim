@@ -67,6 +67,24 @@ use crate::dome;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LightReadError;
 
+/// Presentation scope for a USD light projection.
+///
+/// A live scene consumes the authored dominant lights. An isolated editor
+/// preview owns its own camera-local presentation light, so the authored
+/// scene-wide sun and environment must not enter that render layer. Local
+/// `SphereLight` and `RectLight` prims remain authored assembly content in
+/// either scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LightProjectionScope {
+    Scene,
+    Preview,
+}
+
+fn light_is_in_scope(scope: LightProjectionScope, prim_type: Option<&str>) -> bool {
+    !(scope == LightProjectionScope::Preview
+        && matches!(prim_type, Some("DistantLight" | "DomeLight")))
+}
+
 /// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
 /// (`DomeLight`) — i.e. one that establishes how the whole scene is lit.
 /// Its `Add` observer recomputes the global ambient from authored
@@ -653,7 +671,15 @@ pub(crate) fn instantiate_light_prim(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
     quality: lunco_render::RenderQualityProfile,
+    scope: LightProjectionScope,
 ) -> bool {
+    if !light_is_in_scope(scope, prim_type) {
+        // A preview has one session-local presentation light. Dominant
+        // scene lights are intentionally not projected into it: importing
+        // them as well would double-light the assembly and would let a
+        // preview mutate the live ambient/sky contract.
+        return false;
+    }
     let convention = match crate::units::stage_convention(reader) {
         Ok(convention) => convention,
         Err(error) => {
@@ -1433,6 +1459,30 @@ mod photometry_tests {
     use super::*;
     use crate::canonical::{CanonicalStage, StageRecipe};
     use crate::read::UsdRead;
+
+    #[test]
+    fn preview_scope_excludes_only_dominant_authored_lights() {
+        assert!(!light_is_in_scope(
+            LightProjectionScope::Preview,
+            Some("DistantLight")
+        ));
+        assert!(!light_is_in_scope(
+            LightProjectionScope::Preview,
+            Some("DomeLight")
+        ));
+        assert!(light_is_in_scope(
+            LightProjectionScope::Preview,
+            Some("SphereLight")
+        ));
+        assert!(light_is_in_scope(
+            LightProjectionScope::Preview,
+            Some("RectLight")
+        ));
+        assert!(light_is_in_scope(
+            LightProjectionScope::Scene,
+            Some("DistantLight")
+        ));
+    }
 
     #[test]
     fn rect_power_scales_with_area_unless_normalized() {

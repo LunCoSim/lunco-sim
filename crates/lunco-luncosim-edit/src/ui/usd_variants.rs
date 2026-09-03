@@ -109,6 +109,9 @@ pub fn produce_usd_variant_view(
         session_view.entity = None;
         session_view.sets.clear();
         session_view.prim_path.clear();
+        if !session.projection_ready() {
+            continue;
+        }
 
         let Some(entity) = crate::ui::selected_entity_in_preview(
             session,
