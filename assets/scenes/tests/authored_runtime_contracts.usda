@@ -1,0 +1,117 @@
+#usda 1.0
+(
+    defaultPrim = "AuthoredRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Small production fixture for the authored-asset boundary. The scenario checks
+# the composed USD values and then observes the same scene through the authored
+# camera track and physics query surfaces.
+def Xform "AuthoredRuntimeContracts" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Self-contained positive fixture for authored presentation, collision, and joint contracts."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # The camera and the sun are explicit scene inputs, not inferred defaults.
+    def Camera "VisualCamera" (
+        prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
+    )
+    {
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (8.0, 5.0, 10.0)
+        float focalLength = 24.0
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "VisualCamera",
+        }
+    }
+
+    over "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Plane "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double width = 1.0
+        double length = 1.0
+        token axis = "Y"
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </AuthoredRuntimeContracts/PhysicsMaterials/Friction_1_0>
+    }
+
+    # A static rigid-body anchor and a dynamic payload make the joint relation
+    # observable without depending on a vehicle-specific loader.
+    def Cube "Anchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (2.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+    }
+
+    def Cube "Payload" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (2.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:collisionEnabled = true
+    }
+
+    def PhysicsFixedJoint "PayloadJoint"
+    {
+        rel physics:body0 = </AuthoredRuntimeContracts/Anchor>
+        rel physics:body1 = </AuthoredRuntimeContracts/Payload>
+        point3f physics:localPos0 = (0.0, 0.5, 0.0)
+        point3f physics:localPos1 = (0.0, -0.5, 0.0)
+    }
+
+    # A separate authored obstacle keeps the collision query from being a
+    # vacuous check against the dynamic payload.
+    def Cube "Ramp" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (6.0, 0.5, 0.0)
+        double3 xformOp:scale = (4.0, 1.0, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "authored-runtime-contracts"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/authored_runtime_contracts.rhai@
+        }
+    }
+}

@@ -160,6 +160,36 @@ separate active-gizmo drag mode.
    scene gate only when an authored runtime path is affected; run the broad
    workspace suite at handoff or after a cross-crate change.
 
+## Current authored regression coverage
+
+The production gate is the coverage index for claims that an asset author can
+observe through USD, commands, queries, or telemetry. A row may point at more
+than one fixture when the positive behavior and its negative control are
+separate scenes.
+
+| Contract | Positive production fixture | Negative/control fixture | Observation boundary |
+|---|---|---|---|
+| Explicit camera, light, composed geometry, collision, and fixed-joint wiring | `assets/scenes/tests/authored_runtime_contracts.usda` + `authored_runtime_contracts.rhai` | `authored_runtime_contracts_negative.usda` + matching Rhai | `QueryUsdPrim`, authored camera track, `Raycast`, `GroundHeight` |
+| Composed battery/solar envelopes | `battery_mounts` | `battery_mounts_negative` | `QueryUsdPrim` and world poses |
+| Component socket, plug-kind, and joint rejection | `socket_attach_rejection` | same fixture's rejected command cases | public `AttachComponent` |
+| Reload/reset and event-gated authored policy | `component_detach`, `rhai_event_delivery` | `rhai_event_delivery_negative` | public commands and telemetry |
+| Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
+| Possession and handoff authority | `tutorial_authority_handoff`, `descent_lander_runtime` | authority-conflict cases in those scenarios | semantic commands, events, and final owner |
+| Terrain stream readiness and terrain-progress completion | no repository-owned deterministic DEM fixture | external DEM scenes are not accepted as this branch's authored gate | `TerrainLodStatus` and `ReadExposures` exist; a test-owned DEM/Twin is still required |
+| Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body | terminal `physics-body-escaped` verdict |
+
+The two new authored contract fixtures deliberately do not assert terrain
+stream completion: a flat `Plane` is not a streamed DEM, and treating it as one
+would make `TerrainLodStatus` coverage falsely green. Adding a deterministic
+terrain case requires a maintained DEM/Twin fixture and its asset-resolution
+contract; it does not require a Rust change. The existing wheel, ramp, landing,
+and vehicle rows currently expose runtime failures or liveness failures when
+they fail, so their fixes belong to the owning Rust/physics/runtime cards rather
+than to another authored shim. Headless scene tests also do not require a
+renderer-selected active-camera exposure; that presentation fact belongs to a
+GPU-backed visual acceptance pass, while the authored camera track and spawned
+camera remain observable here.
+
 ## Migration decision table
 
 Move to Rhai when all of these are true:
