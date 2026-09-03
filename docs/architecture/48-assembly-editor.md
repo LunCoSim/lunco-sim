@@ -309,6 +309,18 @@ listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
+The companion `assembly_audit` library is the authored diagnostic surface for
+assembly contracts. It reads explicit composed paths through `QueryUsdPrim` and
+returns structured reports for topology/relationship expectations, reciprocal
+mount metadata, joint bodies/axes/optional authored frames, rigid-body/joint
+coverage, and mass/inertia plus explicit collider coverage. Its
+`explode_plan` returns non-mutating local preview deltas for the existing USD
+preview/transform boundary; it does not author transforms or create a second
+selection or journal. Callers supply the assembly manifest and expected
+targets, so missing metadata fails visibly instead of being inferred from
+names. Raycast wheels are not listed as rigid bodies: only actual movable
+bodies are checked for joint coverage.
+
 The companion `assembly_ui` tool library is presentation policy over the same
 typed boundary. Its templates describe the registered `editor` perspective,
 Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and

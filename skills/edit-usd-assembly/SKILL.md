@@ -174,6 +174,17 @@ hidden open preview without changing the user's visible focus. The response
 marks no-selection, multi-selection, stale entries, and duplicate projected
 paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
+
+For composed assembly diagnostics, use the companion
+[`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
+Give it an explicit manifest and inspect its structured reports for topology,
+mount reciprocity, joint frames, rigid-body/joint coverage, and
+mass/inertia/collider coverage before proposing an edit. Its `explode_plan`
+only returns preview deltas; it does not write USD or bypass the journal. Do
+not list raycast wheels as rigid bodies or invent a joint to make that audit
+pass. Missing relationships, bodies, or colliders are defects to fix at their
+authored owner.
+
 For numeric part transforms, use the focused preview's Inspector Transform
 section or call the existing `assembly_edit::transform(doc, edit_target, path,
 translation, rotation, scale, parent_gen)` helper with the exact selection

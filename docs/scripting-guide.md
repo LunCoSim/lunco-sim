@@ -469,6 +469,26 @@ reversible USD operations. They require an explicit edit target, exact paths,
 and the generation returned by inspection; raw layer replacement is not part
 of the agent workflow.
 
+### Authored assembly diagnostics
+
+Use the [`assembly_audit`](../assets/scripting/tools/assembly_audit.rhai)
+library with an explicit composed assembly manifest. `topology_report` checks
+prim existence, type, direct children, and caller-supplied relationship targets;
+`mount_contract_report` checks the host socket, socket occupancy, component
+attachment joint, asset, and joint-kind reciprocity. `joint_frame_report`
+checks explicit joint bodies, cardinal axes, limits, and optional local frame
+opinions. `body_joint_coverage_report` and `collider_mass_report` check that
+actual movable rigid bodies have mass/inertia and explicit joint/collider
+coverage. Raycast wheels remain outside rigid-body/joint coverage because they
+are not jointed bodies.
+
+`explode_plan(parts, axis, spacing)` produces a structured, non-mutating set of
+preview deltas. Apply any reviewed edit through `assembly_edit` and its typed
+USD journal boundary; the audit library never writes transforms, chooses a
+target by name, or creates a parallel topology registry. Tests should include
+negative manifests for missing paths or reciprocal relationships when the
+asset contract warrants them.
+
 Use `assembly_ui` for the presentation step after the document and preview
 identities are known. `assembly_ui::panel_templates(preview, doc,
 edit_target)` returns nine existing Editor surfaces/workflows with explicit

@@ -8,6 +8,10 @@
 
 const EPSILON = 0.001;
 
+fn close_scalar(actual, expected, epsilon) {
+    actual != () && expected != () && (actual - expected).abs() <= epsilon
+}
+
 fn close_vec(actual, expected, epsilon) {
     if actual == () || expected == () || actual.len() != expected.len() {
         return false;
@@ -114,4 +118,335 @@ fn seat_pairs(pairs) {
         }
     }
     true
+}
+
+fn query_prim(path, attrs, rels, children) {
+    let request = #{ path: path };
+    if attrs != () { request.attrs = attrs; }
+    if rels != () { request.rels = rels; }
+    if children != () { request.children = children; }
+    query("QueryUsdPrim", request)
+}
+
+fn query_ok(record) {
+    record != () && record.ok != false
+}
+
+fn array_has(values, expected) {
+    if values == () { return false; }
+    for value in values {
+        if value == expected { return true; }
+    }
+    false
+}
+
+fn relationship_targets(record, name) {
+    if !query_ok(record) || record.relationships == () || record.relationships[name] == () {
+        return [];
+    }
+    record.relationships[name]
+}
+
+fn required_targets(actual, expected) {
+    if expected == () { return true; }
+    if actual == () || actual.len() != expected.len() { return false; }
+    for target in expected {
+        if !array_has(actual, target) { return false; }
+    }
+    true
+}
+
+/// Inspect explicit composed prim paths and verify only caller-supplied
+/// topology expectations. `nodes` contains `{path, expected_type?, children?,
+/// relations?}`; each relation is `{name, targets?}`. This is intentionally a
+/// report rather than a traversal: the caller owns the assembly manifest and
+/// missing metadata is visible instead of being inferred from names.
+fn topology_report(nodes) {
+    let records = [];
+    let errors = [];
+    for spec in nodes {
+        let relation_names = [];
+        if spec.relations != () {
+            for relation in spec.relations {
+                relation_names.push(relation.name);
+            }
+        }
+        let record = query_prim(spec.path, [], relation_names, true);
+        if !query_ok(record) {
+            errors.push(spec.path + ": composed prim is missing");
+            continue;
+        }
+        let entry = #{
+            path: spec.path,
+            type_name: record.type_name,
+            children: record.children,
+            relationships: record.relationships,
+        };
+        if spec.expected_type != () && record.type_name != spec.expected_type {
+            errors.push(spec.path + ": expected type " + spec.expected_type
+                + ", got " + record.type_name);
+        }
+        if spec.children != () {
+            for child in spec.children {
+                if !array_has(record.children, child) {
+                    errors.push(spec.path + ": missing child " + child);
+                }
+            }
+        }
+        if spec.relations != () {
+            for relation in spec.relations {
+                let actual = relationship_targets(record, relation.name);
+                if relation.targets != () && !required_targets(actual, relation.targets) {
+                    errors.push(spec.path + ": relationship " + relation.name
+                        + " has unexpected targets");
+                }
+            }
+        }
+        records.push(entry);
+    }
+    #{ ok: errors.len() == 0, records: records, errors: errors }
+}
+
+/// Verify the reciprocal metadata for an explicit mount. This checks the
+/// host socket list, socket occupancy, component attachment joint, asset and
+/// joint kind; it never selects a socket or joint from a name convention.
+fn mount_contract_report(mounts) {
+    let connections = [];
+    let errors = [];
+    for spec in mounts {
+        let host = query_prim(spec.host, (), ["lunco:mount:sockets"], false);
+        let socket = query_prim(spec.socket, [
+            "lunco:mount:socket", "lunco:mount:joint", "lunco:mount:asset"
+        ], ["lunco:mount:part"], false);
+        let component = query_prim(spec.component, (), ["lunco:mount:attachmentJoint"], false);
+        let joint = query_prim(spec.joint, (), ["physics:body0", "physics:body1"], false);
+        let host_sockets = relationship_targets(host, "lunco:mount:sockets");
+        let socket_part = relationship_targets(socket, "lunco:mount:part");
+        let component_joint = relationship_targets(component, "lunco:mount:attachmentJoint");
+        let entry = #{
+            host: spec.host,
+            socket: spec.socket,
+            component: spec.component,
+            joint: spec.joint,
+            host_sockets: host_sockets,
+            socket_part: socket_part,
+            component_joint: component_joint,
+        };
+        if !query_ok(host) || !query_ok(socket) || !query_ok(component) || !query_ok(joint) {
+            errors.push(spec.component + ": mount prim or joint is missing");
+        } else {
+            if !array_has(host_sockets, spec.socket) {
+                errors.push(spec.socket + ": socket is not advertised by its host");
+            }
+            if !required_targets(socket_part, [spec.component]) {
+                errors.push(spec.socket + ": occupancy does not point to the component");
+            }
+            if !required_targets(component_joint, [spec.joint]) {
+                errors.push(spec.component + ": attachment joint relationship is wrong");
+            }
+            if spec.socket_kind != ()
+                && socket.attrs["lunco:mount:socket"] != spec.socket_kind {
+                errors.push(spec.socket + ": socket kind does not match the contract");
+            }
+            if spec.joint_kind != ()
+                && socket.attrs["lunco:mount:joint"] != spec.joint_kind {
+                errors.push(spec.socket + ": joint kind does not match the contract");
+            }
+            if spec.asset != () && socket.attrs["lunco:mount:asset"] != spec.asset {
+                errors.push(spec.socket + ": asset does not match the advertised contract");
+            }
+            if !joint.type_name.contains("Joint") {
+                errors.push(spec.joint + ": attachment prim is not a USD joint");
+            }
+        }
+        connections.push(entry);
+    }
+    #{ ok: errors.len() == 0, connections: connections, errors: errors }
+}
+
+fn cardinal_axis(axis) {
+    axis == "X" || axis == "Y" || axis == "Z"
+}
+
+/// Check explicit joint bodies, axis and optional frame opinions. Omitted
+/// `physics:localPos*` values are valid when the engine's documented derived
+/// anchor contract is intended; set `require_positions` only for joints whose
+/// asset contract requires authored anchors.
+fn joint_frame_report(joints) {
+    let frames = [];
+    let errors = [];
+    for spec in joints {
+        let record = query_prim(spec.path, [
+            "physics:axis", "physics:localPos0", "physics:localPos1",
+            "physics:localRot0", "physics:localRot1",
+            "physics:lowerLimit", "physics:upperLimit"
+        ], ["physics:body0", "physics:body1"], false);
+        let body0 = relationship_targets(record, "physics:body0");
+        let body1 = relationship_targets(record, "physics:body1");
+        let entry = #{
+            path: spec.path,
+            type_name: if query_ok(record) { record.type_name } else { () },
+            axis: if query_ok(record) { record.attrs["physics:axis"] } else { () },
+            body0: body0,
+            body1: body1,
+        };
+        if !query_ok(record) {
+            errors.push(spec.path + ": joint is missing");
+        } else {
+            let axis = record.attrs["physics:axis"];
+            if !record.type_name.contains("Joint") || !cardinal_axis(axis) {
+                errors.push(spec.path + ": joint type or cardinal axis is invalid");
+            }
+            if spec.axis != () && axis != spec.axis {
+                errors.push(spec.path + ": expected axis " + spec.axis + ", got " + axis);
+            }
+            if spec.body0 != () && !required_targets(body0, [spec.body0]) {
+                errors.push(spec.path + ": body0 relationship is wrong");
+            }
+            if spec.body1 != () && !required_targets(body1, [spec.body1]) {
+                errors.push(spec.path + ": body1 relationship is wrong");
+            }
+            if spec.require_positions == true
+                && (record.attrs["physics:localPos0"] == ()
+                    || record.attrs["physics:localPos1"] == ()) {
+                errors.push(spec.path + ": required authored joint positions are missing");
+            }
+            if spec.require_rotations == true
+                && (record.attrs["physics:localRot0"] == ()
+                    || record.attrs["physics:localRot1"] == ()) {
+                errors.push(spec.path + ": required authored joint rotations are missing");
+            }
+            let lower = record.attrs["physics:lowerLimit"];
+            let upper = record.attrs["physics:upperLimit"];
+            if lower != () && upper != () && lower > upper {
+                errors.push(spec.path + ": lower limit exceeds upper limit");
+            }
+        }
+        frames.push(entry);
+    }
+    #{ ok: errors.len() == 0, frames: frames, errors: errors }
+}
+
+/// Ensure each explicitly listed movable body has mass/inertia and every
+/// listed joint connects the expected body pair. Raycast wheels are not passed
+/// here: they are not rigid bodies and must not be forced into a fake joint
+/// topology.
+fn body_joint_coverage_report(bodies) {
+    let coverage = [];
+    let errors = [];
+    for spec in bodies {
+        let body = query_prim(spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
+        let entry = #{ path: spec.path, joints: [], mass: () };
+        if !query_ok(body) {
+            errors.push(spec.path + ": rigid-body prim is missing");
+        } else {
+            let mass = body.attrs["physics:mass"];
+            entry.mass = mass;
+            if mass == () || mass <= 0.0 {
+                errors.push(spec.path + ": rigid body has no positive mass");
+            }
+            if spec.mass != () && !close_scalar(mass, spec.mass, 0.001) {
+                errors.push(spec.path + ": mass does not match the authored contract");
+            }
+            if spec.inertia != ()
+                && !close_vec(body.attrs["physics:diagonalInertia"], spec.inertia, 0.001) {
+                errors.push(spec.path + ": diagonal inertia does not match the contract");
+            }
+        }
+        if spec.joints == () || spec.joints.len() == 0 {
+            errors.push(spec.path + ": no joint coverage was declared");
+        } else {
+            for joint_spec in spec.joints {
+                let joint = query_prim(joint_spec.path, (), ["physics:body0", "physics:body1"], false);
+                let body0 = relationship_targets(joint, "physics:body0");
+                let body1 = relationship_targets(joint, "physics:body1");
+                entry.joints.push(#{ path: joint_spec.path, body0: body0, body1: body1 });
+                if !query_ok(joint) || !joint.type_name.contains("Joint") {
+                    errors.push(joint_spec.path + ": joint is missing");
+                    continue;
+                }
+                if joint_spec.body0 != () && !required_targets(body0, [joint_spec.body0]) {
+                    errors.push(joint_spec.path + ": body0 is not explicitly connected");
+                }
+                if joint_spec.body1 != () && !required_targets(body1, [joint_spec.body1]) {
+                    errors.push(joint_spec.path + ": body1 is not explicitly connected");
+                }
+            }
+        }
+        coverage.push(entry);
+    }
+    #{ ok: errors.len() == 0, coverage: coverage, errors: errors }
+}
+
+/// Check authored mass/inertia values and an explicit collider list. A collider
+/// may rely on a schema default, so `enabled` is optional; when supplied it
+/// must match the composed `physics:collisionEnabled` value.
+fn collider_mass_report(bodies) {
+    let reports = [];
+    let errors = [];
+    for spec in bodies {
+        let body = query_prim(spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
+        let entry = #{ path: spec.path, colliders: [], mass: () };
+        if !query_ok(body) {
+            errors.push(spec.path + ": mass owner is missing");
+        } else {
+            let mass = body.attrs["physics:mass"];
+            entry.mass = mass;
+            if mass == () || mass <= 0.0 {
+                errors.push(spec.path + ": mass must be positive");
+            }
+            if spec.mass != () && !close_scalar(mass, spec.mass, 0.001) {
+                errors.push(spec.path + ": mass differs from expected value");
+            }
+            if spec.inertia != ()
+                && !close_vec(body.attrs["physics:diagonalInertia"], spec.inertia, 0.001) {
+                errors.push(spec.path + ": inertia differs from expected value");
+            }
+        }
+        if spec.colliders == () || spec.colliders.len() == 0 {
+            errors.push(spec.path + ": no collider coverage was declared");
+        } else {
+            for collider_spec in spec.colliders {
+                let collider = query_prim(collider_spec.path,
+                    ["physics:collisionEnabled", "visibility"], (), false);
+                let enabled = if query_ok(collider) {
+                    collider.attrs["physics:collisionEnabled"]
+                } else { () };
+                entry.colliders.push(#{ path: collider_spec.path, enabled: enabled });
+                if !query_ok(collider) {
+                    errors.push(collider_spec.path + ": collider prim is missing");
+                } else if collider_spec.enabled != () && enabled != collider_spec.enabled {
+                    errors.push(collider_spec.path + ": collisionEnabled is not as authored");
+                }
+            }
+        }
+        reports.push(entry);
+    }
+    #{ ok: errors.len() == 0, reports: reports, errors: errors }
+}
+
+/// Build a non-mutating visual explode plan. The returned deltas are consumed
+/// by the existing USD preview/transform boundary; this helper never authors a
+/// transform and therefore cannot bypass the journal or selection owner.
+fn explode_plan(parts, axis, spacing) {
+    if !cardinal_axis(axis) || spacing <= 0.0 {
+        return #{ ok: false, error: "explode axis must be X/Y/Z and spacing positive" };
+    }
+    let changes = [];
+    for i in 0..parts.len() {
+        let distance = spacing * (i + 1);
+        let delta = if axis == "X" { [distance, 0.0, 0.0] }
+            else if axis == "Y" { [0.0, distance, 0.0] }
+            else { [0.0, 0.0, distance] };
+        let change = #{ path: parts[i].path, delta: delta, order: i + 1 };
+        if parts[i].label != () { change.label = parts[i].label; }
+        changes.push(change);
+    }
+    #{
+        ok: true,
+        kind: "assembly_explode_plan",
+        axis: axis,
+        spacing: spacing,
+        changes: changes,
+    }
 }

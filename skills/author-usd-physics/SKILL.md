@@ -26,6 +26,13 @@ schedule. Do not duplicate standard fields under `lunco:*`. Missing or invalid
 fields fail projection; they are never replaced by a target, force cap, or
 solver-resolution workaround.
 
+For asset-level checks, the authored `assembly_audit` tool can inspect explicit
+composed joint body relationships, cardinal axes, optional local frames,
+rigid-body/joint coverage, and mass/inertia/collider manifests. Use those
+reports to diagnose authored topology before changing solver settings. The
+tool does not infer a body from a name, turn a raycast wheel into a rigid body,
+or replace the standard USD physics owner.
+
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
 colliders projected by the Avian bridge in the active BigSpace frame. Do not

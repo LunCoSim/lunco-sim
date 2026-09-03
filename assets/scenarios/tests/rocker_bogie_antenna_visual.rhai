@@ -110,6 +110,131 @@ fn chassis_rocker_seat_ok() {
     ])
 }
 
+fn assembly_tool_contracts_ok() {
+    let topology = assembly_audit::topology_report([
+        #{
+            path: ROOT,
+            expected_type: "Xform",
+            children: [
+                ROOT + "/Body", ROOT + "/RockerL", ROOT + "/RockerR",
+                ROOT + "/BogieL", ROOT + "/BogieR",
+            ],
+        },
+    ]);
+    let frames = assembly_audit::joint_frame_report([
+        #{
+            path: ROOT + "/HingeL", axis: "X",
+            body0: ROOT, body1: ROOT + "/RockerL",
+        },
+        #{
+            path: ROOT + "/HingeR", axis: "X",
+            body0: ROOT, body1: ROOT + "/RockerR",
+        },
+        #{
+            path: ROOT + "/BogieHingeL", axis: "X",
+            body0: ROOT + "/RockerL", body1: ROOT + "/BogieL",
+        },
+        #{
+            path: ROOT + "/BogieHingeR", axis: "X",
+            body0: ROOT + "/RockerR", body1: ROOT + "/BogieR",
+        },
+    ]);
+    let coverage = assembly_audit::body_joint_coverage_report([
+        #{
+            path: ROOT, mass: 720.0,
+            joints: [
+                #{path: ROOT + "/HingeL", body0: ROOT, body1: ROOT + "/RockerL"},
+                #{path: ROOT + "/HingeR", body0: ROOT, body1: ROOT + "/RockerR"},
+            ],
+        },
+        #{
+            path: ROOT + "/RockerL", mass: 50.0, inertia: [30.0, 30.0, 3.0],
+            joints: [
+                #{path: ROOT + "/HingeL", body0: ROOT, body1: ROOT + "/RockerL"},
+                #{path: ROOT + "/BogieHingeL", body0: ROOT + "/RockerL", body1: ROOT + "/BogieL"},
+            ],
+        },
+        #{
+            path: ROOT + "/RockerR", mass: 50.0, inertia: [30.0, 30.0, 3.0],
+            joints: [
+                #{path: ROOT + "/HingeR", body0: ROOT, body1: ROOT + "/RockerR"},
+                #{path: ROOT + "/BogieHingeR", body0: ROOT + "/RockerR", body1: ROOT + "/BogieR"},
+            ],
+        },
+        #{
+            path: ROOT + "/BogieL", mass: 30.0, inertia: [15.0, 15.0, 1.5],
+            joints: [
+                #{path: ROOT + "/BogieHingeL", body0: ROOT + "/RockerL", body1: ROOT + "/BogieL"},
+            ],
+        },
+        #{
+            path: ROOT + "/BogieR", mass: 30.0, inertia: [15.0, 15.0, 1.5],
+            joints: [
+                #{path: ROOT + "/BogieHingeR", body0: ROOT + "/RockerR", body1: ROOT + "/BogieR"},
+            ],
+        },
+    ]);
+    let colliders = assembly_audit::collider_mass_report([
+        #{
+            path: ROOT, mass: 720.0,
+            colliders: [#{path: ROOT + "/Body"}],
+        },
+        #{
+            path: ROOT + "/RockerL", mass: 50.0, inertia: [30.0, 30.0, 3.0],
+            colliders: [#{path: ROOT + "/RockerL/Collider", enabled: true}],
+        },
+        #{
+            path: ROOT + "/RockerR", mass: 50.0, inertia: [30.0, 30.0, 3.0],
+            colliders: [#{path: ROOT + "/RockerR/Collider", enabled: true}],
+        },
+        #{
+            path: ROOT + "/BogieL", mass: 30.0, inertia: [15.0, 15.0, 1.5],
+            colliders: [#{path: ROOT + "/BogieL/Collider", enabled: true}],
+        },
+        #{
+            path: ROOT + "/BogieR", mass: 30.0, inertia: [15.0, 15.0, 1.5],
+            colliders: [#{path: ROOT + "/BogieR/Collider", enabled: true}],
+        },
+    ]);
+    let exploded = assembly_audit::explode_plan([
+        #{path: ROOT + "/RockerL", label: "left rocker"},
+        #{path: ROOT + "/RockerR", label: "right rocker"},
+        #{path: ROOT + "/BogieL", label: "left bogie"},
+    ], "X", 0.25);
+    topology.ok && frames.ok && coverage.ok && colliders.ok
+        && exploded.ok && exploded.changes.len() == 3
+        && close_vec(exploded.changes[1].delta, [0.5, 0.0, 0.0])
+}
+
+fn assembly_tool_negative_contracts_ok() {
+    let missing = assembly_audit::topology_report([
+        #{path: ROOT + "/MissingAssemblyPart", expected_type: "Xform"},
+    ]);
+    let wrong_axis = assembly_audit::joint_frame_report([
+        #{
+            path: ROOT + "/HingeL", axis: "Y",
+            body0: ROOT, body1: ROOT + "/RockerL",
+        },
+    ]);
+    let no_joints = assembly_audit::body_joint_coverage_report([
+        #{path: ROOT + "/RockerL", joints: []},
+    ]);
+    let missing_collider = assembly_audit::collider_mass_report([
+        #{
+            path: ROOT + "/RockerL", mass: 50.0,
+            colliders: [#{path: ROOT + "/MissingCollider", enabled: true}],
+        },
+    ]);
+    let invalid_explode = assembly_audit::explode_plan([
+        #{path: ROOT + "/RockerL"},
+    ], "Q", 0.25);
+    !missing.ok && missing.errors.len() > 0
+        && !wrong_axis.ok && wrong_axis.errors.len() > 0
+        && !no_joints.ok && no_joints.errors.len() > 0
+        && !missing_collider.ok && missing_collider.errors.len() > 0
+        && invalid_explode.ok == false
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.done = false;
@@ -138,6 +263,12 @@ fn on_tick(me) {
     failures.push(t_true(
         chassis_rocker_seat_ok(),
         "the composed chassis envelope does not seat both rocker pivots"));
+    failures.push(t_true(
+        assembly_tool_contracts_ok(),
+        "the authored assembly topology, frame, body, collider, or explode-plan audit failed"));
+    failures.push(t_true(
+        assembly_tool_negative_contracts_ok(),
+        "the authored assembly diagnostics did not reject invalid contracts"));
     // Every link and axle is checked as a composed USD cylinder. The endpoint
     // contract is represented by the shared link/axle translations, lengths,
     // and axis declarations; checking all eight links catches either side's

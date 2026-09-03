@@ -159,7 +159,15 @@ fn attached_relationships(me) {
         || !array_has(host.children, JOINT) {
         return false;
     }
-    true
+    assembly_audit::mount_contract_report([#{
+        host: HOST,
+        socket: me.socket,
+        component: COMPONENT,
+        joint: JOINT,
+        socket_kind: SOCKET_KIND,
+        joint_kind: JOINT_KIND,
+        asset: me.asset,
+    }]).ok
 }
 
 fn detached_relationships(me) {
