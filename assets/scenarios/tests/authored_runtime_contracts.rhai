@@ -1,6 +1,6 @@
 // Positive production coverage for the authored scene/runtime boundary.
 // USD is checked through QueryUsdPrim; collision and presentation are checked
-// through the public runtime query/exposure surfaces.
+// through the public runtime query surfaces.
 
 const ROOT = "/AuthoredRuntimeContracts";
 
