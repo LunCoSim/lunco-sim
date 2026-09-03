@@ -659,7 +659,12 @@ pub(crate) fn sync_egui_host_msaa(
         (
             With<SceneCamera>,
             Without<WorkbenchEguiHost>,
-            Or<(Changed<Msaa>, Changed<Camera>, Added<SceneCamera>)>,
+            Or<(
+                Changed<Msaa>,
+                Changed<Camera>,
+                Changed<Hdr>,
+                Added<SceneCamera>,
+            )>,
         ),
     >,
     mut removed: RemovedComponents<SceneCamera>,
@@ -719,9 +724,8 @@ fn egui_host_camera() -> Camera {
 /// Startup system — auto-spawn one [`WorkbenchEguiHost`] if none exists.
 ///
 /// Always disables `EguiGlobalSettings::auto_create_primary_context` so
-/// nothing else (e.g. bevy_egui's startup auto-promoter) can pick a
-/// different camera as primary. Idempotent: re-running won't spawn
-/// duplicates.
+/// bevy_egui cannot choose a different camera as primary. Idempotent: re-running
+/// will not spawn duplicates.
 pub(crate) fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
@@ -1156,16 +1160,24 @@ impl Plugin for WorkbenchViewportPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::CameraOutputMode;
     use egui::{pos2, Rect};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
 
     #[test]
-    fn egui_host_is_the_late_shared_texture_writer() {
+    fn egui_host_camera_uses_the_shared_scene_target_contract() {
         let camera = egui_host_camera();
 
         assert_eq!(camera.order, 1);
         assert!(matches!(camera.clear_color, ClearColorConfig::None));
+        assert!(matches!(
+            camera.output_mode,
+            CameraOutputMode::Write {
+                blend_state: None,
+                clear_color: ClearColorConfig::Default,
+            }
+        ));
     }
 
     #[test]

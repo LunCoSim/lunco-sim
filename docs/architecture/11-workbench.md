@@ -156,7 +156,9 @@ The window is drawn by **two layered cameras**, not by tiling:
 | 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints chrome into the scene camera's shared main texture |
 
 The host is a separate camera because scene cameras are transient (USD spawns
-them, `camera_switch` swaps them) while the egui context must be stable.
+them, `camera_switch` swaps them) while the egui context must be stable. Both
+cameras target the window's shared main texture, with the scene clear preceding
+the egui pass.
 
 The host is deliberately keyed to the scene camera's shared Bevy main texture.
 Its `clear_color: None` leaves the scene pixels intact while the scene camera's
