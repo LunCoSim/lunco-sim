@@ -480,7 +480,7 @@ fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec
 fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
     let mut drives = Vec::new();
     for path in joint_paths {
-        let Some(spec) = crate::read_joint_spec(reader, path) else {
+        let Some(spec) = crate::read_joint_spec_for_lint(reader, path) else {
             continue;
         };
         let Some(drive) = spec.drive else {

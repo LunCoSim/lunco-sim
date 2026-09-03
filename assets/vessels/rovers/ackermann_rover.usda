@@ -33,7 +33,6 @@ def Xform "AckermannRover" (
     # vehicle comes with its computer, and without one this rover accepts no
     # commands at all. See `skid_rover.usda` for the full rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend references = @lunco://components/cameras/rover_front_camera.usda@</RoverFrontCamera>
     prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["drivetrain", "power"]
     variants = {
@@ -42,6 +41,12 @@ def Xform "AckermannRover" (
     }
 )
 {
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
+    {
+    }
+
     uniform bool lunco:spawnable = true
 
     float physics:mass = 1000.0

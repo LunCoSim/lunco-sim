@@ -355,6 +355,11 @@ def Xform "LintSelftest" (
             prepend apiSchemas = ["PhysicsDriveAPI:linear"]
         )
         {
+            # This force drive is intentionally incomplete so the linter can
+            # prove its derived-inertia policy. It is not a live mechanism in
+            # this fixture: lintOnly keeps malformed authoring out of Avian
+            # while the linter still reads it through the raw composed stage.
+            bool lunco:lintOnly = true
             rel physics:body0 = </LintSelftest/Leg>
             rel physics:body1 = </LintSelftest/Leg/Strut>
             uniform token physics:axis = "Y"
@@ -366,6 +371,7 @@ def Xform "LintSelftest" (
             prepend apiSchemas = ["PhysicsDriveAPI:linear"]
         )
         {
+            bool lunco:lintOnly = true
             rel physics:body0 = </LintSelftest/Leg>
             rel physics:body1 = </LintSelftest/Leg/Strut>
             uniform token physics:axis = "Y"

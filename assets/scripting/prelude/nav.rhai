@@ -8,9 +8,10 @@
 /// `target`, matched to the SKID-drive sign convention: the drive mixes
 /// `left = drive + steer`, so `+steer` yaws toward the RIGHT (the slower side).
 /// A yaw-plane cross `cy = (heading × goal).y > 0` means the target is to the
-/// LEFT, so we steer `-cy` to turn toward it. When the target is BEHIND
-/// (`dot < 0`) the cross collapses to ~0, so force a hard turn toward its side —
-/// otherwise the rover drives straight past forever. Gain 2.5 + clamp = firm turn.
+/// LEFT, so we steer `-cy` to turn toward it. When the target is unambiguously
+/// BEHIND (`dot < -0.25`), use signed reverse throttle instead of asking every
+/// vehicle to pivot in place. The near-sideways band remains forward so an
+/// Ackermann rover does not flip direction on a tiny heading error.
 fn steer_to(entity, target) {
     let p = world_pos(entity);
     let f = world_forward(entity);
@@ -19,11 +20,8 @@ fn steer_to(entity, target) {
     let fwd = vnorm(f);
     let cy  = vcross(fwd, to)[1];
     let dot = vdot(fwd, to);
-    if dot < 0.0 {
-        if cy >= 0.0 { -1.0 } else { 1.0 }   // target behind → hard turn toward it
-    } else {
-        clamp(-cy * 2.5, -1.0, 1.0)          // skid: +steer yaws right, so negate
-    }
+    let travel_sign = if dot < -0.25 { -1.0 } else { 1.0 };
+    clamp(-cy * 2.5 * travel_sign, -1.0, 1.0) // +steer yaws right, so negate
 }
 
 /// Drive `entity` toward world point `target` at `speed`. Returns true once
@@ -44,16 +42,17 @@ fn nav_to(entity, target, speed, radius) {
         let to = vsub(target, p);
         let distance_to_target = vlen(to);
         let dot = vdot(vnorm(f), vnorm(to));
-        // A target behind the rover requires a true skid pivot.  Any forward
-        // command in that state makes the vehicle trace a large arc and can
-        // permanently miss a finite waypoint radius.
-        let alignment = if dot < 0.0 { 0.0 } else { clamp(0.25 + 0.75 * dot, 0.25, 1.0) };
+        // A clearly behind target uses signed reverse drive.  Do not force a
+        // zero-throttle pivot: Ackermann has no generic in-place pivot, and the
+        // near-sideways band must keep driving while steering into the goal.
+        let travel_sign = if dot < -0.25 { -1.0 } else { 1.0 };
+        let alignment = clamp(0.25 + 0.75 * dot.abs(), 0.25, 1.0);
         // The approach factor is a semantic part of navigation: the requested
         // acceptance radius is where the vehicle must stop, not merely where a
         // fast vehicle is allowed to pass. Two radii provide a smooth braking
         // distance while retaining a small positive command for final steering.
         let approach = clamp((distance_to_target - radius) / (radius * 2.0), 0.15, 1.0);
-        fwd = speed * alignment * approach;
+        fwd = speed * travel_sign * alignment * approach;
     }
     drive(entity, fwd, steer);
     false

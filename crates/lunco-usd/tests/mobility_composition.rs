@@ -368,6 +368,16 @@ fn six_wheel_camera_composes_its_lowered_mount_offset() {
     let camera = SdfPath::new("/SixWheelRover/FrontCamera").expect("camera path");
 
     assert_eq!(
+        view.type_name(&camera).as_deref(),
+        Some("Camera"),
+        "the mounted camera must remain a typed USD Camera after composition"
+    );
+    assert!(
+        view.has_api_schema(&camera, "LunCoCameraAPI"),
+        "the mounted camera must retain its LunCoCameraAPI role"
+    );
+
+    assert_eq!(
         view.value_vec3(&camera, "xformOp:translate"),
         Some([0.0, 0.55, -1.35]),
         "the six-wheel asset must override only its mounted camera eye height"

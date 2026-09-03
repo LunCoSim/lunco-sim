@@ -41,11 +41,89 @@
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::camera::SceneCamera;
+use lunco_render::PbrLook;
+
+use lunco_autopilot::usd_tree::ReachedWaypoints;
 
 /// Marks a USD-authored mission waypoint so presentation systems can keep its
 /// visual and route geometry on the same composed terrain surface.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct WaypointMarker;
+
+/// Runtime presentation state for the visual child of a waypoint marker.
+///
+/// Waypoint arrival is session state, not a USD edit. Keeping both looks on the
+/// projected visual entity lets the marker change appearance in place while the
+/// rover, its co-simulation participants, and its scenario remain live. The
+/// marker path is the same authored identity carried by `waypoint.reached` and
+/// `ReachedWaypoints`; no entity id is persisted across a scene refresh.
+#[derive(Component, Clone, Debug)]
+pub struct WaypointVisualLook {
+    /// The composed marker look before this session reaches the waypoint.
+    pub active: PbrLook,
+    /// The composed inactive look authored by the marker asset.
+    pub inactive: PbrLook,
+    /// Exact composed USD path of the owning waypoint marker.
+    pub marker_path: String,
+}
+
+/// Apply session waypoint progress to projected marker visuals.
+///
+/// `ReachedWaypoints` is written by the collision-backed route system. This
+/// projector only changes `PbrLook` in ECS; it never authors a USD opinion and
+/// therefore cannot trigger a stage resync or tear down a live scenario.
+pub fn sync_waypoint_visuals(
+    q_reached: Query<&ReachedWaypoints>,
+    mut q_visuals: Query<(&WaypointVisualLook, &mut PbrLook)>,
+) {
+    let reached: std::collections::HashSet<&str> = q_reached
+        .iter()
+        .flat_map(|state| state.0.iter().map(String::as_str))
+        .collect();
+
+    for (state, mut look) in &mut q_visuals {
+        let desired = if reached.contains(state.marker_path.as_str()) {
+            &state.inactive
+        } else {
+            &state.active
+        };
+        if &*look != desired {
+            *look = desired.clone();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sync_waypoint_visuals, WaypointVisualLook};
+    use bevy::prelude::*;
+    use lunco_autopilot::usd_tree::ReachedWaypoints;
+    use lunco_render::PbrLook;
+
+    #[test]
+    fn waypoint_reach_changes_projected_look_without_usd_mutation() {
+        let active = PbrLook::matte(LinearRgba::rgb(0.1, 0.2, 0.3));
+        let inactive = PbrLook::matte(LinearRgba::rgb(0.7, 0.7, 0.7));
+        let mut app = App::new();
+        app.world_mut().spawn(ReachedWaypoints(
+            ["/Mission/Target".to_string()].into_iter().collect(),
+        ));
+        app.world_mut().spawn((
+            WaypointVisualLook {
+                active: active.clone(),
+                inactive: inactive.clone(),
+                marker_path: "/Mission/Target".to_string(),
+            },
+            active,
+        ));
+
+        app.add_systems(Update, sync_waypoint_visuals);
+        app.update();
+
+        let mut query = app.world_mut().query::<&PbrLook>();
+        assert!(query.iter(app.world()).any(|look| look == &inactive));
+    }
+}
 
 /// A prim that asked to be drawn at a constant apparent size.
 ///

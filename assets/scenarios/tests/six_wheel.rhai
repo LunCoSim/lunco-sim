@@ -45,6 +45,8 @@ fn set_headlights(target, value) {
 
 fn on_start(me) {
     this.t = 0.0;
+    this.readiness_elapsed = 0.0;
+    this.readiness_timeout = 10.0;
     this.phase_start = 0.0;
     this.settle_s = 2.0;    // let it sit down on its wheels
     this.drive_s = 8.0;     // straight leg
@@ -52,11 +54,14 @@ fn on_start(me) {
     this.sample_s = 2.0;
     this.next_sample = 0.0;
 
-    this.rover = find("/SixWheelTest/Rover");
-    this.camera = find("/SixWheelTest/Rover/FrontCamera");
-    this.controller = find("/SixWheelTest/Rover/HeadlightController_L");
-    this.light = find("/SixWheelTest/Rover/Headlight_L/Light");
-    this.light_right = find("/SixWheelTest/Rover/Headlight_R/Light");
+    // USD composition is projected asynchronously.  A composed child is not
+    // a missing asset just because the root script ran first; retain the
+    // authored paths and resolve their live handles at the simulation boundary.
+    this.rover = -1;
+    this.camera = -1;
+    this.controller = -1;
+    this.light = -1;
+    this.light_right = -1;
 
     this.dist_straight = 0.0;
     this.yaw_straight = 0.0;
@@ -83,41 +88,52 @@ fn on_start(me) {
 fn on_tick(me) {
     if this.phase == "done" { return; }
 
-    if this.rover == () || this.rover < 0 {
-        fail_fast("rover prim not found (gid=" + this.rover + ") — wrong scene?",
-                  "SIX WHEEL", "SIX_WHEEL");
-        this.phase = "done";
-        return;
-    }
+    this.readiness_elapsed += dt();
 
+    if this.rover == () || this.rover < 0 { this.rover = find("/SixWheelTest/Rover"); }
     if this.camera == () || this.camera < 0 {
-        fail_fast("mounted front camera not found (gid=" + this.camera + ") — wrong scene or asset?",
-                  "SIX WHEEL", "SIX_WHEEL");
-        this.phase = "done";
-        return;
+        this.camera = find("/SixWheelTest/Rover/FrontCamera");
+    }
+    if this.controller == () || this.controller < 0 {
+        this.controller = find("/SixWheelTest/Rover/HeadlightController_L");
+    }
+    if this.light == () || this.light < 0 {
+        this.light = find("/SixWheelTest/Rover/Headlight_L/Light");
+    }
+    if this.light_right == () || this.light_right < 0 {
+        this.light_right = find("/SixWheelTest/Rover/Headlight_R/Light");
     }
 
-    if this.controller == () || this.controller < 0 || this.light == () || this.light < 0 ||
+    if this.rover == () || this.rover < 0 || this.camera == () || this.camera < 0 ||
+       this.controller == () || this.controller < 0 || this.light == () || this.light < 0 ||
        this.light_right == () || this.light_right < 0 {
-        fail_fast("reusable headlight controller or lamp did not compose",
-                  "SIX WHEEL", "SIX_WHEEL");
-        this.phase = "done";
+        if this.readiness_elapsed >= this.readiness_timeout {
+            fail_fast("authored rover composition did not materialize before " +
+                      r2(this.readiness_timeout) + " s (rover=" + this.rover +
+                      ", camera=" + this.camera + ", controller=" + this.controller +
+                      ", left_light=" + this.light + ", right_light=" + this.light_right + ")",
+                      "SIX WHEEL", "SIX_WHEEL");
+            this.phase = "done";
+        }
         return;
     }
-
-    this.t += dt();
-    let leg = this.t - this.phase_start;
 
     let p = world_pos(this.rover);
     let fwd = world_forward(this.rover);
     let camera_pos = world_pos(this.camera);
     let camera_fwd = world_forward(this.camera);
-    if camera_pos == () || camera_fwd == () {
-        fail_fast("mounted front camera has no live pose",
-                  "SIX WHEEL", "SIX_WHEEL");
-        this.phase = "done";
+    if p == () || fwd == () || camera_pos == () || camera_fwd == () {
+        if this.readiness_elapsed >= this.readiness_timeout {
+            fail_fast("authored rover composition has no live pose after " +
+                      r2(this.readiness_timeout) + " s",
+                      "SIX WHEEL", "SIX_WHEEL");
+            this.phase = "done";
+        }
         return;
     }
+
+    this.t += dt();
+    let leg = this.t - this.phase_start;
 
     let camera_gap = vlen(vsub(camera_pos, p));
     if this.camera_baseline != () {
