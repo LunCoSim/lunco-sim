@@ -135,68 +135,50 @@ pub(crate) enum AttachState {
     Pending(ProgramChoice),
 }
 
-/// Rebuild the source list from the shared asset discovery owner.
-pub(crate) fn refresh_program_catalog(
-    manifest: &lunco_assets::discovery::AssetManifest,
-    roots: &lunco_assets::twin_source::TwinRoots,
-    catalog: &mut ProgramCatalog,
+/// Publish the program source projection from the shared catalog listing.
+pub(crate) fn drain_program_catalog(
+    mut scan: ResMut<lunco_scene_commands::catalog::CatalogScan>,
+    mut catalog: ResMut<ProgramCatalog>,
 ) {
-    catalog.ready = manifest.ready();
-    catalog.error = None;
-    catalog.entries.clear();
-    if !catalog.ready {
+    let Some(result) = lunco_scene_commands::catalog::take_program_listing(&mut scan) else {
         return;
-    }
-
-    for extension in ["mo", "py"] {
-        match lunco_assets::discovery::list_assets(manifest, roots, extension) {
-            Ok(entries) => catalog
+    };
+    match result {
+        Ok((manifest_ready, assets)) => {
+            catalog.ready = manifest_ready;
+            catalog.error = None;
+            catalog.entries = assets
+                .into_iter()
+                .filter_map(|asset| {
+                    let extension = asset.rel.rsplit_once('.')?.1.to_string();
+                    Some(ProgramChoice {
+                        asset_path: asset.asset_path,
+                        label: asset.rel,
+                        extension,
+                    })
+                })
+                .collect();
+            catalog
                 .entries
-                .extend(entries.into_iter().map(|entry| ProgramChoice {
-                    asset_path: entry.asset_path,
-                    label: entry.rel,
-                    extension: extension.into(),
-                })),
-            Err(error) => catalog.error = Some(error.to_string()),
+                .sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
+        }
+        Err(error) => {
+            catalog.ready = false;
+            catalog.entries.clear();
+            catalog.error = Some(error.to_string());
         }
     }
-    catalog
-        .entries
-        .sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
 }
 
-pub(crate) fn refresh_program_catalog_startup(
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    roots: Res<lunco_assets::twin_source::TwinRoots>,
-    mut catalog: ResMut<ProgramCatalog>,
-) {
-    refresh_program_catalog(&manifest, &roots, &mut catalog);
-}
-
-pub(crate) fn refresh_program_catalog_manifest(
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    roots: Res<lunco_assets::twin_source::TwinRoots>,
-    mut catalog: ResMut<ProgramCatalog>,
-) {
-    refresh_program_catalog(&manifest, &roots, &mut catalog);
-}
-
-pub(crate) fn refresh_program_catalog_twin_added(
-    _trigger: On<lunco_workspace::TwinAdded>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    roots: Res<lunco_assets::twin_source::TwinRoots>,
-    mut catalog: ResMut<ProgramCatalog>,
-) {
-    refresh_program_catalog(&manifest, &roots, &mut catalog);
-}
-
-pub(crate) fn refresh_program_catalog_twin_closed(
+/// Retire Twin-derived program choices at the lifecycle boundary. The next
+/// shared listing repopulates the picker for the surviving/opened Twin set.
+pub(crate) fn clear_program_catalog_on_twin_closed(
     _trigger: On<lunco_workspace::TwinClosed>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    roots: Res<lunco_assets::twin_source::TwinRoots>,
     mut catalog: ResMut<ProgramCatalog>,
 ) {
-    refresh_program_catalog(&manifest, &roots, &mut catalog);
+    catalog.ready = false;
+    catalog.error = None;
+    catalog.entries.clear();
 }
 
 // ─────────────────────────────────────────────────────────────────────

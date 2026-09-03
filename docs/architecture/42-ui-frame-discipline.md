@@ -118,6 +118,10 @@ the physics solver empties. Never block that queue:
   Native MSL source readiness installs the source root immediately; the large
   generated palette index is decoded off-thread and publishes one readiness
   event for the browser to enrich its already-available bundled-model view.
+- Asset catalog enumeration is an async projection of the shared discovery
+  owner. USD, WGSL, Modelica, and Python listings are collected in one task and
+  published by their consumers; startup and Twin lifecycle observers do not
+  walk filesystem roots on the UI schedule.
 - The shared Modelica engine sync is revision- and completion-driven. Its
   document-generation cursor scans the registry only after a document change,
   an async parse/library completion, or an expired edit-debounce deadline;
