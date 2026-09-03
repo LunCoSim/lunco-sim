@@ -633,7 +633,15 @@ fn register_update_settings_menu(world: &mut World) {
             UpdateStatus::Idle | UpdateStatus::NotInstalled | UpdateStatus::Error
         ) && state.ready.is_none();
         ui.horizontal(|ui| {
-            if can_check && ui.button("Check now").clicked() {
+            if can_check
+                && lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Refresh,
+                    "Check now",
+                    "Check GitHub for a newer LunCoSim release",
+                )
+                .clicked()
+            {
                 actions.check_requested = true;
             }
             let download_label = if state.error.is_some() {
@@ -641,10 +649,31 @@ fn register_update_settings_menu(world: &mut World) {
             } else {
                 "Download update"
             };
-            if state.status == UpdateStatus::Available && ui.button(download_label).clicked() {
+            let download_icon = if state.error.is_some() {
+                lunco_workbench::UiIcon::Refresh
+            } else {
+                lunco_workbench::UiIcon::Download
+            };
+            if state.status == UpdateStatus::Available
+                && lunco_workbench::icon_text_button(
+                    ui,
+                    download_icon,
+                    download_label,
+                    "Download the selected LunCoSim update",
+                )
+                .clicked()
+            {
                 actions.download_requested = true;
             }
-            if state.ready.is_some() && ui.button("Restart to install").clicked() {
+            if state.ready.is_some()
+                && lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Play,
+                    "Restart to install",
+                    "Install the downloaded LunCoSim update",
+                )
+                .clicked()
+            {
                 actions.apply_requested = true;
             }
         });
