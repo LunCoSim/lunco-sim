@@ -169,7 +169,7 @@ transient session state. The correct split for the shipped surfaces is:
 | `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
 | lander control cards | authored USD `lunco:ui:controlHud` metadata | Already scene/Twin-authored opt-in |
 | `lunica-schema` | selected authored USD schema root | No; selection-derived |
-| `celestial-view` | runtime exposure plus global view-switcher host gate | Not migrated; it is currently an application view control |
+| `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in the Camera menu | Not migrated; it is an application view control |
 | terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
 | tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
 | notifications, blackout, perf/input overlays, theme, window geometry | runtime or user-global settings | No; session/diagnostic/application scope |

@@ -812,6 +812,7 @@ fn register_camera_menu(world: &mut World) {
                 ui.close();
             }
         }
+        overlays::camera_menu_ui(ui, ctx);
     });
 }
 
