@@ -29,6 +29,13 @@ deadlines are the only wake sources. A completion latch is cleared only while
 the engine mutex confirms both completion queues are empty, so the bounded
 completion budget cannot strand a queued parse or library result.
 
+The asset catalog follows the same UI boundary. The shared discovery owner now
+enumerates USD, WGSL, Modelica, and Python extensions in one asynchronous task;
+the spawn, shader, and program projections publish only after that task drains.
+The startup and Twin lifecycle paths no longer synchronously walk the open Twin
+roots from the UI schedule, and listing generations prevent a closed/reopened
+Twin from publishing stale results.
+
 ## Verification
 
 - `cargo clean` from the optimization checkout removed 16.2 GiB after the
@@ -43,6 +50,19 @@ completion budget cannot strand a queued parse or library result.
   pass. Apollo reached `/api/ready` in 4.1 s from process start; its settled
   diagnostic tail was 92–147 FPS with 7.3–10.9 ms frame samples. The sandbox
   reached readiness in 2.8 s. These runs remain non-acceptance evidence.
+- On the post-change production Griffin run (binary rebuilt after syncing
+  `d7ad4ad0f`), the shared listing was scheduled at `01:56:35.675886Z`, the
+  scene was spawned at `01:56:36.732963Z`, and scene participants were ready at
+  `01:56:41.677245Z`. This is approximately 8.88 s from process start and is
+  evidence that catalog enumeration no longer blocks the scene schedule, not a
+  claim that the 2 s loading target is met.
+- The final rebuilt binary also completed a headless Griffin smoke: the shared
+  listing was scheduled at `02:43:32.324864Z`, the scene spawned at
+  `02:43:32.547703Z`, and participants were ready at `02:43:36.320508Z`.
+  The run was terminated by its 10 s verification timeout after readiness; the
+  port was free afterward. This confirms the new catalog path on the rebuilt
+  binary, but the approximately 5.01 s process-to-readiness interval remains
+  above the 2 s target.
 - Settled diagnostics reported 4100 entities and approximately 33–79 FPS with
   approximately 12.6–30.3 ms samples in the captured window. The API `Exit`
   command was accepted and port 4366 was verified closed.

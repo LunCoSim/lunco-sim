@@ -68,7 +68,7 @@ pub struct AssetFile {
 ///   readiness check at all — it has no "already scanned" state to corrupt.
 /// - The UI cannot wait, since it must draw *something* — so it asks
 ///   [`ready`](Self::ready) and says "loading…" rather than "no scenes found".
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct AssetManifest {
     rels: Vec<String>,
     ready: bool,
@@ -327,13 +327,29 @@ pub fn list_assets(
     roots: &TwinRoots,
     ext: &str,
 ) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+    list_assets_with_extensions(manifest, roots, &[ext])
+}
+
+/// List every project asset whose extension is in `extensions` with one shared
+/// traversal of the engine library and each open Twin. Callers that need more
+/// than one catalog projection should use this instead of walking the same
+/// roots once per extension.
+pub fn list_assets_with_extensions(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+    extensions: &[&str],
+) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
     let mut out = Vec::new();
-    let suffix = format!(".{ext}");
+    let suffixes: Vec<String> = extensions.iter().map(|ext| format!(".{ext}")).collect();
 
     // Engine library, addressed by the default source (plain relative paths).
     #[cfg(not(target_arch = "wasm32"))]
     let assets_dir = crate::assets_dir_abs();
-    for rel in manifest.rels().iter().filter(|r| r.ends_with(&suffix)) {
+    for rel in manifest
+        .rels()
+        .iter()
+        .filter(|rel| suffixes.iter().any(|suffix| rel.ends_with(suffix)))
+    {
         out.push(AssetFile {
             asset_path: rel.clone(),
             stem: stem_of(rel),
@@ -351,7 +367,7 @@ pub fn list_assets(
     #[cfg(not(target_arch = "wasm32"))]
     for name in roots.names()? {
         if let Some(root) = roots.root_of(&name)? {
-            walk(&root, &root, ext, &mut |rel| {
+            walk_matching(&root, &root, extensions, &mut |rel| {
                 out.push(AssetFile {
                     asset_path: crate::twin_uri(&name, &rel),
                     stem: stem_of(&rel),
@@ -498,7 +514,7 @@ fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn walk(base: &Path, dir: &Path, ext: &str, f: &mut impl FnMut(String)) {
+fn walk_matching(base: &Path, dir: &Path, extensions: &[&str], f: &mut impl FnMut(String)) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -507,9 +523,13 @@ fn walk(base: &Path, dir: &Path, ext: &str, f: &mut impl FnMut(String)) {
         if p.is_dir() {
             match p.file_name().and_then(|s| s.to_str()) {
                 Some(n) if n.starts_with('.') || n == "target" => continue,
-                _ => walk(base, &p, ext, f),
+                _ => walk_matching(base, &p, extensions, f),
             }
-        } else if p.extension().and_then(|s| s.to_str()) == Some(ext) {
+        } else if p
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| extensions.contains(&ext))
+        {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
                     f(crate::asset_path::slashed(rel_s));
@@ -575,6 +595,25 @@ mod tests {
         assert_eq!(
             list_assets(&m, &roots, "wgsl").expect("list assets").len(),
             1
+        );
+    }
+
+    #[test]
+    fn lists_multiple_extensions_in_one_projection() {
+        let mut m = AssetManifest::default();
+        m.set(vec![
+            "vessels/rovers/skid_rover.usda".into(),
+            "shaders/regolith.wgsl".into(),
+            "scenarios/landing.rhai".into(),
+        ]);
+        let assets = list_assets_with_extensions(&m, &TwinRoots::default(), &["usda", "wgsl"])
+            .expect("list assets");
+        assert_eq!(
+            assets
+                .iter()
+                .map(|asset| asset.rel.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vessels/rovers/skid_rover.usda", "shaders/regolith.wgsl"]
         );
     }
 }
