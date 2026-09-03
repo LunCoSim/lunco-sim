@@ -140,6 +140,34 @@ fn on_tick(me) {
         return;
     }
 
+    let after_redo = assembly_edit::describe(this.doc);
+    let scaled = assembly_edit::transform(
+        this.doc,
+        "@root@",
+        PROPOSED,
+        (),
+        (),
+        [2.0, 3.0, 4.0],
+        after_redo.generation,
+    );
+    if !query_ok(scaled) {
+        fail(this, "the public transform helper did not author a scale edit");
+        return;
+    }
+    let snapshot = assembly_edit::sync_document(this.doc, ());
+    let source = if snapshot != () && snapshot.layers != ()
+        && snapshot.layers.root != () {
+        snapshot.layers.root.source
+    } else {
+        ()
+    };
+    if source == () || !source.contains("custom double3 xformOp:scale")
+        || !source.contains("(2.0, 3.0, 4.0)")
+        || !source.contains("xformOpOrder = [\"xformOp:scale\"]") {
+        fail(this, "scale edit did not serialize as a standard USD xformOp:scale");
+        return;
+    }
+
     let current = assembly_edit::describe(this.doc);
     let stale_created = assembly_edit::propose(
         this.doc,
@@ -189,6 +217,7 @@ fn on_tick(me) {
         t_true(true, "typed proposal is validated and non-mutating before review"),
         t_true(true, "mute and unmute state is visible through InspectUsdEditSession"),
         t_true(true, "commit uses the existing USD journal, undo, and redo path"),
+        t_true(true, "public transform authors standard USD scale with the document snapshot path"),
         t_true(true, "stale commit becomes a visible conflict without overwriting newer edits"),
     ], "ASSEMBLY EDITOR PROPOSAL", "ASSEMBLY_EDITOR_PROPOSAL");
 }

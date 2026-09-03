@@ -1,11 +1,11 @@
 //! Incremental change consumption (E2): apply `UsdChange` deltas to the live
 //! world entity-by-entity instead of full-reloading the scene on every edit.
 //!
-//! `UsdDocument` records granular deltas (`document::UsdChange`): a **move** is
-//! `InfoOnly{path, "xformOp:translate"}` (cheap — just an entity transform),
-//! while spawns/removes/renames are `Resync` and a wholesale replace is
-//! `FullReload`. The doc-backed projector routes each delta to the smallest
-//! live-stage or ECS update that can express it.
+//! `UsdDocument` records granular deltas (`document::UsdChange`): a transform
+//! edit is an `InfoOnly` change for one standard `xformOp:*` channel (cheap —
+//! just an entity transform), while spawns/removes/renames are `Resync` and a
+//! wholesale replace is `FullReload`. The doc-backed projector routes each
+//! delta to the smallest live-stage or ECS update that can express it.
 //!
 //! The document projector replays typed edits onto the live canonical stage.
 //! This read-side bridge drains the stage sink, applies transform and other
@@ -17,22 +17,81 @@ use bevy::prelude::*;
 use lunco_autopilot::usd_tree::{BehaviorProgramSource, BehaviorXml, BehaviorXmlPath};
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
 
 /// The attribute a rotate edit (`UsdOp::SetRotate`) records as `InfoOnly`.
 const ROTATE_ATTR: &str = "xformOp:rotateXYZ";
+/// The attribute a scale edit (`UsdOp::SetScale`) records as `InfoOnly`.
+const SCALE_ATTR: &str = "xformOp:scale";
 
-fn transform_prim_paths(info_only: &[String]) -> Vec<String> {
-    info_only
-        .iter()
-        .filter_map(|path| {
-            let (prim, attr) = path.split_once('.')?;
-            (attr == TRANSLATE_ATTR || attr == ROTATE_ATTR).then(|| prim.to_string())
-        })
-        .collect()
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TransformEditChannels {
+    pub(crate) translate: bool,
+    pub(crate) rotate: bool,
+    pub(crate) scale: bool,
+}
+
+impl TransformEditChannels {
+    pub(crate) const fn translate() -> Self {
+        Self {
+            translate: true,
+            rotate: false,
+            scale: false,
+        }
+    }
+
+    pub(crate) const fn rotate() -> Self {
+        Self {
+            translate: false,
+            rotate: true,
+            scale: false,
+        }
+    }
+
+    pub(crate) const fn scale() -> Self {
+        Self {
+            translate: false,
+            rotate: false,
+            scale: true,
+        }
+    }
+
+    pub(crate) fn for_attribute(attribute: &str) -> Option<Self> {
+        let mut channels = Self::default();
+        match attribute {
+            TRANSLATE_ATTR => channels.translate = true,
+            ROTATE_ATTR => channels.rotate = true,
+            SCALE_ATTR => channels.scale = true,
+            _ => return None,
+        }
+        Some(channels)
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.translate |= other.translate;
+        self.rotate |= other.rotate;
+        self.scale |= other.scale;
+    }
+}
+
+fn transform_edits(info_only: &[String]) -> HashMap<String, TransformEditChannels> {
+    let mut edits = HashMap::new();
+    for path in info_only {
+        let Some((prim, attribute)) = path.split_once('.') else {
+            continue;
+        };
+        let Some(channels) = TransformEditChannels::for_attribute(attribute) else {
+            continue;
+        };
+        edits
+            .entry(prim.to_string())
+            .or_insert_with(TransformEditChannels::default)
+            .merge(channels);
+    }
+    edits
 }
 
 /// Transform paths explicitly authored by the typed live-stage projector.
@@ -45,29 +104,40 @@ fn transform_prim_paths(info_only: &[String]) -> Vec<String> {
 /// sink notice so the structural bridge can distinguish those two cases.
 #[derive(Resource, Default)]
 pub(crate) struct LiveTransformEditHints {
-    translate_paths: HashMap<AssetId<UsdStageAsset>, HashSet<String>>,
+    paths: HashMap<AssetId<UsdStageAsset>, HashMap<String, TransformEditChannels>>,
 }
 
 impl LiveTransformEditHints {
-    pub(crate) fn mark_translate(&mut self, stage: AssetId<UsdStageAsset>, path: String) {
-        self.translate_paths.entry(stage).or_default().insert(path);
+    pub(crate) fn mark(
+        &mut self,
+        stage: AssetId<UsdStageAsset>,
+        path: String,
+        channels: TransformEditChannels,
+    ) {
+        self.paths
+            .entry(stage)
+            .or_default()
+            .entry(path)
+            .or_insert_with(TransformEditChannels::default)
+            .merge(channels);
     }
 
-    fn take_translate_paths(&mut self, stage: AssetId<UsdStageAsset>) -> HashSet<String> {
-        self.translate_paths.remove(&stage).unwrap_or_default()
+    fn take(&mut self, stage: AssetId<UsdStageAsset>) -> HashMap<String, TransformEditChannels> {
+        self.paths.remove(&stage).unwrap_or_default()
     }
 }
 
-/// Record a successful typed `SetTranslate` authoring operation. The resource
+/// Record a successful typed transform authoring operation. The resource
 /// is optional for small headless projection tests that construct only the sink
 /// bridge; production installs it with `UsdCommandsPlugin`.
-pub(crate) fn mark_live_translate(
+pub(crate) fn mark_live_transform(
     world: &mut World,
     stage: AssetId<UsdStageAsset>,
     path: impl Into<String>,
+    channels: TransformEditChannels,
 ) {
     if let Some(mut hints) = world.get_resource_mut::<LiveTransformEditHints>() {
-        hints.mark_translate(stage, path.into());
+        hints.mark(stage, path.into(), channels);
     }
 }
 
@@ -232,9 +302,9 @@ pub(crate) fn project_stage_changes(world: &mut World) {
 
     let mut projected_anything = false;
     for (id, changes) in batches {
-        let authored_translate_paths = world
+        let authored_transform_edits = world
             .get_resource_mut::<LiveTransformEditHints>()
-            .map(|mut hints| hints.take_translate_paths(id))
+            .map(|mut hints| hints.take(id))
             .unwrap_or_default();
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
@@ -248,26 +318,37 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         info_only.sort();
         info_only.dedup();
 
-        if resynced.is_empty() && info_only.is_empty() {
+        if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
             continue;
         }
         projected_anything = true;
 
-        let prim_paths = transform_prim_paths(&info_only);
-        apply_translates_live(world, id, &prim_paths);
-        apply_rotates_live(world, id, &prim_paths);
+        let mut transform_edits = transform_edits(&info_only);
+        for (path, channels) in authored_transform_edits {
+            transform_edits
+                .entry(path)
+                .or_insert_with(TransformEditChannels::default)
+                .merge(channels);
+        }
+        apply_transform_edits_live(world, id, &transform_edits);
         // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
         // transforms, so neither of the above sees them. Without this, a
         // `SetDomeLight` on an already-live dome would journal and save but
         // leave the rendered sky untouched. Runs before the general refresh
         // below, which then skips domes — this path is the cheaper one (it keeps
         // the projected cubemap when only the brightness moved).
-        refresh_domes_live(world, id, &prim_paths);
+        let mut changed_prim_paths: Vec<String> = info_only
+            .iter()
+            .filter_map(|path| path.split_once('.').map(|(prim, _)| prim.to_string()))
+            .collect();
+        changed_prim_paths.sort();
+        changed_prim_paths.dedup();
+        refresh_domes_live(world, id, &changed_prim_paths);
         // EVERYTHING ELSE. Any other authored attribute — a colour, a material
         // input, a light's intensity, a radius, `visibility` — re-projects here,
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
-        reconcile_structural_live(world, id, &resynced, &authored_translate_paths);
+        reconcile_structural_live(world, id, &resynced);
     }
 
     // Connections are derived from native `connectionPaths` by
@@ -293,53 +374,69 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     }
 }
 
-/// Apply the composed `xformOp:translate` of each `path` to its live entity,
-/// read from the **live [`CanonicalStage`]** (not the flatten) under a short
-/// immutable borrow. Shared by the sink bridge and the doc-diff refresh so both
-/// read one source.
+/// Apply the changed composed transform channels to matching live entities,
+/// reading from the **live [`CanonicalStage`]** (not the flatten) under one
+/// short immutable borrow. The sink bridge applies this before structural
+/// reconciliation so every transform channel has one reader and one live
+/// projection owner.
 ///
 /// [`CanonicalStage`]: lunco_usd_bevy::CanonicalStage
-pub(crate) fn apply_translates_live(
+pub(crate) fn apply_transform_edits_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
-    paths: &[String],
+    edits: &HashMap<String, TransformEditChannels>,
 ) {
     use lunco_usd_bevy::CanonicalStages;
-    if paths.is_empty() {
+    if edits.is_empty() {
         return;
     }
-    // Read every translate under one short borrow of the `!Send` stage, then
-    // release it before mutating the world.
-    let translates: Vec<(String, Vec3)> = {
+    // Read every changed transform under one short borrow of the `!Send` stage,
+    // then release it before mutating the world.
+    let transforms: Vec<(String, TransformEditChannels, Transform)> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
         let Some(cs) = stages.get(id) else { return };
         let view = cs.view();
-        paths
+        edits
             .iter()
-            .filter_map(|p| {
-                let sp = SdfPath::new(p).ok()?;
+            .filter_map(|(path, channels)| {
+                let sp = SdfPath::new(path).ok()?;
                 match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
-                    Ok(Some(transform)) => Some((p.clone(), transform.translation)),
+                    Ok(Some(transform)) => Some((path.clone(), *channels, transform)),
                     Ok(None) => None,
                     Err(error) => {
-                        error!("[usd] translate edit rejected for {p}: {error}");
+                        error!("[usd] transform edit rejected for {path}: {error}");
                         None
                     }
                 }
             })
             .collect()
     };
-    for (path, v) in translates {
+    for (path, channels, transform) in transforms {
         let Some(entity) = find_live_entity(world, id, &path) else {
             // Named, because the silent version of this is "the edit journalled and
             // saved but nothing moved": an authored translate for a prim this stage
             // projects no entity for.
-            debug!("[usd] translate {path} → {v:?}: no live entity on this stage");
+            debug!("[usd] transform edit {path}: no live entity on this stage");
             continue;
         };
-        seat_authored_translate(world, entity, v);
+        if channels.translate {
+            seat_authored_translate(world, entity, transform.translation);
+        }
+        let preview_only = channels.scale && lunco_usd_bevy::is_preview_only_entity(world, entity);
+        if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+            if channels.rotate {
+                tf.rotation = transform.rotation;
+            }
+            // Scale is an authoring-preview capability. Applying it to a live
+            // simulation entity would change render scale without updating its
+            // Avian collider/body contract, so the preview ownership marker is
+            // the explicit admission boundary.
+            if preview_only {
+                tf.scale = transform.scale;
+            }
+        }
     }
 }
 
@@ -482,49 +579,6 @@ mod translate_seat_tests {
     }
 }
 
-/// Apply the composed `xformOp:rotateXYZ` (Euler XYZ, **degrees**) of each
-/// `path` to its live entity — the rotation counterpart of
-/// [`apply_translates_live`], and read the same way (one short borrow of the
-/// `!Send` stage, released before the world is mutated).
-///
-/// Without this, [`UsdOp::SetRotate`](crate::document::UsdOp::SetRotate) authored,
-/// journaled and saved, but nothing moved until the scene was reloaded — it is
-/// how a `DomeLight`'s environment is spun, and how the sun is aimed.
-pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
-    use lunco_usd_bevy::CanonicalStages;
-    if paths.is_empty() {
-        return;
-    }
-    let rotations: Vec<(String, Quat)> = {
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return;
-        };
-        let Some(cs) = stages.get(id) else { return };
-        let view = cs.view();
-        paths
-            .iter()
-            .filter_map(|p| {
-                let sp = SdfPath::new(p).ok()?;
-                match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
-                    Ok(Some(transform)) => Some((p.clone(), transform.rotation)),
-                    Ok(None) => None,
-                    Err(error) => {
-                        error!("[usd] rotate edit rejected for {p}: {error}");
-                        None
-                    }
-                }
-            })
-            .collect()
-    };
-    for (path, q) in rotations {
-        if let Some(entity) = find_live_entity(world, id, &path) {
-            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-                tf.rotation = q;
-            }
-        }
-    }
-}
-
 /// Re-read every changed `DomeLight` prim and push its authored state back onto
 /// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
 /// the skybox toggle are plain attributes, so only this sees them move.
@@ -619,8 +673,8 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
 /// changed attribute (pinned by `info_only_reports_both_prim_and_property_paths`).
 /// That attribute name is what lets this be precise instead of a reload:
 ///
-/// - **`xformOp:*`** — skipped. [`apply_translates_live`] / [`apply_rotates_live`]
-///   already wrote the `Transform` in place. Re-instantiating on a transform edit
+/// - **`xformOp:*`** — skipped. [`apply_transform_edits_live`] already wrote the
+///   changed channels in place. Re-instantiating on a transform edit
 ///   would rebuild the mesh and re-run the physics observers on every frame of a
 ///   gizmo drag.
 /// - **`Shader` / `Material` prims** — a material edit fans out through
@@ -795,7 +849,6 @@ pub(crate) fn reconcile_structural_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
     resync_paths: &[String],
-    authored_translate_paths: &HashSet<String>,
 ) {
     use lunco_usd_bevy::CanonicalStages;
     for path in resync_paths {
@@ -901,46 +954,11 @@ pub(crate) fn reconcile_structural_live(
             }
             // ALREADY LIVE, AND RESYNCED — not "nothing to do".
             //
-            // `CanonicalStage::author_translate` writes `xformOp:translate` AND
-            // appends to `xformOpOrder`, which is a UNIFORM token array: openusd
-            // reports that as a RESYNC of the prim rather than an info-only
-            // attribute change, so the move can arrive here with its `info_only`
-            // list empty and [`apply_translates_live`] never runs for it. The
-            // entity then sits where it was: `UsdOp::SetTranslate` journalled,
-            // saved and replicated, with nothing moving on screen — which is what
-            // the waypoint context menu's `Move` did, and what any scripted or
-            // API-driven move of an already-spawned prim does.
-            //
-            // Only a typed SetTranslate may re-seat an already-live prim here.
             // A descendant edit (for example adding `/Rover/Mission`) can report
-            // `/Rover` as resynced even though no rover transform was authored.
-            // Re-seating in that case overwrites Avian's settled/moving pose with
-            // the USD spawn transform — the first-waypoint reset. The typed hint
-            // also preserves support for a genuine transform whose xform-order
-            // authoring arrives as resync with no info-only property notice.
-            (true, Some(entity)) => {
-                if authored_translate_paths.contains(path) {
-                    let v = {
-                        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-                            return;
-                        };
-                        let Some(cs) = stages.get(id) else {
-                            return;
-                        };
-                        match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
-                            Ok(Some(transform)) => Some(transform.translation),
-                            Ok(None) => None,
-                            Err(error) => {
-                                error!("[usd] resync transform rejected for {path}: {error}");
-                                None
-                            }
-                        }
-                    };
-                    if let Some(translate) = v {
-                        seat_authored_translate(world, entity, translate);
-                    }
-                }
-
+            // `/Rover` as resynced even though no transform was authored. The
+            // typed transform hint was applied above, so this structural pass
+            // never overwrites a moving body with its authored spawn pose.
+            (true, Some(_entity)) => {
                 // A reference/variant resync can add the body schema to a
                 // prim after its visual entity was first projected. The
                 // structural bridge sees the prim as already live and would
@@ -963,18 +981,26 @@ mod tests {
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
     #[test]
-    fn bare_resync_paths_never_become_transform_edits() {
+    fn transform_edits_extract_only_authored_channels() {
         let info_only = vec![
             "/World".to_string(),
             "/World/Rover".to_string(),
             "/World/Route/W0".to_string(),
             "/World/Route/W0.xformOp:translate".to_string(),
+            "/World/Route/W0.xformOp:scale".to_string(),
             "/World/Rover/Mission.info:sourceCode".to_string(),
         ];
 
         assert_eq!(
-            transform_prim_paths(&info_only),
-            vec!["/World/Route/W0".to_string()]
+            transform_edits(&info_only),
+            HashMap::from([(
+                "/World/Route/W0".to_string(),
+                TransformEditChannels {
+                    translate: true,
+                    rotate: false,
+                    scale: true,
+                },
+            )])
         );
     }
 
@@ -1064,6 +1090,80 @@ mod tests {
         );
     }
 
+    /// **Scaling an ALREADY-LIVE USD preview must update its entity.** The
+    /// document and canonical stage can advance independently of the render
+    /// projection; this pins the sink bridge that keeps the preview's
+    /// Inspector and geometry on the same composed transform.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn authoring_a_scale_updates_an_already_live_preview_entity() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPreviewOnly};
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>();
+
+        let recipe = StageRecipe::from_source("scene.usda", TINY);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
+        let id = handle.id();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(id, &recipe)
+            .expect("stage builds");
+
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            let cs = stages.get(id).unwrap();
+            cs.stage()
+                .define_prim("/World/Panel")
+                .unwrap()
+                .set_type_name("Xform")
+                .unwrap();
+            cs.projector()
+                .author_scale(&SdfPath::new("/World/Panel").unwrap(), [1.0, 2.0, 3.0])
+                .expect("initial scale authors");
+        }
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
+
+        let preview_root = app.world_mut().spawn(UsdPreviewOnly).id();
+        let panel = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle,
+                    path: "/World/Panel".into(),
+                },
+                Transform::from_scale(Vec3::ONE),
+                ChildOf(preview_root),
+            ))
+            .id();
+
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            stages
+                .get(id)
+                .unwrap()
+                .projector()
+                .author_scale(&SdfPath::new("/World/Panel").unwrap(), [4.0, 5.0, 6.0])
+                .expect("preview scale authors");
+        }
+        project_stage_changes(app.world_mut());
+
+        assert_eq!(
+            app.world().get::<Transform>(panel).unwrap().scale,
+            Vec3::new(4.0, 5.0, 6.0),
+            "a composed SetScale must reach the already-live USD preview entity"
+        );
+    }
+
     /// A descendant structural edit may resync an existing ancestor in the
     /// OpenUSD sink. That notice is not a transform edit: re-seating the live
     /// entity from its authored spawn pose would teleport a moving physics body.
@@ -1105,25 +1205,19 @@ mod tests {
             ))
             .id();
 
-        reconcile_structural_live(
-            app.world_mut(),
-            id,
-            &["/World/Rover".to_string()],
-            &HashSet::new(),
-        );
+        reconcile_structural_live(app.world_mut(), id, &["/World/Rover".to_string()]);
         assert_eq!(
             app.world().get::<Transform>(rover).unwrap().translation,
             Vec3::new(10.0, -1901.0, 10.0),
             "a descendant resync must not restore the authored spawn pose"
         );
 
-        let authored_translate = HashSet::from(["/World/Rover".to_string()]);
-        reconcile_structural_live(
-            app.world_mut(),
-            id,
-            &["/World/Rover".to_string()],
-            &authored_translate,
-        );
+        let authored_translate = HashMap::from([(
+            "/World/Rover".to_string(),
+            TransformEditChannels::translate(),
+        )]);
+        apply_transform_edits_live(app.world_mut(), id, &authored_translate);
+        reconcile_structural_live(app.world_mut(), id, &["/World/Rover".to_string()]);
         assert_eq!(
             app.world().get::<Transform>(rover).unwrap().translation,
             Vec3::new(0.0, -1900.0, 0.0),
@@ -1223,7 +1317,7 @@ mod tests {
     ///
     /// Pinned by a test because the live-edit bridge depends on both halves and
     /// they are easy to assume away in either direction:
-    /// - the prim path is what [`apply_translates_live`] matches on (drop it and
+    /// - the prim path is what [`apply_transform_edits_live`] matches on (drop it and
     ///   gizmo moves stop projecting);
     /// - the property path is what names the CHANGED ATTRIBUTE, which is the only
     ///   way [`refresh_edited_prims_live`] can tell "the colour moved, re-project

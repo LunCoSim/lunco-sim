@@ -178,9 +178,10 @@ without changing user-visible focus.
 
 The Inspector uses that same lease boundary for numeric transform edits. A
 selected entity under the focused preview root is edited as its composed USD
-prim's local canonical transform: the controls display metres and Euler XYZ
-degrees and submit one `ApplyUsdOps` change set containing the changed existing
-`SetTranslate` and/or `SetRotate` operation after a value is committed. The command
+prim's local canonical transform: the controls display metres, Euler XYZ
+degrees, and unitless scale, and submit one `ApplyUsdOps` change set containing
+the changed `SetTranslate`, `SetRotate`, and/or `SetScale` operations after a
+value is committed. The command
 uses the preview's explicit document, edit target, and projected generation, so
 stale edits are rejected and the USD projector remains the only preview update
 owner. Live simulation entities continue to use `MoveEntity`, which owns
@@ -193,12 +194,13 @@ preview root, stage handle, document, edit target, generation, and `UsdPrimPath`
 its local composed Bevy `Transform` becomes the transaction snapshot. During the
 drag, the proxy's render pose is converted to parent-local space with Bevy's
 `GlobalTransform::reparented_to`. Release authors only the changed local
-translation and/or Euler XYZ rotation as one generation-checked `ApplyUsdOps`
-change set. Escape restores the local snapshot, while a changed preview
-generation or closed session discards the transaction without restoring stale
-state. Preview drags never create `RigidBody`, `KinematicDrive`, or a physics
-hold. Live targets keep the existing BigSpace/Avian capture, rebranch, restore,
-and `TransformEntity` path.
+translation, Euler XYZ rotation, and/or unitless scale as one generation-checked
+`ApplyUsdOps` change set. Escape restores the local snapshot, while a changed
+preview generation or closed session discards the transaction without restoring
+stale state. Preview drags never create `RigidBody`, `KinematicDrive`, or a
+physics hold. Live targets keep the existing BigSpace/Avian capture, rebranch,
+restore, and `TransformEntity` path; live scale remains unavailable until a
+separate authored physics contract defines its topology and solver consequences.
 
 The presentation binding is shared with the standard workbench contracts. A
 visible focused preview camera is the sole `GizmoCamera`, and the workbench's
@@ -272,7 +274,7 @@ they are the only review path exposed by this library. The optional
 revision precondition. A supplied cursor makes stale edits fail atomically
 before authoring or journaling; `()` is reserved for an operation with no
 causal predecessor. `transform` uses one `ApplyUsdOps` change set for its
-translation/rotation pair. Attach and detach helpers pass the complete typed
+translation/rotation/scale components. Attach and detach helpers pass the complete typed
 specification to the existing mount/socket/joint validators. `assembly_edit::attach_program`
 passes the complete `ProgramAttachSpec` contract to the existing
 `AttachProgram` lowering. The library is

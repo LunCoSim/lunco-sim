@@ -36,19 +36,25 @@ use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
 };
 
-/// Configure the standard transform-gizmo frontend to expose only operations
-/// backed by the scene command contract. Scale is deliberately absent until
-/// authored scale and runtime projection have an owner.
+const SCALE_MODES: [GizmoMode; 7] = [
+    GizmoMode::ScaleX,
+    GizmoMode::ScaleY,
+    GizmoMode::ScaleZ,
+    GizmoMode::ScaleUniform,
+    GizmoMode::ScaleXY,
+    GizmoMode::ScaleXZ,
+    GizmoMode::ScaleYZ,
+];
+
+fn is_scale_mode(mode: GizmoMode) -> bool {
+    SCALE_MODES.contains(&mode)
+}
+
+/// Configure the standard transform-gizmo frontend for the live-scene
+/// contract. USD preview capability is enabled by [`sync_gizmo_camera`] only
+/// when the focused presentation owner is an isolated preview.
 pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
-    for mode in [
-        GizmoMode::ScaleX,
-        GizmoMode::ScaleY,
-        GizmoMode::ScaleZ,
-        GizmoMode::ScaleUniform,
-        GizmoMode::ScaleXY,
-        GizmoMode::ScaleXZ,
-        GizmoMode::ScaleYZ,
-    ] {
+    for mode in SCALE_MODES {
         options.gizmo_modes.remove(mode);
     }
 }
@@ -104,10 +110,16 @@ pub struct GizmoDragState {
     pub owner: GizmoDragOwner,
     pub original_position: DVec3,
     pub original_rotation: bevy::math::DQuat,
+    /// Preview-local scale before the drag. `None` for live entities because
+    /// the live physics contract does not expose scale editing.
+    pub original_scale: Option<DVec3>,
     /// The latest valid pose proposed by the gizmo in the same space as the
     /// original pose.
     pub current_position: DVec3,
     pub current_rotation: bevy::math::DQuat,
+    /// Latest preview-local scale proposed by the gizmo, when scale editing is
+    /// owned by the USD preview transaction.
+    pub current_scale: Option<DVec3>,
 }
 
 /// Marks an entity as selected for gizmo editing. The `GizmoTarget` the gizmo
@@ -218,8 +230,6 @@ pub fn sync_gizmo_proxies(
                     );
                 tf.translation = render_position.0.as_vec3();
                 tf.rotation = render_rotation.0.as_quat();
-                // Scale editing is intentionally disabled until it has a scene
-                // command and an authored contract of its own.
                 tf.scale = Vec3::ONE;
                 continue;
             }
@@ -245,6 +255,7 @@ fn proxy_pose_to_active_frame(
     if !tf.translation.is_finite()
         || !tf.rotation.is_finite()
         || tf.rotation.length_squared() < 1.0e-12
+        || !tf.scale.is_finite()
     {
         return None;
     }
@@ -266,35 +277,44 @@ fn proxy_pose_to_active_frame(
 /// Preview entities are ordinary USD projections, not BigSpace bodies. Their
 /// authored transform is local to the composed USD parent, so the render-space
 /// proxy must be reparented through the current parent `GlobalTransform` before
-/// it can be written to the projection or authored as `SetTranslate`/`SetRotate`.
-fn proxy_pose_to_preview_local(
+/// it can be written to the projection or authored as the typed
+/// `SetTranslate`/`SetRotate`/`SetScale` operations.
+fn proxy_transform_to_preview_local(
     entity: Entity,
     tf: &Transform,
     q_parents: &Query<&ChildOf>,
     q_globals: &Query<&GlobalTransform, Without<GizmoProxy>>,
-) -> Option<(DVec3, bevy::math::DQuat)> {
+) -> Option<Transform> {
     let parent = match q_parents.get(entity) {
         Ok(parent) => Some(q_globals.get(parent.parent()).ok()?),
         Err(_) => None,
     };
-    preview_global_to_local_pose(tf, parent)
+    preview_global_to_local_transform(tf, parent)
 }
 
-fn preview_global_to_local_pose(
+fn preview_global_to_local_transform(
     tf: &Transform,
     parent: Option<&GlobalTransform>,
-) -> Option<(DVec3, bevy::math::DQuat)> {
+) -> Option<Transform> {
     let local = match parent {
         Some(parent) => GlobalTransform::from(*tf).reparented_to(parent),
         None => *tf,
     };
-    local_transform_pose(&local)
+    if !local.translation.is_finite()
+        || !local.rotation.is_finite()
+        || local.rotation.length_squared() < 1.0e-12
+        || !local.scale.is_finite()
+    {
+        return None;
+    }
+    Some(local)
 }
 
 fn local_transform_pose(tf: &Transform) -> Option<(DVec3, bevy::math::DQuat)> {
     if !tf.translation.is_finite()
         || !tf.rotation.is_finite()
         || tf.rotation.length_squared() < 1.0e-12
+        || !tf.scale.is_finite()
     {
         return None;
     }
@@ -330,20 +350,23 @@ pub fn apply_gizmo_proxy_drag(
             continue;
         };
         if let GizmoDragOwner::UsdPreview { .. } = owner {
-            let Some((position, rotation)) =
-                proxy_pose_to_preview_local(link.target, tf, &q_parents, &q_globals)
+            let Some(local) =
+                proxy_transform_to_preview_local(link.target, tf, &q_parents, &q_globals)
             else {
                 continue;
             };
             if let Ok(mut target_tf) = world.p1().get_mut(link.target) {
-                target_tf.translation = position.as_vec3();
-                target_tf.rotation = rotation.as_quat();
+                *target_tf = local;
             } else {
                 continue;
             }
+            let Some((position, rotation)) = local_transform_pose(&local) else {
+                continue;
+            };
             if let Ok(mut state) = world.p3().get_mut(link.target) {
                 state.current_position = position;
                 state.current_rotation = rotation;
+                state.current_scale = Some(local.scale.as_dvec3());
             }
             continue;
         }
@@ -449,7 +472,7 @@ pub fn capture_final_gizmo_pose(
         let Ok(mut drag) = q_drag.get_mut(link.target) else {
             continue;
         };
-        let pose = match &drag.owner {
+        let resolved = match &drag.owner {
             GizmoDragOwner::Live {
                 active_frame: drag_frame,
                 ..
@@ -460,17 +483,27 @@ pub fn capture_final_gizmo_pose(
                 let Ok(grid) = q_grids.get(*drag_frame) else {
                     continue;
                 };
-                proxy_pose_to_active_frame(grid, proxy_tf)
+                proxy_pose_to_active_frame(grid, proxy_tf).map(|pose| (pose, None))
             }
             GizmoDragOwner::UsdPreview { .. } => {
-                proxy_pose_to_preview_local(link.target, proxy_tf, &q_parents, &q_globals)
+                let parent = q_parents
+                    .get(link.target)
+                    .ok()
+                    .and_then(|parent| q_globals.get(parent.parent()).ok());
+                preview_global_to_local_transform(proxy_tf, parent).and_then(|local| {
+                    let scale = local.scale.as_dvec3();
+                    local_transform_pose(&local).map(|pose| (pose, Some(scale)))
+                })
             }
         };
-        let Some((position, rotation)) = pose else {
+        let Some(((position, rotation), preview_scale)) = resolved else {
             continue;
         };
         drag.current_position = position;
         drag.current_rotation = rotation;
+        if let Some(scale) = preview_scale {
+            drag.current_scale = Some(scale);
+        }
     }
 }
 
@@ -565,11 +598,13 @@ pub fn capture_gizmo_start(
         }
 
         if let Some(owner) = preview_drag_owner(entity, viewport.as_deref(), &q_paths, &q_parents) {
-            let Some((position, rotation)) =
-                q_transforms.get(entity).ok().and_then(local_transform_pose)
-            else {
+            let Ok(local) = q_transforms.get(entity) else {
                 continue;
             };
+            let Some((position, rotation)) = local_transform_pose(local) else {
+                continue;
+            };
+            let scale = local.scale.as_dvec3();
             session.targets.insert(entity);
             info!(
                 "GIZMO: USD preview drag started for {:?}, local_pos={:?}",
@@ -579,8 +614,10 @@ pub fn capture_gizmo_start(
                 owner,
                 original_position: position,
                 original_rotation: rotation,
+                original_scale: Some(scale),
                 current_position: position,
                 current_rotation: rotation,
+                current_scale: Some(scale),
             });
             continue;
         }
@@ -633,8 +670,10 @@ pub fn capture_gizmo_start(
                     },
                     original_position: position.0,
                     original_rotation: rotation.0,
+                    original_scale: None,
                     current_position: position.0,
                     current_rotation: rotation.0,
+                    current_scale: None,
                 },
             ));
     }
@@ -732,6 +771,9 @@ pub fn restore_gizmo_dynamic(
                 if let Ok(mut tf) = spatial.p1().get_mut(entity) {
                     tf.translation = drag.original_position.as_vec3();
                     tf.rotation = drag.original_rotation.as_quat();
+                    if let Some(scale) = drag.original_scale {
+                        tf.scale = scale.as_vec3();
+                    }
                 }
             }
 
@@ -744,7 +786,7 @@ pub fn restore_gizmo_dynamic(
                     ..
                 } = &drag.owner
                 {
-                    let mut ops = Vec::with_capacity(2);
+                    let mut ops = Vec::with_capacity(3);
                     if (drag.current_position - drag.original_position).length_squared() > 1.0e-12 {
                         ops.push(lunco_usd::document::UsdOp::SetTranslate {
                             edit_target: edit_target.clone(),
@@ -759,6 +801,17 @@ pub fn restore_gizmo_dynamic(
                             path: path.clone(),
                             value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
                         });
+                    }
+                    if let (Some(current), Some(original)) =
+                        (drag.current_scale, drag.original_scale)
+                    {
+                        if (current - original).length_squared() > 1.0e-12 {
+                            ops.push(lunco_usd::document::UsdOp::SetScale {
+                                edit_target: edit_target.clone(),
+                                path: path.clone(),
+                                value: current.to_array(),
+                            });
+                        }
                     }
                     if !ops.is_empty() {
                         commands.trigger(lunco_usd::commands::ApplyUsdOps {
@@ -1031,6 +1084,21 @@ pub(crate) fn sync_gizmo_camera(
             })
     });
     let preview = preview_candidate.filter(|_| !orbital_active);
+    if preview.is_some() {
+        // Scale is an authored USD transform channel. It is available only
+        // while the isolated preview owns the gizmo, never on live physics
+        // entities whose scale has no solver/topology contract.
+        for mode in SCALE_MODES {
+            options.gizmo_modes.insert(mode);
+        }
+    } else {
+        for mode in SCALE_MODES {
+            options.gizmo_modes.remove(mode);
+        }
+        if options.mode_override.is_some_and(is_scale_mode) {
+            options.mode_override = None;
+        }
+    }
     let active = preview.map(|(entity, _)| entity).or(live);
     options.viewport_rect = preview.map(|(_, rect)| {
         rect_to_logical(
@@ -1257,8 +1325,10 @@ mod tests {
                 },
                 original_position: DVec3::ZERO,
                 original_rotation: bevy::math::DQuat::IDENTITY,
+                original_scale: None,
                 current_position: DVec3::ZERO,
                 current_rotation: bevy::math::DQuat::IDENTITY,
+                current_scale: None,
             })
             .id();
         app.world_mut()
@@ -1288,9 +1358,13 @@ mod tests {
             .with_rotation(Quat::from_rotation_x(-0.3) * Quat::from_rotation_z(0.2));
         let proxy = (GlobalTransform::from(parent_transform) * local).compute_transform();
 
+        let local = preview_global_to_local_transform(
+            &proxy,
+            Some(&GlobalTransform::from(parent_transform)),
+        )
+        .expect("a preview parent must provide a valid local transform");
         let (position, rotation) =
-            preview_global_to_local_pose(&proxy, Some(&GlobalTransform::from(parent_transform)))
-                .expect("a preview parent must provide a valid local transform");
+            local_transform_pose(&local).expect("reparented preview pose must be readable");
 
         assert!((position - local.translation.as_dvec3()).length() < 1.0e-5);
         assert!(rotation.dot(local.rotation.as_dquat()).abs() > 1.0 - 1.0e-5);
@@ -1303,7 +1377,9 @@ mod tests {
             ..Transform::IDENTITY
         };
 
-        assert!(preview_global_to_local_pose(&proxy, None).is_none());
+        assert!(preview_global_to_local_transform(&proxy, None)
+            .and_then(|local| local_transform_pose(&local))
+            .is_none());
     }
 
     #[test]
@@ -1343,8 +1419,10 @@ mod tests {
                     },
                     original_position: DVec3::ZERO,
                     original_rotation: bevy::math::DQuat::IDENTITY,
+                    original_scale: None,
                     current_position: DVec3::ZERO,
                     current_rotation: bevy::math::DQuat::IDENTITY,
+                    current_scale: None,
                 },
                 LinearVelocity(DVec3::new(4.0, 5.0, 6.0)),
             ))
@@ -1431,8 +1509,10 @@ mod tests {
                     },
                     original_position: DVec3::ZERO,
                     original_rotation: bevy::math::DQuat::IDENTITY,
+                    original_scale: None,
                     current_position: DVec3::ZERO,
                     current_rotation: bevy::math::DQuat::IDENTITY,
+                    current_scale: None,
                 },
                 LinearVelocity::default(),
             ))

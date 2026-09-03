@@ -100,11 +100,11 @@ pose back with the canonical render/grid and parent-local helpers, and commit
 through one `TransformEntity` scene command. Never apply render deltas to a
 parent-local `Transform`, read `GlobalTransform` as physics authority, or write
 Avian `Position`/`Rotation` from editor code. Reproject from the active-frame
-transaction pose after BigSpace origin/cell changes; scale handles remain
 transaction pose after BigSpace origin/cell changes. Because the frontend writes
 its final proxy pose in `Last` after the normal interaction transfer in
-`PostUpdate`, snapshot that final pose in `Last` before release cleanup. Scale
-handles remain disabled until scale has its own authored contract.
+`PostUpdate`, snapshot that final pose in `Last` before release cleanup. USD
+preview scale is authored through `UsdOp::SetScale`; live scale remains outside
+the physics contract.
 
 For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
 Read the complete composed local transform through the shared USD transform

@@ -84,11 +84,15 @@ is:
    stale preview revision, or commits changed local channels as one
    generation-checked `ApplyUsdOps` change set.
 5. **Owner boundary** — the scene command owns live parent-local/cell storage;
-   `UsdOp::SetTranslate`/`SetRotate` own preview authoring and projection.
+  `UsdOp::SetTranslate`/`SetRotate`/`SetScale` own preview authoring and
+  projection.
 
-Scale handles are disabled until scale has an authored USD and runtime command
-contract. The existing BigSpace physics bridge remains the only normal Avian
-pose adapter.
+USD preview targets expose the standard USD `xformOp:scale` handles and the
+Inspector's unitless scale fields. They commit through `UsdOp::SetScale` in the
+same generation-checked `ApplyUsdOps` change set as translation and rotation.
+Live simulation targets keep scale unavailable because changing a physics
+body's scale requires an authored `UsdPhysics` topology/solver contract; the
+existing BigSpace physics bridge remains the only normal Avian pose adapter.
 
 ### Why Render and Physics Poses Are Split
 

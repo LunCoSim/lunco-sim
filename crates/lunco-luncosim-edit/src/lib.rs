@@ -93,11 +93,9 @@ impl Plugin for SceneEditPlugin {
         );
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
-        // The editor currently has a translation/rotation document contract.
-        // Scale is not a harmless frontend-only mode: exposing it while the
-        // scene command and USD lowering ignore scale creates a visible no-op.
-        // Keep the standard gizmo frontend, but configure only implemented
-        // semantic operations.
+        // Configure the standard gizmo for live-scene operations at startup.
+        // The camera reconciliation enables the authored USD scale modes only
+        // while an isolated preview owns the gizmo.
         app.add_systems(Startup, gizmo::configure_gizmo_modes);
         app.add_plugins(commands::SpawnCommandPlugin);
         app.add_plugins(perf_bridge::PerfBridgePlugin);

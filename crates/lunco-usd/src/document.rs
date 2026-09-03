@@ -335,6 +335,18 @@ pub enum UsdOp {
         /// `[x, y, z]` Euler angles in **degrees** (USD `xformOp:rotateXYZ`).
         value: [f64; 3],
     },
+    /// Set the `xformOp:scale` attribute on the prim at `path`.
+    /// Authors `xformOpOrder` too if the prim has none yet. Values are
+    /// unitless canonical local scale factors and preserve negative authored
+    /// scale values.
+    SetScale {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose scale to set.
+        path: String,
+        /// Unitless local scale factors `[x, y, z]`.
+        value: [f64; 3],
+    },
     /// Set an arbitrary attribute on the prim at `path`. Creates the
     /// attribute if absent, replaces its value otherwise.
     ///
@@ -559,6 +571,7 @@ impl UsdOp {
             | Self::RemovePrim { edit_target, .. }
             | Self::SetTranslate { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
+            | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
@@ -589,6 +602,7 @@ impl UsdOp {
             Self::RemovePrim { path, .. }
             | Self::SetTranslate { path, .. }
             | Self::SetRotate { path, .. }
+            | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
             | Self::SetTimeSample { path, .. }
             | Self::RemoveTimeSample { path, .. }
@@ -1403,6 +1417,7 @@ impl Document for UsdDocument {
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
             | UsdOp::SetRotate { edit_target, .. }
+            | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
@@ -1648,6 +1663,58 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
+            UsdOp::SetScale { path, value, .. } => {
+                if value.iter().any(|component| !component.is_finite()) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetScale `{path}` requires finite scale components"
+                    )));
+                }
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let layer = self.layer(target);
+                let scale_existed = prim_sdf
+                    .append_property("xformOp:scale")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
+                let (composed_order, append_op) =
+                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:scale");
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv = authoring_stage_convention(&stage)?;
+                let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
+                stage
+                    .create_attribute(format!("{path}.xformOp:scale"), "double3")
+                    .map_err(author_err)?
+                    .set(authored)
+                    .map_err(author_err)?;
+                if append_op {
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:scale")?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                let inverse = if scale_existed && !append_op {
+                    old_scale
+                        .map(|old| UsdOp::SetScale {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: conv.scale_vec_d(DVec3::from_array(old)).to_array(),
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:scale".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
             UsdOp::SetAttribute {
                 path,
                 name,
@@ -1827,7 +1894,7 @@ impl Document for UsdDocument {
                 };
                 // A time-sampled xform channel is not usable unless its token is
                 // present in the prim's xformOpOrder. Reuse the same composed-order
-                // append rule as SetTranslate/SetRotate so keyframing a channel is
+                // append rule as SetTranslate/SetRotate/SetScale so keyframing a channel is
                 // a complete USD edit rather than a detached attribute that the
                 // transform evaluator ignores.
                 let (composed_order, append_xform_op) =
@@ -3668,6 +3735,52 @@ mod tests {
                 .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
             Some([0.0, 45.0, 0.0])
         );
+    }
+
+    #[test]
+    fn set_scale_authors_standard_op_and_typed_undo() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(64),
+            scene,
+            DocumentOrigin::writable_file("target/order_scale.usda"),
+        );
+        let rig = SdfPath::new("/Rig").unwrap();
+
+        let first_inverse = doc
+            .apply(UsdOp::SetScale {
+                edit_target: LayerId::root(),
+                path: "/Rig".into(),
+                value: [2.0, 3.0, 4.0],
+            })
+            .expect("initial scale applies");
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:scale".to_string()]
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:scale"),
+            Some([2.0, 3.0, 4.0])
+        );
+
+        let inverse = doc
+            .apply(UsdOp::SetScale {
+                edit_target: LayerId::root(),
+                path: "/Rig".into(),
+                value: [-2.0, 5.0, 6.0],
+            })
+            .expect("scale overwrite applies");
+        assert!(matches!(inverse, UsdOp::SetScale { value, .. } if value == [2.0, 3.0, 4.0]));
+        doc.apply(inverse).expect("typed scale undo applies");
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:scale"),
+            Some([2.0, 3.0, 4.0])
+        );
+        // The first edit introduced both the attribute and its order entry, so
+        // its inverse remains the existing exact source snapshot.
+        assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
     }
 
     /// The order is the AUTHOR order, not a canonical translate-first order:

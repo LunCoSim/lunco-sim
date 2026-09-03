@@ -1392,12 +1392,14 @@ fn usd_preview_transform_section(
         f64::from(euler.1.to_degrees()),
         f64::from(euler.2.to_degrees()),
     ];
+    let mut scale = transform.scale.as_dvec3().to_array();
     let mut translation_commit = false;
     let mut rotation_commit = false;
+    let mut scale_commit = false;
     egui::CollapsingHeader::new("Transform")
         .default_open(true)
         .show(ui, |ui| {
-            ui.small("Local · canonical metres · Euler XYZ degrees");
+            ui.small("Local · canonical metres · Euler XYZ degrees · scale unitless");
             let (translate_x, translate_y, translate_z) = ui
                 .horizontal(|ui| {
                     (
@@ -1440,18 +1442,40 @@ fn usd_preview_transform_section(
                     )
                 })
                 .inner;
+            let (scale_x, scale_y, scale_z) = ui
+                .horizontal(|ui| {
+                    (
+                        ui.add(
+                            egui::DragValue::new(&mut scale[0])
+                                .speed(0.01)
+                                .prefix("Sx: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut scale[1])
+                                .speed(0.01)
+                                .prefix("Sy: "),
+                        ),
+                        ui.add(
+                            egui::DragValue::new(&mut scale[2])
+                                .speed(0.01)
+                                .prefix("Sz: "),
+                        ),
+                    )
+                })
+                .inner;
             translation_commit = [translate_x, translate_y, translate_z]
                 .iter()
                 .any(usd_edit_released);
             rotation_commit = [rotate_x, rotate_y, rotate_z].iter().any(usd_edit_released);
+            scale_commit = [scale_x, scale_y, scale_z].iter().any(usd_edit_released);
         });
 
-    let committed = translation_commit || rotation_commit;
+    let committed = translation_commit || rotation_commit || scale_commit;
     if !committed {
         return;
     }
 
-    let mut ops = Vec::with_capacity(2);
+    let mut ops = Vec::with_capacity(3);
     if translation_commit {
         ops.push(UsdOp::SetTranslate {
             edit_target: preview.edit_target.clone(),
@@ -1464,6 +1488,13 @@ fn usd_preview_transform_section(
             edit_target: preview.edit_target.clone(),
             path: preview.path.clone(),
             value: rotation,
+        });
+    }
+    if scale_commit {
+        ops.push(UsdOp::SetScale {
+            edit_target: preview.edit_target.clone(),
+            path: preview.path.clone(),
+            value: scale,
         });
     }
     ctx.trigger(lunco_usd::commands::ApplyUsdOps {

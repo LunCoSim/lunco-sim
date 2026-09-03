@@ -918,6 +918,25 @@ fn is_preview_only(
     }
 }
 
+/// Returns whether an entity belongs to a render-only USD preview hierarchy.
+///
+/// The root marker is the ownership boundary for a preview lease. Consumers
+/// that reconcile an already-live entity use this same boundary instead of
+/// inferring preview state from a name, stage handle, or missing physics
+/// components.
+pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
+    let mut current = entity;
+    loop {
+        if world.get::<UsdPreviewOnly>(current).is_some() {
+            return true;
+        }
+        let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) else {
+            return false;
+        };
+        current = parent;
+    }
+}
+
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
 /// referenced `UsdStageAsset` finished loading. `sync_usd_visuals` moves it
 /// into the bounded projection queue once the asset becomes available.

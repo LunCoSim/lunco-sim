@@ -48,9 +48,10 @@ convert transforms *and* points/dims. Conjugation is what lets each level of the
 hierarchy be converted independently, with no knowledge of its parents.
 
 `Q` is either the identity or a ±90° axis swap (USD defines only `upAxis` `Y`/`Z`),
-so componentwise `|Q·s|` on a non-uniform scale is exact. It would **not** be for
-an arbitrary rotation — that is why `Q` is derived from a two-valued token and
-never from free-form data.
+so the signed components of `Q·s` are an exact axis permutation for a
+non-uniform scale. It would **not** remain a diagonal scale for an arbitrary
+rotation — that is why `Q` is derived from a two-valued token and never from
+free-form data.
 
 **Failure behaviour is loud, never silent.** An `upAxis` that is neither `Y` nor
 `Z`, or a non-finite/non-positive `metersPerUnit`, rejects the USD projection at

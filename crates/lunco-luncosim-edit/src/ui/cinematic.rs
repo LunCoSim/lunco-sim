@@ -335,7 +335,7 @@ fn on_add_camera_here(
             reference: None,
         },
     });
-    // `SetTranslate`/`SetRotate` synthesize `xformOpOrder` when the prim has
+    // `SetTranslate`/`SetRotate`/`SetScale` synthesize `xformOpOrder` when the prim has
     // none, which a just-created Camera never does — so the op stack comes out
     // right without hand-authoring the token array.
     commands.trigger(ApplyUsdOp {

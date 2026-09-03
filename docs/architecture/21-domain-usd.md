@@ -517,14 +517,17 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   BigSpace frame and actual parent storage. Drag completion emits one
   `TransformEntity` scene command, whose live leg writes `(CellCoord, Transform)`
   through the canonical parent conversion and whose persistence leg authors
-  translation plus rotation as one runtime-layer USD change set. Since the
+  translation plus rotation as one runtime-layer USD change set. USD preview
+  targets use the same transaction boundary for canonical translation,
+  rotation, and unitless scale through `UsdOp::SetScale`; live simulation
+  targets keep scale unavailable until an authored physics topology/solver
+  contract exists. Since the
   gizmo library writes its final proxy pose in `Last` while the normal
   interaction transfer runs in `PostUpdate`, a Last-stage final-pose snapshot
   runs before release cleanup consumes the transaction. The default
   `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
   `gizmo_picking_backend` kept); `drive_gizmo_drag_no_shift` remains gated to
-  plain, non-Shift presses and egui pointer capture. Scale handles are disabled
-  until scale has an authored command and projection contract.
+  plain, non-Shift presses and egui pointer capture.
 - **Undo**: Reverting a `UsdOp` in the document system automatically updates the 3D world.
 
 | Scheme | Purpose | Resolves to |
@@ -533,9 +536,8 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
 | `lunco://` | **Engine asset library** (rovers, parts, vessels, downloaded binaries) — location-independent ref usable from external Twins | `assets/...`, then `<cache>/...` |
 | `twin://<name>/...` | **Internal, runtime-only.** The currently-open Twin's root, keyed by Twin name. Reads an external Twin scene + its co-located assets (fs on native, http on web). Never authored into a file. | the opened Twin folder |
 
-> `lunco://` was previously *reserved* for a future collaborative protocol; it's
-> now the engine library scheme. A collaborative/Nucleus-like protocol, if added,
-> should pick a distinct scheme (e.g. `lunco-net://`).
+The `lunco://` scheme is the engine library scheme. Collaboration protocols
+must use their own explicitly defined scheme.
 >
 > The cache is **not addressable**: a scheme pointing at it would bake a
 > machine-local location into authored content, and the file would resolve only

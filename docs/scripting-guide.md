@@ -425,7 +425,7 @@ let before = assembly_edit::describe(doc);
 let generation = before.generation;
 let changed = assembly_edit::transform(
     doc, "@root@", "/Rover",
-    [1.0, 0.0, 0.0], (), generation,
+    [1.0, 0.0, 0.0], (), (), generation,
 );
 let plan = [#{ SetAttribute: #{
     edit_target: "@root@",

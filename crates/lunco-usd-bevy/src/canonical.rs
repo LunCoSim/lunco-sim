@@ -198,6 +198,25 @@ impl CanonicalStage {
         self.insert_xform_op(path, "xformOp:rotateXYZ")
     }
 
+    /// Author `xformOp:scale = value` (unitless local factors) onto the
+    /// composed prim at `path`. Fires the change sink and inserts the standard
+    /// scale operation into `xformOpOrder` without disturbing existing ops.
+    pub(crate) fn author_scale(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        if value.iter().any(|component| !component.is_finite()) {
+            return Err(anyhow!("scale at {path} contains a non-finite component"));
+        }
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_scale_vec_d(bevy::math::DVec3::from_array(value));
+        self.stage
+            .create_attribute(format!("{}.xformOp:scale", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author scale at {path}: {e}"))?
+            .set(value.to_array())
+            .map_err(|e| anyhow!("set scale at {path}: {e}"))?;
+        self.insert_xform_op(path, "xformOp:scale")
+    }
+
     /// Rank of `op` in XformCommonAPI's canonical stack: `!resetXformStack!`
     /// first, then translate → rotate/orient → scale, with unknown/extra ops
     /// after the canonical trio.
@@ -630,6 +649,11 @@ impl StageProjector<'_> {
     /// Replay a `SetRotate` op — see [`CanonicalStage::author_rotate`].
     pub fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         self.0.author_rotate(path, value)
+    }
+
+    /// Replay a `SetScale` op — see [`CanonicalStage::author_scale`].
+    pub fn author_scale(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_scale(path, value)
     }
 
     /// Replay a `DefinePrim` op — see [`CanonicalStage::author_prim`].
@@ -1210,6 +1234,18 @@ mod authoring_tests {
                 .zip([0.0, 0.0, 90.0])
                 .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
             "canonical rotation must be expressed in the Z-up stage basis: {stage_rotation:?}"
+        );
+
+        cs.author_scale(&rover, [1.0, 2.0, 3.0])
+            .expect("author canonical local scale");
+        let stage_scale =
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:scale").expect("stage scale");
+        assert!(
+            stage_scale
+                .iter()
+                .zip([1.0, 3.0, 2.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-6),
+            "canonical scale must exchange Y/Z in the Z-up stage basis: {stage_scale:?}"
         );
     }
 

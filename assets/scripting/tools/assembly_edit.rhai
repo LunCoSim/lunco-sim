@@ -245,9 +245,10 @@ fn move_prim(doc, edit_target, from_path, to_path, parent_gen) {
     })
 }
 
-/// Apply translation and/or Euler XYZ rotation as one journaled edit.
-/// `translation` and `rotation` may be `()` independently, but not both.
-fn transform(doc, edit_target, path, translation, rotation, parent_gen) {
+/// Apply translation, Euler XYZ rotation, and/or unitless local scale as one
+/// journaled edit. The transform components may be `()` independently, but
+/// not all three.
+fn transform(doc, edit_target, path, translation, rotation, scale, parent_gen) {
     let ops = [];
     if translation != () {
         ops.push(#{ SetTranslate: #{
@@ -263,8 +264,15 @@ fn transform(doc, edit_target, path, translation, rotation, parent_gen) {
             value: rotation,
         }});
     }
+    if scale != () {
+        ops.push(#{ SetScale: #{
+            edit_target: edit_target,
+            path: path,
+            value: scale,
+        }});
+    }
     if ops.is_empty() {
-        return #{ ok: false, error: "transform requires translation or rotation" };
+        return #{ ok: false, error: "transform requires translation, rotation, or scale" };
     }
     cmd("ApplyUsdOps", #{
         doc: doc,

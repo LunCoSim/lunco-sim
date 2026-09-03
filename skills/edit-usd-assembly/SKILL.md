@@ -170,14 +170,16 @@ paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
 For numeric part transforms, use the focused preview's Inspector Transform
 section or call the existing `assembly_edit::transform(doc, edit_target, path,
-translation, rotation, parent_gen)` helper with the exact selection context.
-Preview values are local canonical metres and Euler XYZ degrees; the Inspector
-commits changed translation and/or rotation fields as one journaled
-`ApplyUsdOps` edit.
+translation, rotation, scale, parent_gen)` helper with the exact selection
+context. Preview values are local canonical metres, Euler XYZ degrees, and
+unitless scale factors; the Inspector commits changed translation, rotation,
+and/or scale fields as one journaled `ApplyUsdOps` edit. The typed
+`UsdOp::SetScale` operation preserves the standard `xformOpOrder` and stage
+unit/axis boundary.
 The standard transform gizmo is also available for the focused preview: select
 the exact prim, drag its unparented proxy, and release to commit the changed
-local translation and/or Euler XYZ rotation as one generation-checked
-`ApplyUsdOps` change set. Preview gizmo drags use Bevy's parent-local
+local translation, Euler XYZ rotation, and/or unitless scale as one
+generation-checked `ApplyUsdOps` change set. Preview gizmo drags use Bevy's parent-local
 `GlobalTransform::reparented_to` conversion and never create a live physics
 identity or hold. Escape cancels; if the preview generation changes or the
 session closes, the stale transaction is discarded and the newer USD projection

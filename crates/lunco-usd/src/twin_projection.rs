@@ -1192,6 +1192,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             UsdOp::RemovePrim { path, .. }
             | UsdOp::SetTranslate { path, .. }
             | UsdOp::SetRotate { path, .. }
+            | UsdOp::SetScale { path, .. }
             | UsdOp::SetAttribute { path, .. }
             | UsdOp::SetRelationship { path, .. }
             | UsdOp::SetConnection { path, .. }
@@ -1240,7 +1241,12 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 if let Err(e) = cs.projector().author_translate(&sp, *value) {
                     warn!("[twin] author translate {path}: {e}");
                 } else {
-                    crate::live_consume::mark_live_translate(world, scene_id, path.clone());
+                    crate::live_consume::mark_live_transform(
+                        world,
+                        scene_id,
+                        path.clone(),
+                        crate::live_consume::TransformEditChannels::translate(),
+                    );
                 }
             }
         }
@@ -1254,6 +1260,33 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             {
                 if let Err(e) = cs.projector().author_rotate(&sp, *value) {
                     warn!("[twin] author rotate {path}: {e}");
+                } else {
+                    crate::live_consume::mark_live_transform(
+                        world,
+                        scene_id,
+                        path.clone(),
+                        crate::live_consume::TransformEditChannels::rotate(),
+                    );
+                }
+            }
+        }
+        UsdOp::SetScale { path, value, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                if let Err(e) = cs.projector().author_scale(&sp, *value) {
+                    warn!("[twin] author scale {path}: {e}");
+                } else {
+                    crate::live_consume::mark_live_transform(
+                        world,
+                        scene_id,
+                        path.clone(),
+                        crate::live_consume::TransformEditChannels::scale(),
+                    );
                 }
             }
         }
@@ -2003,10 +2036,11 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                     if let Err(e) = cs.projector().author_translate(&sp, translate) {
                         warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
                     } else {
-                        crate::live_consume::mark_live_translate(
+                        crate::live_consume::mark_live_transform(
                             world,
                             item.scene_id,
                             item.prim_path.clone(),
+                            crate::live_consume::TransformEditChannels::translate(),
                         );
                     }
                 }

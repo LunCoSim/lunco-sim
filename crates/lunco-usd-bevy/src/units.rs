@@ -538,10 +538,17 @@ impl ConventionTransform {
 
     /// A prim's **local scale** → canonical: the axes permute with `Q`. Exact for
     /// the only two `Q` USD can produce (identity, ±90° axis swap) — see
-    /// [`local_transform`](Self::local_transform).
+    /// [`local_transform`](Self::local_transform). Scale signs are preserved;
+    /// the sign changes in the basis rotation cancel in diagonal-scale
+    /// conjugation.
     pub fn scale_vec(&self, s: Vec3) -> Vec3 {
-        let s = self.rot * s;
-        Vec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+        if self.rot == Quat::IDENTITY {
+            s
+        } else {
+            // The only non-identity USD basis is Z-up → Y-up, where local Y/Z
+            // exchange and the basis sign is not part of the scale value.
+            Vec3::new(s.x, s.z, s.y)
+        }
     }
 
     /// Conjugate a prim's **local** transform: `L' = S·L·S⁻¹`.
@@ -550,9 +557,9 @@ impl ConventionTransform {
     /// hierarchy be converted independently — see the module docs. The rotation
     /// is re-expressed in the canonical basis, the translation is a point, and
     /// the (possibly non-uniform) scale's *axes permute* with `Q`: `Q` is either
-    /// the identity or a ±90° axis swap, so `|Q·s|` componentwise is exact here
-    /// (it would not be for an arbitrary rotation — none can occur: USD defines
-    /// only `upAxis` `Y`/`Z`).
+    /// the identity or a ±90° axis swap, so the signed components of `Q·s` are
+    /// an exact axis permutation here (it would not be a diagonal scale for an
+    /// arbitrary rotation — none can occur: USD defines only `upAxis` `Y`/`Z`).
     pub fn local_transform(&self, t: Transform) -> Transform {
         if self.is_identity() {
             return t;
@@ -620,10 +627,13 @@ impl ConventionTransform {
 
     /// A canonical **local scale** → the stage's axis order. Inverse of
     /// [`scale_vec`](Self::scale_vec); exact for the only two `Q` USD can
-    /// produce.
+    /// produce. Scale signs are preserved.
     pub fn stage_scale_vec(&self, s: Vec3) -> Vec3 {
-        let s = self.rot.inverse() * s;
-        Vec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+        if self.rot == Quat::IDENTITY {
+            s
+        } else {
+            Vec3::new(s.x, s.z, s.y)
+        }
     }
 
     /// A canonical local scale in `f64` → the stage's axis order. USD xform
@@ -631,14 +641,20 @@ impl ConventionTransform {
     /// narrowing an edit merely because the live authoring API received a
     /// double-valued USD op.
     pub fn stage_scale_vec_d(&self, s: DVec3) -> DVec3 {
-        let s = self.rot.as_dquat().inverse() * s;
-        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+        if self.rot == Quat::IDENTITY {
+            s
+        } else {
+            DVec3::new(s.x, s.z, s.y)
+        }
     }
 
     /// A stage-local scale in `f64` → canonical axis order.
     pub fn scale_vec_d(&self, s: DVec3) -> DVec3 {
-        let s = self.rot.as_dquat() * s;
-        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+        if self.rot == Quat::IDENTITY {
+            s
+        } else {
+            DVec3::new(s.x, s.z, s.y)
+        }
     }
 
     /// Convert a canonical `xformOp:rotateXYZ` Euler triple to the stage's
@@ -1093,6 +1109,20 @@ mod tests {
         let t = Transform::from_xyz(1.0, 2.0, 3.0).with_scale(Vec3::new(1.0, 2.0, 3.0));
         assert_eq!(ct.stage_local_transform(t), t);
         assert_eq!(ct.stage_length(7.5), 7.5);
+    }
+
+    /// A Z-up basis exchanges local Y/Z scale axes but does not turn a
+    /// negative authored scale into a positive one.
+    #[test]
+    fn noncanonical_scale_remap_preserves_axis_signs() {
+        let ct = ConventionTransform::from_stage_metrics(&StageMetrics {
+            meters_per_unit: 0.01,
+            up_axis: UpAxis::Z,
+        });
+        let stage = DVec3::new(-1.0, 2.0, -3.0);
+        let canonical = ct.scale_vec_d(stage);
+        assert_eq!(canonical, DVec3::new(-1.0, -3.0, 2.0));
+        assert_eq!(ct.stage_scale_vec_d(canonical), stage);
     }
 
     /// A centimetre stage's authored numbers, spelled out: 2.5 m is `250`, and a

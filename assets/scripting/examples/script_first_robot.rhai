@@ -17,6 +17,7 @@ fn build_robot(usd_doc, modelica_doc) {
         [0.0, 0.0, 0.0],
         (),
         (),
+        (),
     );
 
     // A fixed sensor mount and a revolute wheel are both authored through the
