@@ -3506,6 +3506,28 @@ fn new_document_menu_label(index: usize, display: &str) -> String {
     }
 }
 
+fn settings_choice_menu<T>(
+    ui: &mut egui::Ui,
+    label: String,
+    current: &mut T,
+    choices: impl IntoIterator<Item = (T, String)>,
+) -> bool
+where
+    T: Copy + PartialEq,
+{
+    let mut changed = false;
+    ui.menu_button(label, |ui| {
+        for (choice, text) in choices {
+            if ui.selectable_label(*current == choice, text).clicked() {
+                *current = choice;
+                changed = true;
+                ui.close();
+            }
+        }
+    });
+    changed
+}
+
 /// Run one contributed menu callback behind the capability-limited
 /// [`MenuCtx`], then apply its typed intent while the workbench layout is
 /// still temporarily removed from the world.
@@ -5776,19 +5798,21 @@ fn register_graphics_settings_menu(world: &mut World) {
             let mut settings = *current;
             let current_preset = settings.preset();
             let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::Balanced);
-            let mut preset_changed = false;
-            egui::ComboBox::from_id_salt("graphics.rendering_quality")
-                .selected_text(current_preset.map_or("Custom", |preset| preset.label()))
-                .show_ui(ui, |ui| {
-                    for quality in lunco_render::RenderingQuality::all() {
-                        preset_changed |= ui
-                            .selectable_value(&mut selected_preset, quality, quality.label())
-                            .changed();
-                    }
-                });
+            let preset_label = current_preset.map_or("Custom", |preset| preset.label());
+            let preset_changed = settings_choice_menu(
+                ui,
+                format!("Rendering quality: {preset_label}"),
+                &mut selected_preset,
+                lunco_render::RenderingQuality::all()
+                    .into_iter()
+                    .map(|quality| (quality, quality.label().to_owned())),
+            );
             if preset_changed {
                 settings.apply_preset(selected_preset);
             }
+            let shadow_map_sizes = ctx
+                .resource::<crate::render_robustness::RenderCapabilities>()
+                .and_then(|capabilities| capabilities.supported_shadow_map_sizes());
             ui.label(
                 egui::RichText::new(
                     "High is the highest shipped visual budget; USD-authored sky and lunar surface shaders remain authoritative.",
@@ -5804,18 +5828,37 @@ fn register_graphics_settings_menu(world: &mut World) {
                 .small(),
             );
             ui.collapsing("Shadow allocation", |ui| {
-                ui.add(
-                    egui::DragValue::new(&mut settings.directional_shadow_map_size)
-                        .speed(128.0)
-                        .prefix("Directional map: ")
-                        .suffix(" px"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut settings.point_shadow_map_size)
-                        .speed(128.0)
-                        .prefix("Point map: ")
-                        .suffix(" px"),
-                );
+                if let Some(sizes) = shadow_map_sizes.as_deref() {
+                    settings_choice_menu(
+                        ui,
+                        format!(
+                            "Directional map: {} px",
+                            settings.directional_shadow_map_size
+                        ),
+                        &mut settings.directional_shadow_map_size,
+                        sizes
+                            .iter()
+                            .copied()
+                            .map(|size| (size, format!("{size} px"))),
+                    );
+                    settings_choice_menu(
+                        ui,
+                        format!("Point map: {} px", settings.point_shadow_map_size),
+                        &mut settings.point_shadow_map_size,
+                        sizes
+                            .iter()
+                            .copied()
+                            .map(|size| (size, format!("{size} px"))),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Shadow-map sizes are unavailable until the render device reports its limits.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                }
                 ui.add(
                     egui::DragValue::new(&mut settings.directional_cascades)
                         .speed(1.0)
@@ -6083,55 +6126,44 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .weak()
                     .small(),
                 );
-                egui::ComboBox::from_id_salt("graphics.camera_tone_map")
-                    .selected_text(match settings.camera_tone_map {
-                        lunco_render::ToneMap::None => "None",
-                        lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
-                        lunco_render::ToneMap::AgX => "AgX",
-                        lunco_render::ToneMap::AcesFitted => "ACES fitted",
-                        lunco_render::ToneMap::Reinhard => "Reinhard",
-                    })
-                    .show_ui(ui, |ui| {
-                        for tone_map in [
-                            lunco_render::ToneMap::None,
-                            lunco_render::ToneMap::TonyMcMapface,
-                            lunco_render::ToneMap::AgX,
-                            lunco_render::ToneMap::AcesFitted,
-                            lunco_render::ToneMap::Reinhard,
-                        ] {
-                            let label = match tone_map {
-                                lunco_render::ToneMap::None => "None",
-                                lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
-                                lunco_render::ToneMap::AgX => "AgX",
-                                lunco_render::ToneMap::AcesFitted => "ACES fitted",
-                                lunco_render::ToneMap::Reinhard => "Reinhard",
-                            };
-                            ui.selectable_value(&mut settings.camera_tone_map, tone_map, label);
-                        }
-                    });
-                egui::ComboBox::from_id_salt("graphics.camera_msaa")
-                    .selected_text(match settings.camera_msaa {
-                        lunco_render::MsaaLevel::Off => "Off",
-                        lunco_render::MsaaLevel::X2 => "2x",
-                        lunco_render::MsaaLevel::X4 => "4x",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut settings.camera_msaa,
-                            lunco_render::MsaaLevel::Off,
-                            "Off",
-                        );
-                        ui.selectable_value(
-                            &mut settings.camera_msaa,
-                            lunco_render::MsaaLevel::X2,
-                            "2x",
-                        );
-                        ui.selectable_value(
-                            &mut settings.camera_msaa,
-                            lunco_render::MsaaLevel::X4,
-                            "4x",
-                        );
-                    });
+                let tone_map_label = match settings.camera_tone_map {
+                    lunco_render::ToneMap::None => "None",
+                    lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
+                    lunco_render::ToneMap::AgX => "AgX",
+                    lunco_render::ToneMap::AcesFitted => "ACES fitted",
+                    lunco_render::ToneMap::Reinhard => "Reinhard",
+                };
+                settings_choice_menu(
+                    ui,
+                    format!("Tone map: {tone_map_label}"),
+                    &mut settings.camera_tone_map,
+                    [
+                        (lunco_render::ToneMap::None, "None"),
+                        (lunco_render::ToneMap::TonyMcMapface, "TonyMcMapface"),
+                        (lunco_render::ToneMap::AgX, "AgX"),
+                        (lunco_render::ToneMap::AcesFitted, "ACES fitted"),
+                        (lunco_render::ToneMap::Reinhard, "Reinhard"),
+                    ]
+                    .into_iter()
+                    .map(|(tone_map, label)| (tone_map, label.to_owned())),
+                );
+                let msaa_label = match settings.camera_msaa {
+                    lunco_render::MsaaLevel::Off => "Off",
+                    lunco_render::MsaaLevel::X2 => "2x",
+                    lunco_render::MsaaLevel::X4 => "4x",
+                };
+                settings_choice_menu(
+                    ui,
+                    format!("Camera MSAA: {msaa_label}"),
+                    &mut settings.camera_msaa,
+                    [
+                        (lunco_render::MsaaLevel::Off, "Off"),
+                        (lunco_render::MsaaLevel::X2, "2x"),
+                        (lunco_render::MsaaLevel::X4, "4x"),
+                    ]
+                    .into_iter()
+                    .map(|(msaa, label)| (msaa, label.to_owned())),
+                );
                 ui.add(
                     egui::DragValue::new(&mut settings.camera_exposure_ev100)
                         .speed(0.1)
@@ -6366,7 +6398,17 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
-            if let Err(reason) = settings.validate() {
+            let validation_error = settings.validate().err().map(str::to_owned).or_else(|| {
+                let capabilities = ctx
+                    .resource::<crate::render_robustness::RenderCapabilities>()
+                    .filter(|capabilities| capabilities.is_ready())?;
+                crate::render_robustness::validate_profile_for_capabilities(
+                    settings.profile(),
+                    capabilities,
+                )
+                .err()
+            });
+            if let Some(reason) = validation_error {
                 let error_color = ctx
                     .resource::<lunco_theme::Theme>()
                     .map(|theme| theme.tokens.error)

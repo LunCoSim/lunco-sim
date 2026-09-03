@@ -168,10 +168,38 @@ struct RenderCapabilityShared {
 pub(crate) struct RenderCapabilitiesHandle(Arc<RenderCapabilityShared>);
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct RenderCapabilities {
+pub(crate) struct RenderCapabilities {
     ready: bool,
     max_texture_dimension_2d: u32,
     max_texture_array_layers: u32,
+}
+
+impl RenderCapabilities {
+    pub(crate) fn is_ready(self) -> bool {
+        self.ready
+    }
+
+    /// Return every shadow-map size accepted by the live adapter and the
+    /// persisted graphics-settings contract.
+    pub(crate) fn supported_shadow_map_sizes(self) -> Option<Vec<u32>> {
+        if !self.ready || self.max_texture_dimension_2d == 0 {
+            return None;
+        }
+
+        let mut sizes = Vec::new();
+        let mut size: u32 = 1;
+        loop {
+            sizes.push(size);
+            let Some(next) = size.checked_mul(2) else {
+                break;
+            };
+            if next > self.max_texture_dimension_2d {
+                break;
+            }
+            size = next;
+        }
+        Some(sizes)
+    }
 }
 
 fn publish_render_capabilities(
@@ -562,7 +590,7 @@ fn render_quality_changed(
 /// the current adapter will actually use. Bevy otherwise truncates light
 /// lists/layers in the render world, which would silently change an explicit
 /// graphics request or allocate an unsupported point-shadow texture.
-fn validate_profile_for_capabilities(
+pub(crate) fn validate_profile_for_capabilities(
     profile: lunco_render::RenderQualityProfile,
     capabilities: &RenderCapabilities,
 ) -> Result<(), String> {
@@ -1739,6 +1767,18 @@ mod tests {
             max_texture_dimension_2d,
             max_texture_array_layers,
         }
+    }
+
+    #[test]
+    fn shadow_map_choices_are_adapter_bounded_powers_of_two() {
+        assert_eq!(
+            capabilities(4095, 2048).supported_shadow_map_sizes(),
+            Some(vec![1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048])
+        );
+        assert_eq!(
+            RenderCapabilities::default().supported_shadow_map_sizes(),
+            None
+        );
     }
 
     #[test]
