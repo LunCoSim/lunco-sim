@@ -216,8 +216,9 @@ You'll use these constantly (the complete table is in
 > **`set` vs `cmd`.** Use `set` to tune a reflected value. When `set`
 > falls through to a scalar port it is a raw write and has no persistent hold;
 > use `cmd("SetPorts", #{target: id, writes: [[name, value]]})` when wiring must
-> be overridden until the shared hold expires; use `cmd("ReleasePort", ... )` to
-> end that hold early. Direct
+> be overridden until an explicit release; use `cmd("ReleasePort", ... )` for
+> one port or `cmd("ReleaseControl", #{target: id})` for the complete vehicle
+> command surface. Direct
 > writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd`
 > for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
@@ -293,7 +294,9 @@ no JSON round-trip on the read or write path.
 > **`set` vs `cmd`.** Use `set`/`set_setting` for host-side tuning through the
 > reflected field surface or the canonical scalar co-simulation port surface.
 > This is a raw write, not a persistent hold; use
-> `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a hold. Direct
+> `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a persistent
+> command intent, and `cmd("ReleaseControl", #{target: id})` to apply the safe
+> state immediately. Direct
 > writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
 > material, anything an observer must react to). Settings are only reachable if

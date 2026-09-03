@@ -960,112 +960,87 @@ pub struct LunCoAvatarPlugin;
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarSceneHandoffSet;
 
-/// Host-only: record that the possessing session now owns the target vessel, so
-/// the authority gate ([`lunco_core::authorize`]) accepts that session's
-/// `SetPorts` control commands (gap G4). Runs for both local-host and wire-applied
-/// possessions; the origin is the wire-apply guard (remote) or the local
-/// session (host's own).
-fn record_possession_authority(
-    trigger: On<PossessVessel>,
-    role: Res<lunco_core::NetworkRole>,
-    guard: Res<lunco_core::SyncApplyGuard>,
-    local: Res<lunco_core::LocalSession>,
-    rbac: Res<lunco_core::session::SessionRbac>,
-    q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
-    q_child_of: Query<&ChildOf>,
-    q_preview_only: Query<(), With<UsdPreviewOnly>>,
-    mut registry: ResMut<lunco_core::SessionRegistry>,
+fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
+    commands.trigger(lunco_cosim::ReleaseControl {
+        target: vessel_entity,
+    });
+}
+
+fn stop_released_vessels(
+    commands: &mut Commands,
+    released: &[u64],
+    q_vessels: &Query<(Entity, &lunco_core::GlobalEntityId)>,
 ) {
-    // Record ownership on the authoritative peer: Host, and also single-player
-    // Standalone (whose authority is local) so the control-authority yield/takeover
-    // works offline. Only a Client defers to the host's table.
-    if matches!(*role, lunco_core::NetworkRole::Client) {
-        return;
-    }
-    let cmd = trigger.event();
-    if !is_vessel_control_endpoint(cmd.target, &q_input_ports, &q_child_of, &q_preview_only) {
-        warn!(target = ?cmd.target, "[auth] possession refused: target exposes no writable input ports");
-        return;
-    }
-    let origin = guard.0.unwrap_or(local.0);
-    if let Ok(gid) = q_gid.get(cmd.target) {
-        // Control-authority takeover (spec 034): if the vessel is currently owned by
-        // a DIFFERENT session, ask the rhai policy
-        // ([`lunco_core::session::CONTROL_AUTHORITY_HOOK`]) whether this possessor may
-        // take it. The rule (e.g. "a human may take from an autopilot; an autopilot
-        // may not take from a human") is authored in rhai, not here. If allowed,
-        // release the prior owner FIRST so the claim below succeeds under the default
-        // Exclusive policy; the released autopilot then loses `owns` and stops
-        // driving on its own. Fails closed (no policy ⇒ no takeover). One vessel per
-        // autopilot session, so releasing that session frees exactly this vessel.
-        // `may_control` is the shared predicate (see its doc): the bind leg
-        // (`on_possess_command`) asks the SAME question, so the two legs cannot
-        // disagree about whether this possession is allowed. Here it decides whether to
-        // evict the current owner; there it decides whether to attach the camera.
-        if let Some(cur) = registry.owner_of(gid.get()) {
-            if cur != origin
-                && lunco_core::session::may_control(&registry, &rbac, origin, gid.get())
-            {
-                registry.release_session(cur);
-                info!(
-                    "[auth] session {origin} took control of entity {} from {cur} (policy allowed)",
-                    gid.get()
-                );
-            }
-        }
-        // One vessel per player. If the new target is claimable (free, or already
-        // ours), drop EVERY vessel this session currently holds before claiming
-        // it — so clicking through rovers swaps control instead of hoarding
-        // ownership and locking every other player out under the Exclusive
-        // policy. Frees are broadcast by `broadcast_ownership`; the prior owner's
-        // client drops its stale bind via `enforce_ownership`. We check
-        // `may_possess` FIRST so a denied claim (vessel owned by someone else)
-        // never costs us the vessel we already hold.
-        if registry.may_possess(origin, gid.get()) {
-            let freed = registry.release_session(origin);
-            let _ = registry.claim(origin, gid.get()); // infallible after may_possess
-            if freed.is_empty() {
-                info!("[auth] session {origin} possesses entity {}", gid.get());
-            } else {
-                info!(
-                    "[auth] session {origin} possesses entity {} (released {} prior vessel(s))",
-                    gid.get(),
-                    freed.len()
-                );
-            }
-        } else {
-            let cur = registry.owner_of(gid.get());
-            warn!(
-                "[auth] entity {} already owned by {cur:?}; {origin} possession denied",
-                gid.get()
-            );
+    for (entity, gid) in q_vessels.iter() {
+        if released.contains(&gid.get()) {
+            trigger_vessel_hard_stop(commands, entity);
         }
     }
 }
 
-/// Host-side: free the releasing session's ownership when a [`ReleaseVessel`]
-/// fires (local host release or a client's wire-applied one). Frees by SESSION
-/// (a player holds one vessel) so it works without resolving the avatar entity
-/// the command carries. The next `broadcast_ownership` propagates the freeing.
-fn release_possession_authority(
-    trigger: On<ReleaseVessel>,
-    role: Res<lunco_core::NetworkRole>,
-    guard: Res<lunco_core::SyncApplyGuard>,
-    local: Res<lunco_core::LocalSession>,
-    mut registry: ResMut<lunco_core::SessionRegistry>,
+fn stop_previous_vessel(
+    commands: &mut Commands,
+    previous: Option<Entity>,
+    released: &[u64],
+    q_owned: &Query<&lunco_core::GlobalEntityId>,
 ) {
-    let _ = trigger;
-    // Authoritative peer (Host or single-player Standalone); a Client defers to the
-    // host. Mirrors `record_possession_authority`.
-    if matches!(*role, lunco_core::NetworkRole::Client) {
-        return;
+    if let Some(entity) = previous {
+        let old_gid = q_owned.get(entity).ok().map(|gid| gid.get());
+        if old_gid.is_none_or(|gid| !released.contains(&gid)) {
+            trigger_vessel_hard_stop(commands, entity);
+        }
     }
-    let origin = guard.0.unwrap_or(local.0);
-    let freed = registry.release_session(origin);
-    if !freed.is_empty() {
-        info!("[auth] session {origin} released {} vessel(s)", freed.len());
+}
+
+/// Commit one possession to the authoritative registry after the command has
+/// validated its endpoint and any requested local binding. The same command
+/// observer owns both this table and the local `ControllerLink` transaction.
+fn commit_possession_authority(
+    commands: &mut Commands,
+    authority: &mut PossessionAuthority,
+    target: Entity,
+) -> Option<Vec<u64>> {
+    let origin = authority.guard.0.unwrap_or(authority.session.0);
+    let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
+    if let Some(gid) = target_gid {
+        if !lunco_core::session::may_control(&authority.registry, &authority.rbac, origin, gid) {
+            info!("[possess] vessel {gid} owned by another session — refused (policy)");
+            return None;
+        }
     }
+
+    // Clients keep the host's table as the authority and only use the shared
+    // predicate above for optimistic local binding.
+    if matches!(*authority.role, lunco_core::NetworkRole::Client) {
+        return Some(Vec::new());
+    }
+
+    let mut released = if let Some(gid) = target_gid {
+        if let Some(current) = authority.registry.owner_of(gid) {
+            if current != origin {
+                let taken = authority.registry.release_session(current);
+                info!("[auth] session {origin} took control of entity {gid} from {current}");
+                taken
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    if let Some(gid) = target_gid {
+        released.extend(authority.registry.release_session_except(origin, gid));
+        if authority.registry.claim(origin, gid).is_err() {
+            warn!("[auth] entity {gid} possession changed during commit; refused");
+            return None;
+        }
+    } else {
+        released.extend(authority.registry.release_session(origin));
+    }
+    stop_released_vessels(commands, &released, &authority.q_vessels);
+    Some(released)
 }
 
 /// Scene-owned USD prims are the identity boundary for vessel claims. Clear
@@ -1091,8 +1066,8 @@ fn clear_scene_possession_claims(
 /// Client-side correction: drop control of any vessel the synced ownership table
 /// no longer attributes to us (we lost a possession race, or the host force-
 /// released us). Keeps "only one owner" true even when an optimistic local bind
-/// raced another client. No-op on host/standalone and while a claim is pending
-/// (owner still `None`).
+/// raced another client. A missing target identity is stale scene state and is
+/// released through the same command path.
 fn enforce_ownership(
     role: Res<lunco_core::NetworkRole>,
     registry: Res<lunco_core::SessionRegistry>,
@@ -1106,12 +1081,11 @@ fn enforce_ownership(
     }
     for (avatar, link) in q_avatar.iter() {
         let Ok(gid) = q_gid.get(link.vessel_entity) else {
+            commands.trigger(ReleaseVessel { target: avatar });
             continue;
         };
-        if let Some(owner) = registry.owner_of(gid.get()) {
-            if owner != session.0 {
-                commands.trigger(ReleaseVessel { target: avatar });
-            }
+        if registry.owner_of(gid.get()) != Some(session.0) {
+            commands.trigger(ReleaseVessel { target: avatar });
         }
     }
 }
@@ -1135,10 +1109,8 @@ impl Plugin for LunCoAvatarPlugin {
         // not here: the tool's closure triggers `CaptureFromCamera`, whose observer is a
         // render-world readback this crate deliberately cannot link.
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
-        // Secondary observers on the SAME verbs — the authority-bookkeeping leg,
-        // not the command handlers (those go through `register_commands!`).
-        app.add_observer(record_possession_authority);
-        app.add_observer(release_possession_authority);
+        // Possession and release commands own both authority bookkeeping and
+        // local binding, so the registry and `ControllerLink` commit together.
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
         // global `Pointer<Click>` observer (egui occlusion handled by the
@@ -4222,20 +4194,58 @@ fn on_release_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_vessels: Query<(Entity, &lunco_core::GlobalEntityId)>,
+    q_owned: Query<&lunco_core::GlobalEntityId>,
     q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
+    role: Res<lunco_core::NetworkRole>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
+    local: Res<lunco_core::LocalSession>,
+    mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
+    let cmd = trigger.event();
+    // A wire-applied release carries the remote client's avatar, which is not a
+    // local camera entity. The same command still owns the host-side release and
+    // hard-stop transaction.
+    if guard.is_from_sync() {
+        if !matches!(*role, lunco_core::NetworkRole::Client) {
+            let origin = guard.0.unwrap_or(local.0);
+            let released = registry.release_session(origin);
+            stop_released_vessels(&mut commands, &released, &q_vessels);
+            if !released.is_empty() {
+                info!(
+                    "[auth] session {origin} released {} vessel(s)",
+                    released.len()
+                );
+            }
+        }
+        return;
+    }
+    // A local release is meaningful only for the authoritative local avatar.
+    // Validate this before freeing the session table so a stale entity cannot
+    // release an otherwise valid possession.
+    if q_avatar.get(cmd.target).is_err() {
+        warn!(target = ?cmd.target, "[release] refused: target is not the local avatar");
+        return;
+    }
+    let released = if matches!(*role, lunco_core::NetworkRole::Client) {
+        Vec::new()
+    } else {
+        let freed = registry.release_session(local.0);
+        stop_released_vessels(&mut commands, &freed, &q_vessels);
+        if !freed.is_empty() {
+            info!(
+                "[auth] session {} released {} vessel(s)",
+                local.0,
+                freed.len()
+            );
+        }
+        freed
+    };
     // The stick goes back to the guidance law — publish it for the UI that
     // shows WHO is flying (the overlay's AUTO/MANUAL badge).
     if let Some(a) = authority.as_mut() {
         a.piloted = false;
-    }
-    // A wire-applied release (a client telling the host it let go) carries that
-    // client's avatar, which is meaningless here — the host frees ownership in
-    // `release_possession_authority`, not by touching a local camera.
-    if guard.is_from_sync() {
-        return;
     }
     // Orbital presentation state is global, but the exact return frame belongs
     // to the avatar and is restored below from `OrbitViewReturn`.
@@ -4244,7 +4254,6 @@ fn on_release_command(
             pin.active = false;
         }
     }
-    let cmd = trigger.event();
     let avatar_ent = cmd.target;
     let (yaw, pitch, opt_vessel, is_surface, local_translation, return_state) = if let Ok((
         mut tf,
@@ -4263,16 +4272,10 @@ fn on_release_command(
         let opt_vessel = link.map(|link| link.vessel_entity);
         if cinematic_lock {
             if let Some(vessel_entity) = opt_vessel {
-                commands.trigger(lunco_cosim::SetPorts {
-                    target: vessel_entity,
-                    writes: vec![
-                        ("throttle".into(), 0.0),
-                        ("steer".into(), 0.0),
-                        ("brake".into(), 1.0),
-                    ],
-                    seq: 0,
-                    tick: 0,
-                });
+                let old_gid = q_owned.get(vessel_entity).ok().map(|gid| gid.get());
+                if old_gid.is_none_or(|gid| !released.contains(&gid)) {
+                    trigger_vessel_hard_stop(&mut commands, vessel_entity);
+                }
             }
             commands.entity(avatar_ent).remove::<ControllerLink>();
             return;
@@ -4332,16 +4335,10 @@ fn on_release_command(
 
     // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
     if let Some(vessel_entity) = opt_vessel {
-        commands.trigger(lunco_cosim::SetPorts {
-            target: vessel_entity,
-            writes: vec![
-                ("throttle".into(), 0.0),
-                ("steer".into(), 0.0),
-                ("brake".into(), 1.0),
-            ],
-            seq: 0,
-            tick: 0,
-        });
+        let old_gid = q_owned.get(vessel_entity).ok().map(|gid| gid.get());
+        if old_gid.is_none_or(|gid| !released.contains(&gid)) {
+            trigger_vessel_hard_stop(&mut commands, vessel_entity);
+        }
     }
 
     // Dropping the `ControllerLink` stops `drive_from_bindings` (the vessel keeps
@@ -4496,7 +4493,23 @@ struct PossessAvatarQueries<'w, 's> {
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
-    controller: Query<'w, 's, (), (With<Avatar>, With<ActionState<UserIntent>>)>,
+    controller: Query<
+        'w,
+        's,
+        Option<&'static ControllerLink>,
+        (With<Avatar>, With<ActionState<UserIntent>>),
+    >,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct PossessionAuthority<'w, 's> {
+    role: Res<'w, lunco_core::NetworkRole>,
+    guard: Res<'w, lunco_core::SyncApplyGuard>,
+    registry: ResMut<'w, lunco_core::SessionRegistry>,
+    rbac: Res<'w, lunco_core::session::SessionRbac>,
+    session: Res<'w, lunco_core::LocalSession>,
+    q_vessels: Query<'w, 's, (Entity, &'static lunco_core::GlobalEntityId)>,
+    q_owned: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
 }
 
 #[on_command(PossessVessel)]
@@ -4518,11 +4531,7 @@ fn on_possess_command(
     q_vessel: Query<(Option<&lunco_core::CameraFollow>, Option<&GravityBody>), Controllable>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
-    guard: Res<lunco_core::SyncApplyGuard>,
-    registry: Res<lunco_core::SessionRegistry>,
-    rbac: Res<lunco_core::session::SessionRbac>,
-    session: Res<lunco_core::LocalSession>,
-    q_owned: Query<&lunco_core::GlobalEntityId>,
+    mut possession_authority: PossessionAuthority,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
     local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -4532,49 +4541,49 @@ fn on_possess_command(
         warn!(target = ?cmd.target, "[possess] refused: target exposes no writable input ports");
         return;
     }
-    // A *remote* possession applied from the wire (host attributing a client's
-    // claim) must NOT bind a local camera — the host has no camera for that
-    // player. Authority is recorded separately by `record_possession_authority`;
-    // here we only do the local camera-bind for our own (non-wire) possessions.
-    if guard.is_from_sync() {
-        return;
-    }
-    // A session has the stick — publish it for the AUTO/MANUAL badge. Set after
-    // the sync guard so a remote player's possession does not relabel OUR view.
-    if let Some(a) = authority.as_mut() {
-        a.piloted = true;
-    }
-    // Possession arbitration — ONE predicate, shared with the authority leg
-    // (`record_possession_authority`). `may_control` = `may_possess` (free / already
-    // ours / `LastWins`) OR an authored takeover of another session's vessel. This
-    // used to call `may_possess` alone, which does NOT know about takeover: it agreed
-    // with the authority leg only because that leg is registered first and had already
-    // rewritten the table. Asking the same question both legs ask removes the ordering
-    // assumption — otherwise a granted takeover could still be refused a camera here,
-    // logging "session N possesses entity" over an empty cockpit.
-    if let Ok(gid) = q_owned.get(cmd.target) {
-        if !lunco_core::session::may_control(&registry, &rbac, session.0, gid.get()) {
-            info!(
-                "[possess] vessel {} owned by another session — refused (policy)",
-                gid.get()
-            );
-            return;
+    // A wire-applied possession records the remote session on the host but
+    // never binds that session to this process's local camera or controller.
+    if possession_authority.guard.is_from_sync() {
+        if !matches!(*possession_authority.role, lunco_core::NetworkRole::Client) {
+            let _ =
+                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target);
         }
+        return;
     }
     // A headless/direct-control possession deliberately has no camera owner.
     // Return before avatar resolution so `bind_camera = false` never performs
     // an implicit lookup.
     if !cmd.bind_camera {
         if let Some(requested) = cmd.avatar {
-            if possession_avatars.controller.contains(requested) {
-                commands.entity(requested).try_insert(ControllerLink {
-                    vessel_entity: cmd.target,
-                });
-            } else {
+            let Some(previous) = possession_avatars.controller.get(requested).ok() else {
                 replace_avatar_diagnostic(
                     &mut diagnostics,
                     Some(controller_avatar_state_error(Some(requested))),
                 );
+                return;
+            };
+            let Some(released) =
+                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+            else {
+                return;
+            };
+            stop_previous_vessel(
+                &mut commands,
+                previous.map(|link| link.vessel_entity),
+                &released,
+                &possession_authority.q_owned,
+            );
+            commands.entity(requested).try_insert(ControllerLink {
+                vessel_entity: cmd.target,
+            });
+            if let Some(a) = authority.as_mut() {
+                a.piloted = true;
+            }
+        } else if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+            .is_some()
+        {
+            if let Some(a) = authority.as_mut() {
+                a.piloted = true;
             }
         }
         return;
@@ -4594,36 +4603,63 @@ fn on_possess_command(
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
     }
-    // Bind the shared semantic controller before the camera query. The camera
-    // may still be between scene/perspective states, but the avatar's intent
-    // source is already valid and must not lose a possession transition.
-    commands.entity(avatar_ent).try_insert(ControllerLink {
-        vessel_entity: cmd.target,
-    });
+    let previous_vessel = possession_avatars
+        .controller
+        .get(avatar_ent)
+        .ok()
+        .flatten()
+        .map(|link| link.vessel_entity);
 
     let Ok((avatar_ent, cam_tf, _child_of, existing_link, cinematic_lock)) =
         possession_avatars.camera.get(avatar_ent)
     else {
         let message = local_avatar_state_error(cmd.avatar);
         warn!(target = ?cmd.target, "[possess] camera bind deferred: {message}");
+        let Some(released) =
+            commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+        else {
+            return;
+        };
+        stop_previous_vessel(
+            &mut commands,
+            previous_vessel,
+            &released,
+            &possession_authority.q_owned,
+        );
+        commands.entity(avatar_ent).try_insert(ControllerLink {
+            vessel_entity: cmd.target,
+        });
+        if let Some(a) = authority.as_mut() {
+            a.piloted = true;
+        }
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
     };
-    replace_avatar_diagnostic(&mut diagnostics, None);
 
     // A possession command may still establish control, but it cannot replace
     // the pose owner of a cinematic camera. The caller must explicitly release
     // the authored camera path before requesting an interactive camera bind.
-    if let Some(link) = existing_link {
-        if link.vessel_entity == cmd.target {
-            return;
-        }
-    }
+    let already_bound = existing_link.is_some_and(|link| link.vessel_entity == cmd.target);
 
-    if cinematic_lock {
+    if already_bound || cinematic_lock {
+        let Some(released) =
+            commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+        else {
+            return;
+        };
+        stop_previous_vessel(
+            &mut commands,
+            previous_vessel,
+            &released,
+            &possession_authority.q_owned,
+        );
         commands.entity(avatar_ent).try_insert(ControllerLink {
             vessel_entity: cmd.target,
         });
+        if let Some(a) = authority.as_mut() {
+            a.piloted = true;
+        }
+        replace_avatar_diagnostic(&mut diagnostics, None);
         return;
     }
 
@@ -4646,6 +4682,25 @@ fn on_possess_command(
         );
         return;
     };
+
+    let Some(released) =
+        commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
+    else {
+        return;
+    };
+    stop_previous_vessel(
+        &mut commands,
+        previous_vessel,
+        &released,
+        &possession_authority.q_owned,
+    );
+    if let Some(a) = authority.as_mut() {
+        a.piloted = true;
+    }
+    commands.entity(avatar_ent).try_insert(ControllerLink {
+        vessel_entity: cmd.target,
+    });
+    replace_avatar_diagnostic(&mut diagnostics, None);
 
     // Camera-follow mode is authored on the vessel's control profile
     // (`lunco_core::CameraFollow`) — that, not any hardcoded marker, decides
@@ -5880,6 +5935,7 @@ mod tests {
     fn possession_binds_controller_during_camera_handoff() {
         let mut app = App::new();
         app.init_resource::<lunco_core::SyncApplyGuard>()
+            .init_resource::<lunco_core::NetworkRole>()
             .init_resource::<lunco_core::SessionRegistry>()
             .init_resource::<lunco_core::session::SessionRbac>()
             .init_resource::<lunco_core::LocalSession>()
@@ -5913,6 +5969,83 @@ mod tests {
                 .vessel_entity,
             rover,
             "control binding must not wait for camera readiness"
+        );
+    }
+
+    #[test]
+    fn possession_validation_precedes_authority_claim() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::SyncApplyGuard>()
+            .init_resource::<lunco_core::NetworkRole>()
+            .init_resource::<lunco_core::SessionRegistry>()
+            .init_resource::<lunco_core::session::SessionRbac>()
+            .init_resource::<lunco_core::LocalSession>()
+            .add_observer(on_possess_command);
+        let target = app
+            .world_mut()
+            .spawn((
+                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_core::GlobalEntityId::from_raw(0xA1),
+            ))
+            .id();
+
+        // No local avatar exists. The endpoint is valid, but the camera-binding
+        // request must fail before it can publish a registry claim.
+        app.world_mut().trigger(PossessVessel {
+            avatar: None,
+            target,
+            bind_camera: true,
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core::SessionRegistry>()
+                .owner_of(0xA1),
+            None,
+            "invalid local binding must not leave an authority claim"
+        );
+    }
+
+    #[test]
+    fn possession_handoff_keeps_one_claim_and_releases_the_old_target() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::SyncApplyGuard>()
+            .init_resource::<lunco_core::NetworkRole>()
+            .init_resource::<lunco_core::SessionRegistry>()
+            .init_resource::<lunco_core::session::SessionRbac>()
+            .init_resource::<lunco_core::LocalSession>()
+            .add_observer(on_possess_command);
+        let first = app
+            .world_mut()
+            .spawn((
+                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_core::GlobalEntityId::from_raw(0xA1),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_core::GlobalEntityId::from_raw(0xB2),
+            ))
+            .id();
+
+        for target in [first, second] {
+            app.world_mut().trigger(PossessVessel {
+                avatar: None,
+                target,
+                bind_camera: false,
+            });
+            app.world_mut().flush();
+        }
+
+        let registry = app.world().resource::<lunco_core::SessionRegistry>();
+        assert_eq!(registry.owner_of(0xA1), None);
+        assert_eq!(
+            registry.owner_of(0xB2),
+            Some(lunco_core::SessionId::LOCAL),
+            "handoff leaves the session owning only the selected target"
         );
     }
 
@@ -6257,6 +6390,9 @@ mod tests {
     fn orbital_release_restores_pose_and_mode_in_one_transition() {
         let mut app = App::new();
         app.init_resource::<lunco_core::SyncApplyGuard>()
+            .init_resource::<lunco_core::NetworkRole>()
+            .init_resource::<lunco_core::LocalSession>()
+            .init_resource::<lunco_core::SessionRegistry>()
             .init_resource::<LocalGravityField>()
             .add_observer(on_release_command);
 

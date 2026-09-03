@@ -885,7 +885,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
 /// the end of a frame's batch so a possession that arrives alongside them is
 /// recorded first (see [`drain_sync_inbox`]).
 fn is_control_command(type_name: &str) -> bool {
-    matches!(type_name, "SetPorts")
+    matches!(type_name, "SetPorts" | "ReleaseControl")
 }
 
 fn is_declared_wire_command(channels: &SyncChannelRegistry, type_name: &str) -> bool {

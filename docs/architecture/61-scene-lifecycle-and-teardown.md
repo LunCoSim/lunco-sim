@@ -176,6 +176,14 @@ by stable `GlobalEntityId` values, so `lunco-avatar` clears claims for outgoing
 replacement scene can therefore reuse deterministic ids without inheriting a
 prior lesson's driver, while non-scene ids remain untouched.
 
+The same boundary clears the fixed `SimTick`, rollback marker, prediction input
+logs, host jitter buffers, applied-input acknowledgements, render-leading drive
+values, simulated intents, and control-path registry. Physics clears its holds
+and queued deliberate-step debt and restores a zero-delta physics clock. These
+are scene-owned control surfaces, not session identity; leaving any of them
+behind would allow a replacement entity or reused global id to receive an old
+command or remain silently held.
+
 It is a **schedule**, not a registry, and that choice is the design:
 
 - Bevy already expresses "run these systems at this lifecycle edge" — that is

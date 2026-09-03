@@ -34,7 +34,7 @@ The substrate **does** have single-owner control — but two things stop it from
 
 ### Prerequisite bug (independent of this spec)
 
-The merge deleted `DriveRover`/`BrakeRover`, but `assets/scripting/prelude/control.rhai` still emitted `cmd("DriveRover", …)` / `cmd("BrakeRover", …)`. Scripted driving was therefore a **no-op**. Fixed alongside this spec: `drive()`/`brake()` now emit `cmd("SetPorts", { target, writes:[["throttle",…],["steer",…],["brake",…]] })`, writing all three command ports every tick (mirroring the keyboard path) so a prior `brake` doesn't stick.
+The merge deleted `DriveRover`/`BrakeRover`, but `assets/scripting/prelude/control.rhai` still emitted `cmd("DriveRover", …)` / `cmd("BrakeRover", …)`. Scripted driving was therefore a **no-op**. Fixed alongside this spec: `drive()` now emits `cmd("SetPorts", { target, writes:[["throttle",…],["steer",…],["brake",…]] })`; those values persist at the receiver until replacement, and `brake()` now emits the shared `ReleaseControl` safe-stop command.
 
 ## 2. Goals / Non-goals
 
@@ -46,7 +46,10 @@ The merge deleted `DriveRover`/`BrakeRover`, but `assets/scripting/prelude/contr
 5. No new control taxonomy: reuse `SessionRegistry`, `authorize`, `AuthorityRole::AiAgent`, `rbac.authorize`, and `SetScriptedPolicy`. (Matches the standing "less Rust / more dynamic registries" direction.)
 
 **Non-goals**
-- Changing `SetPorts`, the authored controller program, or the physics/actuator model. Arbitration is entirely at "which session owns the vessel."
+- Changing the authored controller program or the physics/actuator model. The
+  control receiver's persistent-intent and explicit-release lifecycle is shared
+  by every authority; arbitration remains entirely at "which session owns the
+  vessel."
 - A per-frame arbiter system with holder state / idle grace / expiry (explicitly rejected — that was rev 1).
 - Multi-operator cross-session conflict beyond what possession + `authorize` already give.
 
@@ -155,7 +158,7 @@ One owner ⇒ one writer per tick ⇒ no competing port writes ⇒ no jitter. Di
 
 ## 7. What was built
 
-1. **Prelude:** `control.rhai` `drive()`/`brake()` → `SetPorts`; `nav.rhai` doc. (`drive()` writes throttle/steer/brake=0; `brake()` writes brake only, since the mix zeroes throttle/steer under brake.)
+1. **Prelude:** `control.rhai` `drive()` → `SetPorts`, `brake()` → `ReleaseControl`; `nav.rhai` doc. (`drive()` writes throttle/steer/brake=0; `brake()` applies the complete shared safe state.)
 2. **`lunco-autopilot` crate:** `Autopilot` component; `setup_autopilot_session` registers a reserved `AiAgent` `UserSession` + `claim`s the vessel; `drive_autopilots` emits `SetPorts` while `engaged && owns`. Deps `lunco-core` + `lunco-cosim` only. `AutopilotPlugin` added on the control path in `luncosim` + `lunco-luncosim` (so `--no-ui` runs it).
 3. **Ownership yield:** `drive_from_bindings` skips any vessel owned by a session `≠ LocalSession`. The single `lunco-controller` change; `Option`-guarded.
 4. **Takeover rule in rhai:** `assets/scripting/policy/control_authority.rhai` (`may_take_control`), registered at startup by `lunco-scripting::register_builtin_policies` under `CONTROL_AUTHORITY_HOOK`; consulted by `record_possession_authority` via `lunco_core::session::may_take_control` (fail-closed). No hardcoded steal rule in Rust; hot-replaceable via `SetScriptedPolicy`.
@@ -177,12 +180,11 @@ One owner ⇒ one writer per tick ⇒ no competing port writes ⇒ no jitter. Di
 ## 10. Addendum (2026-07-11): idle-yield for same-session scripted drive
 
 The ownership yield (§7.3) covers an **autopilot actor** (its own `AiAgent`
-session owns the vessel). It does NOT cover the tutorial/scenario pattern where
+session owns the vessel). It also covers the tutorial/scenario pattern where
 a plain rhai script (same session as the human) drives a vessel the human
-possesses: `drive_from_bindings` wrote every bound port as **0 every tick**
-while idle, so the script's `SetPorts` survived at most one tick — scripted
-drive of a possessed vessel was effectively dead (found via `drive-diag`:
-throttle reached `apply_wheel_drive` 1 tick in ~8700).
+possesses: the keyboard producer emits only while an intent is active and once
+on the active→idle edge, so it does not overwrite a persistent scripted
+setpoint on silent ticks.
 
 **Fix (idle-yield, in `drive_from_bindings`):** the keyboard writes only while
 a bound intent is actually held, plus exactly ONE all-zero batch on the

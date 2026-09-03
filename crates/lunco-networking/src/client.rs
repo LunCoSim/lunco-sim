@@ -327,7 +327,17 @@ fn on_client_disconnected(
     _trigger: On<Add, Disconnected>,
     mut local: ResMut<LocalSession>,
     mut status: ResMut<NetStatus>,
+    holds: Option<Res<lunco_cosim::PortHolds>>,
+    mut commands: Commands,
 ) {
+    if let Some(holds) = holds {
+        for entity in holds.held_entities() {
+            // The disconnected client cannot issue its normal ReleaseVessel path.
+            // Clear predicted/local intents now so reconnecting or re-possession
+            // cannot inherit an abandoned command surface.
+            commands.trigger(lunco_cosim::ReleaseControl { target: entity });
+        }
+    }
     local.0 = SessionId::LOCAL;
     // Deliberately KEEP role == Client (and the Disconnected Client entity + the
     // status endpoint) on an *involuntary* drop. The host-loss quiescence path

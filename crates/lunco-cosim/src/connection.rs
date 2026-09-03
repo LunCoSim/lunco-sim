@@ -93,7 +93,7 @@ impl Default for SimConnection {
     }
 }
 
-/// Manual setpoints that OUTRANK the wiring fabric, until they expire.
+/// Manual setpoints that OUTRANK the wiring fabric, until explicitly released.
 ///
 /// # Why a hold, and not just a write
 ///
@@ -109,20 +109,15 @@ impl Default for SimConnection {
 /// is live. The accumulator itself is untouched — a hold suppresses a wire, it
 /// does not corrupt the sum feeding other targets.
 ///
-/// # Why it expires
-///
-/// An indefinite hold is a scene that silently stops responding to its own
-/// wiring, and the only way back is a caller that remembers to release. A
-/// deadline makes the default outcome *recovery*: a script that crashes, an API
-/// client that disconnects, a test that forgets to clean up all end with the
-/// vehicle back under its own control. [`DEFAULT_HOLD_SECS`] is the timeout when
-/// a caller does not state one; `release` ends it early, and re-setting the same
-/// port extends it (latest-wins, so a 10 Hz stream of setpoints simply keeps its
-/// hold alive).
+/// A control intent is a level, not a pulse. It remains the latest value until
+/// the owner explicitly releases that port or the lifecycle boundary clears the
+/// vehicle. Re-setting the same port is latest-wins. This makes a single command
+/// deterministic across fixed ticks and lets a controller release all of its
+/// related ports atomically through the shared safe-stop command.
 #[derive(Resource, Debug, Default)]
 pub struct PortHolds {
-    /// `(entity, port) → (value, expiry on the REAL clock)`.
-    holds: std::collections::HashMap<(Entity, String), (f64, f64)>,
+    /// `(entity, port) → latest commanded value`.
+    holds: std::collections::HashMap<(Entity, String), f64>,
 }
 
 /// A one-fixed-tick lifecycle fence for deferred control writes.
@@ -158,17 +153,10 @@ pub fn clear_control_write_fence(mut fence: ResMut<ControlWriteFence>) {
     fence.clear();
 }
 
-/// How long a hold lasts when the caller does not say.
-///
-/// Long enough to drive interactively at human rates (a slider, a keypress
-/// repeat, a 1 Hz script) and short enough that an abandoned hold is a hiccup
-/// rather than a stuck vehicle.
-pub const DEFAULT_HOLD_SECS: f64 = 2.0;
-
 impl PortHolds {
-    /// Hold `port` on `entity` at `value` until `now + secs`.
-    pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64, until: f64) {
-        self.holds.insert((entity, port.into()), (value, until));
+    /// Set the persistent intent for `port` on `entity`.
+    pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64) {
+        self.holds.insert((entity, port.into()), value);
     }
 
     /// End a hold early. `true` if one was live.
@@ -176,16 +164,38 @@ impl PortHolds {
         self.holds.remove(&(entity, port.to_string())).is_some()
     }
 
-    /// Drop everything that has expired. Called once per propagation tick.
-    pub fn expire(&mut self, now: f64) {
-        self.holds.retain(|_, (_, until)| *until > now);
+    /// Release every persisted intent addressed to `entity`.
+    pub fn clear_entity(&mut self, entity: Entity) {
+        self.holds
+            .retain(|(held_entity, _), _| *held_entity != entity);
+    }
+
+    /// Return the names of every persisted intent addressed to `entity`.
+    pub fn entity_port_names(&self, entity: Entity) -> Vec<String> {
+        self.holds
+            .keys()
+            .filter(|(held_entity, _)| *held_entity == entity)
+            .map(|(_, name)| name.clone())
+            .collect()
+    }
+
+    /// Return every entity with at least one persisted control intent.
+    pub fn held_entities(&self) -> Vec<Entity> {
+        let mut entities = self
+            .holds
+            .keys()
+            .map(|(entity, _)| *entity)
+            .collect::<Vec<_>>();
+        entities.sort_by_key(|entity| entity.to_bits());
+        entities.dedup();
+        entities
     }
 
     /// The live holds, for the propagation master's per-target lookup.
     pub fn snapshot(&self) -> std::collections::HashMap<(Entity, String), f64> {
         self.holds
             .iter()
-            .map(|(key, (value, _))| (key.clone(), *value))
+            .map(|(key, value)| (key.clone(), *value))
             .collect()
     }
 

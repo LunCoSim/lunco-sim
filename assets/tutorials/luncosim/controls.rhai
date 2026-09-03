@@ -37,7 +37,7 @@ fn authority_possess(me) {
 }
 
 fn authority_release(me) {
-    cmd("ReleaseVessel", #{ target: find("/FirstDrive/Rover") })
+    cmd("ReleaseVessel", #{ target: find("/FirstDrive/Avatar") })
 }
 
 fn on_start(me) {

@@ -792,6 +792,43 @@ pub fn apply_physics_holds(
     }
 }
 
+/// Enforce a user transport pause at the last boundary before Avian's solver.
+///
+/// `SetTimeTransport` can be triggered from `FixedUpdate`, after
+/// `apply_physics_holds` has already run for the frame. The virtual clock is the
+/// authoritative whole-simulation pause projection; mirror that state here so
+/// Avian cannot integrate the fixed iteration that follows the acknowledgement.
+/// Physics holds and coupling barriers remain owned by `apply_physics_holds` and
+/// are never released by this transport-only check.
+pub fn apply_transport_pause_before_physics(
+    virtual_time: Option<Res<Time<Virtual>>>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
+) {
+    if virtual_time.is_some_and(|time| time.is_paused()) {
+        if let Some(mut physics_time) = physics_time.take() {
+            physics_time.pause();
+            physics_time.advance_by(Duration::ZERO);
+        }
+    }
+}
+
+/// Clear all scene-owned physics admission state before the outgoing entities
+/// are reclaimed. The replacement scene rebuilds its readiness/hold decisions
+/// from its own authored and runtime state; carrying a hold or a queued step
+/// across that boundary can either freeze the new scene or admit stale motion.
+fn reset_scene_physics_state(
+    mut holds: ResMut<PhysicsHolds>,
+    mut steps: ResMut<PhysicsStepRequest>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
+) {
+    *holds = PhysicsHolds::default();
+    steps.clear();
+    if let Some(mut physics_time) = physics_time.take() {
+        physics_time.unpause();
+        physics_time.advance_by(Duration::ZERO);
+    }
+}
+
 /// Release exactly one queued [`PhysicsStepRequest`] frame through a hold.
 ///
 /// Runs in `FixedPreUpdate`, **inside** the fixed loop — the same clock domain that
@@ -1181,9 +1218,15 @@ impl Plugin for PhysicsGatePlugin {
             .init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsStepRequest>()
             .add_systems(PreUpdate, apply_physics_holds)
+            .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
             // so a granted step coincides with a step that actually runs.
             .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
+            .add_systems(
+                bevy::prelude::FixedPostUpdate,
+                apply_transport_pause_before_physics
+                    .before(avian3d::prelude::PhysicsSystems::StepSimulation),
+            )
             .add_systems(
                 avian3d::prelude::SubstepSchedule,
                 solve_contact_prismatic_joint
@@ -1594,6 +1637,48 @@ mod tests {
             .set(PhysicsHolds::TERRAIN_READY, false);
         world.run_system_once(apply_physics_holds).unwrap();
         assert!(!world.resource::<Time<Physics>>().is_paused());
+    }
+
+    #[test]
+    fn transport_pause_reaches_physics_before_the_solver_boundary() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(Time::<Physics>::default());
+        world
+            .resource_mut::<Time<Physics>>()
+            .advance_by(Duration::from_millis(16));
+        world.resource_mut::<Time<Virtual>>().pause();
+
+        world
+            .run_system_once(apply_transport_pause_before_physics)
+            .unwrap();
+
+        assert!(world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
+    }
+
+    #[test]
+    fn scene_teardown_clears_physics_holds_and_step_debt() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
+        world.insert_resource(Time::<Physics>::default());
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::CINEMATIC, true);
+        world.resource_mut::<PhysicsStepRequest>().request(4);
+        world.resource_mut::<Time<Physics>>().pause();
+
+        world.run_system_once(reset_scene_physics_state).unwrap();
+
+        assert!(!world.resource::<PhysicsHolds>().is_held());
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+        assert!(!world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
     }
 
     /// A kinematic drive is an interface-clock operation: it updates the Avian

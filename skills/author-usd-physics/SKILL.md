@@ -316,6 +316,13 @@ Which disposition is right depends on who owns the value:
 `SceneTeardown` grep-lists everything a reload restores. If you add
 scene-derived state and do not register it, you have added a leak.
 
+The shared physics owner clears `PhysicsHolds` and `PhysicsStepRequest` and
+restores a zero-delta `Time<Physics>` at this boundary. The time owner clears
+fixed overstep during reset, and the controller/core owners clear scene-keyed
+input and control-path state. Do not add an asset-local pause flag or carry
+step debt into the replacement scene; readiness and deliberate stepping must be
+re-authored by the incoming scene.
+
 ## 5. Reading the failure modes
 
 | Symptom | Look at |

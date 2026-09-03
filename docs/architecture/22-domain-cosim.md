@@ -246,7 +246,7 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 |---|---|---|
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
-| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied through the shared port command observer. The reflected command is the same path for API, Rhai, UI, and network input. |
+| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied through the shared port command observer. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; the reflected command is the same path for API, Rhai, UI, and network input. |
 | **Modelica input injection** — discrete | `SetModelInput` | the reflected Modelica command, registered by the UI-free Modelica core and applied through the shared input helper. |
 
 Rule of thumb: **commands start/stop/configure a run and one-shot actions;

@@ -281,6 +281,24 @@ impl SessionRegistry {
         freed
     }
 
+    /// Free every entity a session held except `keep_gid`.
+    ///
+    /// Possession is a single active authority per session. A handoff must
+    /// therefore release the old claims before retaining the selected target;
+    /// keeping the target in the table makes the operation idempotent when the
+    /// session clicks the already-possessed vessel again.
+    pub fn release_session_except(&mut self, session: SessionId, keep_gid: u64) -> Vec<u64> {
+        let freed: Vec<u64> = self
+            .owners
+            .iter()
+            .filter_map(|(&gid, &s)| (s == session && gid != keep_gid).then_some(gid))
+            .collect();
+        for gid in &freed {
+            self.owners.remove(gid);
+        }
+        freed
+    }
+
     /// Snapshot the full `(gid, session)` table — the host broadcasts this so
     /// clients hold the same authoritative ownership view.
     pub fn snapshot(&self) -> Vec<(u64, u64)> {
@@ -1216,26 +1234,20 @@ pub fn authorize_policy(
 }
 
 /// **The** answer to "may `session` take control of `gid` right now?" — the single
-/// predicate the whole possession path must ask.
+/// predicate the possession command must ask before it mutates authority.
 ///
 /// It is [`SessionRegistry::may_possess`] (free, or already ours, or `LastWins`) OR an
 /// authored takeover of a *different* session's vessel via [`may_take_control`]. Both
 /// halves are the rule; either alone is not.
 ///
-/// WHY THIS EXISTS: `PossessVessel` is handled by two observers — the authority leg
-/// (`record_possession_authority`, which claims/takes over) and the bind leg
-/// (`on_possess_command`, which attaches the camera + `ControllerLink`). They each used
-/// to decide possession for themselves, and only the authority leg knew about takeover.
-/// They agreed *only* because the authority leg happens to be registered first, so the
-/// bind leg re-derived its answer from an already-updated table. Registered the other way
-/// round, the bind leg would refuse a takeover the authority leg had just granted: the log
-/// would say "session N possesses entity" while the cockpit stayed empty and the vessel
-/// undrivable — a silent, order-dependent split-brain. One predicate, both legs, no
-/// ordering assumption.
+/// The possession command owns both semantic binding and authority mutation. It asks
+/// this predicate before claiming a vessel, so a policy-approved takeover cannot leave
+/// the authority table and the local `ControllerLink` in different states.
 ///
 /// Deliberately permissive on an *unknown* vessel (no owner recorded): a client's table is
 /// a replicated copy that can lag its own claim, and single-player's is empty until the
-/// authority leg runs. Refusing there would block the local bind waiting for a round trip.
+/// possession command commits it. Refusing there would block the local bind waiting for
+/// a round trip.
 pub fn may_control(
     registry: &SessionRegistry,
     rbac: &SessionRbac,
@@ -1327,16 +1339,14 @@ mod tests {
         }
     }
 
-    /// `may_control` is the ONE predicate both `PossessVessel` legs ask, so it must
-    /// agree with `may_possess` on the easy cases and additionally honour takeover.
+    /// `may_control` is the ONE predicate the `PossessVessel` command asks, so it
+    /// must agree with `may_possess` on the easy cases and additionally honour takeover.
     ///
-    /// The bug it guards: the bind leg used to call `may_possess` alone, which refuses
-    /// ANY vessel another session owns, while the authority leg granted takeovers via
-    /// the rhai policy. They agreed only by registration order. If the bind leg says no
-    /// to a takeover the authority leg said yes to, you get authority with no camera —
-    /// the log reads "session N possesses entity" and the cockpit is empty.
+    /// The regression it guards is that an authority decision and a local bind could
+    /// disagree about a policy-approved takeover, leaving a claimed vessel without a
+    /// camera or semantic controller.
     #[test]
-    fn may_control_agrees_with_the_authority_leg_on_a_policy_takeover() {
+    fn may_control_allows_a_policy_approved_takeover() {
         let _g = hook_lock();
         let (reg, rbac, _) = owner_of_r1();
 
@@ -1356,7 +1366,7 @@ mod tests {
         );
 
         // With a policy that ALLOWS the takeover, may_control must say yes — this is
-        // exactly where the old `may_possess`-only bind leg said no and split the brain.
+        // the decision the possession command now commits atomically with its bind.
         struct AllowTakeover;
         impl lunco_hooks::ScriptHook for AllowTakeover {
             fn invoke(&self, _args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
@@ -1819,6 +1829,22 @@ mod tests {
         assert_eq!(reg.owner_of(0xC3), Some(B)); // B untouched
                                                  // Freed vessel is now claimable by anyone, even under Exclusive.
         assert!(reg.claim(B, R1).is_ok());
+    }
+
+    #[test]
+    fn release_session_except_keeps_the_handoff_target() {
+        let mut reg = SessionRegistry::default();
+        reg.claim(A, R1).unwrap();
+        reg.claim(A, R2).unwrap();
+        reg.claim(B, 0xC3).unwrap();
+
+        let mut freed = reg.release_session_except(A, R2);
+        freed.sort_unstable();
+        assert_eq!(freed, vec![R1]);
+        assert_eq!(reg.owner_of(R1), None);
+        assert_eq!(reg.owner_of(R2), Some(A));
+        assert_eq!(reg.owner_of(0xC3), Some(B));
+        assert!(reg.claim(A, R2).is_ok(), "keeping the target is idempotent");
     }
 
     #[test]

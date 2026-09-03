@@ -166,6 +166,13 @@ Scene replacement clears possession claims for outgoing USD prims at the shared
 replacement projection may reuse an id without inheriting the previous scene's
 driver; persistent non-scene ids are not cleared by that sweep.
 
+`PossessVessel` and `ReleaseVessel` are the single owner of the possession transaction:
+they validate the endpoint and local binding before changing `SessionRegistry` or
+`ControllerLink`. A handoff releases prior claims for that session (except the selected
+target) and hard-stops each released vessel; release hard-stops the current vessel before
+restoring free flight. Wire-applied commands update host authority only and never bind a
+remote session to the local camera.
+
 ### Autopilots must drive like humans
 
 An autopilot is only a different policy. It must acquire authority with

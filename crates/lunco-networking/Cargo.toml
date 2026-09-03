@@ -47,8 +47,8 @@ lunco-core = { path = "../lunco-core" }
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-luncosim's own default features.
 lunco-api = { path = "../lunco-api", default-features = false }
-# The ONE generic vessel-control command `SetPorts` lives here; the wire declares
-# a channel for it (replacing the old rover drive/brake command pair).
+# The generic vessel-control commands `SetPorts` and `ReleaseControl` live here;
+# the wire declares channels for them (replacing the old rover drive/brake pair).
 lunco-cosim = { path = "../lunco-cosim" }
 # Prediction probes use the same solver-resolution owner as luncosim; they must
 # not carry a second hard-coded substep contract.

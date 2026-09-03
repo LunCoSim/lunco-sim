@@ -516,18 +516,14 @@ impl InputPorts {
     }
 
     /// Move the logical command surface to its safe state without inventing
-    /// undeclared ports. This is the input half of [`safe_stop_control_surface`].
+    /// undeclared ports. Braking is a rover-specific convention; every other
+    /// declared command is neutralized so lander thrust/attitude and RCS
+    /// commands cannot survive a release.
     pub fn safe_stop(&mut self) {
-        if let Some(throttle) = self.values.get_mut("throttle") {
-            *throttle = 0.0;
+        for (name, value) in &mut self.values {
+            *value = if name == "brake" { 1.0 } else { 0.0 };
         }
-        if let Some(steer) = self.values.get_mut("steer") {
-            *steer = 0.0;
-        }
-        if let Some(brake) = self.values.get_mut("brake") {
-            *brake = 1.0;
-            self.brake_active = true;
-        }
+        self.brake_active = self.values.get("brake").is_some_and(|v| *v > 0.5);
     }
 }
 
