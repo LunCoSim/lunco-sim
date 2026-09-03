@@ -130,7 +130,8 @@ fn target_report_key(world: &World, target: &CompiledTarget) -> String {
     format!("target:{identity}:{}", target.name)
 }
 
-/// One algebraic loop found at compile time, spanning at least two participants.
+/// One force-producing feedback cycle found at compile time, spanning at least
+/// two participants.
 #[derive(Clone)]
 struct DetectedLoop {
     entity: Entity,
@@ -240,23 +241,24 @@ impl CompiledWiring {
                 .then_with(|| a.src_port.cmp(&b.src_port))
                 .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
         });
-        self.detect_algebraic_loops(world);
+        self.detect_force_feedback_loops(world);
     }
 
     /// Find force-producing feedback SCCs over the explicit causal wire graph.
     ///
     /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
     /// a cycle costs one fixed step of delay, and nothing iterates the loop to
-    /// convergence. That 1-step-delay behaviour is the documented contract and
-    /// is NOT changed here — a detected loop is published as a topology
-    /// diagnostic so the otherwise invisible coupling error is diagnosable,
-    /// without pretending that any endpoint is missing a port.
+    /// convergence. That 1-step-delay behaviour is the documented contract for
+    /// this causal fabric. A causal cycle that does not reach a force or torque
+    /// input is therefore ordinary dynamic feedback, not an unresolved
+    /// algebraic loop and not a diagnostic. Only force-producing cycles need a
+    /// topology entry for the client-prediction safety decision below.
     ///
     /// Single-entity self-wires (`netForce`→`force_y` on ONE entity — the
     /// balloon pattern, an engine exchanging with its own body) are the intended
     /// single-participant co-sim shape and are excluded: a reported cycle must
     /// span ≥ 2 participants (an SCC of ≥ 2 nodes, via iterative Tarjan).
-    fn detect_algebraic_loops(&mut self, world: &World) {
+    fn detect_force_feedback_loops(&mut self, world: &World) {
         self.loops.clear();
 
         // Participant graph. Self-edges dropped (see doc above).
@@ -408,6 +410,9 @@ impl CompiledWiring {
                 && programs
                     .iter()
                     .all(|program| world.get::<RealtimeSafe>(*program).is_some());
+            if !force_producing {
+                continue;
+            }
             self.loops.push(DetectedLoop {
                 entity,
                 global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
@@ -498,10 +503,9 @@ pub fn propagate_connections(
             }
         }
 
-        // Algebraic loops describe the current fabric. Keep them in their own
-        // diagnostic collection: they are topology facts, not missing-port
-        // faults, and therefore must not make a scenario fail the
-        // never-landed connection gate.
+        // Force-producing feedback cycles describe a client-prediction safety
+        // decision. Ordinary causal cycles are valid dynamic feedback and are
+        // intentionally absent from this collection.
         let loops = compiled
             .loops
             .iter()
@@ -1162,12 +1166,11 @@ mod wire_order_tests {
             .collect()
     }
 
-    /// M6: a feedthrough cycle spanning two participants is an algebraic loop —
-    /// the single-pass ZOH master cannot iterate it to convergence — and must
-    /// publish exactly ONE topology diagnostic, naming the wires on it, while
-    /// leaving the missing-port ledger empty.
+    /// A cycle spanning two explicit causal participants is dynamic feedback.
+    /// The single-pass ZOH exchange gives it the documented step semantics, so
+    /// it must not be reported as an unresolved algebraic loop.
     #[test]
-    fn a_two_entity_feedthrough_loop_is_recorded_as_one_topology_diagnostic() {
+    fn a_two_entity_causal_feedback_loop_is_not_an_algebraic_diagnostic() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -1186,7 +1189,10 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         let loops = loop_diagnostics(&world);
-        assert_eq!(loops.len(), 1, "one loop, one diagnostic: {loops:?}");
+        assert!(
+            loops.is_empty(),
+            "ordinary causal feedback is not an algebraic diagnostic: {loops:?}"
+        );
         assert!(
             world
                 .resource::<crate::diagnostics::CosimDiagnostics>()
@@ -1194,13 +1200,7 @@ mod wire_order_tests {
                 .is_empty(),
             "a topology loop is not a missing-port fault"
         );
-        assert!(
-            loops[0].contains("out") && loops[0].contains("in"),
-            "the entry names the ports on the loop: {}",
-            loops[0]
-        );
-
-        // Removing the back-edge dissolves the loop; the rebuild retracts it.
+        // Removing the back-edge keeps the causal fabric clean after rebuild.
         let conns: Vec<Entity> = {
             let mut q = world.query_filtered::<Entity, With<SimConnection>>();
             q.iter(&world).collect()
@@ -1209,7 +1209,7 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
         assert!(
             loop_diagnostics(&world).is_empty(),
-            "a loop entry is a fact about the current fabric — retracted on rewire"
+            "removing the back-edge keeps the causal fabric clean"
         );
     }
 

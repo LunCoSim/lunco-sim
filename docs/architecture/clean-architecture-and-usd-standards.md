@@ -173,11 +173,12 @@ The generated network must be:
 - compiled and contract-checked before the surrounding USD graph is marked ready.
 
 Keep acausal physical conservation and continuous equations inside Modelica.
-Use causal USD connections for cross-domain signals. If separately compiled
-components form an algebraic cycle, the runtime must report the explicit
-co-simulation delay. Do not hide it in Rhai or suppress the warning. If the
-mission requires zero-delay continuous feedback, synthesize one Modelica island
-and solve it as one system.
+Use causal USD connections for cross-domain signals. A cycle between separate
+causal participants is valid fixed-step dynamic feedback, not an unresolved
+algebraic equation; it must not be reported as an algebraic-loop warning. Do
+not hide a true acausal connection in Rhai or the causal fabric. If the mission
+requires zero-delay continuous feedback, synthesize one Modelica island and
+solve it as one system.
 
 ## 7. Verification and handoff
 
