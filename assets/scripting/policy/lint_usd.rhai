@@ -75,12 +75,13 @@
 //       the authoritative fixed-step contract used by the physics owner.
 //
 //   facts.drives[]  #{ path, joint_type, body0, body1, realization,
-//                      stiffness, damping, max_force, driven_mass,
+//                      stiffness, damping, max_force, generalized_inertia,
 //                      frequency, damping_ratio }
 //       semantic drive facts produced by the same typed USD→Avian reader as
 //       runtime projection. `realization` is `spring_damper`, `force_based`,
-//       or `acceleration_based`; it is not inferred from the raw schema in
-//       policy.
+//       `acceleration_based`, `derived`, or `invalid`; it is not inferred from
+//       the raw schema in policy. `derived` means Avian will obtain the
+//       generalized inertia from the composed body's computed mass properties.
 //
 //   facts.gear_drives[]  #{ path, valid, realization, ratio, rest_offset,
 //                           target_velocity, stiffness, damping, max_force }
@@ -273,13 +274,13 @@ fn telemetry_target_missing_finding(path) {
     )
 }
 
-/// Avian's `ForceBased` and `AccelerationBased` spring realizations are
-/// timestep- and effective-mass-dependent. They are not the production
-/// stability contract at the authoritative fixed step. A force drive with no
-/// authored driven mass is exactly the path that caused the native reproduction
-/// fixtures to fail when run at insufficient resolution. Avian's owning mapping
-/// explicitly permits a positive pure ForceBased damper; it has no positional
-/// stiffness to make the spring realization conditional.
+/// A stiffness-bearing USD force drive is lowered to Avian's implicit
+/// `SpringDamper` model. If USD does not author mass/inertia explicitly, the
+/// bridge derives the generalized inertia from Avian's computed body properties
+/// after colliders and density have been composed. That omission is valid USD
+/// authoring and is not a lint error. Avian's `AccelerationBased` spring
+/// realization remains timestep- and effective-mass-dependent, so it is still
+/// not the production stability contract at the authoritative fixed step.
 ///
 /// The fact producer has already resolved USD units, defaults, and the actual
 /// Avian realization. Rhai only applies the authoring policy here; it does not
@@ -293,7 +294,7 @@ fn conditionally_stable_joint_drive(facts) {
         if drive.stiffness < 0.0 {
             let m = "has negative stiffness=";
             m += drive.stiffness;
-            m += " — a negative spring coefficient injects energy and cannot be converted to an implicit SpringDamper. Set stiffness >= 0; adding driven mass does not fix this parameter.";
+            m += " — a negative spring coefficient injects energy and cannot be converted to an implicit SpringDamper. Set stiffness >= 0; adding mass or inertia does not fix this parameter.";
             out.push(finding("joint-drive-negative-stiffness", "error", drive.path, m));
             continue;
         }
@@ -308,6 +309,12 @@ fn conditionally_stable_joint_drive(facts) {
             continue;
         }
 
+        // `derived` is the normal OpenUSD/Avian path when mass properties are
+        // omitted and the attached body geometry can supply them. It is already
+        // the same implicit SpringDamper realization at runtime, so no policy
+        // finding is needed here.
+        if drive.realization == "derived" { continue; }
+
         if drive.damping < 0.0 {
             let m = "has negative damping=";
             m += drive.damping;
@@ -318,8 +325,9 @@ fn conditionally_stable_joint_drive(facts) {
             continue;
         }
 
-        // The USD→Avian owner documents a positive pure ForceBased damper as
-        // safe. Do not turn that documented semantic into a false positive.
+        // A pure ForceBased damper has no stiffness-bearing spring to lower;
+        // it remains the exact USD force law because Avian has no implicit
+        // damping-only motor model.
         if drive.realization == "force_based" && drive.stiffness == 0.0 { continue; }
 
         let m = "uses Avian's ";
@@ -334,7 +342,7 @@ fn conditionally_stable_joint_drive(facts) {
         m += facts.stage.physics_substeps;
         m += " substeps (dt=";
         m += facts.stage.substep_dt;
-        m += " s). This path is conditionally stable and the assembled effective mass/inertia is not certified by the authored facts; it can overshoot, oscillate, or diverge. Use the implicit SpringDamper realization through the authoritative USD→Avian mapping. For a linear force drive, author a valid positive driven mass so that mapping can perform the conversion; adding mass to an angular drive is not a valid substitute for an implicit angular realization. Do not raise substeps to mask this finding.";
+        m += " s). This path is conditionally stable and the assembled effective mass/inertia is not certified by the authored facts; it can overshoot, oscillate, or diverge. Author valid mass properties on the driven body and, for angular drives, a usable diagonal inertia/principal-axis tensor. The authoritative USD→Avian mapping will then lower the force drive to the implicit SpringDamper realization. Do not raise substeps to mask this finding.";
         out.push(finding("conditionally-stable-joint-drive", "error", drive.path, m));
     }
     out

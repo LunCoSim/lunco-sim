@@ -135,13 +135,6 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
-            .any(|e| e.contains("conditionally-stable-joint-drive")
-                && e.contains("/LintSelftest/Leg/Strut_Spring")),
-        "lint_selftest.usda must reject the un-massed conditional drive through the same ValidateAsset path — got {lint_errors:?}"
-    );
-    assert!(
-        lint_errors
-            .iter()
             .any(|e| e.contains("joint-drive-negative-stiffness")
                 && e.contains("/LintSelftest/Leg/Strut_NegativeStiffness")),
         "lint_selftest.usda must reject negative stiffness with its dedicated finding — got {lint_errors:?}"
@@ -233,65 +226,7 @@ fn massed_linear_force_drives_are_not_false_positive_lint_errors() {
         .collect();
     assert!(
         conditional.is_empty(),
-        "massed linear force drives must resolve to the implicit SpringDamper path, not lint errors: {conditional:?}"
-    );
-}
-
-#[test]
-fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
-    use lunco_hooks::HookValue as H;
-
-    register_usd_lint_policy();
-    let empty = || H::Array(Vec::new());
-    let facts = H::map([
-        (
-            "stage",
-            H::map([
-                ("meters_per_unit_authored", H::Bool(true)),
-                ("fixed_hz", H::Float(60.0)),
-                (
-                    "physics_substeps",
-                    H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
-                ),
-                (
-                    "substep_dt",
-                    H::Float(
-                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
-                    ),
-                ),
-            ]),
-        ),
-        ("bodies", empty()),
-        ("joints", empty()),
-        ("prims", empty()),
-        ("collections", empty()),
-        ("filtered_pairs", empty()),
-        ("collision_groups", empty()),
-        ("network_roots", empty()),
-        ("collision_enabled_without_api", empty()),
-        ("unsupported_program_prims", empty()),
-        ("connector_programs", empty()),
-        (
-            "drives",
-            H::Array(vec![H::map([
-                ("path", H::str("/Rig/Damper")),
-                ("realization", H::str("force_based")),
-                ("stiffness", H::Float(0.0)),
-                ("damping", H::Float(10.0)),
-                ("damping_ratio", H::Float(0.0)),
-            ])]),
-        ),
-        ("gear_drives", empty()),
-        ("wheel_attachments", empty()),
-        ("invalid_wheel_attachments", empty()),
-    ]);
-
-    let findings = lunco_lint::run_lint("usd", facts);
-    assert!(
-        findings
-            .iter()
-            .all(|finding| finding.rule != "conditionally-stable-joint-drive"),
-        "the documented positive pure ForceBased damper must not be rejected: {findings:?}"
+        "massed linear force drives must resolve to the implicit SpringDamper path, not conditional-stability lint errors: {conditional:?}"
     );
 }
 

@@ -103,49 +103,41 @@ def Xform "Drivetrain" (
         float drive:linear:physics:maxForce = 12000.0
     }
 
-    # Each wheel is bound to its carrier by a `PhysicsRevoluteJoint` with a
-    # `PhysicsDriveAPI:angular` declaration. The runtime wheel actuator consumes
-    # the solved shaft torque at this authored joint boundary.
+    # Each wheel is bound to its carrier by a plain `PhysicsRevoluteJoint`.
+    # It deliberately has no `PhysicsDriveAPI:angular`: the wheel motor is the
+    # authored Modelica/vehicle actuator on the wheel's drive ports, and the
+    # runtime wheel projector applies that shaft torque at this joint boundary.
+    # Applying a drive API with only schema-default coefficients would create a
+    # second, inactive actuator surface and falsely suggest that the wheel is
+    # driven by a joint position target.
     #
     # The joints DELIBERATELY omit `physics:localPos0`/`localPos1`: each wheel's
     # placement is the rover's own `Suspension_*.xformOp:translate`, and the avian joint
     # reader DERIVES the anchor from that (body1's origin in body0's frame, anchor on
     # body1 = origin) — so the position is authored once, not typed twice and left to
     # drift. Author a `localPos0` on a joint to override the derivation.
-    def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
+    def PhysicsRevoluteJoint "Wheel_FL_Hinge"
     {
         rel physics:body0 = </Drivetrain/Suspension_FL>
         rel physics:body1 = </Drivetrain/Suspension_FL/Wheel_FL>
         uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
     }
-    def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
+    def PhysicsRevoluteJoint "Wheel_FR_Hinge"
     {
         rel physics:body0 = </Drivetrain/Suspension_FR>
         rel physics:body1 = </Drivetrain/Suspension_FR/Wheel_FR>
         uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
     }
-    def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
+    def PhysicsRevoluteJoint "Wheel_RL_Hinge"
     {
         rel physics:body0 = </Drivetrain/Suspension_RL>
         rel physics:body1 = </Drivetrain/Suspension_RL/Wheel_RL>
         uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
     }
-    def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
+    def PhysicsRevoluteJoint "Wheel_RR_Hinge"
     {
         rel physics:body0 = </Drivetrain/Suspension_RR>
         rel physics:body1 = </Drivetrain/Suspension_RR/Wheel_RR>
         uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
     }
 }

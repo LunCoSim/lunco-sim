@@ -294,6 +294,9 @@ impl Plugin for UsdAvianPlugin {
                     build_usd_physics_joints
                         .in_set(avian3d::prelude::PhysicsSystems::Prepare)
                         .after(big_space_bridge::PhysicsBridgeSystems::Read)
+                        .after(
+                            avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems::UpdateComputedMassProperties,
+                        )
                         .run_if(any_with_component::<PendingUsdJoint>),
                     bevy::ecs::schedule::ApplyDeferred,
                 )
@@ -505,14 +508,14 @@ pub struct JointDrive {
     /// `None` = unauthored, and the schema's own fallback for that is
     /// [`DriveType::Force`].
     pub drive_type: Option<DriveType>,
-    /// The driven body's authored `physics:mass` (kg), read alongside a **linear**
-    /// drive. A force-type spring is realised as a stable
-    /// [`MotorModel::SpringDamper`], whose frequency is `sqrt(stiffness / mass)`;
-    /// see [`JointDrive::motor_model`]. `None` when the body authors no explicit
-    /// mass, and always `None` for an angular drive (whose matching inertia is the
-    /// moment about the hinge axis, not the mass) — the drive then stays
-    /// [`MotorModel::ForceBased`] rather than divide by the wrong quantity.
-    pub driven_mass: Option<f64>,
+    /// The authored generalized inertia of the driven coordinate: kilograms for
+    /// a linear drive, or kg·m² for an angular drive. A force-type spring is
+    /// realised as a stable [`MotorModel::SpringDamper`], whose frequency is
+    /// `sqrt(stiffness / generalized_inertia)`; see [`JointDrive::motor_model`].
+    /// `None` means USD left the value to Avian's computed mass-property path;
+    /// runtime joint construction resolves it from the participating bodies'
+    /// attached geometry, density, mass and inertia.
+    pub generalized_inertia: Option<f64>,
 }
 
 impl JointDrive {
@@ -538,9 +541,12 @@ impl JointDrive {
     /// acceleration `omega^2*pos_err + 2*zeta*omega*vel_err`, so the force it
     /// develops is `mass * that = stiffness*pos_err + damping*vel_err` — `force =
     /// k*x + c*v`, unchanged, but integrated stably. The conversion needs the driven
-    /// body's inertia ([`Self::driven_mass`]), which is only the mass for a LINEAR
-    /// drive; without it (an angular drive, or no authored mass) we cannot convert
-    /// and keep `ForceBased` rather than divide by the wrong quantity.
+    /// coordinate's generalized inertia ([`Self::generalized_inertia`]), which is
+    /// the mass for a LINEAR drive and the effective moment about the hinge for an
+    /// ANGULAR drive; the runtime resolver supplies Avian's computed value when
+    /// USD left it unauthored. If neither authored nor computed properties can
+    /// certify it, the drive is rejected rather than silently reverting to an
+    /// uncertified explicit motor.
     ///
     /// An unauthored `physics:type` takes the schema's own fallback, `"force"`
     /// (`usdPhysics` declares `uniform token physics:type = "force"`).
@@ -549,18 +555,21 @@ impl JointDrive {
     /// setpoint, and how fast it converges is a tuning choice rather than a property
     /// of the mechanism. That one gets [`MotorModel::SpringDamper`] at a fixed
     /// frequency, which is unconditionally stable under XPBD substepping at any mass.
-    fn motor_model(&self) -> MotorModel {
+    fn motor_model(&self) -> Result<MotorModel, lunco_physics::ForceDriveMotorError> {
         if self.stiffness.is_none() && self.damping.is_none() {
-            return JOINT_DRIVE_MOTOR_MODEL;
+            return Ok(JOINT_DRIVE_MOTOR_MODEL);
         }
         let stiffness = self.stiffness.unwrap_or(0.0);
         let damping = self.damping.unwrap_or(0.0);
+        if stiffness == 0.0 && damping == 0.0 {
+            return Ok(JOINT_DRIVE_MOTOR_MODEL);
+        }
         match self.drive_type.unwrap_or(DriveType::Force) {
-            DriveType::Acceleration => MotorModel::AccelerationBased { stiffness, damping },
+            DriveType::Acceleration => Ok(MotorModel::AccelerationBased { stiffness, damping }),
             DriveType::Force => lunco_physics::force_drive_motor_model(
                 stiffness,
                 damping,
-                self.driven_mass.unwrap_or(0.0),
+                self.generalized_inertia.unwrap_or(0.0),
             ),
         }
     }
@@ -577,6 +586,222 @@ impl JointDrive {
             || self.target_velocity.is_some()
             || self.stiffness.is_some()
             || self.damping.is_some()
+    }
+}
+
+/// Mass properties needed to turn a USD force drive into Avian's implicit
+/// spring-damper model. These are the live, composed properties after Avian has
+/// combined the body's own collider tree and any authored mass overrides.
+#[derive(Clone, Copy)]
+struct LiveDriveMassProperties {
+    mass: f64,
+    angular_inertia: ComputedAngularInertia,
+    center_of_mass: DVec3,
+}
+
+/// Why a live body's computed mass properties cannot yet be used by a drive.
+#[derive(Clone, Copy)]
+enum LiveDriveMassPropertiesError {
+    /// Avian has not run its mass-property update for this body yet.
+    NotReady,
+    /// Avian has produced an infinite/degenerate property for a body that the
+    /// drive expects to move.
+    Invalid,
+}
+
+/// The result of resolving a force drive's generalized inertia. `Waiting` is a
+/// real lifecycle state: USD permits mass/inertia to be omitted, and Avian
+/// computes them from attached colliders. The joint must wait for that computed
+/// state rather than rejecting a valid stage or installing a timestep-sensitive
+/// explicit motor.
+enum ResolvedJointDrive {
+    Ready(MotorModel),
+    Waiting,
+    Invalid(lunco_physics::ForceDriveMotorError),
+}
+
+/// Return the finite live mass properties for an endpoint.
+///
+/// `None` is a world/static endpoint and therefore contributes infinite
+/// generalized inertia. An `Err` is deliberately distinct from that case: a
+/// dynamic/kinematic body whose computed properties are not available yet must
+/// defer joint admission, while a body whose computed properties are present but
+/// degenerate is a terminal physics authoring error.
+fn live_drive_mass_properties(
+    query: &Query<(
+        &RigidBody,
+        Option<&ShouldBeDynamic>,
+        Option<&ComputedMass>,
+        Option<&ComputedAngularInertia>,
+        Option<&ComputedCenterOfMass>,
+    )>,
+    entity: Option<Entity>,
+) -> Result<Option<LiveDriveMassProperties>, LiveDriveMassPropertiesError> {
+    let Some(entity) = entity else {
+        return Ok(None);
+    };
+    let Ok((body, should_be_dynamic, mass, angular_inertia, center_of_mass)) = query.get(entity)
+    else {
+        return Err(LiveDriveMassPropertiesError::NotReady);
+    };
+    if matches!(body, RigidBody::Static)
+        || (matches!(body, RigidBody::Kinematic) && should_be_dynamic.is_none())
+    {
+        return Ok(None);
+    }
+    let (Some(mass), Some(angular_inertia), Some(center_of_mass)) =
+        (mass, angular_inertia, center_of_mass)
+    else {
+        return Err(LiveDriveMassPropertiesError::NotReady);
+    };
+    let mass = mass.value();
+    let center_of_mass = center_of_mass.0;
+    if !mass.is_finite()
+        || mass <= 0.0
+        || !angular_inertia.is_finite()
+        || !center_of_mass.is_finite()
+    {
+        return Err(LiveDriveMassPropertiesError::Invalid);
+    }
+    Ok(Some(LiveDriveMassProperties {
+        mass,
+        angular_inertia: *angular_inertia,
+        center_of_mass,
+    }))
+}
+
+/// Resolve a USD force drive against Avian's computed attached-body properties.
+///
+/// Authored generalized inertia wins when present. When it is absent, the
+/// implicit conversion is calculated from the actual live bodies: effective
+/// mass for a slider, or effective moment about the joint axis for a hinge,
+/// including the parallel-axis term from each body's computed centre of mass.
+/// This is the general articulated-body path; it contains no rover or steering
+/// knowledge.
+fn resolve_joint_drive_motor_model(
+    drive: JointDrive,
+    pending: &PendingUsdJoint,
+    body0: Option<Entity>,
+    body1: Option<Entity>,
+    pose0: Option<(DVec3, DQuat)>,
+    pose1: Option<(DVec3, DQuat)>,
+    mass_properties: &Query<(
+        &RigidBody,
+        Option<&ShouldBeDynamic>,
+        Option<&ComputedMass>,
+        Option<&ComputedAngularInertia>,
+        Option<&ComputedCenterOfMass>,
+    )>,
+) -> ResolvedJointDrive {
+    // This first call validates the authored coefficients and resolves all
+    // acceleration drives and force drives that do not need an inertia. Only a
+    // missing generalized inertia proceeds to live-property derivation.
+    match drive.motor_model() {
+        Ok(model) => return ResolvedJointDrive::Ready(model),
+        Err(lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia) => {}
+        Err(error) => return ResolvedJointDrive::Invalid(error),
+    }
+
+    let properties0 = match live_drive_mass_properties(mass_properties, body0) {
+        Ok(properties) => properties,
+        Err(LiveDriveMassPropertiesError::NotReady) => return ResolvedJointDrive::Waiting,
+        Err(LiveDriveMassPropertiesError::Invalid) => {
+            return ResolvedJointDrive::Invalid(
+                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
+            )
+        }
+    };
+    let properties1 = match live_drive_mass_properties(mass_properties, body1) {
+        Ok(properties) => properties,
+        Err(LiveDriveMassPropertiesError::NotReady) => return ResolvedJointDrive::Waiting,
+        Err(LiveDriveMassPropertiesError::Invalid) => {
+            return ResolvedJointDrive::Invalid(
+                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
+            )
+        }
+    };
+
+    let generalized_inertia = if pending.joint_type == "PhysicsPrismaticJoint" {
+        let inverse_mass = properties0.map(|p| 1.0 / p.mass).unwrap_or(0.0)
+            + properties1.map(|p| 1.0 / p.mass).unwrap_or(0.0);
+        if !inverse_mass.is_finite() || inverse_mass <= f64::EPSILON {
+            return ResolvedJointDrive::Invalid(
+                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
+            );
+        }
+        1.0 / inverse_mass
+    } else if pending.joint_type == "PhysicsRevoluteJoint" {
+        let scalar_inertia = |properties: Option<LiveDriveMassProperties>,
+                               pose: Option<(DVec3, DQuat)>,
+                               local_axis: DVec3,
+                               local_anchor: DVec3|
+         -> Result<Option<f64>, ResolvedJointDrive> {
+            let Some(properties) = properties else {
+                return Ok(None);
+            };
+            let Some((position, rotation)) = pose else {
+                return Err(ResolvedJointDrive::Waiting);
+            };
+            let local_axis = local_axis.normalize_or_zero();
+            if !local_axis.is_finite() || local_axis.length_squared() <= f64::EPSILON {
+                return Err(ResolvedJointDrive::Invalid(
+                    lunco_physics::ForceDriveMotorError::InvalidCoefficients,
+                ));
+            }
+            let rotational = local_axis.dot(properties.angular_inertia.value() * local_axis);
+            let axis_world = rotation * local_axis;
+            let anchor_world = position + rotation * local_anchor;
+            let center_of_mass_world = position + rotation * properties.center_of_mass;
+            let offset = anchor_world - center_of_mass_world;
+            let perpendicular_offset_squared =
+                (offset.length_squared() - offset.dot(axis_world).powi(2)).max(0.0);
+            let scalar = rotational + properties.mass * perpendicular_offset_squared;
+            if !scalar.is_finite() || scalar <= f64::EPSILON {
+                return Err(ResolvedJointDrive::Invalid(
+                    lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
+                ));
+            }
+            Ok(Some(scalar))
+        };
+        let i0 = match scalar_inertia(
+            properties0,
+            pose0,
+            pending.local_rot0 * pending.axis,
+            pending.local_pos0,
+        ) {
+            Ok(value) => value,
+            Err(result) => return result,
+        };
+        let i1 = match scalar_inertia(
+            properties1,
+            pose1,
+            pending.local_rot1 * pending.axis,
+            pending.local_pos1,
+        ) {
+            Ok(value) => value,
+            Err(result) => return result,
+        };
+        let inverse = i0.map(|i| 1.0 / i).unwrap_or(0.0) + i1.map(|i| 1.0 / i).unwrap_or(0.0);
+        if !inverse.is_finite() || inverse <= f64::EPSILON {
+            return ResolvedJointDrive::Invalid(
+                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
+            );
+        }
+        1.0 / inverse
+    } else {
+        // Fixed/spherical/distance joints do not install a linear/angular motor
+        // from this reader. Keep the resolution closed over the explicit joint
+        // kinds that carry the corresponding USD drive instance.
+        return ResolvedJointDrive::Invalid(
+            lunco_physics::ForceDriveMotorError::InvalidCoefficients,
+        );
+    };
+
+    let mut resolved = drive;
+    resolved.generalized_inertia = Some(generalized_inertia);
+    match resolved.motor_model() {
+        Ok(model) => ResolvedJointDrive::Ready(model),
+        Err(error) => ResolvedJointDrive::Invalid(error),
     }
 }
 
@@ -1882,7 +2107,81 @@ fn read_joint_spec(
             local_rot1,
         })
     };
-    let read_drive = |ns: &str, body1: &str| -> Result<Option<JointDrive>, ()> {
+    let read_generalized_inertia = |body_path: &str,
+                                    axis_in_body: DVec3,
+                                    joint_anchor_in_body: DVec3|
+     -> Result<Option<f64>, ()> {
+        if body_path.is_empty() {
+            // A world anchor has infinite generalized inertia; its inverse
+            // contribution is zero. The other body supplies the coordinate's
+            // finite inertia.
+            return Ok(None);
+        }
+        let body = SdfPath::new(body_path).map_err(|_| ())?;
+        let Some(diagonal) = read_authored_vec3(view, &body, ptok::A_DIAGONAL_INERTIA)? else {
+            return Ok(None);
+        };
+        if diagonal == DVec3::ZERO {
+            // MassAPI's zero tensor is its unauthored sentinel.
+            return Ok(None);
+        }
+        if !diagonal.is_finite() || diagonal.x <= 0.0 || diagonal.y <= 0.0 || diagonal.z <= 0.0 {
+            return Err(());
+        }
+        let principal_axes = read_authored_quat(view, &body, ptok::A_PRINCIPAL_AXES)?
+            .map(|q| conv.rotation_d(q))
+            .unwrap_or(DQuat::IDENTITY);
+        let mpu = conv.length(1.0);
+        let principal = conv.dir_d(diagonal).abs() * (mpu * mpu);
+        let axis = axis_in_body.normalize_or_zero();
+        if !axis.is_finite() || axis.length_squared() <= f64::EPSILON {
+            return Err(());
+        }
+        let principal_axis = principal_axes.inverse() * axis;
+        let rotational = principal_axis.x * principal_axis.x * principal.x
+            + principal_axis.y * principal_axis.y * principal.y
+            + principal_axis.z * principal_axis.z * principal.z;
+        if !rotational.is_finite() || rotational <= f64::EPSILON {
+            return Err(());
+        }
+        // USD's diagonal inertia is about the body's center of mass. A joint
+        // hinge is generally offset from that point, so the scalar inertia of
+        // the generalized coordinate also contains m * r_perp^2. This is the
+        // standard rigid-body parallel-axis term and is essential for steering
+        // knuckles mounted below a rover chassis.
+        let mass = match read_authored_real(view, &body, ptok::A_MASS)? {
+            // A missing/zero mass is valid USD authoring: Avian derives it from
+            // the collider tree. Do not treat that as a zero-mass body while
+            // lowering the drive; leave the coordinate unresolved so the live
+            // Avian properties can supply the correct value.
+            None | Some(0.0) => return Ok(None),
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            Some(_) => return Err(()),
+        };
+        let center_of_mass = read_authored_vec3(view, &body, ptok::A_CENTER_OF_MASS)?
+            .map(|value| conv.point_d(value))
+            .unwrap_or(DVec3::ZERO);
+        let offset = joint_anchor_in_body - center_of_mass;
+        if !center_of_mass.is_finite() || !offset.is_finite() {
+            return Err(());
+        }
+        let perpendicular_offset_squared =
+            (offset.length_squared() - offset.dot(axis) * offset.dot(axis)).max(0.0);
+        let scalar = rotational + mass * perpendicular_offset_squared;
+        if !scalar.is_finite() || scalar <= f64::EPSILON {
+            return Err(());
+        }
+        Ok(Some(scalar))
+    };
+    let read_drive = |ns: &str,
+                      body0: &str,
+                      body1: &str,
+                      axis: DVec3,
+                      local_pos0: DVec3,
+                      local_pos1: DVec3,
+                      local_rot0: DQuat,
+                      local_rot1: DQuat|
+     -> Result<Option<JointDrive>, ()> {
         let api_name = format!("PhysicsDriveAPI:{ns}");
         if !view.has_api_schema(path, &api_name) {
             return Ok(None);
@@ -1935,22 +2234,40 @@ fn read_joint_spec(
             None if !view.has_authored_attribute(path, &type_name) => None,
             None => return Err(()),
         };
-        // The driven body's authored mass, for the force-spring → SpringDamper
-        // conversion. Read from USD (not avian's computed `Mass`, which does not
-        // exist yet at spec-read time). `None` when the body leaves it to density.
-        //
-        // LINEAR drives only. The conversion divides stiffness by the driven
-        // INERTIA, and for a slider that is the mass (N/m ÷ kg). For an ANGULAR
-        // drive the stiffness is N·m/rad and the inertia is the moment about the
-        // hinge axis (kg·m²) — a different quantity, and one `physics:mass` is not.
-        // Feeding mass in there would be dimensionally wrong, so an angular drive
-        // keeps `ForceBased`: unchanged behaviour for the rocker/differential
-        // couplings that author angular stiffness.
-        let driven_mass = if ns == ptok::DOF_LINEAR {
-            let b1 = SdfPath::new(body1).map_err(|_| ())?;
-            read_authored_real(view, &b1, ptok::A_MASS)?
+        // The force-spring → SpringDamper conversion uses the generalized inertia
+        // of the coordinate. When USD authors complete mass properties, the fact
+        // is recorded here. When it omits them (the schema-valid computed path),
+        // the runtime resolver obtains the effective mass/moment from Avian after
+        // collider and density processing.
+        let generalized_inertia = if ns == ptok::DOF_LINEAR {
+            // A world endpoint has infinite mass. A non-world endpoint with no
+            // authored mass is still valid USD and will be resolved from
+            // Avian's computed body mass during joint construction.
+            if body1.is_empty() {
+                None
+            } else {
+                let b1 = SdfPath::new(body1).map_err(|_| ())?;
+                match read_authored_real(view, &b1, ptok::A_MASS)? {
+                    None | Some(0.0) => None,
+                    Some(value) if value.is_finite() && value > 0.0 => Some(value),
+                    Some(_) => return Err(()),
+                }
+            }
         } else {
-            None
+            let i0 = read_generalized_inertia(body0, local_rot0 * axis, local_pos0)?;
+            let i1 = read_generalized_inertia(body1, local_rot1 * axis, local_pos1)?;
+            // `None` means either a world endpoint or an endpoint whose
+            // properties are computed by Avian. Only combine authored values
+            // when every non-world endpoint supplied a complete tensor.
+            let authored0 = body0.is_empty() || i0.is_some();
+            let authored1 = body1.is_empty() || i1.is_some();
+            if !authored0 || !authored1 {
+                None
+            } else {
+                let inverse =
+                    i0.map(|i| 1.0 / i).unwrap_or(0.0) + i1.map(|i| 1.0 / i).unwrap_or(0.0);
+                (inverse > f64::EPSILON && inverse.is_finite()).then_some(1.0 / inverse)
+            }
         };
         Ok(
             (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
@@ -1961,7 +2278,7 @@ fn read_joint_spec(
                     stiffness: k,
                     damping: c,
                     drive_type: ty,
-                    driven_mass,
+                    generalized_inertia,
                 },
             ),
         )
@@ -2006,7 +2323,17 @@ fn read_joint_spec(
             let axis = read_axis()?;
             let lo = read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
             let hi = read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
-            let drive = read_drive(ptok::DOF_ANGULAR, &b.body1).ok()?;
+            let drive = read_drive(
+                ptok::DOF_ANGULAR,
+                &b.body0,
+                &b.body1,
+                axis,
+                b.local_pos0,
+                b.local_pos1,
+                b.local_rot0,
+                b.local_rot1,
+            )
+            .ok()?;
             pending_from(b, axis, lo, hi, ptok::T_PHYSICS_REVOLUTE_JOINT, None, drive)
         }
         ptok::T_PHYSICS_PRISMATIC_JOINT => {
@@ -2015,7 +2342,17 @@ fn read_joint_spec(
             // Linear limits are authored in scene units, like the anchors.
             let lo = conv.length(read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?);
             let hi = conv.length(read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?);
-            let drive = read_drive(ptok::DOF_LINEAR, &b.body1).ok()?;
+            let drive = read_drive(
+                ptok::DOF_LINEAR,
+                &b.body0,
+                &b.body1,
+                axis,
+                b.local_pos0,
+                b.local_pos1,
+                b.local_rot0,
+                b.local_rot1,
+            )
+            .ok()?;
             pending_from(
                 b,
                 axis,
@@ -2474,6 +2811,17 @@ fn build_usd_physics_joints(
     // bridge has seeded it. Keeping those two facts separate prevents seating
     // against the required-component default at the origin.
     q_bodies: Query<(Entity, &UsdPrimPath), (With<RigidBody>, With<Position>)>,
+    // Avian owns the composed mass properties. USD mass/inertia overrides and
+    // collider/density-derived values both arrive here after its prepare pass;
+    // the drive resolver below uses this query only when USD did not author a
+    // generalized inertia explicitly.
+    q_mass_properties: Query<(
+        &RigidBody,
+        Option<&ShouldBeDynamic>,
+        Option<&ComputedMass>,
+        Option<&ComputedAngularInertia>,
+        Option<&ComputedCenterOfMass>,
+    )>,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&big_space_bridge::BridgeShadow>,
@@ -2489,6 +2837,7 @@ fn build_usd_physics_joints(
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
@@ -2648,10 +2997,72 @@ fn build_usd_physics_joints(
             continue;
         }
 
-        // A world-anchored side becomes a static body at the canonical origin, so
-        // the authored `localPos`/`localRot` — expressed in the world frame when
-        // the rel is empty — apply as that anchor's local frame unchanged. A
-        // static body is admitted by construction (see [`admit_pending_joints`]).
+        // Snapshot poses before the seating write below. They are also the
+        // world-frame data needed for a live angular inertia calculation. A
+        // world/static endpoint has no finite mass properties and contributes
+        // zero inverse inertia to the effective coordinate.
+        let drive_pose0 = body0_ent
+            .and_then(|entity| q_pose
+                .get(entity)
+                .ok()
+                .map(|(p, r)| (GridPos(p.0).0, r.0)));
+        let drive_pose1 = body1_ent
+            .and_then(|entity| q_pose
+                .get(entity)
+                .ok()
+                .map(|(p, r)| (GridPos(p.0).0, r.0)));
+        let resolved_drive_model = match pending.drive {
+            None => None,
+            Some(drive) => match resolve_joint_drive_motor_model(
+                drive,
+                pending,
+                body0_ent,
+                body1_ent,
+                drive_pose0,
+                drive_pose1,
+                &q_mass_properties,
+            ) {
+                ResolvedJointDrive::Ready(model) => Some(model),
+                ResolvedJointDrive::Waiting => {
+                    // USD permits mass/inertia to be computed from attached
+                    // colliders. Avian has not exposed that result yet; keep
+                    // the authored joint pending and retry after the next
+                    // mass-property update.
+                    continue;
+                }
+                ResolvedJointDrive::Invalid(error) => {
+                    let detail = format!(
+                        "standard USD force drive could not be realized from authored or computed generalized inertia: {error:?}; ensure participating bodies have valid mass properties or attached colliders"
+                    );
+                    error!(
+                        "USD physics joint {} rejected its drive: {detail}",
+                        joint_prim_path.path
+                    );
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "usd-physics-joint-drive-invalid",
+                            Some(joint_entity),
+                            joint_prim_path.path.clone(),
+                            detail,
+                        );
+                    }
+                    if let Some(holds) = holds.as_deref_mut() {
+                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                    }
+                    commands.entity(joint_entity).remove::<PendingUsdJoint>();
+                    resolve_ticks.remove(&joint_entity);
+                    continue;
+                }
+            },
+        };
+
+        // A world-anchored side becomes a static body at the canonical origin,
+        // so the authored `localPos`/`localRot` — expressed in the world frame
+        // when the rel is empty — apply as that anchor's local frame unchanged.
+        // A static body is admitted by construction (see
+        // [`admit_pending_joints`]). These entities are spawned only after the
+        // drive resolver succeeds, so a deferred computed-property update never
+        // leaks one anonymous anchor per retry.
         let b0 = body0_ent
             .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
         let b1 = body1_ent
@@ -2706,8 +3117,8 @@ fn build_usd_physics_joints(
         );
         // avian `Position` is a grid-absolute point — wrap at the read so the
         // anchor math below type-checks as grid + body-local offset.
-        let pose0 = q_pose.get(b0).ok().map(|(p, r)| (GridPos(p.0), r.0));
-        let pose1 = q_pose.get(b1).ok().map(|(p, r)| (GridPos(p.0), r.0));
+        let pose0 = drive_pose0.map(|(position, rotation)| (GridPos(position), rotation));
+        let pose1 = drive_pose1.map(|(position, rotation)| (GridPos(position), rotation));
 
         if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
             // The orientation the constraint demands of body1:
@@ -2869,7 +3280,8 @@ fn build_usd_physics_joints(
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: d.motor_model(),
+                        motor_model: resolved_drive_model
+                            .expect("resolved USD prismatic drive motor"),
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
@@ -2889,7 +3301,8 @@ fn build_usd_physics_joints(
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: d.motor_model(),
+                        motor_model: resolved_drive_model
+                            .expect("resolved USD revolute drive motor"),
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
@@ -4165,6 +4578,7 @@ mod joint_reader_tests {
     //! This is the headless-verifiable half of the rework (the read); joint
     //! *dynamics* need a rover boot.
     use super::read_joint_spec;
+    use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
     use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
@@ -4229,6 +4643,42 @@ def PhysicsRevoluteJoint "Hinge" (
         let damping = j.damping.expect("typed passive joint damping");
         assert_eq!(damping.linear, 0.0);
         assert_eq!(damping.angular, 2.5);
+    }
+
+    #[test]
+    fn angular_force_drive_uses_authored_effective_inertia() {
+        let source = "#usda 1.0\n\
+def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
+{\n\
+    float physics:mass = 10.0\n\
+    float3 physics:diagonalInertia = (100.0, 100.0, 100.0)\n\
+    def Xform \"Link\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
+    {\n\
+        float physics:mass = 2.0\n\
+        float3 physics:diagonalInertia = (2.0, 3.0, 4.0)\n\
+    }\n\
+}\n\
+def PhysicsRevoluteJoint \"Hinge\" ( prepend apiSchemas = [\"PhysicsDriveAPI:angular\"] )\n\
+{\n\
+    rel physics:body0 = </Host>\n\
+    rel physics:body1 = </Host/Link>\n\
+    uniform token physics:axis = \"Y\"\n\
+    point3f physics:localPos0 = (1.0, 0.0, 0.0)\n\
+    point3f physics:localPos1 = (0.0, 1.0, 0.0)\n\
+    uniform token drive:angular:physics:type = \"force\"\n\
+    float drive:angular:physics:stiffness = 300.0\n\
+    float drive:angular:physics:damping = 30.0\n\
+}\n";
+        let stage = write_and_compose("angular_inertia.usda", source);
+        let joint = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+            .expect("angular force drive reads");
+        let drive = joint.drive.expect("drive is authored");
+        let expected_inertia = 1.0 / (1.0 / 110.0 + 1.0 / 5.0);
+        assert!((drive.generalized_inertia.unwrap() - expected_inertia).abs() < 1e-9);
+        assert!(matches!(
+            drive.motor_model(),
+            Ok(MotorModel::SpringDamper { .. })
+        ));
     }
 
     /// Where a raked joint's axis actually POINTS, from the authoring a landing

@@ -328,25 +328,45 @@ pub struct PrismaticDriveParameters {
     pub max_force: f64,
 }
 
+/// Why a dimensional force drive cannot be lowered to Avian's implicit model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForceDriveMotorError {
+    /// A positive spring coefficient needs a positive generalized inertia to
+    /// preserve the authored force law in `SpringDamper` form.
+    MissingGeneralizedInertia,
+    /// A drive coefficient is not a finite, non-negative physical quantity.
+    InvalidCoefficients,
+}
+
 /// Convert a dimensional force spring into Avian's stable spring-damper model.
 ///
 /// USD's `physics:type = "force"` coefficients remain the public physical
 /// contract. Avian receives the equivalent implicit representation when a
-/// driven mass is available, preserving the authored force law while avoiding
-/// an explicit stiff-force update at the fixed-step boundary.
+/// generalized inertia is available, preserving the authored force law while
+/// avoiding an explicit stiff-force update at the fixed-step boundary. For a
+/// linear drive this is a mass; for an angular drive it is a moment of inertia
+/// about the driven coordinate.
 pub fn force_drive_motor_model(
     stiffness: f64,
     damping: f64,
-    driven_mass: f64,
-) -> avian3d::prelude::MotorModel {
-    if stiffness > 0.0 && driven_mass > 0.0 {
-        let omega = (stiffness / driven_mass).sqrt();
-        avian3d::prelude::MotorModel::SpringDamper {
-            frequency: omega / std::f64::consts::TAU,
-            damping_ratio: damping / (2.0 * (stiffness * driven_mass).sqrt()),
+    generalized_inertia: f64,
+) -> Result<avian3d::prelude::MotorModel, ForceDriveMotorError> {
+    if !stiffness.is_finite() || !damping.is_finite() || stiffness < 0.0 || damping < 0.0 {
+        return Err(ForceDriveMotorError::InvalidCoefficients);
+    }
+    if stiffness > 0.0 {
+        if !generalized_inertia.is_finite() || generalized_inertia <= 0.0 {
+            return Err(ForceDriveMotorError::MissingGeneralizedInertia);
         }
+        let omega = (stiffness / generalized_inertia).sqrt();
+        Ok(avian3d::prelude::MotorModel::SpringDamper {
+            frequency: omega / std::f64::consts::TAU,
+            damping_ratio: damping / (2.0 * (stiffness * generalized_inertia).sqrt()),
+        })
     } else {
-        avian3d::prelude::MotorModel::ForceBased { stiffness, damping }
+        // Avian has no implicit zero-stiffness damping-only motor. This is the
+        // exact USD force law for a pure damper, not a spring-drive fallback.
+        Ok(avian3d::prelude::MotorModel::ForceBased { stiffness, damping })
     }
 }
 
@@ -357,7 +377,7 @@ pub fn force_drive_motor_model(
 /// so presenting them as newtons would be dimensionally false.
 pub fn motor_model_force_coefficients(
     model: avian3d::prelude::MotorModel,
-    driven_mass: f64,
+    generalized_inertia: f64,
 ) -> Option<(f64, f64)> {
     match model {
         avian3d::prelude::MotorModel::ForceBased { stiffness, damping } => {
@@ -366,11 +386,11 @@ pub fn motor_model_force_coefficients(
         avian3d::prelude::MotorModel::SpringDamper {
             frequency,
             damping_ratio,
-        } if driven_mass > 0.0 => {
+        } if generalized_inertia > 0.0 => {
             let omega = std::f64::consts::TAU * frequency;
             Some((
-                driven_mass * omega * omega,
-                driven_mass * 2.0 * damping_ratio * omega,
+                generalized_inertia * omega * omega,
+                generalized_inertia * 2.0 * damping_ratio * omega,
             ))
         }
         avian3d::prelude::MotorModel::AccelerationBased { .. }
@@ -419,7 +439,7 @@ pub fn set_prismatic_drive(
     let joint = world
         .get::<PrismaticJoint>(entity)
         .ok_or_else(|| format!("entity {entity:?} has no PrismaticJoint"))?;
-    let driven_mass = world
+    let body_mass = world
         .get::<Mass>(joint.body2)
         .map(|mass| mass.0 as f64)
         .or_else(|| {
@@ -428,7 +448,8 @@ pub fn set_prismatic_drive(
                 .map(|mass| mass.value() as f64)
         })
         .ok_or_else(|| format!("prismatic joint {entity:?} has no driven-body mass"))?;
-    let model = force_drive_motor_model(drive.stiffness, drive.damping, driven_mass);
+    let model = force_drive_motor_model(drive.stiffness, drive.damping, body_mass)
+        .map_err(|error| format!("cannot lower prismatic force drive: {error:?}"))?;
     let Some(mut joint) = world.get_mut::<PrismaticJoint>(entity) else {
         return Err(format!("entity {entity:?} has no PrismaticJoint"));
     };
@@ -1232,7 +1253,7 @@ mod tests {
 
     #[test]
     fn force_drive_conversion_preserves_the_authored_units() {
-        let motor = force_drive_motor_model(4000.0, 1600.0, 40.0);
+        let motor = force_drive_motor_model(4000.0, 1600.0, 40.0).expect("valid force drive");
         match motor {
             avian3d::prelude::MotorModel::SpringDamper {
                 frequency,
@@ -1243,6 +1264,14 @@ mod tests {
             }
             other => panic!("expected implicit force-equivalent drive, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn force_drive_with_stiffness_requires_generalized_inertia() {
+        assert_eq!(
+            force_drive_motor_model(4000.0, 1600.0, 0.0),
+            Err(ForceDriveMotorError::MissingGeneralizedInertia)
+        );
     }
 
     #[test]

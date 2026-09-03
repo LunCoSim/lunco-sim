@@ -45,6 +45,10 @@ def Xform "AckermannRover" (
     uniform bool lunco:spawnable = true
 
     float physics:mass = 1000.0
+    # Authored principal inertia for the 2.0 m × 0.3 m × 3.5 m chassis. The
+    # generic USD joint mapper uses this together with the knuckle inertia to
+    # lower the steering torque spring into Avian's implicit SpringDamper model.
+    float3 physics:diagonalInertia = (1028.0, 1354.0, 341.0)
     # Symmetric box chassis: the body frame origin is the authored COM for both
     # raycast and joint realizations.
     float3 physics:centerOfMass = (0.0, 0.0, 0.0)
@@ -425,34 +429,22 @@ def Xform "AckermannRover" (
                 double3 xformOp:translate = (1.0, -0.65, -1.225)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }
-            def PhysicsRevoluteJoint "Steering_FL_Hinge" (
-                prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-            )
+            def PhysicsRevoluteJoint "Steering_FL_Hinge"
             {
                 rel physics:body0 = </AckermannRover>
                 rel physics:body1 = </AckermannRover/SteeringKnuckle_FL>
                 uniform token physics:axis = "Y"
                 float physics:lowerLimit = -30
                 float physics:upperLimit = 30
-                uniform token drive:angular:physics:type = "force"
-                float drive:angular:physics:stiffness = 1600.0
-                float drive:angular:physics:damping = 160.0
-                float drive:angular:physics:maxForce = 350.0
                 float inputs:angle.connect = </AckermannRover.outputs:heading_fl>
             }
-            def PhysicsRevoluteJoint "Steering_FR_Hinge" (
-                prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-            )
+            def PhysicsRevoluteJoint "Steering_FR_Hinge"
             {
                 rel physics:body0 = </AckermannRover>
                 rel physics:body1 = </AckermannRover/SteeringKnuckle_FR>
                 uniform token physics:axis = "Y"
                 float physics:lowerLimit = -30
                 float physics:upperLimit = 30
-                uniform token drive:angular:physics:type = "force"
-                float drive:angular:physics:stiffness = 1600.0
-                float drive:angular:physics:damping = 160.0
-                float drive:angular:physics:maxForce = 350.0
                 float inputs:angle.connect = </AckermannRover.outputs:heading_fr>
             }
             over "Suspension_FL_Slider" {

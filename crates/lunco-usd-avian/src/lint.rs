@@ -55,6 +55,10 @@
 //! reads 0 N at 0 stroke while carrying the vehicle. Nothing logs it; the vehicle
 //! sits level at a plausible height.
 //!
+//! Drive facts use `realization = "derived"` when a force spring has no explicit
+//! generalized inertia. That is not an error: the runtime asks Avian for the
+//! computed mass/inertia after the body's collider tree and density are live.
+//!
 //! `collider_min` / `collider_max` are the world-space bounds of everything a body
 //! can touch the world with — the union over its collider subtree, taken through
 //! the composed transform, so a raked strut measures where its corner actually
@@ -316,12 +320,22 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
         };
 
         let (realization, frequency, damping_ratio) = match drive.motor_model() {
-            MotorModel::SpringDamper {
+            Ok(MotorModel::SpringDamper {
                 frequency,
                 damping_ratio,
-            } => ("spring_damper", frequency, damping_ratio),
-            MotorModel::ForceBased { .. } => ("force_based", 0.0, 0.0),
-            MotorModel::AccelerationBased { .. } => ("acceleration_based", 0.0, 0.0),
+            }) => ("spring_damper", frequency, damping_ratio),
+            Ok(MotorModel::ForceBased { .. }) => ("force_based", 0.0, 0.0),
+            Ok(MotorModel::AccelerationBased { .. }) => ("acceleration_based", 0.0, 0.0),
+            // Missing authored mass/inertia is valid USD authoring. The runtime
+            // resolves this drive from Avian's computed properties after the
+            // body's collider tree has been admitted; policy must not turn a
+            // schema-valid omission into an error.
+            Err(lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia) => {
+                ("derived", 0.0, 0.0)
+            }
+            Err(lunco_physics::ForceDriveMotorError::InvalidCoefficients) => {
+                ("invalid", 0.0, 0.0)
+            }
         };
         let stiffness = drive.stiffness.unwrap_or(0.0);
         let damping = drive.damping.unwrap_or(0.0);
@@ -338,8 +352,8 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
                 drive.max_force.map(H::Float).unwrap_or(H::Unit),
             ),
             (
-                "driven_mass",
-                drive.driven_mass.map(H::Float).unwrap_or(H::Unit),
+                "generalized_inertia",
+                drive.generalized_inertia.map(H::Float).unwrap_or(H::Unit),
             ),
             ("frequency", H::Float(frequency)),
             ("damping_ratio", H::Float(damping_ratio)),
@@ -1192,9 +1206,8 @@ def Scope "Root"
 
     /// Drive facts must describe the motor model the loader will install. A
     /// massed linear force drive is converted to the implicit SpringDamper path;
-    /// the same authored law without a driven mass remains ForceBased and must
-    /// be visible to the USD policy rather than disappearing into raw prim
-    /// attributes.
+    /// the same authored law without explicit generalized inertia is marked for
+    /// runtime derivation from the body's computed mass properties.
     #[test]
     fn drive_facts_preserve_the_runtime_motor_realization() {
         let f = facts(
@@ -1241,7 +1254,7 @@ def Scope "Root"
             .iter()
             .find(|drive| field(drive, "path") == &H::str("/Rig/Conditional"))
             .expect("unmassed drive fact");
-        assert_eq!(field(conditional, "realization"), &H::str("force_based"));
+        assert_eq!(field(conditional, "realization"), &H::str("derived"));
         let stage = match &f {
             H::Map(entries) => entries
                 .iter()

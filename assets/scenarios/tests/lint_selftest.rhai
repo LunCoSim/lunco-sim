@@ -171,25 +171,6 @@ fn on_tick(me) {
             "collision-enabled-without-api did not name the schema the author must apply"));
     }
 
-    // A force-based drive with stiffness but no driven mass is not the
-    // production implicit motor path. The finding must name the drive itself,
-    // include the authoritative solver-resolution contract, and remain separate
-    // from the geometric sprung-foot finding.
-    let unstable_drive = by_rule(findings, "conditionally-stable-joint-drive");
-    f.push(t_true(unstable_drive.len() == 1,
-        "conditionally-stable-joint-drive fired " + unstable_drive.len() +
-        " time(s), expected exactly 1 (/LintSelftest/Leg/Strut_Spring)"));
-    if unstable_drive.len() == 1 {
-        f.push(t_true(unstable_drive[0].subject == "/LintSelftest/Leg/Strut_Spring",
-            "conditionally-stable-joint-drive named " + unstable_drive[0].subject +
-            ", expected the un-massed force drive"));
-        f.push(t_true(unstable_drive[0].severity == "error",
-            "conditionally-stable-joint-drive is severity " + unstable_drive[0].severity +
-            ", expected error"));
-        f.push(t_true(unstable_drive[0].message.contains("8 substeps"),
-            "conditionally-stable-joint-drive did not report the authoritative 8-substep contract"));
-    }
-
     let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");
     f.push(t_true(negative_stiffness.len() == 1,
         "joint-drive-negative-stiffness fired " + negative_stiffness.len() +

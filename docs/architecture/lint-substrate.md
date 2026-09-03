@@ -68,7 +68,7 @@ facts.joints[]  #{ path, type, bodies[], missing[] }
 facts.stage     #{ meters_per_unit_authored, fixed_hz, physics_substeps,
                    substep_dt }
 facts.drives[]  #{ path, joint_type, body0, body1, realization,
-                   stiffness, damping, max_force, driven_mass,
+                   stiffness, damping, max_force, generalized_inertia,
                    frequency, damping_ratio }
 facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
                        target_velocity, stiffness, damping, max_force }
@@ -91,9 +91,13 @@ from the same typed USD→Avian reader used by runtime projection, so the policy
 does not duplicate USD unit conversion or motor-model selection. A
 `spring_damper` realization is Avian's implicit, unconditionally stable model;
 stiffness-bearing `force_based` and all `acceleration_based` spring realizations
-are conditional models and are rejected by the shipped policy. A positive pure
-ForceBased damper remains allowed because the owning USD→Avian mapping documents
-that case as safe. `gear_drives` is semantic output from the
+are conditional models and are rejected by the shipped policy. The USD→Avian
+reader lowers a force-based drive to `spring_damper` when authored mass or
+angular inertia facts certify the generalized inertia, or when Avian can derive
+those properties from the attached collider tree and density. The latter is
+reported as `realization = derived` in facts and is still the implicit
+`SpringDamper` runtime path. A positive pure ForceBased damper remains the exact
+USD force law because Avian has no implicit damping-only motor model. `gear_drives` is semantic output from the
 `lunco-usd-sim` reader for `PhysxPhysicsGearJoint`; its force and acceleration
 realizations are implicit per substep, so positive coefficients have no guessed
 asset-specific stiffness cap. Invalid values are retained and rejected by
@@ -156,7 +160,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `connector-requires-network-root` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |
-| `conditionally-stable-joint-drive` | error | a stiffness-bearing USD drive resolves to Avian `ForceBased`, or any spring drive resolves to `AccelerationBased`, at the authoritative fixed step; use the implicit `SpringDamper` realization instead of tuning substeps to mask it |
+| `conditionally-stable-joint-drive` | error | a USD spring drive resolves to Avian `AccelerationBased` at the authoritative fixed step; use the implicit `SpringDamper` realization instead |
 | `joint-drive-negative-stiffness` | error | a drive has a negative stiffness coefficient that injects energy and cannot be converted to the implicit `SpringDamper` realization |
 | `joint-drive-negative-damping` | error | a drive has negative damping (or an implicit drive would receive a negative damping ratio) and injects energy |
 | `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |

@@ -255,9 +255,11 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   frequency and damping ratio; this is a numerical realization change, not a
   second spring or a changed physical coefficient. Acceleration drives map to
   `AccelerationBased` because their response is intentionally mass-normalized.
-  Standard `Physics*Joint` angular drives and force drives without a usable
-  linear mass remain explicit and are rejected by the USD linter when their
-  coefficients are conditionally unstable. A drive with neither coefficient is
+  Standard `Physics*Joint` angular drives now use the same implicit lowering when
+  both bodies author a usable effective hinge inertia, or when Avian derives it
+  from the participating bodies' computed mass properties and collider trees. A
+  stiffness-bearing force drive is never lowered to an uncertified explicit
+  motor. A drive with neither coefficient is
   a positioner, not a spring, and
   keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
   throughout. Wheels are unaffected: their revolute joints
