@@ -3595,21 +3595,38 @@ fn report_terrain_stream_status(
     let Some(mut bus) = bus else { return };
     const STREAM_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     const DERIVED_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE;
-    let streaming = status.wanted > 0 && status.resident < status.wanted;
+    // A resident count can reach the selected count before the last bake or
+    // render-material publication finishes. Keep the typed live state active
+    // until both fulfilment dimensions settle; otherwise the readiness gate
+    // sees a false idle transition and the overlay disappears too early.
+    let streaming = status.wanted > 0 && (status.resident < status.wanted || status.pending > 0);
     let completed = mirror.streaming
         && status.wanted > 0
         && status.resident >= status.wanted
         && status.pending == 0;
     if streaming {
-        bus.set_progress(
-            STREAM_SOURCE,
+        let fully_selected = status.resident >= status.wanted;
+        let message = if fully_selected {
+            format!(
+                "Preparing terrain visuals {}/{} ({} pending)",
+                status.resident, status.wanted, status.pending
+            )
+        } else {
             format!(
                 "Streaming terrain tiles {}/{}",
                 status.resident, status.wanted
-            ),
-            status.resident as u64,
-            status.wanted as u64,
-        );
+            )
+        };
+        // Do not show a completed progress bar while render readiness is still
+        // pending. Once all selected tiles are resident, the remaining work is
+        // not another selected tile count, so an indeterminate indicator is the
+        // truthful presentation until `pending == 0`.
+        let (done, total) = if fully_selected {
+            (0, 0)
+        } else {
+            (status.resident as u64, status.wanted as u64)
+        };
+        bus.set_progress(STREAM_SOURCE, message, done, total);
     } else {
         bus.remove_progress(STREAM_SOURCE);
     }
@@ -3713,8 +3730,33 @@ mod terrain_status_tests {
             lunco_terrain_surface::TerrainStreamStatus {
                 wanted: 2,
                 resident: 2,
+                pending: 1,
                 ..Default::default()
             };
+        app.update();
+        {
+            let bus = app
+                .world()
+                .resource::<lunco_workbench::status_bus::StatusBus>();
+            let progress = bus
+                .active_progress()
+                .find(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .expect("render-pending terrain must keep live progress");
+            assert_eq!(
+                progress.message,
+                "Preparing terrain visuals 2/2 (1 pending)"
+            );
+            assert_eq!(progress.progress, Some((0, 0)));
+            assert!(bus.history().next().is_none());
+
+            *app.world_mut()
+                .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+                lunco_terrain_surface::TerrainStreamStatus {
+                    wanted: 2,
+                    resident: 2,
+                    ..Default::default()
+                };
+        }
         app.update();
         {
             let bus = app

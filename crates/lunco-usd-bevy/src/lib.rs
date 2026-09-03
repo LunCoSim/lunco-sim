@@ -1693,7 +1693,11 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 asset_server,
                 prim_path.stage_handle.id(),
             )
-        } else if mesh_pending {
+        } else if mesh_pending || is_procedural_terrain_visual_owner(reader, &sdf_path) {
+            // DEM terrain is projected as an Xform and receives its mesh later from
+            // lunco-terrain-surface. Preserve the authored USD appearance contract
+            // across that asynchronous geometry boundary; the terrain assembler is
+            // render-free and must not choose a second material itself.
             apply_standard_material_intent(
                 reader,
                 &sdf_path,
@@ -3520,6 +3524,23 @@ fn read_standard_material(
         no_shadow_cast,
         ..default()
     })
+}
+
+/// A DEM terrain owns a procedural mesh even when the initial USD projection has
+/// no `UsdGeomGprim` shape to queue. Keep its standard USD appearance intent on
+/// the owner so the later static mesh assembly is immediately renderable. This is
+/// deliberately restricted to the explicit terrain API plus DEM asset modes; an
+/// arbitrary Xform must not acquire a material merely because it may gain geometry
+/// from another subsystem.
+fn is_procedural_terrain_visual_owner(
+    reader: &dyn read::UsdReadObject,
+    sdf_path: &SdfPath,
+) -> bool {
+    reader.has_api_schema(sdf_path, "LunCoTerrainAPI")
+        && matches!(
+            reader.text(sdf_path, "lunco:assetMode").as_deref(),
+            Some("dem") | Some("layered")
+        )
 }
 
 /// Attach one prepared PBR intent together with a ready mesh.
