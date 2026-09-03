@@ -122,7 +122,10 @@ generic billboard renderer consume its propagated `GlobalTransform`. The
 renderer uses the shared BigSpace world-pose machinery for the camera/subject
 range check; route projection does not add another distance or coordinate
 conversion owner. The terrain-grid/BigSpace hierarchy and the existing
-billboard path already own that conversion.
+billboard path already own that conversion. The shared overlay wraps labels to a
+bounded width, clamps their backdrop inside the active viewport, and gives
+nearer labels first choice of non-overlapping camera-facing slots. A label with
+no safe slot is omitted for that frame rather than covering another marker.
 Editor-created waypoints use the canonical USD billboard authoring helper;
 runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one

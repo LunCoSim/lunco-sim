@@ -106,20 +106,25 @@ dome, with the dome still visibly emissive.
 ### Labels follow the waypoint
 
 A waypoint that needs a screen label authors `lunco:billboard = true` and its
-`lunco:billboard:*` presentation fields on the waypoint prim. The generic USD
-billboard renderer is the only label reader: it consumes the waypoint's propagated
-`GlobalTransform`, which BigSpace derives from the terrain grid and its ancestors,
-and projects that render pose with the active camera. Route projection does not
-draw a second label, subtract active-frame positions from camera positions, or
+`lunco:billboard:*` presentation fields on the waypoint prim. The reusable
+waypoint asset opts in, so composed scene references and runtime-created markers
+have the same label contract; the editor authoring helper writes the same fields
+when it creates a marker directly. The generic USD billboard renderer is the
+only label reader: it consumes the waypoint's propagated `GlobalTransform`, which
+BigSpace derives from the terrain grid and its ancestors, and projects that render
+pose with the active camera. It wraps labels to a bounded width, clamps their
+backdrop to the viewport, and gives nearer markers first choice of one of four
+camera-facing slots. A label with no collision-free slot is omitted for that frame
+rather than covering another label or its marker. Route projection does not draw
+a second label, subtract active-frame positions from camera positions, or
 reimplement distance/coordinate conversion. This keeps a label attached to its
 waypoint when celestial parents rotate and leaves the route snapshot responsible
-only for terrain-grid ribbon geometry and active-leg presentation. The editor's
-waypoint authoring helper writes this contract for every new authored marker;
-runtime-only markers attach the same data-only `UsdBillboard` contract plus the
-generic `BillboardIndex` fact to their shared USD marker root. Their `Name`
-identity remains owned by the spawn/catalog path; the route key is used only by
-arrival state. Both paths therefore feed the same renderer without a
-route-specific label path or alternate identity path.
+only for terrain-grid ribbon geometry and active-leg presentation. Runtime-only
+markers attach the same data-only `UsdBillboard` contract plus the generic
+`BillboardIndex` fact to their shared USD marker root. Their `Name` identity
+remains owned by the spawn/catalog path; the route key is used only by arrival
+state. Both paths therefore feed the same renderer without a route-specific label
+path or alternate identity path.
 
 The change-gated surface projection uses the shared BigSpace conversion
 `position_in_grid_to_parent_local`: it samples in the active terrain frame and
@@ -155,6 +160,13 @@ transform, visibility, material, and collision are standard USD/UsdPhysics data.
 radius, while only `Trigger` is projected into the Avian overlap sensor. The
 visual dome remains present after arrival; the shared Rhai waypoint helper reads
 the authored inactive color and applies it through the USD runtime layer.
+
+The derived route is intentionally quieter than the marker annotation: it is a
+surface-separated, unlit triangle strip with a narrow total width (14 cm), a
+muted green complete path, and a brighter blue active leg. It remains one
+change-gated route projection and never grows with the waypoint dome or vehicle
+dimensions. This preserves ordered-route context without painting a road over a
+close rover view.
 
 ### Visual progress uses the authoritative live binding
 

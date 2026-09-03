@@ -1,5 +1,6 @@
 // Graphics acceptance for the reusable waypoint marker presentation.
 const TEST_KIND = "graphics";
+const WAYPOINT = "/WaypointVisual/Waypoint1";
 const SKY_SHADER = "/WaypointVisual/Sky/Looks/Starfield/Shader";
 const SKY_INPUTS = [
     "inputs:core_color",
@@ -38,9 +39,21 @@ fn sky_uses_shader_defaults() {
     true
 }
 
+fn waypoint_uses_shared_billboard_contract() {
+    let record = query("QueryUsdPrim", #{
+        path: WAYPOINT,
+        attrs: ["lunco:billboard", "lunco:billboard:offsetY", "lunco:billboard:fadeEnd"],
+    });
+    record != () && record.ok != false && record.attrs != ()
+        && record.attrs["lunco:billboard"] == true
+        && record.attrs["lunco:billboard:text"] != ()
+        && record.attrs["lunco:billboard:offsetY"] == 4.0
+        && record.attrs["lunco:billboard:fadeEnd"] == 1200.0
+}
+
 fn on_start(me) {
     this.rover = find("/WaypointVisual/Rover");
-    this.marker = find("/WaypointVisual/Waypoint");
+    this.marker = find("/WaypointVisual/Waypoint1");
     this.done = false;
     this.t = 0.0;
 }
@@ -57,5 +70,7 @@ fn on_tick(me) {
         "reusable waypoint marker is missing from the review scene"));
     checks.push(t_true(sky_uses_shader_defaults(),
         "waypoint review authors a redundant procedural-sky input override"));
+    checks.push(t_true(waypoint_uses_shared_billboard_contract(),
+        "waypoint marker does not expose the shared bounded-label contract"));
     report_verdict(checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
 }
