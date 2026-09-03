@@ -1144,6 +1144,49 @@ impl UsdDocument {
         }
     }
 
+    /// Keep a typed edit's declaration identical to every local opinion it
+    /// can override. USD value decoding erases roles such as `color3f` versus
+    /// `float3`, so comparing only the parsed [`sdf::Value`] would allow an
+    /// array/scalar or role change to enter the document and fail later in the
+    /// live stage. Referenced-only attributes have no local declaration here;
+    /// the mounted canonical stage validates those against its composed schema
+    /// before the command is admitted.
+    fn validate_attribute_type(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        requested: &str,
+    ) -> Result<(), DocumentError> {
+        let attr = prim.append_property(name).map_err(|error| {
+            DocumentError::ValidationFailed(format!(
+                "attribute `{prim}.{name}` has an invalid path: {error}"
+            ))
+        })?;
+        for (layer_name, layer) in [("root", &self.base), ("runtime", &self.runtime)] {
+            let Some(spec) = layer.spec(&attr) else {
+                continue;
+            };
+            if spec.ty != SpecType::Attribute {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is authored as {:?} in the {layer_name} layer, not an attribute",
+                    spec.ty
+                )));
+            }
+            let Some(sdf::Value::Token(type_name)) = spec.get("typeName") else {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` has no USD type declaration in the {layer_name} layer"
+                )));
+            };
+            if type_name.as_str() != requested {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is declared as `{}` in the {layer_name} layer; typed edits must use `{requested}`",
+                    type_name.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// The current serialized source of layer `t` (base honors the
     /// un-parseable raw-text fallback; runtime is always real data).
     fn layer_source(&self, t: TargetLayer) -> String {
@@ -1732,6 +1775,7 @@ impl Document for UsdDocument {
                         (prim, true)
                     }
                 };
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
 
                 // The single place attribute values are turned into USD values, so
                 // NO call site ever hand-escapes. Two rules by type:
@@ -1870,6 +1914,7 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
                 let val = parse_attribute_value(&type_name, &value).map_err(|e| {
                     DocumentError::ValidationFailed(format!(
                         "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
@@ -2097,6 +2142,7 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
                 let source_paths = sources
                     .iter()
                     .map(|s| {
@@ -3933,15 +3979,42 @@ mod tests {
             edit_target: LayerId::root(),
             path: "/Ball".into(),
             name: "primvars:displayColor".into(),
-            type_name: "color3f".into(),
-            value: "(0.2, 0.4, 0.8)".into(),
+            type_name: "color3f[]".into(),
+            value: "[(0.2, 0.4, 0.8)]".into(),
         })
         .unwrap();
-        let color = doc.data().prim_attribute_value::<[f32; 3]>(
-            &SdfPath::new("/Ball").unwrap(),
-            "primvars:displayColor",
-        );
-        assert_eq!(color, Some([0.2, 0.4, 0.8]));
+        let attr = SdfPath::new("/Ball.primvars:displayColor").unwrap();
+        assert!(matches!(
+            doc.data().field(&attr, "typeName"),
+            Some(sdf::Value::Token(type_name)) if type_name.as_str() == "color3f[]"
+        ));
+        assert!(matches!(
+            doc.data().field(&attr, "default"),
+            Some(sdf::Value::Vec3fVec(values)) if values.len() == 1
+        ));
+    }
+
+    #[test]
+    fn set_attribute_rejects_usd_role_or_array_shape_changes() {
+        let scene = "#usda 1.0\ndef Mesh \"Patch\"\n{\n    color3f[] primvars:displayColor = [(1, 0, 0)]\n    color3f inputs:color = (0, 1, 0)\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(64), scene);
+        let before = doc.source();
+
+        for (name, type_name, value) in [
+            ("primvars:displayColor", "color3f", "(0, 0, 1)"),
+            ("inputs:color", "color3f[]", "[(0, 0, 1)]"),
+        ] {
+            let error = doc.apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Patch".into(),
+                name: name.into(),
+                type_name: type_name.into(),
+                value: value.into(),
+            });
+            assert!(matches!(error, Err(DocumentError::ValidationFailed(_))));
+            assert_eq!(doc.generation(), 0);
+            assert_eq!(doc.source(), before);
+        }
     }
 
     #[test]

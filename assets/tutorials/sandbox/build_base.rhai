@@ -77,7 +77,8 @@ fn on_start(me) {
     // (a `payload` arc) and mounted by the launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
     hint("Open Spawn in the right dock. Open Structures and add the requested part.\n\nDrag its gizmo to place it; use " + input_hint("look_button") + " to look around.");
-    spotlight("panel.right_inspector", "Open Spawn, then choose a part from Structures.");
+    focus_panel("spawn_palette");
+    spotlight("panel.spawn_palette", "Open Spawn, then choose a part from Structures.");
 }
 
 fn mission(me) {

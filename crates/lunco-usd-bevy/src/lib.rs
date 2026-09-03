@@ -3662,10 +3662,8 @@ impl DefaultPrim {
     /// )
     /// ```
     ///
-    /// We used to invent `custom string lunco:description` for exactly this, which
-    /// is the same mistake as `inputs:reflectance` (USD had `inputs:ior`) and
-    /// `primvars:materialType` (never primvar data): a bespoke name for a field USD
-    /// already defines. The invention is deleted; this is its replacement.
+    /// This uses USD's `doc` metadata rather than a custom attribute, so the
+    /// description is visible to OpenUSD tools without a LunCo-specific schema.
     pub fn documentation(&self) -> Option<String> {
         self.data
             .field(&self.path, "documentation")

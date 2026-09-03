@@ -60,6 +60,18 @@ commands.spawn((Mesh3d(mesh), look, Transform::from_translation(p)));
 That is the whole API. You never touch `Assets<StandardMaterial>`, and the crate you
 write this in does not link `bevy_pbr`. `lunco-render-bevy` binds it.
 
+### Authoring a parameter in USD
+
+When a `ShaderLook` is backed by an authored USD material, a parameter edit
+belongs to the bound `UsdShade.Shader` prim's `inputs:<name>` attribute. The
+editor and `SetObjectProperty` share the bound-Shader resolver: it follows the
+composed `material:binding` network, uses the existing composed `typeName`
+without collapsing USD roles or array shape, validates the USDA literal, and
+authors a typed `UsdOp`. A missing input uses the canonical scalar/vector type
+of the reflected `ParamValue`. Geometry `primvars:` are reserved for standard
+`UsdGeom` primvars such as `primvars:displayColor`; they are not a generic
+shader-parameter namespace.
+
 The uniform block is deliberately **opaque**: the same 256 bytes are reinterpreted by
 each shader through its own `struct Material`. That is what makes the parameter set a
 property of the *asset*, not of the engine. A name that is not in the schema is

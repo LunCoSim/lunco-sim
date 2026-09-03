@@ -173,7 +173,9 @@ fn __init_mission(me) {
     } else { () };
     if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
     if this.mission != () {
-        this.mission = __restore_mission(me, this.mission);
+        if this.__mission_doc != () {
+            this.mission = __restore_mission(me, this.mission);
+        }
         let s = __mission_status(this.mission);
         if s.all_done || s.any_failed { this.__mission_done = true; }
         this.__mission_restored = true;

@@ -101,6 +101,20 @@ name convention, or ECS-only grouping state is introduced.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
+### Dynamic shader parameter edits
+
+Dynamic shader parameters are authored on the composed USD `UsdShade.Shader`
+prim that the selected geometry reaches through `material:binding`. The editor
+does not infer a destination from a field name and does not write shader values
+as geometry `primvars:`. The shared resolver converts the reflected
+`ShaderLook` value into `inputs:<name>`, reads an existing composed
+`typeName` exactly (including roles such as `color3f` and array shape such as
+`color3f[]`), validates the literal through the USD authoring parser, and
+submits the complete edit as one `ApplyUsdOps` change set. New inputs use the
+canonical scalar/vector type for their reflected value. This is the same
+resolver used by `SetObjectProperty`, so interactive and agent edits have one
+USD destination and one type contract.
+
 ## Current surfaces
 
 The existing implementation provides the substrate the perspective composes:

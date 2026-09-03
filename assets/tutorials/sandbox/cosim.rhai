@@ -29,7 +29,7 @@ fn steps() {
            title: "The wire",
            body: "The USD `connectionPaths` become `SimConnection` links: model output to physics input, and physics output back to the model.\n\nForces become PendingForces on the body. The `piloted` port yields control to the current driver." },
 
-        #{ anchor: "panel.right_inspector",
+        #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser",
            title: "The model speaks in events",
            body: "Modelica publishes conditions such as `low_fuel` and `depleted` as outputs. `LunCoEvent` turns each output into a named event with a severity.\n\nOpen status or Telemetry to read the resulting state while the lander burns fuel." },
 

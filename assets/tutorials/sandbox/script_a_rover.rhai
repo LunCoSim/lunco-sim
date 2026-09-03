@@ -8,8 +8,8 @@ fn steps() {
         #{ anchor: "",                   title: "Script a rover",       body: "Rhai scripts add scenario behaviour to entities. This tutorial is a Rhai scenario too. Press Next to continue." },
         #{ anchor: "",                   title: "React to events",       body: "Use `on_start` for setup and `on_event` for reactions. Use mission and task primitives for progression. Keep per-entity state on `this`." },
         #{ anchor: "",                   title: "Choose the right owner", body: "Use Modelica for continuous equations. Use Rhai for policy and sequencing with verbs such as `nav_to`, `arrived`, `emit`, and mission objectives." },
-        #{ anchor: "panel.side_browser", title: "Attach or run a script", body: "To attach a script, add a `Scope` with `LunCoProgramAPI` and set its `info:sourceAsset` to the `.rhai` file. To run one live, use RunScenario. Re-running reloads the script without a rebuild." },
-        #{ anchor: "panel.side_browser", title: "Read the result",        body: "Open status and Telemetry to read the script's output. Scripts, the UI, and AI agents use the same command surface." },
+        #{ anchor: "panel.rhai_editor", focus: "rhai_editor", title: "Attach or run a script", body: "To attach a script, add a `Scope` with `LunCoProgramAPI` and set its `info:sourceAsset` to the `.rhai` file. To run one live, use RunScenario. Re-running reloads the script without a rebuild." },
+        #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser", title: "Read the result",        body: "Open Telemetry to read the script's output. Scripts, the UI, and AI agents use the same command surface." },
         #{ anchor: "",                   title: "Try it yourself",       body: "Open the Scripting Guide for the full verb and mission reference. Click Continue to return to the tutorial list." },
     ]
 }

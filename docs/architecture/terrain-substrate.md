@@ -135,7 +135,7 @@ both feed the runtime oracle, and must not be conflated:
 1. **USD composition layers** (sublayer stack / session / runtime layer) — the
    *authoring & merge* plane. Non-destructive, RBAC-scoped, journaled edits.
    A live crater-density tweak rides the **runtime layer**
-   (`persist_property_to_runtime_layer`) → composition resolves → new params.
+   typed runtime-layer shader-parameter command → composition resolves → new params.
    This is where authored values live and how edits compose across peers.
 
 2. **Terrain content layers** (`lunco:layer = "dem" | "craters" | "rocks" |

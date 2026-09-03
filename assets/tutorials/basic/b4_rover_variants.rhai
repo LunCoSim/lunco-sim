@@ -12,7 +12,7 @@ fn steps() {
         #{ anchor: "panel.center",          title: "Explorer LT (green)",       body: "Select the green Explorer LT. Notice its low centre of mass, strong motors, and high grip. Use it when you want forgiving handling." },
         #{ anchor: "panel.center",          title: "Standard (amber)",          body: "Select the amber Standard. Compare its mass and motor values with the Explorer LT. It is the balanced baseline for testing." },
         #{ anchor: "panel.center",          title: "Hauler (red)",              body: "Select the red Hauler. Notice its high centre of mass, weaker motors, and lower grip. Drive it carefully: across-slope steering can tip it." },
-        #{ anchor: "panel.right_inspector", title: "Explain the difference",    body: "Select a rover and read centre of mass, mass, torque, and friction in Inspector. Those authored values explain how each rover handles." },
+        #{ anchor: "panel.sandbox_inspector", title: "Explain the difference",    body: "Select a rover and read centre of mass, mass, torque, and friction in Inspector. Those authored values explain how each rover handles." },
         #{ anchor: "",                      title: "Choose a rover",             body: "Pick the rover that fits your next task. Click Continue to learn how to join a team session." },
     ]
 }

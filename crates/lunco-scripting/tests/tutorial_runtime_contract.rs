@@ -139,3 +139,53 @@ fn every_bundled_tutorial_starts_and_navigates_without_a_rhai_runtime_error() {
         }
     }
 }
+
+#[test]
+fn mission_without_a_document_starts_pending_without_reading_checkpoints() {
+    let checkpoint_reads = Arc::new(Mutex::new(Vec::<String>::new()));
+    let engine_commands = Arc::new(Mutex::new(Vec::new()));
+    let mut engine = runtime_engine(engine_commands);
+    let reads = checkpoint_reads.clone();
+    engine.register_fn(
+        "mission_checkpoint_read",
+        move |_me: Dynamic, key: String| -> String {
+            reads.lock().expect("checkpoint log poisoned").push(key);
+            "complete".to_owned()
+        },
+    );
+    let ast = engine
+        .compile(combined_source(
+            r#"
+                fn mission(me) {
+                    [objective("fresh", #{ text: "Fresh objective", done: |m| false })]
+                }
+            "#,
+        ))
+        .expect("mission contract compiles");
+    let mut scope = Scope::new();
+    let mut this = Dynamic::from_map(Map::new());
+
+    let _ = call_hook(
+        &engine,
+        &mut scope,
+        &ast,
+        "__init_mission",
+        (Dynamic::from_int(0),),
+        &mut this,
+    )
+    .expect("mission initialization succeeds without a document");
+
+    let state = this
+        .read_lock::<Map>()
+        .expect("mission state remains a map")
+        .get("mission")
+        .expect("mission is initialized")
+        .clone()
+        .cast::<rhai::Array>();
+    let objective = state[0].clone().cast::<Map>();
+    assert_eq!(objective["state"].clone().cast::<String>(), "pending");
+    assert!(checkpoint_reads
+        .lock()
+        .expect("checkpoint log poisoned")
+        .is_empty());
+}

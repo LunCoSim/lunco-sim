@@ -3212,6 +3212,15 @@ struct PanelTabViewer<'a> {
     world: &'a mut World,
 }
 
+/// Publish the exact screen rect for a registered panel. Generic dock-slot
+/// anchors remain available for lessons about a whole slot, while named panel
+/// lessons use this one registry-owned key in every Workbench render mode.
+fn publish_panel_anchor(world: &mut World, id: PanelId, rect: egui::Rect) {
+    if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
+        anchors.set(format!("panel.{}", id.as_str()), rect);
+    }
+}
+
 impl<'a> TabViewer for PanelTabViewer<'a> {
     type Tab = TabId;
 
@@ -3235,21 +3244,15 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // anchor for the current frame.
         let panel_rect = ui.max_rect();
         let measured_panel_rect = viewport::PanelRects::panel_rect_from_ui(ui);
-        let panel_key = match *tab {
-            TabId::Singleton(id) => Some(format!("panel.{}", id.as_str())),
-            TabId::Instance { kind, .. } => Some(format!("panel.{}", kind.as_str())),
-        };
-        if let (Some(mut a), Some(k)) = (self.world.get_resource_mut::<HelpAnchors>(), panel_key) {
-            a.set(k, panel_rect);
-        }
-
-        // Publish the active tab's authoritative screen rect before rendering
-        // its contents. Camera/image panels and runtime-authored surfaces both
-        // consume this same geometry; neither needs to infer dock positions.
         let panel_id = match *tab {
             TabId::Singleton(id) => id,
             TabId::Instance { kind, .. } => kind,
         };
+        publish_panel_anchor(self.world, panel_id, panel_rect);
+
+        // Publish the active tab's authoritative screen rect before rendering
+        // its contents. Camera/image panels and runtime-authored surfaces both
+        // consume this same geometry; neither needs to infer dock positions.
         if let Some(mut rects) = self.world.get_resource_mut::<viewport::PanelRects>() {
             match *tab {
                 TabId::Singleton(_) => rects.record(panel_id, measured_panel_rect),
@@ -4915,6 +4918,7 @@ fn render_layout(
                 .show(&mut viewport_ui, |ui| {
                     render_panel_solo(ui, &id, layout, world);
                 });
+            publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.side_browser", r.response.rect);
             }
@@ -4931,6 +4935,7 @@ fn render_layout(
                 .show(&mut viewport_ui, |ui| {
                     render_panel_solo(ui, &id, layout, world);
                 });
+            publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.right_inspector", r.response.rect);
             }
@@ -4946,6 +4951,7 @@ fn render_layout(
                 .show(&mut viewport_ui, |ui| {
                     render_panel_solo(ui, &id, layout, world);
                 });
+            publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.bottom", r.response.rect);
             }

@@ -7,10 +7,10 @@
 fn steps() {
     [
         #{ anchor: "",                      title: "Build a scene",        body: "Use this tour to place and edit objects. Press Next to move on; press Back to review a step." },
-        #{ anchor: "panel.right_inspector", title: "Place an object",       body: "Open Spawn in the right dock. Click an object in the palette to add it to the scene." },
+        #{ anchor: "panel.spawn_palette",   title: "Place an object",       body: "Open Spawn in the right dock. Click an object in the palette to add it to the scene." },
         #{ anchor: "panel.center",          title: "Move the object",       body: "Select the object in Entities or the USD prim tree. Drag the gizmo to move, rotate, or scale it." },
-        #{ anchor: "panel.right_inspector", title: "Edit its properties",   body: "With the object selected, open Inspector. Change an authored property such as colour, mass, or material." },
-        #{ anchor: "panel.side_browser",    title: "Save the scene",       body: "The shipped assets are read-only. Save your authored changes through the active Twin or document Save workflow." },
+        #{ anchor: "panel.sandbox_inspector", title: "Edit its properties",   body: "With the object selected, open Inspector. Change an authored property such as colour, mass, or material." },
+        #{ anchor: "",                      title: "Save the scene",       body: "The shipped assets are read-only. Save your authored changes through the active Twin or document Save workflow." },
         #{ anchor: "",                      title: "Scene ready",           body: "You placed an object, transformed it, and edited its properties. Click Continue to learn how to script a rover." },
     ]
 }

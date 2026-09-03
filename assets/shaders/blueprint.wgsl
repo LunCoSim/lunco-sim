@@ -1,5 +1,4 @@
-//! Blueprint grid material — self-describing `ShaderMaterial` (replaces the old
-//! hand-rolled `ExtendedMaterial` in `blueprint.rs`).
+//! Blueprint grid material — self-describing `ShaderMaterial`.
 //!
 //! Two grid modes blended by `transition` (0 → 1):
 //!   * `transition < 0.5` — **spherical lat/long grid** derived per fragment from
@@ -17,7 +16,8 @@
 //!
 //! Self-describing: the engine reflects `struct Material` (field → std140 offset)
 //! + the `//!@` annotations, so every knob is a free Inspector slider /
-//! `SetObjectProperty` target / USD `primvars:<field>`, and it hot-reloads on edit.
+//! `SetObjectProperty` target / bound USD Shader `inputs:<field>`, and it
+//! hot-reloads on edit.
 
 #import bevy_pbr::{
     mesh_functions,

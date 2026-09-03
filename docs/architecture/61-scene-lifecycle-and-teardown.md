@@ -170,6 +170,12 @@ clears both in `SceneTeardown` before the replacement scene integrates. A bad
 scene therefore stops safely, but cannot become a process-wide load lock; there
 is no restart-process fallback or mutation-rejection shim in the scene commands.
 
+Possession claims follow the same identity boundary. `SessionRegistry` is keyed
+by stable `GlobalEntityId` values, so `lunco-avatar` clears claims for outgoing
+`UsdPrimPath` entities during `SceneTeardown`, before deferred despawn. The
+replacement scene can therefore reuse deterministic ids without inheriting a
+prior lesson's driver, while non-scene ids remain untouched.
+
 It is a **schedule**, not a registry, and that choice is the design:
 
 - Bevy already expresses "run these systems at this lifecycle edge" — that is

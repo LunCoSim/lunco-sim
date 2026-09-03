@@ -647,9 +647,6 @@ pub(crate) fn populate_entity_tree_view(
 /// terrain streaming and render extraction create both continuously, and neither
 /// can change the visible tree by itself.
 /// Tracked automatically by `add_view_model` — see [`lunco_core::gate::tracked`].
-/// Measured firing on 2692 of 2694 frames while looking entirely correct,
-/// rebuilding the whole tree (a `String` per named entity) to produce an
-/// identical result.
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
@@ -667,6 +664,9 @@ pub(crate) fn scene_topology_changed(
             Option<&lunco_usd_bevy::UsdPrimPath>,
             Option<&ChildOf>,
             Option<&lunco_core::SystemManaged>,
+            Has<Mesh3d>,
+            Has<lunco_core::SelectableRoot>,
+            Has<SceneCamera>,
         ),
         (
             With<Name>,
@@ -745,11 +745,25 @@ pub(crate) fn scene_topology_changed(
             || view.parents.get(&entity).copied() != parent.map(|p| p.parent())
     };
     let named_changed = changed.iter().any(
-        |(entity, name, callsign, catalog_id, path, parent, system)| {
+        |(
+            entity,
+            name,
+            callsign,
+            catalog_id,
+            path,
+            parent,
+            system,
+            has_mesh,
+            has_selectable,
+            has_camera,
+        )| {
             let eligible =
                 view.scope_entities.contains(&entity) || system.is_none() || settings.show_system;
+            let newly_visible = !view.base_labels.contains_key(&entity)
+                && (has_mesh || has_selectable || has_camera);
             eligible
-                && (view.scope_entities.contains(&entity)
+                && (newly_visible
+                    || view.scope_entities.contains(&entity)
                     || value_changed((entity, name, callsign, catalog_id, path, parent)))
         },
     );
@@ -778,6 +792,31 @@ pub(crate) fn on_twin_closed(trigger: On<TwinClosed>, mut view: ResMut<EntityTre
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct GateRuns(u32);
+
+    fn count_gate_run(mut runs: ResMut<GateRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn topology_gate_rebuilds_when_a_named_selectable_arrives_after_initial_fill() {
+        let mut app = App::new();
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<EntityTreeView>()
+            .init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        app.world_mut()
+            .spawn((Name::new("Rover"), lunco_core::SelectableRoot));
+        app.update();
+
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+    }
 
     #[test]
     fn duplicate_labels_are_ordered_by_stable_source_key() {

@@ -188,9 +188,13 @@ first. lunica panel ids: `lunco.workbench.twin_browser`, `modelica_welcome`,
 `model_view.compile_buttons` (need a model open). `panel.modelica_plot` is an
 instance panel — spotlight its anchor, but don't `focus` it. See `lunica/README.md`.
 
-For luncosim, use the current generic dock anchors: `panel.center`,
-`panel.side_browser`, `panel.right_inspector`, and `panel.bottom`; use the real
-panel id with `focus` when a lesson needs to open a tab. Menu and toolbar
+For luncosim, use `panel.center` and the generic slot anchors
+`panel.side_browser`, `panel.right_inspector`, and `panel.bottom` only when the
+lesson is about that whole region. When the copy names a panel, use its exact
+registered anchor and focus pair, for example `panel.entity_list` with
+`entity_list`, `panel.telemetry_browser` with `telemetry_browser`,
+`panel.sandbox_inspector` with `sandbox_inspector`, or `panel.command_deck` with
+`command_deck`. Menu and toolbar
 controls can use their published anchors: `menu.time`, `menu.network`,
 `menu.help`, and `toolbar.run`. Perspective tabs use
 `menu.perspective.<registered-perspective-id>`, for example

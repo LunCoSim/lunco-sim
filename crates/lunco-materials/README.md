@@ -12,8 +12,10 @@ chosen per-instance via its `shader: Handle<Shader>`:
 - **Parameters are declared in the shader**, not in Rust. Each `.wgsl` declares a
   WGSL `struct Material { … }` plus `//!@ui` / `//!@default` annotation comments.
   The engine reflects them (`reflect_shader_schemas`) into a `ParamSchema`, so
-  every field becomes a free Inspector slider, `SetObjectProperty` target, and USD
-  `primvars:<field>` — and the layout **hot-reloads** on shader edit.
+  every field becomes a free Inspector slider and `SetObjectProperty` target —
+  and the layout **hot-reloads** on shader edit. When the look is backed by USD,
+  edits are authored as typed `inputs:<field>` attributes on the bound
+  `UsdShade.Shader` prim.
 - **Lighting** is opt-in via the shared `#import lunco::pbr_lit::lit` module (full
   Bevy PBR — directional sun, shadows, tonemapping) — no `StandardMaterial`
   inheritance, no hand-copied `PbrInput` boilerplate.
@@ -58,18 +60,36 @@ That's it — no Rust. Optional texture slots are available at fixed bindings
 ### 2. Apply it from USD
 
 ```usda
-def Cube "MyObject"
+def Xform "World"
 {
-    string primvars:materialType = "shader"
-    string primvars:shaderPath   = "shaders/my_material.wgsl"
-    color3f primvars:base_color   = (0.2, 0.4, 0.9)
-    float   primvars:roughness    = 0.3
+    def Cube "MyObject" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Looks/MyObject_Mat>
+    }
+    def Scope "Looks"
+    {
+        def Material "MyObject_Mat"
+        {
+            rel outputs:surface.connect = </World/Looks/MyObject_Mat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                asset info:wgsl:sourceAsset = @lunco://shaders/my_material.wgsl@
+                color3f inputs:diffuseColor = (0.2, 0.4, 0.9)
+                float inputs:roughness = 0.3
+            }
+        }
+    }
 }
 ```
 
-Each `primvars:<name>` whose name matches a `Material` field is read and packed by
 `apply_usd_shader_materials` (in `lunco-usd-sim`, deterministically ordered after
-`sync_usd_visuals`). Colours read as `vec3`, scalars as `f32`.
+`sync_usd_visuals`) follows the composed `material:binding`, reads the bound
+Shader's typed `inputs:*`, and packs values whose names match the WGSL `Material`
+fields. Geometry `primvars:displayColor` remains the standard shared colour
+input for shaders that opt into `//!@engine display_color`.
 
 ### 3. Or apply it from Rust
 
@@ -88,7 +108,8 @@ let handle = shader_materials.add(m);   // needs ShaderMaterialPlugin registered
 A binary that renders `ShaderMaterial` adds `ShaderMaterialPlugin` (registers
 `MaterialPlugin::<ShaderMaterial>` + the schema-reflection system). USD authoring
 is separate — `lunco-usd-sim`'s `UsdSimPlugin` — so a binary with the pipeline but
-not `UsdSimPlugin` renders `materialType="shader"` prims as plain `StandardMaterial`.
+not `UsdSimPlugin` does not project the USD `UsdShade` shader network into a
+`ShaderLook`.
 
 ## Crate structure
 

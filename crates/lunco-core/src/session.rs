@@ -258,6 +258,15 @@ impl SessionRegistry {
         self.owners.get(&gid) == Some(&session)
     }
 
+    /// Release the claim for one entity that is leaving the scene.
+    ///
+    /// Global entity ids are stable across scene replacement, so ownership
+    /// must be removed before the replacement projection can reuse the id.
+    /// Returns the session that held the claim, if any.
+    pub fn clear_gid(&mut self, gid: u64) -> Option<SessionId> {
+        self.owners.remove(&gid)
+    }
+
     /// Free every entity a dropped session held; returns the freed gids so the
     /// caller can release the corresponding `ControllerLink`s (G5).
     pub fn release_session(&mut self, session: SessionId) -> Vec<u64> {
@@ -1382,6 +1391,18 @@ mod tests {
             },
         );
         (reg, rbac, CommandPolicyRegistry::default())
+    }
+
+    #[test]
+    fn clear_gid_releases_only_the_scene_entity() {
+        let mut registry = SessionRegistry::default();
+        registry.claim(A, R1).unwrap();
+        registry.claim(A, R2).unwrap();
+
+        assert_eq!(registry.clear_gid(R1), Some(A));
+        assert_eq!(registry.owner_of(R1), None);
+        assert_eq!(registry.owner_of(R2), Some(A));
+        assert_eq!(registry.clear_gid(R1), None);
     }
 
     /// A blackout with NO policy registered changes nothing. The fact is inert on
