@@ -71,9 +71,9 @@ added separately by app composition (not by `UsdPlugins`):
   not render. Visible targets use `UsdPreviewRenderBudget`: 2048 px per axis,
   4,194,304 pixels per view, and 8,388,608 visible pixels per frame by default.
 
-Each `UsdPreviewView` owns CAD-style presentation navigation: primary-drag
-orbit, middle/secondary-drag pan, wheel zoom, perspective/orthographic mode,
-fit-to-bounds, and reset. The typed commands
+Each `UsdPreviewView` owns CAD-style presentation navigation: primary/left-drag
+pan, secondary/right-drag orbit, middle-drag pan, wheel zoom,
+perspective/orthographic mode, fit-to-bounds, and reset. The typed commands
 `SetUsdPreviewProjection`, `PanUsdPreviewView`, `ZoomUsdPreviewView`,
 `FrameUsdPreviewView`, and `ResetUsdPreviewView` are shared by the toolbar and
 agent/Rhai automation. They operate on projected Bevy bounds and camera state;

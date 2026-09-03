@@ -306,8 +306,8 @@ fn on_browser_usd_document_ready(
 }
 
 /// Pointer-driven orbit camera (CAD-style preview). Anchored on a `target`
-/// point in scene space; primary-drag orbits, middle/secondary-drag pans, and
-/// scroll zooms. The camera state is presentation state owned by one
+/// point in scene space; primary-drag pans, secondary-drag orbits,
+/// middle-drag pans, and scroll zooms. The camera state is presentation state owned by one
 /// [`UsdPreviewView`], never by the projected USD stage.
 #[derive(Debug, Clone)]
 pub struct OrbitCamera {
@@ -787,6 +787,20 @@ struct UsdViewportOrbitInput {
     drag: egui::Vec2,
     pan: egui::Vec2,
     scroll_y: f32,
+}
+
+/// Resolve the preview's pointer buttons into the shared View interaction
+/// contract: left/middle drag pans and right drag orbits. Shift keeps the
+/// explicit pan chord available when the secondary button is used.
+fn preview_drag_channels(
+    primary: bool,
+    middle: bool,
+    secondary: bool,
+    shift: bool,
+) -> (bool, bool) {
+    let pan = primary || middle || (secondary && shift);
+    let orbit = secondary && !pan;
+    (orbit, pan)
 }
 
 fn on_viewport_measured(
@@ -2384,6 +2398,7 @@ fn render_preview_view(
             }
         }
     });
+    ui.small("L-drag pan · R-drag orbit · M-drag pan · wheel zoom");
     ui.separator();
 
     let Some(tex_id) = tex_id else {
@@ -2431,8 +2446,8 @@ fn render_preview_view(
             let primary = pointer.button_down(egui::PointerButton::Primary);
             let middle = pointer.button_down(egui::PointerButton::Middle);
             let secondary = pointer.button_down(egui::PointerButton::Secondary);
-            let pan = middle || secondary || (primary && input.modifiers.shift);
-            let orbit = primary && !pan;
+            let (orbit, pan) =
+                preview_drag_channels(primary, middle, secondary, input.modifiers.shift);
             (
                 orbit.then_some(delta).unwrap_or_default(),
                 pan.then_some(delta).unwrap_or_default(),
@@ -2806,6 +2821,30 @@ mod tests {
         assert!(orbit.distance.is_finite());
         assert!(orbit.distance < original_distance);
         assert!((orbit.zoom_factor(12.0) - 0.982).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn preview_pointer_buttons_match_view_navigation_contract() {
+        assert_eq!(
+            preview_drag_channels(true, false, false, false),
+            (false, true)
+        );
+        assert_eq!(
+            preview_drag_channels(false, true, false, false),
+            (false, true)
+        );
+        assert_eq!(
+            preview_drag_channels(false, false, true, false),
+            (true, false)
+        );
+        assert_eq!(
+            preview_drag_channels(false, false, true, true),
+            (false, true)
+        );
+        assert_eq!(
+            preview_drag_channels(true, false, false, true),
+            (false, true)
+        );
     }
 
     #[test]

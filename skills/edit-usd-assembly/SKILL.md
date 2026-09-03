@@ -140,8 +140,9 @@ the active simulation viewport.
    These are presentation budgets, not authored USD values; invalid zero limits
    leave the target inactive.
 
-   Navigate the focused view with primary-drag orbit, middle/secondary-drag
-   pan, and wheel zoom. The toolbar and agents use the same typed commands:
+   Navigate the focused view with primary/left-drag pan, secondary/right-drag
+   orbit, middle-drag pan, and wheel zoom. The toolbar and agents use the same
+   typed commands:
    `SetUsdPreviewProjection { view, projection: "perspective"|"orthographic" }`,
    `PanUsdPreviewView { view, delta: [x, y] }`,
    `ZoomUsdPreviewView { view, factor }`, `FrameUsdPreviewView { view }`, and

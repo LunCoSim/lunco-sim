@@ -74,8 +74,9 @@ name convention, or ECS-only grouping state is introduced.
   focused `UsdPreviewId` and resolves the path only against that session's
   stage handle and preview-root hierarchy, so identical paths in the live
   scene or another open document cannot cross the editor boundary.
-- Preview navigation is owned by `UsdPreviewView`. Primary-drag orbit,
-  middle/secondary-drag pan, and wheel zoom update that view's camera state
+- Preview navigation is owned by `UsdPreviewView`. Primary/left-drag pan,
+  secondary/right-drag orbit, middle-drag pan, and wheel zoom update that
+  view's camera state
   from per-frame pointer deltas. `SetUsdPreviewProjection`,
   `PanUsdPreviewView`, `ZoomUsdPreviewView`, `FrameUsdPreviewView`, and
   `ResetUsdPreviewView` are the same typed boundary for agents and UI
