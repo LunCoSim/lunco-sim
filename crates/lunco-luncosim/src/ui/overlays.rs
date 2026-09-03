@@ -7,10 +7,9 @@
 //! was a pair of system `run_if`s and nothing else, so "hide it" meant editing
 //! Rust.
 //!
-//! Both are now OFF by default and live behind [`OverlaySettings`], toggled from
-//! the workbench **Time** menu. That menu is also where the sky clock's own
-//! controls now live, so turning the overlay off does not take the capability with
-//! it — you can retarget and rescale the celestial clock from the menu alone.
+//! Both are now OFF by default and live behind [`OverlaySettings`]. The sky
+//! clock is configured from the workbench **Time** menu, while the view
+//! switcher is configured from **Camera** beside its body controls.
 //!
 //! The rover HUD is deliberately NOT in here: it only draws while you are
 //! possessing a vessel, so it is already answering a question you just asked.
@@ -44,48 +43,46 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
     settings.is_some_and(|s| s.sky_clock)
 }
 
-/// Contribute the overlay checkboxes to the workbench Time menu, alongside the
-/// sky-clock controls themselves (`celestial_time::sky_clock_menu_ui`).
+/// Contribute the sky-clock controls to the workbench Time menu.
 ///
 /// Registered at `Startup`; a no-op when the workbench layout is absent (headless
 /// runs, `luncosim test`), which is why it takes `&mut World` and bails rather than
 /// requiring the resource.
 pub(crate) fn register_time_menu(world: &mut World) {
-    use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_time_menu(|ui, ctx| {
         super::celestial_time::sky_clock_menu_ui(ui, ctx);
-
-        ui.separator();
-        ui.label(egui::RichText::new("Viewport overlays").weak().small());
-        // Edit a COPY and write back only on a real change: `resource_mut` marks
-        // the resource changed on any deref, and the settings writer persists on
-        // change — so drawing the menu would rewrite settings.json every frame the
-        // menu is open.
-        let Some(mut edited) = ctx.resource::<OverlaySettings>().copied() else {
-            return;
-        };
-        let original = edited;
-        ui.checkbox(&mut edited.sky_clock, "Sky clock (top-left)")
-            .on_hover_text(
-                "Floating pill showing the celestial epoch and its clock coupling. \
-                 The same controls are in this menu — the overlay is only for \
-                 keeping them on screen.",
-            );
-        ui.checkbox(&mut edited.view_switcher, "View switcher (top-centre)")
-            .on_hover_text(
-                "Surface / Moon / Earth pill. The highlighted chip is the body the \
-                 camera is currently focused on.",
-            );
-        if edited != original {
-            ctx.set_resource(edited);
-        }
     });
 }
 
-/// Registers [`OverlaySettings`] (persisted) and its Time-menu rows.
+/// Contribute the view-switcher preference to the workbench Camera menu.
+pub(crate) fn camera_menu_ui(ui: &mut bevy_egui::egui::Ui, ctx: &mut lunco_workbench::MenuCtx) {
+    // Edit a COPY and write back only on a real change: `set_resource` applies
+    // the replacement after the menu pass, so opening the menu does not mark
+    // settings changed and rewrite settings.json.
+    let Some(mut edited) = ctx.resource::<OverlaySettings>().copied() else {
+        return;
+    };
+    let original = edited;
+    ui.separator();
+    ui.label(
+        bevy_egui::egui::RichText::new("Viewport overlays")
+            .weak()
+            .small(),
+    );
+    ui.checkbox(&mut edited.view_switcher, "View switcher (top-centre)")
+        .on_hover_text(
+            "Surface / Moon / Earth pill. The highlighted chip is the body the \
+             camera is currently focused on.",
+        );
+    if edited != original {
+        ctx.set_resource(edited);
+    }
+}
+
+/// Registers [`OverlaySettings`] (persisted) and its menu rows.
 pub(crate) fn plugin(app: &mut App) {
     app.register_settings_section::<OverlaySettings>();
     app.add_systems(Startup, register_time_menu);

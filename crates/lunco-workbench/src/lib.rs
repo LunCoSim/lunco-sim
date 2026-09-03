@@ -1171,8 +1171,8 @@ pub struct WorkbenchLayout {
     /// App-wide Time menu contributions. Domain plugins push a closure via
     /// [`WorkbenchLayout::register_time_menu`] at Startup so
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
-    /// live under ONE discoverable menu instead of on the toolbar and in
-    /// floating overlays. The toolbar keeps pause/resume and nothing else.
+    /// live under ONE discoverable menu. The toolbar keeps pause/resume and
+    /// nothing else.
     pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Dynamic top-level menus contributed by domain plugins.
@@ -4508,8 +4508,8 @@ fn render_layout(
             // for mid-drive.
             //
             // Domain plugins contribute rows via
-            // `WorkbenchLayout::register_time_menu` (the celestial sky clock and
-            // optional overlays), so nothing about the sky is hardcoded here.
+            // `WorkbenchLayout::register_time_menu` (the celestial sky clock),
+            // so nothing about the sky is hardcoded here.
             let r_time = ui.menu_button("Time", |ui| {
                 ui.label(egui::RichText::new("Simulation rate").weak().small());
                 let (paused, rate) = world

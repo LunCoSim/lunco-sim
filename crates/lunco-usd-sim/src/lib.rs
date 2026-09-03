@@ -613,6 +613,13 @@ impl Plugin for UsdSimPlugin {
             PostUpdate,
             marker::scale_screen_constant_markers.before(TransformSystems::Propagate),
         );
+        // Waypoint progress is runtime session state. Keep it on the projected
+        // appearance intent rather than routing a material edit back through the
+        // live USD stage (which would rebuild the scene during an active mission).
+        app.add_systems(
+            Update,
+            marker::sync_waypoint_visuals.after(process_usd_sim_prims),
+        );
         // The authored light's `Transform` is installed during Update, while
         // its composed world rotation is produced by Bevy/big_space transform
         // propagation. Read that world fact only after propagation; sampling it
@@ -1489,6 +1496,59 @@ fn process_usd_sim_prim_read(
     if waypoint {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
+    // Waypoint arrival is session state. Capture the composed active/inactive
+    // looks on the projected visual child so `marker::sync_waypoint_visuals` can
+    // update appearance in ECS without authoring a live USD material edit. A
+    // material edit would rebuild every bound visual and tear down active
+    // co-simulation participants while a route is running.
+    if let Some(material) = maybe_mat {
+        let mut owner = sdf_path.as_str().to_string();
+        let marker_path = loop {
+            let owner_sdf = SdfPath::new(&owner).ok();
+            if owner_sdf
+                .as_ref()
+                .is_some_and(|path| reader.has_api_schema(path, "LunCoWaypointAPI"))
+            {
+                break Some(owner);
+            }
+            if owner == "/" {
+                break None;
+            }
+            owner = owner
+                .rsplit_once('/')
+                .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                .unwrap_or("/")
+                .to_string();
+        };
+        if let Some(marker_path) = marker_path {
+            if let Some(inactive) = lunco_usd_bevy::read_vec3_f64(
+                reader,
+                &SdfPath::new(&marker_path).expect("validated waypoint marker path"),
+                "lunco:waypoint:inactiveColor",
+            ) {
+                if inactive.iter().all(|value| value.is_finite()) {
+                    let mut inactive_look = material.clone();
+                    inactive_look.base_color = LinearRgba::new(
+                        inactive[0] as f32,
+                        inactive[1] as f32,
+                        inactive[2] as f32,
+                        material.base_color.alpha,
+                    );
+                    inactive_look.emissive = LinearRgba::new(
+                        inactive[0] as f32,
+                        inactive[1] as f32,
+                        inactive[2] as f32,
+                        material.emissive.alpha,
+                    );
+                    commands.entity(entity).try_insert(marker::WaypointVisualLook {
+                        active: material.clone(),
+                        inactive: inactive_look,
+                        marker_path,
+                    });
+                }
+            }
+        }
+    }
     // Pointer behavior is scene intent, not a picking-backend concern.  The
     // render-free USD projection records it here; the GUI layer later maps the
     // primary-button pass-through part to Bevy's `Pickable` component.  This
@@ -1978,12 +2038,13 @@ fn process_usd_sim_prim_read(
     }
 
     // 1. Detect PhysxVehicleContextAPI (the mobility root)
-    // Stamps `MobilityRoot` and `OutputPorts` from numeric `outputs:` attributes authored on the
-    // vehicle root. Outputs owned by a generated Modelica network remain on its
-    // `SimComponent`; duplicating them into child `Port`s would create a second,
-    // unwritten producer and make a cross-domain connection read zero.
-    // A vehicle without an authored imperative output surface is under-specified;
-    // Rust does not fabricate drive/steer/brake ports from the PhysX schema.
+    // Stamps the generic mobility/selectable boundary from the PhysX schema. Numeric
+    // outputs authored on the vehicle root become runtime actuator ports only when
+    // they are not owned by a generated Modelica network. Outputs owned by that
+    // network remain on its `SimComponent`; duplicating them into child `Port`s
+    // would create a second, unwritten producer and make a cross-domain connection
+    // read zero. The vehicle's command and drive behaviour therefore remains an
+    // authored USD/Modelica contract; Rust does not fabricate a steering model.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
         info!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
@@ -2014,31 +2075,35 @@ fn process_usd_sim_prim_read(
                 port_names.push(name.to_string());
             }
         }
-        if port_names.is_empty() {
-            error!(
-                "USD vehicle {} applies PhysxVehicleContextAPI but authors no numeric outputs:* actuator ports",
-                prim_path.path
-            );
-            commands.entity(entity).try_insert(UsdSimProcessed);
-            return;
-        }
-        for name in &port_names {
-            // `ChildOf(entity)`: the actuator ports are owned by the vehicle so the
-            // recursive scene-clear reclaims them with it — no detached-at-root
-            // survivors across a scene swap (general lifecycle contract).
-            let port_ent = commands
-                .spawn((
-                    Port::default(),
-                    Name::new(format!("Port_{}", name)),
-                    ChildOf(entity),
-                ))
-                .id();
-            port_map.insert(name.clone(), port_ent);
-        }
-
         commands
             .entity(entity)
-            .try_insert(lunco_core::SelectableRoot);
+            .try_insert((lunco_core::SelectableRoot, lunco_core::MobilityRoot))
+            .remove::<lunco_core::OutputPorts>();
+
+        if port_names.is_empty() {
+            debug!(
+                "USD vehicle {} has no external numeric outputs:* ports; authored generated network owns its actuator outputs",
+                prim_path.path
+            );
+        } else {
+            for name in &port_names {
+                // `ChildOf(entity)`: the actuator ports are owned by the vehicle so the
+                // recursive scene-clear reclaims them with it — no detached-at-root
+                // survivors across a scene swap (general lifecycle contract).
+                let port_ent = commands
+                    .spawn((
+                        Port::default(),
+                        Name::new(format!("Port_{}", name)),
+                        ChildOf(entity),
+                    ))
+                    .id();
+                port_map.insert(name.clone(), port_ent);
+            }
+
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::OutputPorts::new(port_map));
+        }
 
         // The input surface is AUTHORED, in the vessel's `Controls` scope: the
         // intents it binds name exactly the ports this vessel accepts.
@@ -2052,21 +2117,17 @@ fn process_usd_sim_prim_read(
         // refused. That is how you author a wreck or an un-crewed chassis — by
         // composition, not a check.
         //
-        // `MobilityRoot` and `OutputPorts` are stamped here. The `InputPorts` surface is
+        // `MobilityRoot` is stamped here. The `InputPorts` surface is
         // stamped beside the `ControlBinding` (lunco-usd-bevy, the `Controls`
         // branch) — ONE site, because `try_insert` OVERWRITES: stamping a fresh
         // empty surface from two different systems would let a live re-run of
         // either one wipe the keys `sync_input_ports` had already seeded.
         //
-        // `OutputPorts` is a different thing and is NOT the input surface: it
+        // `OutputPorts`, when authored, is a different thing and is NOT the input surface: it
         // maps ACTUATOR names to their `Port` entities, built above from the
         // vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and
         // they are not the same value (analog command vs discretized gate).
-        commands.entity(entity).try_insert((
-            lunco_core::MobilityRoot,
-            lunco_core::OutputPorts::new(port_map),
-        ));
     }
 
     // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
@@ -2081,7 +2142,18 @@ fn process_usd_sim_prim_read(
     // not a script, it is compiled and ticked by the behaviour engine. Extension
     // picks the engine, exactly as it does for `.mo` and `.rhai`.
     let mut behavior_sources: Vec<(String, Option<String>, Option<String>)> = Vec::new();
-    collect_behavior_sources(reader, &sdf_path, &mut behavior_sources);
+    // A behavior program belongs to the prim that owns the command surface. A
+    // scene/root may contain the vessel as a descendant, but recursively scanning
+    // every prim would attach the descendant mission to that root and leave the
+    // actual vessel without an autopilot. `Controls` is the authored, generic
+    // ownership boundary shared by vehicles and other controllable assemblies.
+    let owns_control_surface = reader
+        .children(&sdf_path)
+        .into_iter()
+        .any(|child| child.name() == Some("Controls"));
+    if owns_control_surface {
+        collect_behavior_sources(reader, &sdf_path, &mut behavior_sources);
+    }
     // A BT.CPP file may contain several named BehaviorTree definitions; its
     // `main_tree_to_execute` is the explicit selection for that file. Several
     // sibling BT program children are different controllers, not an implicit

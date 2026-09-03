@@ -890,8 +890,9 @@ fn leaf_drive_to_arming(
     arm: Option<Arc<AtomicBool>>,
 ) -> BoxNode<DriveCtx> {
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let (throttle, steer, brake, arrived) =
-            nav_setpoint(ctx.pos, ctx.fwd, target, speed, radius);
+        let (throttle, steer, brake, arrived) = nav_setpoint_forward(
+            ctx.pos, ctx.fwd, target, speed, radius,
+        );
         ctx.out = (throttle, steer, brake);
         if arrived {
             Status::Success
@@ -1434,9 +1435,11 @@ impl AutopilotBehaviorSpec {
 
 /// Steering math (Rust): from the vessel's world pose and a goal, return
 /// `(throttle, steer, brake, arrived)` in `[-1, 1]`. Steer toward the goal on the
-/// yaw plane; when the goal is behind, pivot with zero throttle until it enters
-/// the forward half-plane, then approach it forward. Brake + `arrived` within
-/// `radius`. This is COMPUTATION, so it lives in Rust — rhai is glue-only.
+/// yaw plane and use signed throttle when the goal is behind, so both
+/// differential and front-steered authored drive laws can make progress. A
+/// zero-throttle pivot is not a generic vehicle operation: Ackermann vehicles
+/// have equal left/right axle drive and cannot rotate in place. Brake + `arrived`
+/// within `radius`. This is COMPUTATION, so it lives in Rust — rhai is glue-only.
 /// Steering is a *relative* direction, so it is invariant to the floating-origin
 /// offset.
 pub fn nav_setpoint(
@@ -1455,21 +1458,57 @@ pub fn nav_setpoint(
     // for steering — only absolute grid positions must stay f64.
     let to = (to / dist).as_vec3();
     let fwd = fwd.normalize_or_zero();
-    // Yaw-plane cross `(forward × to).y` and forward/goal alignment `dot`. Skid mix
-    // is `left = drive + steer`, so `+steer` yaws right; we steer `-cy` to turn
-    // toward the goal (matches the prelude `steer_to` sign convention).
+    // Yaw-plane cross `(forward × to).y` and forward/goal alignment `dot`. Skid
+    // mix is `left = drive + steer`, so `+steer` yaws right; we steer `-cy` to
+    // turn toward the goal (matches the prelude `steer_to` sign convention).
+    // The authored Ackermann law consumes the same signed throttle/steer
+    // surface, so this remains a vehicle-neutral command policy.
     let cy = fwd.z * to.x - fwd.x * to.z;
     let dot = fwd.dot(to);
-    if dot < 0.0 {
-        // A goal behind the rover is a heading error, not a request for reverse
-        // motion. With throttle released, the authored drive program pivots on
-        // the spot. Exactly behind is symmetric, so use the same deterministic
-        // left-turn tie-break as the authored `steer_to` helper.
-        let steer = if cy >= 0.0 { -1.0 } else { 1.0 };
-        return (0.0, steer, 0.0, false);
+    // Treat the near-sideways band as a forward manoeuvre.  A vehicle that is
+    // exactly broadside to a goal has no meaningful forward/back decision, and
+    // choosing reverse from a tiny signed yaw error makes the command flip
+    // every tick while an Ackermann rover is trying to turn.  Reverse only
+    // once the goal is unambiguously behind the vehicle.
+    const REVERSE_ALIGNMENT: f32 = -0.25;
+    let travel_sign: f64 = if dot < REVERSE_ALIGNMENT { -1.0 } else { 1.0 };
+    let steer = (-cy as f64 * 2.5 * travel_sign).clamp(-1.0, 1.0);
+    let alignment = dot.abs() as f64;
+    let throttle = speed * travel_sign * (0.25 + 0.75 * alignment).clamp(0.25, 1.0);
+    (throttle, steer, 0.0, false)
+}
+
+/// Forward-only form used by a `drive_to` leaf. High-level routes must not
+/// reverse merely because a waypoint is behind the rover: a front-steered
+/// vehicle cannot turn while reversing with the same steering geometry, and a
+/// one-tick sign change can make it oscillate around a waypoint. Instead, keep
+/// the requested forward throttle and use the ordinary steering surface to
+/// perform a bounded turn. The exact 180-degree case chooses the same stable
+/// pivot direction as [`leaf_face`].
+fn nav_setpoint_forward(
+    pos: GridPos,
+    fwd: Vec3,
+    target: GridPos,
+    speed: f64,
+    radius: f32,
+) -> (f64, f64, f64, bool) {
+    let to = target - pos;
+    let dist = to.length();
+    if dist < radius as f64 {
+        return (0.0, 0.0, 1.0, true);
     }
-    let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
-    let throttle = speed * (0.25 + 0.75 * dot as f64).clamp(0.25, 1.0);
+
+    let to = (to / dist).as_vec3();
+    let fwd = fwd.normalize_or_zero();
+    let cy = fwd.z * to.x - fwd.x * to.z;
+    let dot = fwd.dot(to);
+    let steer = if dot < 0.0 && cy.abs() < f32::EPSILON {
+        -1.0
+    } else {
+        (-cy as f64 * 2.5).clamp(-1.0, 1.0)
+    };
+    let alignment = dot.max(0.0) as f64;
+    let throttle = speed * (0.25 + 0.75 * alignment).clamp(0.25, 1.0);
     (throttle, steer, 0.0, false)
 }
 
@@ -2426,6 +2465,34 @@ mod tests {
             children: vec![BehaviorSpec::PathBlocked { distance: 2.0 }, patrol(&[10.0])],
         };
         assert!(tree.has_motion());
+    }
+
+    #[test]
+    fn drive_to_rear_goal_turns_with_forward_throttle() {
+        let (throttle, steer, brake, arrived) = nav_setpoint_forward(
+            GridPos(DVec3::ZERO),
+            Vec3::NEG_Z,
+            GridPos(DVec3::new(8.0, 0.0, 3.0)),
+            0.6,
+            2.0,
+        );
+        assert!(throttle > 0.0);
+        assert!(steer.abs() > 0.8);
+        assert_eq!(brake, 0.0);
+        assert!(!arrived);
+
+        // The exact 180-degree case has no cross-product sign. It still needs
+        // a deterministic hard turn; otherwise the route would command a
+        // straight drive forever while the goal remains behind.
+        let (throttle, steer, _, _) = nav_setpoint_forward(
+            GridPos(DVec3::ZERO),
+            Vec3::NEG_Z,
+            GridPos(DVec3::new(0.0, 0.0, 8.0)),
+            0.6,
+            2.0,
+        );
+        assert!(throttle > 0.0);
+        assert_eq!(steer, -1.0);
     }
 
     fn ctx_at(x: f64) -> DriveCtx {
