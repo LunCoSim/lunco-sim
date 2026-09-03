@@ -274,11 +274,12 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   `primvars:st`. If distinct metallic and roughness textures are both connected,
   the **metallic one is silently dropped** (one Bevy slot).
 
-Custom WGSL is bindable via `uniform asset info:wgsl:sourceAsset = @lunco://shaders/x.wgsl@`
-with `inputs:*` as parameters — but that path uses a **weaker resolver** (no
-inheritance, no collections), so bind it **directly on the gprim**. Binding a
-library shader with no `@fragment` entry (e.g. `pbr_lit.wgsl`) is refused with a
-warning, deliberately — an invalid pipeline poisons the cache until restart.
+Custom WGSL is bindable through a standard composed `UsdShade.Material` and
+`UsdShade.Shader`, using `uniform asset info:wgsl:sourceAsset =
+@lunco://shaders/x.wgsl@` and typed `inputs:*` parameters on the Shader. The
+same material-binding resolution handles inherited and collection bindings.
+Binding a library shader with no `@fragment` entry (e.g. `pbr_lit.wgsl`) is an
+authored render error; bind a complete material shader instead.
 
 ## Physics
 

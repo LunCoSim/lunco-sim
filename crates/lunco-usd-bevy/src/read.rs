@@ -212,35 +212,14 @@ pub trait UsdRead {
         }
     }
 
-    /// The composed USD type name of an attribute value. This is intentionally
-    /// derived from the resolved value rather than a caller-maintained table,
-    /// so an editor can preserve an authored `float3`/`double3` or
-    /// `quatf`/`quatd` channel when creating a time sample.
-    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        let type_name = match self.attr_value(prim, name)? {
-            Value::Bool(_) => "bool",
-            Value::Int(_) => "int",
-            Value::Int64(_) => "int64",
-            Value::Float(_) => "float",
-            Value::Double(_) => "double",
-            Value::Vec3f(_) => "float3",
-            Value::Vec3d(_) => "double3",
-            Value::Quatf(_) => "quatf",
-            Value::Quatd(_) => "quatd",
-            Value::Quath(_) => "quath",
-            Value::Token(_) => "token",
-            Value::String(_) => "string",
-            Value::AssetPath(_) => "asset",
-            Value::FloatVec(_) => "float[]",
-            Value::DoubleVec(_) => "double[]",
-            Value::Vec3fVec(_) => "float3[]",
-            Value::Vec3dVec(_) => "double3[]",
-            Value::TokenVec(_) => "token[]",
-            Value::StringVec(_) => "string[]",
-            _ => return None,
-        };
-        Some(type_name.to_owned())
-    }
+    /// The composed USD declaration of an attribute, including its role and
+    /// array shape (`color3f[]`, `point3f`, `quatd`, ...).
+    ///
+    /// This must come from USD's composed `typeName` field, not from the Rust
+    /// value variant: OpenUSD intentionally decodes `color3f`, `point3f`, and
+    /// `vector3f` into the same `Vec3f` value. Editors and keyframe authors
+    /// need the declaration to preserve that semantic role and cardinality.
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String>;
 
     /// The text of a `string`- **or** `token`-typed attribute.
     ///
@@ -864,6 +843,16 @@ impl UsdRead for StageView<'_> {
             .flatten()
     }
 
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .type_name()
+            .ok()
+            .flatten()
+            .map(|type_name| type_name.to_string())
+    }
+
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
         let Ok(property_stack) = self
             .stage()
@@ -1195,6 +1184,13 @@ impl UsdRead for UsdReadSource<'_> {
         }
     }
 
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::attr_type_name(*reader, prim, name),
+            Self::Live(reader) => UsdRead::attr_type_name(reader, prim, name),
+        }
+    }
+
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
         match self {
             Self::Prepared(reader) => UsdRead::has_authored_attribute(*reader, prim, name),
@@ -1467,6 +1463,43 @@ mod real_reader_tests {
         assert_eq!(
             view.text(&world, "a_val").as_deref(),
             Some("terrain/connecting_ridge")
+        );
+    }
+
+    #[test]
+    fn attr_type_name_preserves_usd_roles_and_array_shape() {
+        let source = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    color3f scalar_color = (1, 0, 0)
+    color3f[] array_color = [(0, 1, 0)]
+    point3f point = (1, 2, 3)
+    vector3f direction = (0, 0, 1)
+}
+"#;
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+
+        assert_eq!(
+            view.attr_type_name(&world, "scalar_color").as_deref(),
+            Some("color3f")
+        );
+        assert_eq!(
+            view.attr_type_name(&world, "array_color").as_deref(),
+            Some("color3f[]")
+        );
+        assert_eq!(
+            view.attr_type_name(&world, "point").as_deref(),
+            Some("point3f")
+        );
+        assert_eq!(
+            view.attr_type_name(&world, "direction").as_deref(),
+            Some("vector3f")
         );
     }
 

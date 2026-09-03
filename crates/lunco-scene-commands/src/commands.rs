@@ -1545,109 +1545,6 @@ pub fn persist_delete_to_runtime_layer(
     });
 }
 
-/// Persist a `SetObjectProperty` **shader-param tune** into the active USD
-/// document's **runtime overlay** (#4 — non-destructive layer tuning).
-///
-/// [`on_set_object_property`] mutates the live [`ShaderLook`] for immediate
-/// feedback but writes nothing back to USD, so a tweak (e.g. a terrain
-/// `weight_albedo`) is lost on reload. This decoupled observer authors the same
-/// edit as a `SetAttribute` into `LayerId::runtime()` — the session overlay that
-/// composes over the base layer and rides the Twin journal / `.lunco/runtime`
-/// sidecar, while **Save stays base-only** (the authored `.usda` is never
-/// dirtied). It mirrors [`persist_move_to_runtime_layer`]: same ownership guard,
-/// same runtime target, fully decoupled from the live-mutation handler.
-///
-/// Scope: **scalar** params (covers every layer `weight_*` and roughness knob) on
-/// entities carrying a [`ShaderLook`] whose prim the active document owns.
-/// Colors/vectors and PBR props stay live-only for now.
-///
-/// The "is this a shader prim?" guard is a CLASSIFICATION query, so it asks the
-/// *intent* (`With<ShaderLook>`), not the bound material: the intent exists headless
-/// too, where nothing ever binds a `ShaderMaterial`.
-pub fn persist_property_to_runtime_layer(
-    trigger: On<SetObjectProperty>,
-    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    q_prim: Query<&UsdPrimPath>,
-    q_shader: Query<(), With<ShaderLook>>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    // Not shader *params*: `shader` swaps the material (no USD reader — the
-    // `shaderPath` attribute was deliberately vetoed, so it stays live-only) and
-    // `visible` is authored as standard `token visibility` by
-    // [`persist_wheel_to_runtime_layer`]. Disjoint, so neither is
-    // double-authored.
-    if matches!(cmd.property.as_str(), "shader" | "visible") {
-        return;
-    }
-    // Parse the value into a typed USD attribute. A single float persists as
-    // `float`; three comma-separated floats persist as a `color3f` vector — the
-    // shape shader colours/vectors (`cell_a`, `tint`, …) take. `read_authored_params`
-    // reads BOTH back on reload (vec3 first, then scalar), so both round-trip with
-    // no loader change. Any other arity (or a non-numeric value) stays live-only.
-    let parts: Vec<&str> = cmd.value.split(',').collect();
-    let floats: Vec<f32> = parts
-        .iter()
-        .filter_map(|s| s.trim().parse::<f32>().ok())
-        .collect();
-    if floats.len() != parts.len() {
-        return;
-    }
-    let (type_name, value) = match floats.len() {
-        1 => ("float".to_string(), floats[0].to_string()),
-        3 => (
-            "color3f".to_string(),
-            format!("({}, {}, {})", floats[0], floats[1], floats[2]),
-        ),
-        _ => return,
-    };
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else {
-        return;
-    };
-    let Some(host) = usd_registry.host(doc) else {
-        return;
-    };
-
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else {
-        return;
-    };
-    // Only shader-look prims (the layer-tuning case) — not PBR ones.
-    if q_shader.get(target).is_err() {
-        return;
-    }
-    let Ok(prim) = q_prim.get(target) else { return };
-
-    // Ownership guard: only author for prims the active document actually holds
-    // (base or runtime), so palette/sim spawns never get stray opinions.
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
-        return;
-    };
-    let owned = host.document().data().spec(&prim_sdf).is_some()
-        || host.document().runtime_data().spec(&prim_sdf).is_some();
-    if !owned {
-        return;
-    }
-
-    // Author under `primvars:` with the snake_case field name — the same contract
-    // `read_authored_params` reads back (which now normalizes camelCase too).
-    let name = format!("primvars:{}", lunco_materials::to_snake_case(&cmd.property));
-    commands.trigger(ApplyUsdOp {
-        doc,
-        parent_gen: None,
-        op: UsdOp::SetAttribute {
-            edit_target: LayerId::runtime(),
-            path: prim.path.clone(),
-            name,
-            type_name,
-            value,
-        },
-    });
-}
-
 fn default_float_type() -> String {
     "float".to_string()
 }
@@ -1830,7 +1727,7 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
 
 /// Persist a `SetObjectProperty` **wheel-dynamics** or **visibility** tune into
 /// the active USD document's runtime overlay — the
-/// counterpart of [`persist_property_to_runtime_layer`] for the property classes
+/// counterpart of the shader-parameter authoring path for the property classes
 /// it skips. Fully decoupled + disjoint: it authors wheel-param names (via
 /// [`wheel_param`]) or `visible` (standard USD `token visibility`). PBR intent
 /// is authored by the command handler through the canonical UsdPreviewSurface
@@ -1923,7 +1820,7 @@ pub fn persist_wheel_to_runtime_layer(
 }
 
 /// Persist a `SetEnvironmentLight` sun tweak into the active USD document's
-/// runtime overlay — the environment twin of [`persist_property_to_runtime_layer`].
+/// runtime overlay — the environment twin of the shader-parameter authoring path.
 ///
 /// [`lunco_environment::on_set_environment_light`] mutates the live
 /// `DirectionalLight` for immediate feedback but writes nothing back to USD, so a
@@ -2579,6 +2476,52 @@ fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> O
     ParamValue::parse_authoring(field.ty, value)
 }
 
+/// Queue the authored leg of a reflected shader-parameter edit.
+///
+/// `SetObjectProperty` owns the public command and immediate intent update;
+/// this deferred leg resolves the entity's explicit USD document and bound
+/// Shader, then submits the same typed USD operation used by the Inspector.
+/// Entities without a document remain session-only because they have no USD
+/// owner for persistence.
+fn author_shader_parameter_to_usd(
+    commands: &mut Commands,
+    target: Entity,
+    name: String,
+    value: ParamValue,
+) {
+    commands.queue(move |world: &mut World| {
+        let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
+            return;
+        };
+        let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
+            return;
+        };
+        let target = match crate::doc_resolve::resolve_shader_parameter_usd_target(
+            world, &prim, &name, &value,
+        ) {
+            Ok(target) => target,
+            Err(error) => {
+                warn!(
+                    "SET_PROPERTY: shader parameter '{}' was not authored: {error}",
+                    name
+                );
+                return;
+            }
+        };
+        world.trigger(ApplyUsdOp {
+            doc,
+            parent_gen: None,
+            op: UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: target.shader_path,
+                name: target.attribute_name,
+                type_name: target.type_name,
+                value: target.literal,
+            },
+        });
+    });
+}
+
 /// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any parameters
 /// it already has so swapping the `.wgsl` keeps tuned values.
 ///
@@ -2796,7 +2739,9 @@ pub fn on_set_object_property(
             let schema = shader_schema(&look.shader, &asset_server, &shaders);
             match shader_param_value(schema.as_ref(), &name, &cmd.value) {
                 Some(v) => {
-                    look.values.insert(name, v);
+                    look.values.insert(name.clone(), v);
+                    drop(look);
+                    author_shader_parameter_to_usd(&mut commands, target, name, v);
                 }
                 None => warn!("SET_PROPERTY: unknown property '{}'", key),
             }
@@ -3795,10 +3740,6 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(persist_move_to_runtime_layer);
         app.add_observer(persist_rotation_to_runtime_layer);
         app.add_observer(persist_transform_to_runtime_layer);
-        // #4: persist scalar shader-param tunes into the active doc's runtime
-        // overlay (non-destructive; Save stays base-only). Decoupled from the
-        // live-mutation handler above, like the move/spawn persisters.
-        app.add_observer(persist_property_to_runtime_layer);
         // #15: persist wheel-dynamics tunes (suspension/drive → physxVehicle*)
         // and visibility. PBR intent is authored by SetObjectProperty's
         // canonical UsdPreviewSurface path.

@@ -31,6 +31,7 @@ pub struct UsdPrimProjectionPlan {
     kind: Option<String>,
     property_names: Vec<String>,
     attributes: HashMap<String, Value>,
+    attribute_types: HashMap<String, String>,
     authored_attributes: HashSet<String>,
     attr_ui_hints: HashMap<String, AttrUiHint>,
     api_schemas: Vec<String>,
@@ -112,6 +113,14 @@ impl UsdStageProjectionPlan {
                         .map(|value| (name.clone(), value))
                 })
                 .collect::<HashMap<_, _>>();
+            let attribute_types = attribute_names
+                .iter()
+                .filter_map(|name| {
+                    reader
+                        .attr_type_name(&path, name)
+                        .map(|type_name| (name.clone(), type_name))
+                })
+                .collect::<HashMap<_, _>>();
             let authored_attributes = attribute_names
                 .iter()
                 .filter(|name| reader.has_authored_attribute(&path, name))
@@ -182,6 +191,7 @@ impl UsdStageProjectionPlan {
                 kind: reader.kind(&path),
                 property_names: attribute_names.clone(),
                 attributes,
+                attribute_types,
                 authored_attributes,
                 attr_ui_hints,
                 api_schemas,
@@ -345,6 +355,11 @@ impl UsdRead for UsdStageProjectionPlan {
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
         self.prim(prim)
             .and_then(|prim| prim.attributes.get(name).cloned())
+    }
+
+    fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.prim(prim)
+            .and_then(|prim| prim.attribute_types.get(name).cloned())
     }
 
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
@@ -581,6 +596,35 @@ def Xform \"World\"\n\
             Some([6.0, 2.0, 3.0])
         );
         assert_eq!(plan.children(&world), vec![child]);
+    }
+
+    #[test]
+    fn prepared_reader_preserves_usd_attribute_roles() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    color3f[] primvars:displayColor = [(1, 0, 0)]
+    point3f point = (1, 2, 3)
+}
+"#,
+        );
+        let plan = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
+        let world = SdfPath::new("/World").unwrap();
+
+        assert_eq!(
+            plan.attr_type_name(&world, "primvars:displayColor")
+                .as_deref(),
+            Some("color3f[]")
+        );
+        assert_eq!(
+            plan.attr_type_name(&world, "point").as_deref(),
+            Some("point3f")
+        );
     }
 
     #[test]

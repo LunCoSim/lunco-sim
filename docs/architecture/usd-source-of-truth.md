@@ -113,8 +113,7 @@ base-only redirect.
 | `visible` | sets `Visibility` (Hidden/Visible) | yes, when a document owns the prim |
 | `base_color`, `emissive`, `metallic`, `roughness`, `ior`, `alpha`, `double_sided` | the entity's `PbrLook` via `apply_pbr_look` | **yes** — as `UsdPreviewSurface` `inputs:*` (`double_sided` → `doubleSided` on the Gprim) |
 | `unlit` | the entity's `PbrLook` | no — render-only intent (overlay geometry); USD has no equivalent, by design |
-| *(fallback)* scalar/color3 shader param | the entity's `ShaderLook` values (`lunco_materials`) + `to_snake_case` | yes, when a document owns the prim |
-| *(fallback)* other shader param | the entity's `ShaderLook` values | no — no USD reader yet |
+| reflected shader param | the entity's `ShaderLook` values (`lunco_materials`) + the shared bound-Shader resolver | yes — typed `inputs:<snake_case>` on the bound `UsdShade.Shader` |
 
 All five mutate **appearance intent**, never a material asset: `lunco-render-bevy`
 watches `Changed<PbrLook>` / `Changed<ShaderLook>` and rebinds. `SetObjectProperty`'s
@@ -124,14 +123,20 @@ crate names no material type at all.
 > so identical-looking prims **share one handle**. Reaching through the handle to
 > recolour "this rock" would recolour **every rock that looked like it**.
 
-Sibling observer `persist_property_to_runtime_layer` (`lunco-scene-commands/src/commands.rs:1187`):
-- skips `shader`/`visible`; requires a **scalar float** value; requires an **active
-  document** that **owns** the prim; requires a `ShaderLook` + `UsdPrimPath`.
-- emits `UsdOp::SetAttribute { edit_target: LayerId::runtime(), path:
-  <UsdPrimPath.path>, name: "primvars:<snake>", type: "float", value }`.
+`SetObjectProperty` owns the reflected shader-parameter case. It uses the same
+WGSL schema parser as the live command, resolves the bound Shader through the
+composed USD material network, preserves an existing composed declaration's
+exact `typeName`, validates the literal, and emits one typed runtime-layer
+`UsdOp::SetAttribute` on `inputs:<snake_case>`. The Inspector uses the same
+resolver and groups multi-parameter edits into one `ApplyUsdOps` operation.
+Geometry `primvars:` are not a generic parameter store; standard `UsdGeom`
+primvars such as `primvars:displayColor` keep their own reader/writer contracts.
 
-So: **ECS-immediate, with partial document-backed persistence.** The missing generic
-registry is why unsupported appearance properties can still be live-only.
+So: **ECS-immediate, with document-backed persistence for the reflected shader
+parameter path.** The broader generic component projection registry below
+remains the design for consolidating the other appearance and physics fields;
+it must extend these existing owners rather than create another parameter
+namespace.
 
 ### Supporting facts
 
@@ -141,8 +146,9 @@ registry is why unsupported appearance properties can still be live-only.
   (`lunco-usd-sim/src/cosim.rs:483`), not a maintained index.
 - Reading composed attrs: `UsdDataExt` (`lunco-usd-bevy/src/usd_data.rs`) —
   `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
-- Spawn-time projection precedent: `read_authored_params` (shader.rs) enumerates
-  `primvars:*` once at instantiation — **one-way, instantiation-only**, no watcher.
+- Shader projection reads authored `inputs:*` from the composed bound Shader;
+  connected inputs remain graph-owned and are not treated as local parameter
+  values. The same composed declaration is used by the authoring resolver.
 
 ---
 
@@ -179,24 +185,27 @@ mounting sequence. Direct `lunco://` loads remain intentionally read-only asset
 mounts when no document owns them; they do not silently invent a document.
 
 The remaining steps concern broadening USD round-trip coverage for every
-`SetObjectProperty` field, not repairing a second startup loader.
+`SetObjectProperty` field, not adding a second startup loader. Reflected shader
+parameters already use the shared bound-Shader authoring path described below.
 
 ### Step 1: `SetObjectProperty` authors USD
 
-Rewrite `on_set_object_property` to:
+For each property family that has a USD owner, `on_set_object_property`:
 1. resolve `entity_id → UsdPrimPath`;
 2. look up `property` in the **attribute-mapping registry** (Step 2) → `(usd_attr_name,
    usd_type, usd_value_str, edit_target)`;
 3. emit `ApplyUsdOp(UsdOp::SetAttribute { … })`;
-4. **drop the direct ECS mutation.**
+4. lets the normal USD projection update the ECS intent.
 
 `edit_target = LayerId::runtime()` for live tuning (Save stays base-only, matching
-today's intent); a separate explicit "bake to base" promotes runtime → root. Entities
-with **no `UsdPrimPath`** (transient, editor-only objects) keep a direct-ECS fallback —
-not everything belongs in USD.
+today's intent); a separate explicit "bake to base" promotes runtime → root.
+Transient editor-only objects with no `UsdPrimPath` have no USD owner and are not
+addressable by this document-edit command.
 
-`persist_property_to_runtime_layer` is then **subsumed** by Step 1 (no more separate
-shadow-write) and can be deleted.
+The reflected shader-parameter path is owned by `SetObjectProperty` itself and
+shares its destination resolver with the Inspector. Other property families
+remain separate until their own authoritative USD readers and projectors are
+consolidated.
 
 ### Step 2: a bidirectional attribute ↔ component registry
 
@@ -211,7 +220,7 @@ Built-in projectors:
 
 | Domain | USD attr | Type |
 |---|---|---|
-| `ShaderLook.dyn_params` | `primvars:<snake>` (reuse `to_snake_case`) | float / color3f / color4f |
+| `ShaderLook.dyn_params` | bound `UsdShade.Shader` `inputs:<snake>` | reflected scalar/vector type, preserving an existing USD role and array shape |
 | `PbrLook` | UsdPreviewSurface inputs, or `primvars:*` | float / color3f / bool |
 | Visibility | `visibility` (USD-native) | token (`inherited`/`invisible`) |
 | WheelRaycast | `lunco:wheel:<field>` (matches existing `lunco-usd-sim` convention) | float |
@@ -261,41 +270,25 @@ prim→entity.
 
 ---
 
-## 5. Trade-offs / decisions
+## 5. Current decisions
 
-1. **Author-first vs optimistic.** Pure author-first adds ~1 tick of latency
-   (edit → commit → project). Start author-first (simplest, truly single-source); if a
-   slider feels laggy, also apply optimistically to ECS and let the projector reconcile
-   (the projection is idempotent, so this is safe).
-2. **Attributes with no natural USD home** (pure runtime markers, editor-only state) —
-   keep ECS-only via the `UsdPrimPath`-absent fallback. Don't force everything into USD.
-3. **Step 0 is the big one.** Unifying the luncosim onto the document path is where the
-   real work and risk sit; the rest is mechanical.
-
----
-
-## 6. Implementation sequence (as executed)
-
-Built in order `0 → 4 → 2 → 1 → 3`, with **material params as the first end-to-end vertical slice**
-(they already had the `primvars:<snake>` convention and the `persist_*` precedent to
-fold in):
-
-1. **Step 0** — scene-as-document for `--scene` (completed through Twin projection).
-2. **Step 4** — `UsdPrimIndex` resource + maintenance observers (small, independent).
-3. **Step 2** — `UsdAttrProjection` registry with the material-param projector only.
-4. **Step 1** — `SetObjectProperty` (material props) authors `SetAttribute`; deleted the
-   material branch's direct mutation + folded in `persist_property_to_runtime_layer`.
-5. **Step 3** — `project_usd_attrs_to_components` fast path; verified a material slider
-   round-trips USD→ECS with no respawn and survives reload.
-6. Registry extended to PBR, visibility, wheels.
+1. **Document authority.** A typed edit commits to `UsdDocument` synchronously.
+   The canonical stage is a derived projection and may settle on the following
+   update; document queries therefore read the document composition for paths it
+   owns and use the live stage for paths supplied by external composition arcs.
+2. **Attributes with no natural USD home** (pure runtime markers, editor-only state)
+   remain ECS-only when no `UsdPrimPath` exists; the document edit command does not
+   address state without an authored USD owner.
+3. **New mappings.** A property family may become document-backed only when its
+   authoritative USD owner, typed reader, projector, and production-level
+   acceptance path are implemented together.
 
 ---
 
-## 7. Key references
+## 6. Key references
 
 - `lunco-scene-commands/src/commands.rs` — `SetObjectProperty` struct and observers
 - `lunco-scene-commands/src/commands.rs` — `on_set_object_property`
-- `lunco-scene-commands/src/commands.rs` — `persist_property_to_runtime_layer`
 - `lunco-usd/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)

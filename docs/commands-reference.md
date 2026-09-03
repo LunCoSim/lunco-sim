@@ -512,9 +512,12 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetObjectProperty`
 
- Set a property on a scene object at runtime (live override — not persisted
- to USD). One general command instead of many narrow ones; new properties
- just add a `match` arm. Drive it from curl after a screenshot to iterate:
+ Set a property on a scene object through the typed appearance/physics command
+ boundary. Reflected shader parameters are persisted to the active document's
+ runtime USD layer on the bound Shader's `inputs:<name>` attribute; wheel,
+ visibility, and PBR fields use their documented USD owners. One general
+ command replaces many narrow commands; new properties just add a match arm.
+ Drive it from curl after a screenshot to iterate:
 
  ```jsonc
  {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -530,8 +533,10 @@ actually call, with the fields the deserializer actually accepts. See the
    binder turns it into a material.
  - any parameter named by the shader's `Material` struct (e.g. `albedo`,
    `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
-   (requires `shader` set first, or a USD shader material). The shader's
-   reflected schema resolves the type; colours are `r,g,b`.
+   and author the typed value on the bound USD Shader's `inputs:<name>` (requires
+   `shader` set first, or a USD shader material). The shader's reflected schema
+   resolves the value shape; an existing USD declaration preserves its exact
+   role and array shape; colours are `r,g,b`.
  - `visible` → `true`/`false` toggles `Visibility`.
  - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
    `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,

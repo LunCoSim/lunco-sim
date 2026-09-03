@@ -30,8 +30,9 @@ use lunco_scene_commands::SelectedEntities;
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
 use lunco_scene_commands::doc_resolve::{
     bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
+    resolve_shader_parameter_usd_target,
 };
-use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 
@@ -532,39 +533,58 @@ pub(crate) fn on_shader_parameters_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        let Some((doc, edit_target, generation)) = authoring_context(world, request.entity) else {
+            if request.usd_prim_exists {
+                report_inspector_error(world, "Selected shader target is not document-backed");
+                return;
+            }
+            if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
+                for (name, value) in &request.edits {
+                    look.values.insert(name.clone(), *value);
+                }
+            }
+            return;
+        };
+
+        let mut ops = Vec::new();
+        if request.usd_prim_exists {
+            let Some(prim) = world.get::<UsdPrimPath>(request.entity).cloned() else {
+                report_inspector_error(world, "Selected shader target has no USD prim path");
+                return;
+            };
+            for (name, value) in &request.edits {
+                let target = match resolve_shader_parameter_usd_target(world, &prim, name, value) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        report_inspector_error(
+                            world,
+                            format!("Shader parameter `{name}` cannot be authored: {error}"),
+                        );
+                        return;
+                    }
+                };
+                ops.push(UsdOp::SetAttribute {
+                    edit_target: edit_target.clone(),
+                    path: target.shader_path,
+                    name: target.attribute_name,
+                    type_name: target.type_name,
+                    value: target.literal,
+                });
+            }
+        }
+
         if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
             for (name, value) in &request.edits {
                 look.values.insert(name.clone(), *value);
             }
         }
-        if request.usd_prim_exists {
-            for (name, value) in &request.edits {
-                let usd_name = if name.starts_with("primvars:") {
-                    name.clone()
-                } else {
-                    format!("primvars:{name}")
-                };
-                let (type_name, value_str) = match value {
-                    ParamValue::F32(x) => ("float", format!("{x:.3}")),
-                    ParamValue::I32(x) => ("int", format!("{x}")),
-                    ParamValue::U32(x) => ("uint", format!("{x}")),
-                    ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
-                    ParamValue::Vec3(arr) => {
-                        let name_lc = name.to_lowercase();
-                        let ty = if name_lc.contains("color") || name_lc.contains("colour") {
-                            "color3f"
-                        } else {
-                            "float3"
-                        };
-                        (ty, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
-                    }
-                    ParamValue::Vec4(arr) => (
-                        "float4",
-                        format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3]),
-                    ),
-                };
-                apply_usd_attribute_change(world, request.entity, &usd_name, type_name, value_str);
-            }
+        if !ops.is_empty() {
+            world.trigger(ApplyUsdOps {
+                doc,
+                parent_gen: (generation != 0).then_some(generation),
+                label: "Edit shader parameters".to_owned(),
+                ops,
+            });
         }
     });
 }
@@ -3013,7 +3033,11 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 /// already had (the render binder swaps the material). Runs in the typed
 /// request observer after the egui pass.
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
-    let Some(shader_prim) = bound_shader_prim_path(world, part) else {
+    let Some(prim) = world.get::<UsdPrimPath>(part).cloned() else {
+        report_inspector_error(world, "Selected shader target has no USD prim path");
+        return;
+    };
+    let Some(shader_prim) = bound_shader_prim(world, &prim) else {
         report_inspector_error(
             world,
             "This prim has no bound Material with a Shader child; the shader was not changed",
@@ -3056,25 +3080,6 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
             value: format!("@{}@", path),
         },
     });
-}
-
-/// The USD path of the `Shader` prim behind `part`'s bound material, if it has one:
-/// `rel material:binding` → `Material` → `outputs:surface.connect` → `Shader`.
-///
-/// The same resolve the loader makes (`lunco_usd_bevy::resolve_bound_shader`), so
-/// the Inspector edits exactly the prim the renderer read.
-fn bound_shader_prim_path(world: &mut World, part: Entity) -> Option<String> {
-    use lunco_usd_bevy::{CanonicalStages, SdfPath};
-
-    let prim = world.get::<UsdPrimPath>(part)?.clone();
-    let stage_id = prim.stage_handle.id();
-    let sdf = SdfPath::new(&prim.path).ok()?;
-
-    let canonical = world.get_non_send_mut::<CanonicalStages>()?;
-    let cs = canonical.get(stage_id)?;
-    let view = cs.view();
-
-    lunco_usd_bevy::resolve_bound_shader(&view, &sdf).map(|p| p.to_string())
 }
 
 /// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if
