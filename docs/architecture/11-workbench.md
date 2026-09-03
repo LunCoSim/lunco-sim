@@ -153,17 +153,19 @@ The window is drawn by **two layered cameras**, not by tiling:
 | Order | Camera | Role |
 |-------|--------|------|
 | 0 | scene `Camera3d` (`lunco_render::SceneCamera` intent) | renders the 3D **full-window**; **clears** the target |
-| 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | renders a transparent intermediate and explicitly alpha-blends chrome over the scene |
+| 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints chrome into the scene camera's shared main texture |
 
 The host is a separate camera because scene cameras are transient (USD spawns
 them, `camera_switch` swaps them) while the egui context must be stable.
 
-The host uses Bevy's explicit `CameraOutputMode::Write` contract with
-`BlendState::ALPHA_BLENDING`, `clear_color: Custom(Color::NONE)`, and no world
-render layers. Its intermediate target is independent from the scene camera's
-target, so camera replacement, MSAA/HDR changes, and window resizing cannot
-carry stale chrome across a perspective switch. The output blend state is
-explicit rather than inferred from camera order.
+The host is deliberately keyed to the scene camera's shared Bevy main texture.
+Its `clear_color: None` leaves the scene pixels intact while the scene camera's
+lower-order pass clears and redraws that same texture every frame. Because
+Bevy includes MSAA and HDR format in the texture key, the workbench's
+change-driven `sync_egui_host_msaa` follows the active scene camera across
+quality changes, camera replacement, resize, and Twin teardown. A private
+load-preserving UI texture would accumulate panels removed by a perspective
+switch and is not a valid composition.
 
 When no window `Camera3d` is active at all (Design perspective, the Modelica
 workbench, or the short handoff while a selected camera is being activated),

@@ -145,9 +145,10 @@ control that should change without a Rust rebuild, use the dedicated
 This is a separate presentation path built on HUI/Flair. It uses the generic
 `EngineExposures` capability registry, the existing `WorkbenchEguiHost` camera,
 and the workbench's authoritative dock/pick geometry. The host is the persistent
-Bevy UI layer: it renders a transparent intermediate and uses explicit alpha
-compositing over the transient USD scene camera, so UI state does not depend on
-scene-camera MSAA/HDR or target identity. It does not replace
+Bevy UI layer: it paints into the scene camera's shared cleared main texture,
+with its MSAA/HDR key synchronized to the active scene camera. This keeps UI
+state correct across camera replacement and perspective changes without a
+load-preserving accumulation target. It does not replace
 `Panel`/egui, create a second UI camera, or permit templates to mutate domain
 state. Use this skill for workbench panels and use `runtime-ui` for authored
 HTML/CSS surfaces; do not create a hybrid shim for one widget. The

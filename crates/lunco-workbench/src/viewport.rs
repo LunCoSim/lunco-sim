@@ -2,8 +2,8 @@
 //!
 //! ## Architecture (read this if anything here looks weird)
 //!
-//! Two cameras render the window as an explicit Bevy composition, with the scene
-//! camera rendering the full window behind the active workbench layout:
+//! Two cameras share the window's Bevy main texture, with the scene camera
+//! rendering the full window behind the active workbench layout:
 //!
 //! 1. The scene `Camera3d` (order 0), declared by the canonical
 //!    [`lunco_render::SceneCamera`] intent. It renders the 3D **full-window** in
@@ -11,10 +11,10 @@
 //!    main texture each frame. The dock leaf rect is still measured separately
 //!    for egui occlusion and scene-picking geometry; it is not a camera crop.
 //! 2. The egui host `Camera2d` (order 1) — [`WorkbenchEguiHost`], carrying
-//!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. Bevy renders
-//!    it into an independent transparent intermediate target and alpha-blends
-//!    that target over the scene output. Chrome is opaque where panels are;
-//!    everywhere else the 3D shows through.
+//!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. bevy_egui
+//!    paints the chrome into the same main texture after the scene pass, with
+//!    `ClearColorConfig::None`, so opaque panels cover the scene and transparent
+//!    regions keep the scene pixels.
 //!
 //! The host exists as its own camera because scene cameras are transient — USD
 //! scenes spawn them, `camera_switch` swaps them, avatars despawn them — while
@@ -22,18 +22,13 @@
 //!
 //! ## The framebuffer contract (the load-bearing invariant)
 //!
-//! The host uses Bevy's explicit `CameraOutputMode::Write` contract with
-//! `BlendState::ALPHA_BLENDING`, `clear_color: Custom(Color::NONE)`, and no
-//! render layers. The host intermediate is transparent and is composited over
-//! the scene camera's output; it does not load or reuse a scene camera's
-//! intermediate texture. Consequently, a scene camera may be replaced,
-//! resized, or rendered with a different MSAA/HDR configuration without
-//! changing the UI camera's render target or leaving old chrome in it.
-//!
-//! The two cameras still have a deterministic order: the scene camera is order
-//! 0 and the host is order 1. The output blend state is explicit rather than
-//! inferred from camera order, so the composition remains correct when camera
-//! activation changes during a perspective switch or Twin replacement.
+//! **The two cameras must share one main texture.** Bevy keys a target's main
+//! textures by `(target, usages, format, msaa)`. The scene camera clears that
+//! texture; egui paints on the cleared scene pixels. The host therefore follows
+//! the active scene camera's MSAA and HDR format, and the sync is change-driven
+//! across camera replacement, settings changes, resize, and scene teardown.
+//! A private host texture with `ClearColorConfig::None` is an accumulation
+//! buffer: panels removed by a perspective switch remain baked into it.
 //!
 //! ## Why this is robust *by design*
 //!
@@ -49,9 +44,10 @@
 //! - **Sentinels catch regressions.** [`check_camera_invariants`] warns when a
 //!   new window-targeting `Camera3d` has no `SceneCamera` intent. Such a camera
 //!   has no owner and must be fixed at its spawn/binding site, not adopted here.
-//! - **The render targets are independent by contract.** Scene camera
-//!   replacement, MSAA/HDR changes, and window resizes do not require a
-//!   workbench-side texture-key repair system.
+//! - **The texture key is maintained by its owner.** [`sync_egui_host_msaa`]
+//!   follows the active window scene camera's MSAA and HDR format rather than
+//!   relying on a hardcoded presentation setting. This keeps the shared target
+//!   valid when the user changes graphics quality or a Twin replaces cameras.
 //!
 //! ## When NO 3D camera renders the window
 //!
@@ -64,6 +60,7 @@
 //! ## What goes where
 //!
 //! - `ensure_egui_host` (Startup) — auto-spawn the egui host.
+//! - `sync_egui_host_msaa` (Update) — maintain the shared main-texture key.
 //! - `apply_workbench_viewport` (PostUpdate, before `CameraUpdateSystems`)
 //!   — publish scene visibility into `SceneViewport`; the camera remains
 //!   full-window while the dock leaf rect stays in `PanelRects`/`ScenePickGate`.
@@ -80,11 +77,11 @@ use bevy::prelude::*;
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{CameraOutputMode, ClearColorConfig, RenderTarget};
+use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
-use wgpu::BlendState;
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -463,7 +460,8 @@ impl PressLatch {
 /// Pure scene-vs-chrome decision — no ECS, no egui `Context`, no window.
 ///
 /// The pointer is over CHROME (`None`) when:
-///  • egui is dragging one of its own widgets (`using_pointer`), or
+///  • egui is dragging one of its own widgets (`using_pointer`) outside the
+///    occlusion-aware live scene leaf, or
 ///  • `is_pointer_over_egui()` — a reserved egui panel / menu / status bar /
 ///    floating window / popup, or
 ///  • the pointer has left the window (`hover_pos == None`), or
@@ -489,16 +487,26 @@ pub(crate) fn resolve_scene_target(
     dock_rect: Option<egui::Rect>,
     scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
-    if egui_state.using_pointer {
-        return None;
-    }
     let pos = egui_state.hover_pos?;
     // A scene-hosting leaf that RENDERED under the pointer wins: an offscreen
     // preview records BOTH its own target and an opaque chrome card (it must block
     // the MAIN scene), and we want the precise target, not just "not the main
     // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
-        return Some(target);
+        // The transparent main viewport is represented by an egui leaf, so
+        // egui may report `using_pointer` while a right-button orbit is in
+        // progress. Its occlusion-aware leaf hit-test is more precise than
+        // that broad state. Other scene targets remain behind their opaque
+        // preview chrome and therefore cannot claim the main scene pointer.
+        if target == SceneTarget::MainViewport || !egui_state.using_pointer {
+            return Some(target);
+        }
+    }
+    // An egui widget drag owns the pointer unless the live main viewport leaf
+    // claimed this exact position above. This keeps sliders, dock separators,
+    // scrollbars, menus, and popups from leaking input into the scene.
+    if egui_state.using_pointer {
+        return None;
     }
     // The transparent viewport leaf is itself an egui-dock background layer, so
     // `is_pointer_over_egui` can be true over the live 3D view. The leaf hit-test
@@ -633,19 +641,77 @@ impl Panel for ViewportPanel {
     }
 }
 
-/// Construct the Bevy camera used by the persistent egui host.
+/// Keep the egui host's main-texture key equal to the active scene camera's.
 ///
-/// The intermediate target is transparent and the final write is explicitly
-/// alpha-blended. This is the standard Bevy composition contract for a UI
-/// layer over a separately rendered scene.
+/// Bevy keys a render target's intermediate textures by `(target, usages,
+/// format, msaa)`. The host deliberately shares the scene camera's main
+/// texture so egui paints directly over the scene pixels that were cleared in
+/// the lower-order camera. MSAA and HDR are part of that key; both must follow
+/// the active scene camera rather than being presentation constants.
+///
+/// This is change-driven and covers every owner transition: camera quality
+/// changes, camera replacement/activation, a newly bound scene camera, and
+/// scene-camera removal. If no active window scene camera exists, the layout
+/// paints its own opaque backdrop and there is no valid scene texture to share.
+pub(crate) fn sync_egui_host_msaa(
+    dirty: Query<
+        (),
+        (
+            With<SceneCamera>,
+            Without<WorkbenchEguiHost>,
+            Or<(Changed<Msaa>, Changed<Camera>, Added<SceneCamera>)>,
+        ),
+    >,
+    mut removed: RemovedComponents<SceneCamera>,
+    host_added: Query<(), Added<WorkbenchEguiHost>>,
+    scene_cams: Query<
+        (Entity, &Camera, &Msaa, &RenderTarget, Has<Hdr>),
+        (With<SceneCamera>, Without<WorkbenchEguiHost>),
+    >,
+    viewport: Option<Res<SceneViewport>>,
+    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<SceneCamera>)>,
+    mut commands: Commands,
+) {
+    let had_removal = removed.read().count() > 0;
+    if dirty.is_empty() && host_added.is_empty() && !had_removal {
+        return;
+    }
+
+    let is_window = |target: &RenderTarget| matches!(target, RenderTarget::Window(_));
+    let Some(active_camera) = viewport.as_deref().and_then(|vp| vp.active_camera) else {
+        return;
+    };
+    let want = scene_cams
+        .get(active_camera)
+        .ok()
+        .filter(|(_, camera, _, target, _)| camera.is_active && is_window(target))
+        .map(|(_, _, msaa, _, hdr)| (*msaa, hdr));
+    let Some((want_msaa, want_hdr)) = want else {
+        return;
+    };
+
+    for (entity, mut msaa, host_hdr) in &mut host {
+        if *msaa != want_msaa {
+            *msaa = want_msaa;
+        }
+        if want_hdr != host_hdr {
+            if want_hdr {
+                commands.entity(entity).try_insert(Hdr);
+            } else {
+                commands.entity(entity).remove::<Hdr>();
+            }
+        }
+    }
+}
+
+/// Construct the Bevy camera used by the persistent egui host.
 fn egui_host_camera() -> Camera {
     Camera {
+        // The scene camera is order 0; egui paints into the shared main texture
+        // after it. Its clear operation must remain disabled so it cannot wipe
+        // the scene before the UI pass.
         order: 1,
-        output_mode: CameraOutputMode::Write {
-            blend_state: Some(BlendState::ALPHA_BLENDING),
-            clear_color: ClearColorConfig::None,
-        },
-        clear_color: ClearColorConfig::Custom(Color::NONE),
+        clear_color: ClearColorConfig::None,
         ..default()
     }
 }
@@ -666,10 +732,8 @@ pub(crate) fn ensure_egui_host(
         commands.spawn((
             Camera2d,
             // `order = 1` places egui strictly after the scene Camera3d.
-            // `egui_host_camera` gives this persistent UI layer its own
-            // transparent intermediate target and an explicit alpha-blended
-            // final write. Scene-camera replacement and render-quality changes
-            // therefore cannot affect UI compositing state.
+            // `egui_host_camera` keeps the UI pass on the scene camera's shared
+            // main texture; `sync_egui_host_msaa` maintains the texture key.
             egui_host_camera(),
             //
             // Render NO world layers. This camera exists ONLY to paint egui chrome
@@ -1047,7 +1111,14 @@ impl Plugin for WorkbenchViewportPlugin {
             // `Update`, before the egui pass writes it. It is cleared at the top of
             // `render_workbench` instead.)
             .add_systems(First, reset_scene_pick_gate)
-            .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
+            .add_systems(
+                Update,
+                (
+                    check_camera_invariants,
+                    check_host_invariant_once,
+                    sync_egui_host_msaa,
+                ),
+            )
             // Keep bevy_egui's blanket pointer-capture OFF; we provide our own
             // viewport-aware backend instead (so the egui-dock ViewportPanel leaf
             // doesn't suppress 3D picking over the scene).
@@ -1090,21 +1161,11 @@ mod tests {
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
 
     #[test]
-    fn egui_host_camera_uses_explicit_alpha_compositing() {
+    fn egui_host_is_the_late_shared_texture_writer() {
         let camera = egui_host_camera();
 
         assert_eq!(camera.order, 1);
-        assert!(matches!(
-            camera.clear_color,
-            ClearColorConfig::Custom(color) if color.to_linear() == Color::NONE.to_linear()
-        ));
-        assert!(matches!(
-            camera.output_mode,
-            CameraOutputMode::Write {
-                blend_state: Some(blend_state),
-                clear_color: ClearColorConfig::None,
-            } if blend_state == BlendState::ALPHA_BLENDING
-        ));
+        assert!(matches!(camera.clear_color, ClearColorConfig::None));
     }
 
     #[test]
@@ -1275,6 +1336,24 @@ mod tests {
             Some(SceneTarget::MainViewport),
             &[],
             Some(dock),
+            None,
+        );
+        assert_eq!(out, Some(SceneTarget::MainViewport));
+    }
+
+    /// egui can remain in `using_pointer` while a right-button orbit is held.
+    /// The viewport leaf's occlusion-aware hit-test must still keep that drag
+    /// on the main scene; actual egui widgets have no scene leaf and remain
+    /// authoritative through the `using_pointer` branch.
+    #[test]
+    fn main_scene_leaf_wins_while_egui_is_using_pointer() {
+        let mut state = hovering((400.0, 200.0));
+        state.using_pointer = true;
+        let out = resolve_scene_target(
+            state,
+            Some(SceneTarget::MainViewport),
+            &[],
+            Some(rect((0.0, 30.0), (800.0, 400.0))),
             None,
         );
         assert_eq!(out, Some(SceneTarget::MainViewport));
