@@ -205,8 +205,9 @@ impl Panel for CommandDeck {
         ui.horizontal(|ui| {
             if view.driving {
                 if ui.button("Release control").clicked() {
-                    let v = vessel;
-                    ctx.trigger(lunco_avatar::ReleaseVessel { target: v });
+                    if let Some(avatar) = ctx.resource::<TheLocalAvatar>().and_then(|a| a.0) {
+                        ctx.trigger(lunco_avatar::ReleaseVessel { target: avatar });
+                    }
                 }
             } else {
                 if ui.button("Take control").clicked() {

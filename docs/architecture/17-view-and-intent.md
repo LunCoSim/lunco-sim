@@ -210,6 +210,14 @@ nearest non-avatar input surface, and direct `PossessVessel` requests apply the
 same rule before either camera binding or authority claim. Render markers such
 as `SceneCamera` do not participate in this control decision.
 
+Possession and release are single-owner transactions in `lunco-avatar`: the command
+validates the writable endpoint and requested local binding before changing the
+Twin-scoped `SessionRegistry` or `ControllerLink`. A handoff releases all prior claims
+for the session except the selected target, hard-stops every released vessel, and then
+commits the new link. Release performs the same hard stop before returning the avatar to
+free flight; wire-applied commands update authority without binding a remote avatar to the
+local camera.
+
 Free-flight and surface movement are kinematic camera motion and use the shared
 BigSpace/Avian collision contract described in
 [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md#physics-boundary).
