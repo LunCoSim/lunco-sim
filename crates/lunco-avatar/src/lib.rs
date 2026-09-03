@@ -55,6 +55,7 @@ use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
+use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly};
 
 pub mod commands;
 pub use commands::*;
@@ -938,6 +939,8 @@ fn record_possession_authority(
     rbac: Res<lunco_core::session::SessionRbac>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_child_of: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
     // Record ownership on the authoritative peer: Host, and also single-player
@@ -947,7 +950,7 @@ fn record_possession_authority(
         return;
     }
     let cmd = trigger.event();
-    if !is_vessel_control_endpoint(cmd.target, &q_input_ports) {
+    if !is_vessel_control_endpoint(cmd.target, &q_input_ports, &q_child_of, &q_preview_only) {
         warn!(target = ?cmd.target, "[auth] possession refused: target exposes no writable input ports");
         return;
     }
@@ -3782,6 +3785,7 @@ fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
@@ -3791,7 +3795,7 @@ fn find_control_owner_from_hit(
         // The avatar is also an InputPorts endpoint, but its endpoint is the
         // free-flight driver, not a vessel that a scene click may possess. The
         // domain marker is the authority here; render camera metadata is not.
-        if is_vessel_control_endpoint(entity, q_input_ports) {
+        if is_vessel_control_endpoint(entity, q_input_ports, q_parents, q_preview_only) {
             return Some(entity);
         }
         if let Ok(parent) = q_parents.get(entity) {
@@ -3810,7 +3814,16 @@ fn find_control_owner_from_hit(
 fn is_vessel_control_endpoint(
     entity: Entity,
     q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> bool {
+    // USD previews intentionally mirror a live vessel's input surface so
+    // their Inspector can describe the assembly, but they are not simulation
+    // endpoints. The USD-owned root marker is authoritative for every
+    // descendant, including a preview vessel whose name matches the live one.
+    if is_preview_only(entity, q_child_of, q_preview_only) {
+        return false;
+    }
     q_input_ports
         .get(entity)
         .is_ok_and(|surface| !surface.values.is_empty())
@@ -3896,6 +3909,7 @@ pub fn avatar_raycast_possession(
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
@@ -3986,8 +4000,13 @@ pub fn avatar_raycast_possession(
         f32::INFINITY
     };
 
-    let control_target =
-        find_control_owner_from_hit(click.entity, &q_parents, &q_input_ports, &q_ground);
+    let control_target = find_control_owner_from_hit(
+        click.entity,
+        &q_parents,
+        &q_input_ports,
+        &q_preview_only,
+        &q_ground,
+    );
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
     let mut spacecraft_hit: Option<Entity> = None;
@@ -4498,6 +4517,7 @@ fn on_possess_command(
     // gated by a non-avatar public input endpoint, then authority.
     q_vessel: Query<(Option<&lunco_core::CameraFollow>, Option<&GravityBody>), Controllable>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
@@ -4508,7 +4528,7 @@ fn on_possess_command(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    if !is_vessel_control_endpoint(cmd.target, &q_input_ports) {
+    if !is_vessel_control_endpoint(cmd.target, &q_input_ports, &q_parents, &q_preview_only) {
         warn!(target = ?cmd.target, "[possess] refused: target exposes no writable input ports");
         return;
     }
@@ -5835,12 +5855,19 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
 
         assert_eq!(
-            find_control_owner_from_hit(wheel_mesh, &q_parents, &q_input_ports, &q_ground),
+            find_control_owner_from_hit(
+                wheel_mesh,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
             Some(rover)
         );
     }
@@ -5862,12 +5889,19 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
 
         assert_eq!(
-            find_control_owner_from_hit(avatar, &q_parents, &q_input_ports, &q_ground),
+            find_control_owner_from_hit(
+                avatar,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
             Some(rover)
         );
     }
@@ -5882,12 +5916,47 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
 
         assert_eq!(
-            find_control_owner_from_hit(avatar, &q_parents, &q_input_ports, &q_ground),
+            find_control_owner_from_hit(
+                avatar,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn preview_descendant_is_not_a_possession_target() {
+        let mut world = World::new();
+        let preview_root = world
+            .spawn((UsdPreviewOnly, lunco_core::InputPorts::new(&["drive"])))
+            .id();
+        let preview_part = world.spawn(ChildOf(preview_root)).id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+
+        assert_eq!(
+            find_control_owner_from_hit(
+                preview_part,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
             None
         );
     }
@@ -7302,6 +7371,10 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
             bevy::prelude::With<lunco_cosim::SimComponent>,
         )>>();
         let ents: Vec<Entity> = q.iter(world).collect();
+        let ents: Vec<Entity> = ents
+            .into_iter()
+            .filter(|entity| !is_preview_only_entity(world, *entity))
+            .collect();
         info!("[inspect] {} commandable vessel(s)", ents.len());
         for e in ents {
             let name = world

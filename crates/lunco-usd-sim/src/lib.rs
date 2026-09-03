@@ -57,7 +57,7 @@ use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
 use lunco_usd_bevy::{
-    instance_key, resolve_stage_prim_path, CanonicalStages, UsdInstanceProjection,
+    instance_key, is_preview_only, resolve_stage_prim_path, CanonicalStages, UsdInstanceProjection,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
@@ -4148,26 +4148,6 @@ fn any_nested_link_nodes(
         }
     }
     false
-}
-
-/// Walks `entity`'s `ChildOf` ancestry looking for a `UsdPreviewOnly`
-/// marker. Stops at the first ancestor that has the marker or when the
-/// chain runs out. Bounded by USD scene depth, which is small.
-fn is_preview_only(
-    entity: Entity,
-    q_child_of: &Query<&ChildOf>,
-    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
-) -> bool {
-    let mut cursor = entity;
-    loop {
-        if q_preview_only.get(cursor).is_ok() {
-            return true;
-        }
-        match q_child_of.get(cursor) {
-            Ok(parent) => cursor = parent.parent(),
-            Err(_) => return false,
-        }
-    }
 }
 
 /// Observer that fires when a USD prim entity is added.

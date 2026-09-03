@@ -7188,6 +7188,7 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-twin",
+ "lunco-usd-bevy",
  "lunco-workbench",
  "lunco-workspace",
  "serde",

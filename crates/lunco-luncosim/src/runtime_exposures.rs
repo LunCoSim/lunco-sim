@@ -26,7 +26,7 @@ use lunco_modelica::ModelicaModel;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::read::UsdReadObject;
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdStageAsset};
+use lunco_usd_bevy::{scene_root_ancestor, CanonicalStages, SdfPath, UsdStageAsset};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
@@ -955,6 +955,10 @@ pub(crate) struct ExposureQueries<'w, 's> {
         ),
     >,
     usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
+    entities: Query<'w, 's, Entity>,
+    /// Preview descendants also carry `UsdPrimPath`, but are render-only
+    /// projections and must never populate live operator exposures.
+    scene_roots: Query<'w, 's, (), With<lunco_usd_bevy::UsdSceneRoot>>,
 }
 
 pub(crate) fn publish_exposure(
@@ -1106,6 +1110,9 @@ pub(crate) fn publish_exposure(
         control_roots.refresh(
             revision,
             &queries.usd_paths,
+            &queries.parents,
+            &queries.scene_roots,
+            &queries.entities,
             &runtime.stages,
             &runtime.canonical,
         );
@@ -1125,6 +1132,8 @@ pub(crate) fn publish_exposure(
             &runtime.rotation,
             &queries.spatial,
             &queries.usd_paths,
+            &queries.scene_roots,
+            &queries.entities,
             &runtime.stages,
             &runtime.canonical,
             &control_roots.roots,
@@ -1332,13 +1341,23 @@ impl ControlRootCache {
         &mut self,
         revision: Option<u64>,
         q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+        q_parents: &Query<&ChildOf>,
+        q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+        q_entities: &Query<Entity>,
         stages: &Assets<UsdStageAsset>,
         canonical: &CanonicalStages,
     ) {
         if self.initialized && self.revision == revision {
             return;
         }
-        self.roots = authored_control_roots(q_paths, stages, canonical);
+        self.roots = authored_control_roots(
+            q_paths,
+            q_parents,
+            q_scene_roots,
+            q_entities,
+            stages,
+            canonical,
+        );
         self.roots.sort_by_key(|(_, column)| *column);
         self.revision = revision;
         self.initialized = true;
@@ -1370,6 +1389,8 @@ fn publish_control_exposures(
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     roots: &[(Option<Entity>, i32)],
@@ -1396,6 +1417,8 @@ fn publish_control_exposures(
         q_rotation,
         q_spatial,
         q_paths,
+        q_scene_roots,
+        q_entities,
         stages,
         canonical,
     );
@@ -1422,6 +1445,8 @@ fn publish_control_exposures(
         q_rotation,
         q_spatial,
         q_paths,
+        q_scene_roots,
+        q_entities,
         stages,
         canonical,
     );
@@ -1435,11 +1460,17 @@ fn publish_control_exposures(
 /// vehicles.
 fn authored_control_roots(
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Vec<(Option<Entity>, i32)> {
     let mut roots = Vec::new();
     for (entity, prim_path) in q_paths.iter() {
+        if !is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities) {
+            continue;
+        }
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
@@ -1459,6 +1490,22 @@ fn authored_control_roots(
     roots
 }
 
+/// Return true only for an entity owned by the mounted live scene.
+///
+/// Preview prims intentionally retain ordinary USD components so they render,
+/// but their root carries `UsdPreviewOnly` rather than `UsdSceneRoot`. Walking
+/// ownership here prevents a preview document from becoming a second runtime
+/// vehicle, guidance node, or landing target in operator-facing exposures.
+fn is_live_scene_entity(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
+) -> bool {
+    scene_root_ancestor(entity, q_scene_roots, q_parents, q_entities)
+        .is_ok_and(|root| root.is_some())
+}
+
 /// Resolve the authored target and both entities' absolute positions. This keeps
 /// the HUD honest across BigSpace cells, parent hierarchies, and floating-origin
 /// recentering even when the generated GNC model does not expose estimator error
@@ -1469,9 +1516,14 @@ fn authored_target_positions(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<(lunco_core::coords::GridPos, lunco_core::coords::GridPos)> {
+    if !is_live_scene_entity(root, q_parents, q_scene_roots, q_entities) {
+        return None;
+    }
     let (_, root_path) = q_paths.get(root).ok()?;
     let stage_asset = stages.get(&root_path.stage_handle)?;
     let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
@@ -1487,7 +1539,8 @@ fn authored_target_positions(
     let (target_path, _) = target_source.rsplit_once('.')?;
     let mut target_entities = q_paths.iter().filter_map(|(entity, prim_path)| {
         (prim_path.stage_handle.id() == root_path.stage_handle.id()
-            && prim_path.path == target_path)
+            && prim_path.path == target_path
+            && is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities))
             .then_some(entity)
     });
     let target_entity = target_entities.next()?;
@@ -1545,9 +1598,15 @@ fn authored_guidance_path(
 fn authored_guidance_entity(
     root: Entity,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_parents: &Query<&ChildOf>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<Entity> {
+    if !is_live_scene_entity(root, q_parents, q_scene_roots, q_entities) {
+        return None;
+    }
     let (_, root_path) = q_paths.get(root).ok()?;
     let stage_asset = stages.get(&root_path.stage_handle)?;
     let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
@@ -1555,8 +1614,9 @@ fn authored_guidance_entity(
     let guidance = authored_guidance_path(reader, root_path)?;
     let mut entities = q_paths.iter().filter_map(|(entity, prim_path)| {
         (prim_path.stage_handle.id() == root_path.stage_handle.id()
-            && prim_path.path == guidance.as_str())
-        .then_some(entity)
+            && prim_path.path == guidance.as_str()
+            && is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities))
+            .then_some(entity)
     });
     let entity = entities.next()?;
     if entities.next().is_some() {
@@ -1697,6 +1757,8 @@ fn publish_selected_control_exposure(
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) {
@@ -1753,7 +1815,15 @@ fn publish_selected_control_exposure(
     ui.property("vehicle", vehicle.clone());
     ui.property("status", "INITIALIZING");
 
-    let guidance_entity = authored_guidance_entity(root, q_paths, stages, canonical);
+    let guidance_entity = authored_guidance_entity(
+        root,
+        q_paths,
+        q_parents,
+        q_scene_roots,
+        q_entities,
+        stages,
+        canonical,
+    );
     let guidance_sim = guidance_entity.and_then(|guidance| {
         q_sim
             .iter()
@@ -1842,7 +1912,15 @@ fn publish_selected_control_exposure(
         .zip(outputs.get("range_confidence").copied())
         .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
     let target_positions = authored_target_positions(
-        root, q_parents, q_grids, q_spatial, q_paths, stages, canonical,
+        root,
+        q_parents,
+        q_grids,
+        q_spatial,
+        q_paths,
+        q_scene_roots,
+        q_entities,
+        stages,
+        canonical,
     );
     let target_offset_xy = target_positions.map(|(root_position, target_position)| {
         let offset = root_position.0 - target_position.0;

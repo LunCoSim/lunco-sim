@@ -901,13 +901,15 @@ pub struct UsdSceneRoot;
 /// must never become Bevy window cameras: the viewport owns the one camera
 /// that renders the preview target. Walk `ChildOf` rather than testing only
 /// the entity because cameras are normally descendants of the preview root.
-fn is_preview_only(
+/// The bounded walk also keeps malformed hierarchy data from hanging a
+/// lifecycle or error path.
+pub fn is_preview_only(
     entity: Entity,
     q_child_of: &Query<&ChildOf>,
     q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> bool {
     let mut current = entity;
-    loop {
+    for _ in 0..1024 {
         if q_preview_only.contains(current) {
             return true;
         }
@@ -916,6 +918,11 @@ fn is_preview_only(
         };
         current = parent.parent();
     }
+    warn!(
+        "[usd] preview hierarchy exceeded 1024 ancestors at {:?}",
+        entity
+    );
+    false
 }
 
 /// Returns whether an entity belongs to a render-only USD preview hierarchy.
@@ -926,7 +933,7 @@ fn is_preview_only(
 /// components.
 pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
     let mut current = entity;
-    loop {
+    for _ in 0..1024 {
         if world.get::<UsdPreviewOnly>(current).is_some() {
             return true;
         }
@@ -935,6 +942,11 @@ pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
         };
         current = parent;
     }
+    warn!(
+        "[usd] preview hierarchy exceeded 1024 ancestors at {:?}",
+        entity
+    );
+    false
 }
 
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
@@ -2730,6 +2742,35 @@ mod scene_mount_tests {
         );
     }
 
+    #[derive(Resource)]
+    struct ExpectedPreview {
+        root: Entity,
+        child: Entity,
+        detached: Entity,
+    }
+
+    fn assert_preview_ancestry(
+        expected: Res<ExpectedPreview>,
+        q_preview_only: Query<(), With<UsdPreviewOnly>>,
+        q_child_of: Query<&ChildOf>,
+    ) {
+        assert!(is_preview_only(
+            expected.root,
+            &q_child_of,
+            &q_preview_only
+        ));
+        assert!(is_preview_only(
+            expected.child,
+            &q_child_of,
+            &q_preview_only
+        ));
+        assert!(!is_preview_only(
+            expected.detached,
+            &q_child_of,
+            &q_preview_only
+        ));
+    }
+
     #[test]
     fn projected_descendants_resolve_their_scene_mount_root() {
         let mut app = App::new();
@@ -2760,6 +2801,28 @@ mod scene_mount_tests {
         state.begin_replacement();
         assert!(!state.contains_root(root));
         assert_eq!(state.active_root(), None);
+    }
+
+    #[test]
+    fn projected_preview_descendants_resolve_their_preview_ownership_root() {
+        let mut app = App::new();
+        let (root, child, detached) = {
+            let world = app.world_mut();
+            let root = world.spawn(UsdPreviewOnly).id();
+            let child = world.spawn(ChildOf(root)).id();
+            let detached = world.spawn_empty().id();
+            (root, child, detached)
+        };
+        app.insert_resource(ExpectedPreview {
+            root,
+            child,
+            detached,
+        })
+        .add_systems(Update, assert_preview_ancestry);
+        app.update();
+
+        assert!(is_preview_only_entity(app.world(), child));
+        assert!(!is_preview_only_entity(app.world(), detached));
     }
 }
 

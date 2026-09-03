@@ -14,9 +14,11 @@ use crate::{
 };
 
 const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
-// Rich editors own `.mo`; every other authored text asset uses this one
-// source viewer, including USD layers. Keeping the USD extensions here also
-// makes scene-closure rows and raw Twin files follow the same OpenFile path.
+// Rich editors own `.mo` and USD layers for their native document workflows,
+// but all authored text formats remain readable through the source viewer.
+// USD is intentionally retained here for explicit OpenSourceView/OpenTwinSource
+// requests; the generic OpenFile observer below claims only source-only text so
+// it cannot race the USD document editor.
 const TEXT_VIEW_EXTS: &[&str] = &["rhai", "btxml", "wgsl", "usda", "usd", "usdc"];
 
 fn is_text_view_path(path: &Path) -> bool {
@@ -34,6 +36,9 @@ fn is_text_view_path(path: &Path) -> bool {
 /// extension; otherwise a double-click can be consumed by a domain dispatcher
 /// that has no editor for the file.
 pub(crate) fn is_source_only_text_path(path: &Path) -> bool {
+    if !is_text_view_path(path) {
+        return false;
+    }
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
@@ -246,7 +251,10 @@ pub(crate) fn on_open_file_for_text(
     mut pending: ResMut<PendingSourceRequests>,
 ) {
     let path = trigger.event().path.clone();
-    if is_text_view_path(Path::new(&path)) {
+    // `.usda` remains a supported text view, but its generic OpenFile action
+    // belongs to the USD document domain. Source text for USD is requested
+    // explicitly through OpenSourceView/OpenTwinSource.
+    if is_source_only_text_path(Path::new(&path)) {
         pending.opens.push(SourceOpenRequest::Path(path));
     }
 }

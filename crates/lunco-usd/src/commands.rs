@@ -1090,17 +1090,17 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
 
 /// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
 /// [`drain_pending_usd_file_loads`] each frame until it completes; the
-/// resulting source is allocated as a USD document. Browser-originated loads
-/// publish [`BrowserUsdDocumentReady`] after admission; ordinary typed
-/// `OpenFile` calls remain document-only.
+/// resulting source is allocated as a USD document. USD opens publish
+/// [`BrowserUsdDocumentReady`] after admission so the UI can pair the native
+/// preview with a source-text tab, matching Modelica's text-plus-visual
+/// workflow.
 struct PendingUsdLoad {
     path: PathBuf,
     /// Root of the Twin that emitted a browser request, if any. A closed Twin
     /// cancels its pending reads before they can create a stale document or
     /// focus a preview for a replaced workspace.
     twin_root: Option<PathBuf>,
-    /// Browser-originated opens request the editor preview once admission
-    /// succeeds. Typed API/OpenFile callers retain document-only semantics.
+    /// USD opens request the editor preview once admission succeeds.
     open_preview: bool,
     task: Task<Result<String, String>>,
 }
@@ -1152,7 +1152,17 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
         if !is_usd_path(stripped) {
             return;
         }
-        spawn_usd_load(world, PathBuf::from(stripped), false, None);
+        let path = PathBuf::from(stripped);
+        let twin_root = world
+            .get_resource::<WorkspaceResource>()
+            .and_then(|workspace| {
+                workspace
+                    .twins()
+                    .map(|(_, twin)| twin.root.clone())
+                    .filter(|root| path.strip_prefix(root).is_ok())
+                    .max_by_key(|root| root.components().count())
+            });
+        spawn_usd_load(world, path, true, twin_root);
     });
 }
 

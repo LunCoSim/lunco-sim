@@ -37,6 +37,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 serde = { workspace = true }
 
 [dev-dependencies]

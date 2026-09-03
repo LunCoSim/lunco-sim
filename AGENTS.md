@@ -140,6 +140,9 @@ it with this one.
   the full expensive suite only after a meaningful integration change. Repeat a
   test only when its inputs changed, the previous run was invalidated (for
   example by a clean rebuild), or nondeterminism needs confirmation.
+- Documentation, `AGENTS.md`, comment-only, and other minor non-behavioral edits
+  do not invalidate a passing test result. Reuse the existing evidence and do
+  not restart or repeat tests unless the tested code or inputs changed.
 - Choose the smallest targeted check or test that covers the changed owner;
   crate-wide and workspace-wide suites are slow and should be reserved for
   changes that cross those broader boundaries.

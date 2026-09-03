@@ -104,6 +104,11 @@ Once the document is admitted, the viewport binds it to `EDITOR_PREVIEW_ID`
 with `LayerId::root()` and focuses the USD panel. Pending browser reads are
 cancelled on `TwinClosed`, and repeated clicks coalesce/reuse the same document
 and preview lease.
+The preview root carries `UsdPreviewOnly`, the USD projection ownership fence.
+Consumers that can create simulation side effects must use the shared bounded
+`is_preview_only` ancestry helper rather than names, stage handles, or missing
+physics components; live operator entities are admitted only through their
+`UsdSceneRoot` ownership.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.

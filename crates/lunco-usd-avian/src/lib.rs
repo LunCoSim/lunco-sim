@@ -56,9 +56,9 @@ use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 pub use lunco_usd_bevy::{effective_purpose, Purpose};
 use lunco_usd_bevy::{
-    instance_key, local_transform_at, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated, UsdInstanceProjection, UsdRead,
-    UsdSceneRoot, UsdVisualSynced,
+    instance_key, is_preview_only, local_transform_at, read_primitive_axis, read_shape_dims,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated,
+    UsdInstanceProjection, UsdPreviewOnly, UsdRead, UsdSceneRoot, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -1172,6 +1172,7 @@ fn process_usd_avian_prims(
     query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdAvianProcessed>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -1183,6 +1184,15 @@ fn process_usd_avian_prims(
     let Ok((prim_path, instance_projection)) = query.get(entity) else {
         return;
     };
+    // A USD Editor preview shares the normal visual projection pipeline with
+    // the live scene, but it is not a second physical world.  The preview root
+    // is deliberately marked `UsdPreviewOnly`; walk to it before reading any
+    // PhysicsRigidBodyAPI so Avian cannot admit a duplicate `/Griffin1` body or
+    // a duplicate joint/collider graph into the simulation.
+    if is_preview_only(entity, &q_child_of, &q_preview_only) {
+        commands.entity(entity).try_insert(UsdAvianProcessed);
+        return;
+    }
     if let Some(mount_state) = mount_state {
         let stale_mount = match lunco_usd_bevy::scene_root_ancestor(
             entity,
@@ -2183,6 +2193,8 @@ fn reduce_generic_joint(
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
     query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>)>,
+    q_child_of: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
@@ -2193,6 +2205,13 @@ fn on_add_usd_prim(
     let Ok((prim_path, instance_projection)) = query.get(entity) else {
         return;
     };
+    // Joint authoring is shared with the visual projection, but Editor
+    // previews are render-only.  This observer runs independently of the
+    // `UsdVisualSynced` Avian guard, so it must enforce the same ownership
+    // boundary or a preview hinge becomes a live pending joint forever.
+    if is_preview_only(entity, &q_child_of, &q_preview_only) {
+        return;
+    }
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
         return;
     };

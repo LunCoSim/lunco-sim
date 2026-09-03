@@ -56,6 +56,9 @@ name convention, or ECS-only grouping state is introduced.
   explicit `UsdPreviewId`, `DocumentId`, and `LayerId`. `FocusUsdPreview` selects
   the session shown by the dock and `CloseUsdPreview` releases only that session.
   All preview sessions are isolated from the simulation scene.
+  The projected preview root carries `UsdPreviewOnly`; possession, physics, and
+  operator-exposure systems use that USD-owned marker to keep preview descendants
+  render-only, while live entities require `UsdSceneRoot` ownership.
 - A `UsdPreviewSession` owns one projected composed stage, scene root, and
   render layer. A `UsdPreviewView` owns only one camera, light, render target,
   projection mode, orbit pose, and navigation scale over that session.
