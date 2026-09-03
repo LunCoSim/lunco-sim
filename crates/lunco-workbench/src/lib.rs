@@ -843,6 +843,13 @@ impl Plugin for WorkbenchPlugin {
                 ..Default::default()
             });
         }
+        // `bevy_egui` may auto-create its primary context in `PreStartup`,
+        // before the viewport plugin's `Startup` host setup runs. Disable that
+        // creation now so the workbench owns the one primary camera and can
+        // install its shared scene-target composition contract.
+        app.world_mut()
+            .resource_mut::<bevy_egui::EguiGlobalSettings>()
+            .auto_create_primary_context = false;
         app.add_systems(
             EguiPrimaryContextPass,
             render_robustness::draw_render_recovery_banner.in_set(ApplicationOverlayRenderSet),
