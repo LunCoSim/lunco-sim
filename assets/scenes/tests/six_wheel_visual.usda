@@ -19,6 +19,17 @@ def Xform "SixWheelVisual" (
     {
     }
 
+    # The numeric six-wheel scene keeps the ephemeris-only lighting contract.
+    # This companion is a hardware review, so its authored fill keeps the
+    # chassis, wheel materials, and mounted camera readable without changing
+    # the production rover or its physical lighting model.
+    def DomeLight "ReviewFill"
+    {
+        float inputs:intensity = 5000.0
+        float inputs:exposure = 0.0
+        color3f inputs:color = (0.55, 0.60, 0.70)
+    }
+
     over "Sun"
     {
         # Keep rover material detail and headlight beams readable in the
