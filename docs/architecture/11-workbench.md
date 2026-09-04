@@ -585,7 +585,10 @@ three converge on the same persisted resource.
 Settings submenus are content-sized in both axes, capped at 640 logical px in
 width and 24 interaction rows in height. They become vertically scrollable
 only when their registered controls exceed that height; the submenu itself
-does not reserve unused popup space.
+does not reserve unused popup space. A bounded custom menu uses the shared
+`lunco_workbench::menu_popup_max_width` helper with the egui content viewport,
+then fixes the popup width before laying out wrapped rows; this prevents long
+labels from replacing the viewport-safe width with an intrinsic content width.
 
 The native Updates submenu follows that shared container. Its build identity is
 an explicit Version, GitHub Actions build/run attempt, and Update channel
