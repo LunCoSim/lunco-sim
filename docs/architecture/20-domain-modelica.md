@@ -107,6 +107,11 @@ an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
 
+In-memory roots are parsed completely before they cross the session boundary and
+are installed through Rumoca's bulk parsed-source-set operation. This keeps one
+package admission to one index/invalidation pass and makes a malformed member a
+terminal root-load error rather than exposing a partially installed package.
+
 Reusable vehicle accessories keep the same ownership boundary. For example,
 `assets/components/lights/headlight_controller.usda` projects
 `LunCo.Electrical.HeadlightController`: Rhai writes the vehicle's semantic

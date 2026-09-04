@@ -1254,7 +1254,9 @@ impl ModelicaCompiler {
     /// idempotency + blocking semantics as
     /// [`Self::load_source_root`], but bytes are passed inline so
     /// callers without a real on-disk path can still install
-    /// sources.
+    /// sources. Members are parsed first and installed as one source
+    /// set so a large package invalidates Rumoca once, and a malformed
+    /// member cannot leave a partially-installed root behind.
     ///
     /// `label` shows up in diagnostics as the "source root path"
     /// (rumoca convention: `"in-memory:<id>"`). `files` is a list
@@ -1269,9 +1271,8 @@ impl ModelicaCompiler {
     ///
     /// Stripping alone is only half the contract: the defaults it removes are
     /// accumulated into [`Self::library_input_defaults`] so the worker can
-    /// RE-SEED them onto the fresh stepper. Discarding them here (the old
-    /// `let (stripped, _defaults)`) left every bound library input starting at
-    /// 0.0 — the same silent-wrong-number failure, one seam later.
+    /// re-seed them onto the fresh stepper. These defaults keep each bound
+    /// library input at its authored initial value when it is not wired.
     pub fn load_source_root_in_memory(
         &mut self,
         id: &str,
@@ -1279,11 +1280,13 @@ impl ModelicaCompiler {
         files: Vec<(String, String)>,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
         let file_count = files.len();
-        let mut inserted = 0;
         let mut diagnostics = Vec::new();
+        let mut parsed = Vec::with_capacity(file_count);
+        let mut uris = Vec::with_capacity(file_count);
         for (uri, text) in &files {
             let (stripped, defaults, issues) =
                 crate::ast_extract::strip_input_defaults_with_report(text);
+            uris.push(uri.clone());
             // A library member has no editor buffer to point diagnostics at, so
             // the report goes to the log — but it is never dropped: a parse
             // failure here means NOTHING in this file was stripped and every
@@ -1342,18 +1345,33 @@ impl ModelicaCompiler {
                     std::collections::hash_map::Entry::Occupied(_) => {}
                 }
             }
-            match self.session.add_document(uri, &stripped) {
-                Ok(()) => {
-                    self.remember_source_roots_from_document(uri);
-                    inserted += 1;
-                }
+            match rumoca_phase_parse::parse_to_ast(&stripped, uri) {
+                Ok(ast) => parsed.push((uri.clone(), ast)),
                 Err(error) => {
-                    let message = format!("source root `{id}`: could not seat {uri}: {error}");
+                    let message = format!("source root `{id}`: could not parse {uri}: {error:?}");
                     log::warn!("[ModelicaCompiler] {message}");
                     diagnostics.push(message);
                 }
             }
         }
+        // A source root is one semantic unit. Do not publish a partial package:
+        // the compile owner must either see every member or a terminal load
+        // diagnostic. Bulk installation also keeps Rumoca's source-set index
+        // and invalidation work to one pass instead of one pass per file.
+        let inserted = if diagnostics.is_empty() && !parsed.is_empty() {
+            let inserted = self.session.replace_parsed_source_set(
+                id,
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                parsed,
+                None,
+            );
+            for uri in &uris {
+                self.remember_source_roots_from_document(uri);
+            }
+            inserted
+        } else {
+            0
+        };
         let report = rumoca_compile::compile::SourceRootLoadReport {
             source_set_id: id.to_string(),
             source_root_path: label.to_string(),
@@ -2357,6 +2375,29 @@ mod observables_smoke {
                 .any(|message| message.contains("could not parse Broken.mo")),
             "a source root must not report Ready when its bound-input strip failed: {:?}",
             report.diagnostics
+        );
+    }
+
+    #[test]
+    fn source_root_failure_does_not_publish_partial_members() {
+        let mut compiler = ModelicaCompiler::new();
+        let report = compiler.load_source_root_in_memory(
+            "Demo",
+            "test-root",
+            vec![
+                (
+                    "Demo/Healthy.mo".into(),
+                    "model Healthy end Healthy;".into(),
+                ),
+                ("Demo/Broken.mo".into(), "model Broken".into()),
+            ],
+        );
+        assert_eq!(report.parsed_file_count, 2);
+        assert_eq!(report.inserted_file_count, 0);
+        assert!(!report.diagnostics.is_empty());
+        assert!(
+            compiler.session().class_lookup_query("Healthy").is_none(),
+            "a failed source-root admission must not expose only its parseable members"
         );
     }
 

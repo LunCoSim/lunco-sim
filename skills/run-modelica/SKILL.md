@@ -127,6 +127,10 @@ ordered behind that commit. Readiness is still the completion barrier, so
 physics must not be started before `/api/ready` reports `ready=true`,
 `world_hold=false`, and `pending_count=0`.
 
+Bundled and workspace source roots are parsed to completion before admission and
+installed as one parsed source set. A failed member therefore keeps the root out
+of the Rumoca session; do not treat a nonzero parsed count as readiness.
+
 For policy-owned generated models, keep contract assertions in
 `assets/scripting/tests/*.rhai`. Rust should provide the composed facts and
 invoke the registered policy; Rhai should assert the generated source,

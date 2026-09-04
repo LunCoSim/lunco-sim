@@ -220,6 +220,15 @@ terminal before physics and scenario execution open. This makes cache
 validation part of the existing source-admission order instead of adding a
 second startup traversal.
 
+#### 2026-09-05 bulk source-root admission
+
+The runtime source-root owner now parses in-memory package members completely
+before publishing them through Rumoca's bulk parsed-source-set boundary. A
+successful package performs one source-set index/invalidation pass instead of
+one pass per member, while any parse failure produces a terminal load result
+without exposing the parseable subset. This is a local Modelica worker change;
+the readiness barrier and the production acceptance signal are unchanged.
+
 #### 2026-08-28 verification after source-owner fixes
 
 - `rustup run nightly-2026-02-27 cargo test -p lunco-avatar --lib -j 4` passed
