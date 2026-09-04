@@ -83,6 +83,17 @@ celestial projection therefore read the identical concrete root even when
 their systems observe the load in the same frame; a deferred visual write
 cannot cause a site anchor to be skipped permanently.
 
+BigSpace propagation follows the same schedule-boundary rule. The application
+admits `LocalFloatingOrigins`, `PropagateHighPrecision`, and
+`PropagateLowPrecision` only when their conservative ECS invalidation inputs
+change, while BigSpace remains the authoritative owner of propagation and
+per-entity pruning. The gates include origin-cell and hierarchy changes,
+spatial transform/cell/grid changes, component additions/removals, and
+stationary-entity initialization. They do not gate the normal large-transform
+recentering path or add a second transform cache; a stable frame therefore
+avoids BigSpace's clean-frame worker setup without weakening transform
+correctness.
+
 Generated Modelica projection follows the same frame-discipline contract. Its
 shared USD root predicate runs before synthesizer selection, and the projector
 uses Bevy identity change detection to reprocess only prims whose path or
