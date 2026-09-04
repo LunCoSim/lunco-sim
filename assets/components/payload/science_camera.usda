@@ -50,6 +50,11 @@ def Xform "ScienceCamera" (
         uniform token axis = "Z"
         double3 xformOp:translate = (0, 0, 0.58)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        # The lens is a visual payload detail. The camera body's authored
+        # collision is the payload's physical representative; keeping the
+        # lens out of that body prevents a decorative child from becoming an
+        # independent collider when the component is mounted on a rover.
+        bool physics:collisionEnabled = false
         color3f[] primvars:displayColor = [(0.08, 0.16, 0.32)]
     }
 }
