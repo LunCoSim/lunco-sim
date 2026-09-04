@@ -262,6 +262,8 @@ impl Plugin for UsdBevyPlugin {
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
             .init_resource::<camera_switch::CameraContractStatus>()
+            .init_resource::<camera_switch::StandalonePresentationState>()
+            .init_resource::<camera_switch::StandalonePresentationSettings>()
             // The live canonical stages are main-thread `NonSend` resources
             // because OpenUSD `Stage` is `!Send`. Initial projection uses each
             // asset's worker-produced `UsdStageProjectionPlan`; this resource
@@ -507,6 +509,7 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(
                 Update,
                 (
+                    camera_switch::ensure_standalone_presentation,
                     camera_track::bind_camera_tracks_to_preview,
                     camera_track::clear_camera_track_plans_on_stage_reload.run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
@@ -523,7 +526,8 @@ impl Plugin for UsdBevyPlugin {
                     camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
                 )
                     .chain()
-                    .after(sync_usd_visuals),
+                    .after(sync_usd_visuals)
+                    .after(UsdVisualProjectionSet),
             );
     }
 }

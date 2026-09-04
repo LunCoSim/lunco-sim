@@ -45,9 +45,11 @@ poke an input, `possess_vessel` to take control, then re-read.
 4. Modelica in the loop? `snapshot_variables` for solver state, or `cosim_status` for the whole chain.
 5. `capture_screenshot` → `/tmp/x.png` → Read it, to confirm the physical picture.
 
-If the scene has no authored window camera, the windowed luncosim host uses its
-explicit presentation-camera policy and reports that owner in the Camera menu
-and status history; do not interpret a transient camera-less projection as a
+If the scene has no authored window camera, the windowed luncosim host may use
+its explicit standalone presentation policy after finite USD bounds settle; it
+reports the generated owner in the Camera menu and status history. Headless and
+recording hosts do not opt into that policy. A transient camera-less projection,
+or a boundless standalone scene, is a presentation diagnostic rather than a
 terrain or physics failure.
 
 Before interpreting a live read as a finished scene, check

@@ -449,6 +449,15 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
 - **Switching:** cameras spawn inactive; make one the active view with
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.
+- **Standalone presentation:** the interactive window host may generate one
+  render-free `SceneCamera` plus one unscoped directional light under the active
+  `UsdSceneRoot` when a standalone assembly has finite projected bounds but no
+  `CameraTrack` or unique `LocalAvatar` initial presentation. The generated
+  camera is framed from composed Bevy bounds and selected after deferred
+  projection; it is Twin/scene-scoped and is removed on authored takeover or
+  `SceneTeardown`. Headless and recording hosts leave this policy disabled, and
+  a scene without finite bounds reports an owning diagnostic instead of a fake
+  camera.
 
 The local avatar remains a runtime camera embodiment rather than a USD rigid
 body. Its movement controller consumes the standard `UsdPhysics` colliders

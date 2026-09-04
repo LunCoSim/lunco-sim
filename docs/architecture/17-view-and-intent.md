@@ -155,12 +155,17 @@ The viewport has explicit presentation ownership:
   the presence of an avatar never emits it implicitly. `ResumeCameraDirector`
   returns control to the authored track.
 
-Names match a full USD prim path or its leaf. A windowed scene must author its
-initial presentation through `CameraTrack` (including a single key for a static
-initial view). If no authored window camera or track resolves, the viewport
-stays inactive and the owning diagnostic is shown. The engine does not invent a
-camera, select the first camera, or turn avatar presence into presentation
-policy.
+Names match a full USD prim path or its leaf. A windowed scene normally authors
+its initial presentation through `CameraTrack` (including a single key for a
+static initial view) or exactly one `LocalAvatar` camera. The interactive
+luncosim host also has an explicit standalone-assembly policy: when the active
+USD root has neither authored presentation, it frames finite projected bounds
+with one Twin-scoped generated camera and directional light. That generated
+pair is selected only after projection settles and is removed when authored
+presentation takes ownership or the scene tears down. Headless/recording hosts
+do not opt into it; invalid or boundless scenes remain camera-less with the
+owning diagnostic. The engine never selects the first authored camera or turns
+avatar presence into presentation policy.
 
 ### 6.4 Rover-mounted cameras
 

@@ -197,12 +197,16 @@ impl Plugin for SandboxUiPlugin {
         }
 
         add_runtime_ui_layer(app);
-        // A windowed host requires an authored presentation contract. The USD
-        // projection owns validation; this flag only declares the host's
-        // admission requirement and never creates a camera.
+        // A windowed host requires a presentation contract. Authored tracks and
+        // LocalAvatar cameras remain authoritative; the USD projection may add
+        // one Twin-scoped presentation camera/light for a standalone assembly
+        // that has neither authored initial presentation.
         app.world_mut()
             .resource_mut::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
             .required = true;
+        app.world_mut()
+            .resource_mut::<lunco_usd_bevy::camera_switch::StandalonePresentationState>()
+            .enabled = true;
         app.init_resource::<CameraPickerState>()
             .add_systems(lunco_core::SceneTeardown, reset_camera_picker)
             .add_observer(reset_camera_picker_on_twin_closed);
@@ -764,6 +768,7 @@ fn register_camera_menu(world: &mut World) {
                 CameraSelectionOwner::None => "none",
                 CameraSelectionOwner::Director => "director",
                 CameraSelectionOwner::User => "operator",
+                CameraSelectionOwner::Generated => "generated",
             };
             ui.label(format!("Active: {active}  ·  Owner: {owner}"));
             if let Some(error) = &state.last_error {

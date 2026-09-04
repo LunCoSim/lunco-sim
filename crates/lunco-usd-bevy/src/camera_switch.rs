@@ -27,13 +27,13 @@
 //!   transitions;
 //! - the `KeyC` hotkey ([`cycle_active_camera`]) when a host runs with input.
 
-use bevy::camera::{RenderTarget, Viewport};
+use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{
     on_command, Command, LocalAvatar, OriginAnchor, SceneViewport, TheLocalAvatar, WorldGrid,
 };
-use lunco_render::SceneCamera;
+use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
 
 use crate::UsdPrimPath;
 
@@ -72,6 +72,7 @@ pub enum CameraSelectionOwner {
     None,
     Director,
     User,
+    Generated,
 }
 
 /// Change-gated view model for the Camera menu and no-camera presentation.
@@ -96,12 +97,84 @@ pub struct CameraSelectionStatus {
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct CameraSelectionStatusChanged;
 
-/// Mandatory authored presentation contract for a windowed scene.
+/// Marks the camera generated for an explicit standalone-assembly presentation.
+///
+/// This is intentionally separate from [`UsdPrimPath`]: the camera is a
+/// presentation projection of the mounted assembly, not authored USD content.
+/// Parenting it below the scene root gives it the same Twin/scene lifetime as
+/// the geometry it frames.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct StandalonePresentationCamera;
+
+/// Marks the directional light generated with a standalone presentation camera.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct StandalonePresentationLight;
+
+/// Opt-in and lifecycle state for generated standalone USD presentations.
+///
+/// The windowed host enables this resource. Headless hosts leave it disabled,
+/// so they retain the authored camera contract and never create render-only
+/// scene content. The generated entities are children of the active
+/// [`crate::UsdSceneRoot`] and are therefore reclaimed with that Twin scene;
+/// [`reset_standalone_presentation`] also clears them at the explicit teardown
+/// boundary before a replacement scene is admitted.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct StandalonePresentationState {
+    /// Whether the current host requests a generated presentation when an
+    /// authored camera-track/LocalAvatar presentation is absent.
+    pub enabled: bool,
+    /// Active scene root that owns the generated presentation, if any.
+    pub root: Option<Entity>,
+    /// Generated camera entity, including one queued for insertion.
+    pub camera: Option<Entity>,
+    /// Generated directional-light entity, including one queued for insertion.
+    pub light: Option<Entity>,
+    /// The owner is waiting for projection or for deferred entity insertion.
+    pub pending: bool,
+    /// A terminal presentation reason for the active root, if generation is
+    /// impossible (for example, the assembly has no renderable bounds).
+    pub error: Option<String>,
+}
+
+/// Tunable defaults for the generated standalone framing. These are a resource
+/// rather than literals in the projection system so the presentation owner has
+/// one explicit policy surface and tests can exercise it without a window.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct StandalonePresentationSettings {
+    /// Multiplier applied to the distance needed to fit the bounding sphere.
+    pub framing_margin: f32,
+    /// Camera position direction from the framed assembly center.
+    pub camera_direction: Vec3,
+    /// Light position direction from the framed assembly center.
+    pub light_direction: Vec3,
+    /// Illuminance of the generated presentation light.
+    pub light_illuminance: f32,
+    /// Near clip plane in metres.
+    pub near_clip: f32,
+    /// Minimum far clip plane in metres.
+    pub minimum_far_clip: f32,
+}
+
+impl Default for StandalonePresentationSettings {
+    fn default() -> Self {
+        Self {
+            framing_margin: 1.35,
+            camera_direction: Vec3::new(1.0, 0.65, 1.0),
+            light_direction: Vec3::new(-1.0, 1.5, 1.0),
+            light_illuminance: 128_000.0,
+            near_clip: 0.01,
+            minimum_far_clip: 1_000.0,
+        }
+    }
+}
+
+/// Mandatory presentation contract for a windowed scene.
 ///
 /// The render host opts into `required`. The USD projection owns the verdict:
-/// exactly one authored camera track must resolve to authored scene cameras.
-/// A missing or invalid contract is not repaired by choosing a camera; the
-/// scene admission owner can reject it and the UI can highlight the finding.
+/// an authored camera track/LocalAvatar or an explicit standalone presentation
+/// must resolve to a window camera. A missing or invalid contract is not
+/// repaired by choosing an authored camera; the scene admission owner can
+/// reject it and the UI can highlight the finding.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CameraContractStatus {
     /// Whether the current host requires a presentable authored scene.
@@ -173,6 +246,7 @@ pub struct ResumeCameraDirector {}
 pub enum CameraActivationSource {
     Director,
     User,
+    Generated,
 }
 
 #[derive(Event)]
@@ -193,6 +267,13 @@ impl ActivateCamera {
         Self {
             target,
             source: CameraActivationSource::User,
+        }
+    }
+
+    pub fn generated(target: Entity) -> Self {
+        Self {
+            target,
+            source: CameraActivationSource::Generated,
         }
     }
 }
@@ -580,6 +661,7 @@ pub fn on_activate_camera(
                 selection.owner = match event.source {
                     CameraActivationSource::Director => CameraSelectionOwner::Director,
                     CameraActivationSource::User => CameraSelectionOwner::User,
+                    CameraActivationSource::Generated => CameraSelectionOwner::Generated,
                 };
                 clear_camera_error(&mut status, &mut commands);
                 info!(
@@ -892,6 +974,477 @@ pub fn camera_selection_status_changed(
         || !removed_tracks.is_empty()
 }
 
+/// Keep a windowed standalone USD assembly presentable when it has no authored
+/// camera track or LocalAvatar camera. This is an explicit host policy, not a
+/// fallback in the camera reconciler: the generated camera and light are
+/// parented below the active USD scene root and are removed at the scene
+/// boundary or as soon as an authored presentation takes ownership.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct StandalonePresentationQueries<'w, 's> {
+    scene_roots: Query<'w, 's, (), With<crate::UsdSceneRoot>>,
+    synced_roots: Query<'w, 's, (), With<crate::UsdVisualSynced>>,
+    child_of: Query<'w, 's, &'static ChildOf>,
+    entities: Query<'w, 's, Entity>,
+    pending: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            With<crate::UsdAwaitingStage>,
+            With<crate::UsdVisualMeshPending>,
+        )>,
+    >,
+    bounds: Query<'w, 's, (Entity, &'static Aabb, &'static GlobalTransform)>,
+    tracks: Query<'w, 's, Entity, With<crate::camera_track::CameraTrack>>,
+    avatar_cameras: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<SceneCamera>,
+            With<LocalAvatar>,
+            Without<StandalonePresentationCamera>,
+        ),
+    >,
+    generated_cameras:
+        Query<'w, 's, (Entity, &'static ChildOf), With<StandalonePresentationCamera>>,
+    generated_lights: Query<'w, 's, (Entity, &'static ChildOf), With<StandalonePresentationLight>>,
+    directional_lights: Query<
+        'w,
+        's,
+        Option<&'static bevy::camera::visibility::RenderLayers>,
+        With<DirectionalLight>,
+    >,
+    root_transforms: Query<'w, 's, &'static GlobalTransform, With<crate::UsdSceneRoot>>,
+}
+
+pub(crate) fn ensure_standalone_presentation(
+    mount: Res<lunco_core::SceneMountState>,
+    settings: Res<StandalonePresentationSettings>,
+    mut presentation: ResMut<StandalonePresentationState>,
+    mut selection: ResMut<ViewportCameraSelection>,
+    mut viewport: ResMut<SceneViewport>,
+    queries: StandalonePresentationQueries,
+    mut commands: Commands,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let active_root = mount.active_root();
+
+    // Any generated presentation is owned by this host's active scene. Reclaim
+    // stale or disabled instances by exact marker, never by a broad scene query.
+    let generated_entities: Vec<Entity> = queries
+        .generated_cameras
+        .iter()
+        .map(|(entity, _)| entity)
+        .chain(queries.generated_lights.iter().map(|(entity, _)| entity))
+        .collect();
+    if !presentation.enabled || active_root.is_none() {
+        despawn_generated_presentation(
+            &generated_entities,
+            &mut selection,
+            &mut viewport,
+            &mut commands,
+        );
+        if presentation.root.is_some()
+            || presentation.camera.is_some()
+            || presentation.light.is_some()
+            || presentation.pending
+            || presentation.error.is_some()
+        {
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                ..default()
+            });
+            publish_standalone_presentation_diagnostic(&mut diagnostics, None);
+        }
+        return;
+    }
+    let root = active_root.expect("active_root was checked above");
+
+    if presentation.root != Some(root) {
+        despawn_generated_presentation(
+            &generated_entities,
+            &mut selection,
+            &mut viewport,
+            &mut commands,
+        );
+        let enabled = presentation.enabled;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            pending: true,
+            ..default()
+        });
+        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
+    }
+
+    let authored_track = queries.tracks.iter().any(|entity| {
+        entity_belongs_to_root(
+            entity,
+            root,
+            &queries.scene_roots,
+            &queries.child_of,
+            &queries.entities,
+        )
+    });
+    let authored_avatar = queries.avatar_cameras.iter().any(|entity| {
+        entity_belongs_to_root(
+            entity,
+            root,
+            &queries.scene_roots,
+            &queries.child_of,
+            &queries.entities,
+        )
+    });
+    if authored_track || authored_avatar {
+        despawn_generated_presentation(
+            &generated_entities,
+            &mut selection,
+            &mut viewport,
+            &mut commands,
+        );
+        if presentation.root.is_some()
+            || presentation.camera.is_some()
+            || presentation.light.is_some()
+            || presentation.pending
+            || presentation.error.is_some()
+        {
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                ..default()
+            });
+            publish_standalone_presentation_diagnostic(&mut diagnostics, None);
+        }
+        return;
+    }
+
+    if !queries.scene_roots.contains(root) || !queries.synced_roots.contains(root) {
+        let enabled = presentation.enabled;
+        let camera = presentation.camera;
+        let light = presentation.light;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            camera,
+            light,
+            pending: true,
+            ..default()
+        });
+        return;
+    }
+
+    // Waiting for the USD projection queue is not a missing-presentation error.
+    // The next update will retry after the renderable descendants commit.
+    if queries.pending.iter().any(|entity| {
+        entity_belongs_to_root(
+            entity,
+            root,
+            &queries.scene_roots,
+            &queries.child_of,
+            &queries.entities,
+        )
+    }) {
+        let enabled = presentation.enabled;
+        let camera = presentation.camera;
+        let light = presentation.light;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            camera,
+            light,
+            pending: true,
+            ..default()
+        });
+        return;
+    }
+
+    let existing_camera = queries
+        .generated_cameras
+        .iter()
+        .find_map(|(entity, _child)| {
+            entity_belongs_to_root(
+                entity,
+                root,
+                &queries.scene_roots,
+                &queries.child_of,
+                &queries.entities,
+            )
+            .then_some(entity)
+        });
+    let existing_light = queries
+        .generated_lights
+        .iter()
+        .find_map(|(entity, _child)| {
+            entity_belongs_to_root(
+                entity,
+                root,
+                &queries.scene_roots,
+                &queries.child_of,
+                &queries.entities,
+            )
+            .then_some(entity)
+        });
+    let unscoped_directional_light = queries
+        .directional_lights
+        .iter()
+        .any(|layers| layers.is_none());
+
+    if let Some(camera) = existing_camera {
+        let was_known = presentation.camera == Some(camera);
+        let should_activate = presentation.pending || !was_known;
+        let enabled = presentation.enabled;
+        presentation.set_if_neq(StandalonePresentationState {
+            enabled,
+            root: Some(root),
+            camera: Some(camera),
+            light: existing_light,
+            ..default()
+        });
+        if should_activate {
+            commands.trigger(ActivateCamera::generated(camera));
+        }
+        publish_standalone_presentation_diagnostic(&mut diagnostics, None);
+        return;
+    }
+
+    let Some((min, max)) = standalone_presentation_bounds(
+        root,
+        &queries.scene_roots,
+        &queries.child_of,
+        &queries.entities,
+        &queries.root_transforms,
+        &queries.bounds,
+    ) else {
+        let message =
+            "standalone USD assembly has no finite renderable bounds for generated presentation"
+                .to_string();
+        if presentation.error.as_deref() != Some(message.as_str()) {
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                root: Some(root),
+                error: Some(message.clone()),
+                ..default()
+            });
+            publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
+            error!("[usd-presentation] {message}");
+        }
+        return;
+    };
+
+    let (camera_transform, light_transform, projection) =
+        standalone_presentation_pose(min, max, &settings);
+    let camera = commands
+        .spawn((
+            StandalonePresentationCamera,
+            SceneCamera::agx(),
+            GraphicsCameraDefaults,
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            projection,
+            RenderTarget::Window(bevy::window::WindowRef::Primary),
+            camera_transform,
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            CellCoord::default(),
+            ChildOf(root),
+            Name::new("LunCo standalone presentation"),
+        ))
+        .id();
+    let light = if unscoped_directional_light {
+        None
+    } else {
+        Some(
+            commands
+                .spawn((
+                    StandalonePresentationLight,
+                    DirectionalLight {
+                        illuminance: settings.light_illuminance,
+                        shadow_maps_enabled: false,
+                        ..default()
+                    },
+                    LightGraphicsDefaults {
+                        intensity_uses_graphics_default: false,
+                        intensity_scale: 1.0,
+                        range_uses_graphics_default: false,
+                    },
+                    light_transform,
+                    GlobalTransform::default(),
+                    Visibility::Visible,
+                    InheritedVisibility::default(),
+                    ViewVisibility::default(),
+                    CellCoord::default(),
+                    ChildOf(root),
+                    Name::new("LunCo standalone presentation light"),
+                ))
+                .id(),
+        )
+    };
+
+    let enabled = presentation.enabled;
+    presentation.set_if_neq(StandalonePresentationState {
+        enabled,
+        root: Some(root),
+        camera: Some(camera),
+        light,
+        pending: true,
+        ..default()
+    });
+    publish_standalone_presentation_diagnostic(&mut diagnostics, None);
+}
+
+fn entity_belongs_to_root(
+    entity: Entity,
+    root: Entity,
+    q_scene_roots: &Query<(), With<crate::UsdSceneRoot>>,
+    q_child_of: &Query<&ChildOf>,
+    q_entities: &Query<Entity>,
+) -> bool {
+    crate::scene_root_ancestor(entity, q_scene_roots, q_child_of, q_entities)
+        .ok()
+        .flatten()
+        == Some(root)
+}
+
+fn despawn_generated_presentation(
+    entities: &[Entity],
+    selection: &mut ViewportCameraSelection,
+    viewport: &mut SceneViewport,
+    commands: &mut Commands,
+) {
+    let selected_generated = selection.owner == CameraSelectionOwner::Generated
+        || entities.iter().any(|entity| {
+            matches!(
+                selection.requested,
+                Some(RequestedCamera::Entity(requested)) if requested == *entity
+            )
+        });
+    for entity in entities {
+        commands.entity(*entity).try_despawn();
+    }
+    if selected_generated {
+        *selection = ViewportCameraSelection::default();
+        viewport.active_camera = None;
+    }
+}
+
+fn standalone_presentation_bounds(
+    root: Entity,
+    q_scene_roots: &Query<(), With<crate::UsdSceneRoot>>,
+    q_child_of: &Query<&ChildOf>,
+    q_entities: &Query<Entity>,
+    q_root_transforms: &Query<&GlobalTransform, With<crate::UsdSceneRoot>>,
+    q_bounds: &Query<(Entity, &Aabb, &GlobalTransform)>,
+) -> Option<(Vec3, Vec3)> {
+    let root_transform = q_root_transforms.get(root).ok()?;
+    let root_from_world = root_transform.affine().inverse();
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    let mut found = false;
+
+    for (entity, aabb, transform) in q_bounds.iter() {
+        if !entity_belongs_to_root(entity, root, q_scene_roots, q_child_of, q_entities)
+            || !aabb.center.is_finite()
+            || !aabb.half_extents.is_finite()
+        {
+            continue;
+        }
+        let half = aabb.half_extents.abs();
+        let center = aabb.center;
+        for x in [-1.0_f32, 1.0] {
+            for y in [-1.0_f32, 1.0] {
+                for z in [-1.0_f32, 1.0] {
+                    let corner = center + half * Vec3A::new(x, y, z);
+                    let world = transform.affine().transform_point3a(corner);
+                    let local: Vec3 = root_from_world.transform_point3a(world).into();
+                    if local.is_finite() {
+                        min = min.min(local);
+                        max = max.max(local);
+                        found = true;
+                    }
+                }
+            }
+        }
+    }
+    found.then_some((min, max))
+}
+
+fn standalone_presentation_pose(
+    min: Vec3,
+    max: Vec3,
+    settings: &StandalonePresentationSettings,
+) -> (Transform, Transform, Projection) {
+    let center = (min + max) * 0.5;
+    let radius = ((max - min) * 0.5).length().max(0.1);
+    let camera_direction = settings.camera_direction.normalize_or_zero();
+    let camera_direction = if camera_direction.length_squared() > 0.0 {
+        camera_direction.normalize()
+    } else {
+        Vec3::new(1.0, 0.65, 1.0).normalize()
+    };
+    let fov = std::f32::consts::FRAC_PI_4;
+    let tan_half_fov = (fov * 0.5).tan();
+    let margin = settings.framing_margin.max(1.0);
+    let distance = (radius / tan_half_fov + radius) * margin;
+    let camera_position = center + camera_direction * distance;
+    let camera_up = if camera_direction.dot(Vec3::Y).abs() > 0.95 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let camera_transform =
+        Transform::from_translation(camera_position).looking_at(center, camera_up);
+
+    let light_direction = settings.light_direction.normalize_or_zero();
+    let light_direction = if light_direction.length_squared() > 0.0 {
+        light_direction
+    } else {
+        Vec3::new(-1.0, 1.5, 1.0).normalize()
+    };
+    let light_position = center + light_direction * (radius * 4.0).max(4.0);
+    let light_up = if light_direction.dot(Vec3::Y).abs() > 0.95 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let light_transform = Transform::from_translation(light_position).looking_at(center, light_up);
+
+    let mut projection = lunco_render::usd_default_perspective_projection();
+    if let Projection::Perspective(perspective) = &mut projection {
+        perspective.near = settings.near_clip.max(0.001).min(distance * 0.25);
+        perspective.far = settings
+            .minimum_far_clip
+            .max(distance + radius * margin * 2.0)
+            .max(perspective.near + 1.0);
+    }
+    (camera_transform, light_transform, projection)
+}
+
+fn publish_standalone_presentation_diagnostic(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    error: Option<&str>,
+) {
+    let Some(diagnostics) = diagnostics.as_deref_mut() else {
+        return;
+    };
+    let findings = error
+        .into_iter()
+        .map(|message| lunco_core::RuntimeDiagnostic {
+            code: "standalone-presentation".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "usd-presentation".to_string(),
+            subject: "standalone-assembly".to_string(),
+            message: message.to_string(),
+        });
+    diagnostics.replace_producer("usd-presentation", findings);
+}
+
 /// Run the authored camera-contract admission check only when one of its
 /// authoritative inputs changed. The validator owns a structural scan, so an
 /// unconditional `Update` registration would make a settled scene pay for
@@ -902,20 +1455,21 @@ pub fn camera_selection_status_changed(
 /// verdict write from feeding the validator back into a steady-state loop.
 /// Camera-track plans are mutable because their sampler owns a runtime cut
 /// cursor; only plan insertion/removal is structural input to this validator.
-pub fn camera_contract_inputs_changed(
-    mount: Res<lunco_core::SceneMountState>,
-    revision: Res<crate::UsdStageRevision>,
-    contract: Res<CameraContractStatus>,
-    selection: Res<ViewportCameraSelection>,
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CameraContractInputQueries<'w, 's> {
     scene_roots: Query<
+        'w,
+        's,
         (),
         (
             With<crate::UsdSceneRoot>,
             Or<(Added<crate::UsdSceneRoot>, Changed<crate::UsdVisualSynced>)>,
         ),
     >,
-    pending_added: Query<(), Added<crate::UsdAwaitingStage>>,
+    pending_added: Query<'w, 's, (), Added<crate::UsdAwaitingStage>>,
     cameras: Query<
+        'w,
+        's,
         (),
         (
             With<SceneCamera>,
@@ -928,6 +1482,8 @@ pub fn camera_contract_inputs_changed(
         ),
     >,
     tracks: Query<
+        'w,
+        's,
         (),
         (
             With<crate::camera_track::CameraTrack>,
@@ -938,13 +1494,23 @@ pub fn camera_contract_inputs_changed(
             )>,
         ),
     >,
-    mut removed_pending: RemovedComponents<crate::UsdAwaitingStage>,
-    mut removed_cameras: RemovedComponents<SceneCamera>,
-    mut removed_tracks: RemovedComponents<crate::camera_track::CameraTrack>,
-    mut removed_plans: RemovedComponents<crate::camera_track::CameraTrackPlan>,
-    mut removed_roots: RemovedComponents<crate::UsdSceneRoot>,
+    removed_pending: RemovedComponents<'w, 's, crate::UsdAwaitingStage>,
+    removed_cameras: RemovedComponents<'w, 's, SceneCamera>,
+    removed_tracks: RemovedComponents<'w, 's, crate::camera_track::CameraTrack>,
+    removed_plans: RemovedComponents<'w, 's, crate::camera_track::CameraTrackPlan>,
+    removed_roots: RemovedComponents<'w, 's, crate::UsdSceneRoot>,
+}
+
+pub(crate) fn camera_contract_inputs_changed(
+    mount: Res<lunco_core::SceneMountState>,
+    revision: Res<crate::UsdStageRevision>,
+    contract: Res<CameraContractStatus>,
+    presentation: Res<StandalonePresentationState>,
+    selection: Res<ViewportCameraSelection>,
+    mut queries: CameraContractInputQueries,
     mut required: Local<Option<bool>>,
     mut last_revision: Local<Option<u64>>,
+    mut last_presentation: Local<Option<StandalonePresentationState>>,
 ) -> bool {
     let first_validation = required.is_none();
     let required_changed = required
@@ -957,24 +1523,28 @@ pub fn camera_contract_inputs_changed(
     let revision_changed = last_revision
         .replace(revision.0)
         .is_some_and(|previous| previous != revision.0);
+    let presentation_changed = last_presentation
+        .replace((*presentation).clone())
+        .is_some_and(|previous| previous != *presentation);
 
     // Drain every removal reader before evaluating the result. A short-circuit
     // here would leave an event unread and re-open the structural pass later.
-    let removed_pending = removed_pending.read().next().is_some();
-    let removed_cameras = removed_cameras.read().next().is_some();
-    let removed_tracks = removed_tracks.read().next().is_some();
-    let removed_plans = removed_plans.read().next().is_some();
-    let removed_roots = removed_roots.read().next().is_some();
+    let removed_pending = queries.removed_pending.read().next().is_some();
+    let removed_cameras = queries.removed_cameras.read().next().is_some();
+    let removed_tracks = queries.removed_tracks.read().next().is_some();
+    let removed_plans = queries.removed_plans.read().next().is_some();
+    let removed_roots = queries.removed_roots.read().next().is_some();
 
     first_validation
         || required_changed
         || mount.is_changed()
         || revision_changed
+        || presentation_changed
         || selection.is_changed()
-        || !scene_roots.is_empty()
-        || !pending_added.is_empty()
-        || !cameras.is_empty()
-        || !tracks.is_empty()
+        || !queries.scene_roots.is_empty()
+        || !queries.pending_added.is_empty()
+        || !queries.cameras.is_empty()
+        || !queries.tracks.is_empty()
         || removed_pending
         || removed_cameras
         || removed_tracks
@@ -982,12 +1552,13 @@ pub fn camera_contract_inputs_changed(
         || removed_roots
 }
 
-/// Validate the authored window presentation contract after USD camera-track
-/// plans are derived. This is a structural admission check, not a policy lint:
-/// duplicate tracks, absent cameras, unresolved names, and multiple mounted
-/// stages are errors owned by the camera domain.
+/// Validate the window presentation contract after USD camera-track plans are
+/// derived. An accepted standalone presentation is handled before the
+/// authored structural scan. Duplicate tracks, absent cameras, unresolved
+/// names, and multiple mounted stages are errors owned by the camera domain.
 pub fn validate_authored_camera_contract(
     mount: Res<lunco_core::SceneMountState>,
+    presentation: Res<StandalonePresentationState>,
     scene_roots: Query<Has<crate::UsdVisualSynced>, With<crate::UsdSceneRoot>>,
     pending_projection: Query<Entity, With<crate::UsdAwaitingStage>>,
     q_scene_root: Query<(), With<crate::UsdSceneRoot>>,
@@ -998,6 +1569,11 @@ pub fn validate_authored_camera_contract(
         With<crate::camera_track::CameraTrack>,
     >,
     cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalAvatar>), With<SceneCamera>>,
+    generated_cameras: Query<Entity, With<StandalonePresentationCamera>>,
+    directional_lights: Query<
+        Option<&bevy::camera::visibility::RenderLayers>,
+        With<DirectionalLight>,
+    >,
     selection: Res<ViewportCameraSelection>,
     mut commands: Commands,
     mut contract: ResMut<CameraContractStatus>,
@@ -1070,6 +1646,59 @@ pub fn validate_authored_camera_contract(
             clear_camera_error(&mut status, &mut commands);
         }
         return;
+    }
+
+    if presentation.root == active_root {
+        if presentation.pending {
+            publish_camera_contract_diagnostics(&mut diagnostics, &[]);
+            if contract.ready || !contract.errors.is_empty() {
+                *contract = CameraContractStatus {
+                    required: contract.required,
+                    ..default()
+                };
+            }
+            if status.last_error.as_deref().is_some_and(|error| {
+                error.starts_with("[camera-contract]") || error.starts_with("[usd-presentation]")
+            }) {
+                clear_camera_error(&mut status, &mut commands);
+            }
+            return;
+        }
+        if let Some(error) = presentation.error.as_deref() {
+            let errors = vec![format!("[usd-presentation] {error}")];
+            publish_camera_contract_diagnostics(&mut diagnostics, &errors);
+            let changed = contract.ready || contract.errors != errors;
+            contract.ready = false;
+            contract.errors = errors;
+            if changed {
+                if let Some(error) = contract.errors.first() {
+                    record_camera_error(&mut status, error.clone(), &mut commands);
+                    error!("[camera] {error}");
+                }
+            }
+            return;
+        }
+        let generated_ready = presentation
+            .camera
+            .is_some_and(|camera| generated_cameras.contains(camera))
+            && (presentation.light.is_some()
+                || directional_lights.iter().any(|layers| layers.is_none()));
+        if generated_ready {
+            publish_camera_contract_diagnostics(&mut diagnostics, &[]);
+            if !contract.ready || !contract.errors.is_empty() {
+                *contract = CameraContractStatus {
+                    required: contract.required,
+                    ready: true,
+                    ..default()
+                };
+            }
+            if status.last_error.as_deref().is_some_and(|error| {
+                error.starts_with("[camera-contract]") || error.starts_with("[usd-presentation]")
+            }) {
+                clear_camera_error(&mut status, &mut commands);
+            }
+            return;
+        }
     }
 
     request_authored_local_avatar_view(&cameras, &tracks, &selection, &mut commands);
@@ -1212,10 +1841,30 @@ pub fn reset_camera_selection(
     mut selection: ResMut<ViewportCameraSelection>,
     mut viewport: ResMut<SceneViewport>,
     mut status: ResMut<CameraSelectionStatus>,
+    mut presentation: ResMut<StandalonePresentationState>,
+    q_generated_cameras: Query<Entity, With<StandalonePresentationCamera>>,
+    q_generated_lights: Query<Entity, With<StandalonePresentationLight>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
+    let generated_entities: Vec<Entity> = q_generated_cameras
+        .iter()
+        .chain(q_generated_lights.iter())
+        .collect();
+    despawn_generated_presentation(
+        &generated_entities,
+        &mut selection,
+        &mut viewport,
+        &mut commands,
+    );
     *selection = ViewportCameraSelection::default();
     viewport.active_camera = None;
+    let enabled = presentation.enabled;
+    *presentation = StandalonePresentationState {
+        enabled,
+        ..default()
+    };
+    publish_standalone_presentation_diagnostic(&mut diagnostics, None);
     if *status != CameraSelectionStatus::default() {
         *status = CameraSelectionStatus::default();
         commands.trigger(CameraSelectionStatusChanged);
@@ -1243,6 +1892,155 @@ mod tests {
         // A producer may borrow the revision mutably while checking its
         // structural inputs without actually advancing the value.
         let _ = revision.0;
+    }
+
+    fn standalone_test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .init_resource::<StandalonePresentationState>()
+            .init_resource::<StandalonePresentationSettings>()
+            .add_observer(on_activate_camera)
+            .add_systems(Update, ensure_standalone_presentation)
+            .add_systems(lunco_core::SceneTeardown, reset_camera_selection);
+        app.world_mut()
+            .resource_mut::<StandalonePresentationState>()
+            .enabled = true;
+        app
+    }
+
+    fn standalone_root_with_bounds(app: &mut App) -> (Entity, Entity) {
+        let root = app
+            .world_mut()
+            .spawn((
+                crate::UsdSceneRoot,
+                crate::UsdVisualSynced,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let visual = app
+            .world_mut()
+            .spawn((
+                Aabb::from_min_max(Vec3::new(-2.0, -1.0, -3.0), Vec3::new(2.0, 1.0, 3.0)),
+                Transform::from_translation(Vec3::new(0.0, 0.0, -2.0)),
+                GlobalTransform::from(Transform::from_translation(Vec3::new(0.0, 0.0, -2.0))),
+                ChildOf(root),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+        (root, visual)
+    }
+
+    #[test]
+    fn standalone_presentation_frames_bounds_and_becomes_generated_owner() {
+        let mut app = standalone_test_app();
+        let (root, _visual) = standalone_root_with_bounds(&mut app);
+
+        app.update();
+        let presentation = app.world().resource::<StandalonePresentationState>();
+        let camera = presentation.camera.expect("camera is queued");
+        let light = presentation.light.expect("light is queued");
+        assert_eq!(presentation.root, Some(root));
+        assert!(presentation.pending);
+
+        app.update();
+
+        let presentation = app.world().resource::<StandalonePresentationState>();
+        assert_eq!(presentation.camera, Some(camera));
+        assert_eq!(presentation.light, Some(light));
+        assert!(!presentation.pending);
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner(),
+            CameraSelectionOwner::Generated
+        );
+        let transform = app.world().get::<Transform>(camera).unwrap();
+        assert!(transform.translation.is_finite());
+        assert!(transform.translation.length() > 1.0);
+        assert!(app.world().get::<DirectionalLight>(light).is_some());
+    }
+
+    #[test]
+    fn standalone_presentation_reports_missing_bounds_without_faking_a_camera() {
+        let mut app = standalone_test_app();
+        let root = app
+            .world_mut()
+            .spawn((
+                crate::UsdSceneRoot,
+                crate::UsdVisualSynced,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+
+        app.update();
+
+        let state = app.world().resource::<StandalonePresentationState>();
+        assert!(state.camera.is_none());
+        assert!(!state.pending);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("standalone USD assembly has no finite renderable bounds for generated presentation")
+        );
+    }
+
+    #[test]
+    fn authored_initial_presentation_suppresses_generation() {
+        let mut app = standalone_test_app();
+        let (root, _visual) = standalone_root_with_bounds(&mut app);
+        app.world_mut()
+            .spawn((crate::camera_track::CameraTrack, ChildOf(root)));
+
+        app.update();
+
+        let state = app.world().resource::<StandalonePresentationState>();
+        assert!(state.camera.is_none());
+        assert!(state.light.is_none());
+        assert!(!state.pending);
+        assert!(app
+            .world_mut()
+            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+            .iter(app.world())
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn scene_teardown_reclaims_generated_presentation_and_selection() {
+        let mut app = standalone_test_app();
+        standalone_root_with_bounds(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner(),
+            CameraSelectionOwner::Generated
+        );
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert!(app
+            .world_mut()
+            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+            .iter(app.world())
+            .next()
+            .is_none());
+        assert_eq!(
+            app.world().resource::<StandalonePresentationState>().camera,
+            None
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner(),
+            CameraSelectionOwner::None
+        );
     }
 
     fn window_cam(is_active: bool, name: &str) -> impl Bundle {
@@ -1280,6 +2078,7 @@ mod tests {
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<crate::UsdStageRevision>()
             .init_resource::<CameraContractStatus>()
+            .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraContractGateRuns>()
             .add_systems(
@@ -1327,6 +2126,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<CameraContractStatus>()
+            .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
             .add_systems(Update, validate_authored_camera_contract);
@@ -1358,6 +2158,7 @@ mod tests {
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<crate::UsdStageRevision>()
             .init_resource::<CameraContractStatus>()
+            .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraContractGateRuns>()
             .add_systems(
