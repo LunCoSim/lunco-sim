@@ -116,6 +116,15 @@ name convention, or ECS-only grouping state is introduced.
   and preview replacement discard it with the session. `InspectUsdViewport`
   exposes the active explode identity and `Ack.data` reports the computed
   offsets, so a headful capture can be correlated with the exact operation.
+- Each `UsdPreviewView` can present the same session as `Visual` or `Text`.
+  `SetUsdPreviewViewMode` is a view-only switch: Visual renders the existing
+  projected stage, while Text displays a read-only asynchronous snapshot of
+  the authored save layer or runtime-inclusive composed layer selected by
+  `SetUsdPreviewTextLayer`. The authored/composed snapshots are keyed by the
+  document generation, coalesced while edits are in flight, and discarded on
+  stale completion or session close. The switch preserves the document,
+  projected stage, camera, selection, edit target, and preview identity; it
+  does not create a second document, parser, loader, or USDA writer.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open session and paint the session

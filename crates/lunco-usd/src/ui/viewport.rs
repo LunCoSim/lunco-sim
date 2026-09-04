@@ -58,6 +58,7 @@ use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_api::executor::{finish_command_result, PendingApiRequest};
@@ -66,7 +67,7 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
-use lunco_doc_bevy::DocumentClosed;
+use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 #[cfg(test)]
 use lunco_render::SceneCamera;
 use lunco_render::{
@@ -128,6 +129,8 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                         serde_json::json!({
                             "view": view.id().0,
                             "focused": viewport.focused_view_id() == Some(view.id()),
+                            "mode": view.mode().as_str(),
+                            "text_layer": view.text_layer().as_str(),
                             "projection": view.projection().as_str(),
                             "target": view.orbit().target.to_array(),
                             "distance": view.orbit().distance,
@@ -146,6 +149,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "edit_target": session.edit_target().as_str(),
                     "projected_generation": session.projected_generation(),
                     "projection_ready": session.projection_ready(),
+                    "text_ready": session.text_ready(),
                     "explode": session.explode.as_ref().map(|explode| {
                         serde_json::json!({
                             "assembly": explode.assembly,
@@ -247,6 +251,7 @@ pub struct UsdViewportPlugin;
 impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
+        app.init_resource::<PendingUsdPreviewTextReads>();
         app.init_resource::<UsdPreviewRenderBudget>();
         app.init_resource::<UsdPreviewFrameVisibility>();
         app.init_resource::<RenderingQualitySettings>();
@@ -254,6 +259,7 @@ impl Plugin for UsdViewportPlugin {
         app.register_instance_panel(UsdPreviewViewPanel);
         app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
+        app.add_observer(on_doc_changed_for_preview_text);
         app.add_observer(on_browser_usd_document_ready);
         app.add_observer(on_viewport_measured);
         app.add_observer(on_preview_view_measured);
@@ -266,6 +272,7 @@ impl Plugin for UsdViewportPlugin {
                 propagate_preview_render_layer,
                 frame_preview_views,
                 resize_viewport_image,
+                drain_pending_usd_preview_text_reads,
                 reconcile_preview_projection_state
                     .run_if(preview_projection_inputs_changed)
                     .after(lunco_usd_bevy::UsdVisualProjectionSet),
@@ -273,6 +280,160 @@ impl Plugin for UsdViewportPlugin {
         );
         register_all_commands(app);
     }
+}
+
+/// Queue one authored/composed text snapshot for a preview session. The
+/// document is cloned at the generation boundary and serialized on the async
+/// worker, so egui never performs USDA serialization. A second request while
+/// one is running only advances `requested_generation`; the completion drain
+/// starts the newest generation once, which keeps rapid edits coalesced.
+fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
+    let Some((doc, generation, document)) = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| {
+            let session_doc = world
+                .get_resource::<UsdViewportState>()
+                .and_then(|state| state.session(preview))
+                .map(UsdPreviewSession::doc)?;
+            let host = registry.host(session_doc)?;
+            Some((session_doc, host.generation(), host.document().clone()))
+        })
+    else {
+        return;
+    };
+
+    let request = {
+        let mut pending = world.resource_mut::<PendingUsdPreviewTextReads>();
+        pending.next_request = pending.next_request.wrapping_add(1);
+        pending.next_request
+    };
+    let should_spawn = {
+        let mut state = world.resource_mut::<UsdViewportState>();
+        let Some(session) = state.session_mut(preview) else {
+            return;
+        };
+        if session.doc != doc {
+            return;
+        }
+        session.text.requested_generation = Some(generation);
+        if session.text.loading {
+            false
+        } else if session.text.displayed_generation == Some(generation)
+            && session.text.authored.is_some()
+            && session.text.composed.is_some()
+        {
+            false
+        } else {
+            session.text.loading = true;
+            session.text.error = None;
+            session.text.request = request;
+            true
+        }
+    };
+    if !should_spawn {
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let task = AsyncComputeTaskPool::get()
+        .spawn(async move { Ok((document.source(), document.composed_source())) });
+    #[cfg(not(target_arch = "wasm32"))]
+    world
+        .resource_mut::<PendingUsdPreviewTextReads>()
+        .tasks
+        .push(PendingUsdPreviewTextRead {
+            preview,
+            doc,
+            generation,
+            request,
+            task,
+        });
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (tx, result) = crossbeam_channel::bounded(1);
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = tx.send(Ok((document.source(), document.composed_source())));
+        });
+        world
+            .resource_mut::<PendingUsdPreviewTextReads>()
+            .tasks
+            .push(PendingUsdPreviewTextRead {
+                preview,
+                doc,
+                generation,
+                request,
+                result,
+            });
+    }
+}
+
+/// Document edits invalidate the text snapshot for every view over that
+/// document. The observer queues a single session read; the helper coalesces
+/// further edits behind its in-flight generation.
+fn on_doc_changed_for_preview_text(trigger: On<DocumentChanged>, mut commands: Commands) {
+    let doc = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let previews = world
+            .resource::<UsdViewportState>()
+            .session_ids_for_doc(doc);
+        for preview in previews {
+            request_preview_text_read(world, preview);
+        }
+    });
+}
+
+/// Apply completed text snapshots only when both the request and document
+/// generation still match. A stale completion is discarded and immediately
+/// replaced by the newest requested generation.
+fn drain_pending_usd_preview_text_reads(world: &mut World) {
+    let tasks = std::mem::take(&mut world.resource_mut::<PendingUsdPreviewTextReads>().tasks);
+    let mut pending = Vec::new();
+    for mut read in tasks {
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = block_on(future::poll_once(&mut read.task));
+        #[cfg(target_arch = "wasm32")]
+        let result = read.result.try_recv().ok();
+        let Some(result) = result else {
+            pending.push(read);
+            continue;
+        };
+
+        let current_generation = world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(read.doc)
+            .map(|host| host.generation());
+        let mut retry = false;
+        {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            let Some(session) = state.session_mut(read.preview) else {
+                continue;
+            };
+            if session.doc != read.doc || session.text.request != read.request {
+                continue;
+            }
+            let current = current_generation == Some(read.generation)
+                && session.text.requested_generation == Some(read.generation);
+            session.text.loading = false;
+            if !current {
+                retry = true;
+            } else {
+                match result {
+                    Ok((authored, composed)) => {
+                        session.text.authored = Some(authored);
+                        session.text.composed = Some(composed);
+                        session.text.displayed_generation = Some(read.generation);
+                        session.text.error = None;
+                    }
+                    Err(error) => session.text.error = Some(error),
+                }
+            }
+        }
+        if retry {
+            request_preview_text_read(world, read.preview);
+        }
+    }
+    world.resource_mut::<PendingUsdPreviewTextReads>().tasks = pending;
 }
 
 /// Bind a browser-admitted document to the one editor preview lease and focus
@@ -503,6 +664,50 @@ impl UsdPreviewProjection {
     }
 }
 
+/// Presentation mode of one USD preview view. Both modes are views over the
+/// same document-backed preview session; switching mode never creates another
+/// document, stage, projection, or camera.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
+)]
+#[reflect(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsdPreviewViewMode {
+    #[default]
+    Visual,
+    Text,
+}
+
+impl UsdPreviewViewMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Visual => "visual",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// Which document-layer serialization the USD preview Text mode displays.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
+)]
+#[reflect(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsdPreviewTextLayer {
+    #[default]
+    Authored,
+    Composed,
+}
+
+impl UsdPreviewTextLayer {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Authored => "authored",
+            Self::Composed => "composed",
+        }
+    }
+}
+
 /// Operation applied to the transient presentation pose of a USD preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -583,6 +788,39 @@ pub struct UsdPreviewSession {
     projection_ready: bool,
     primary_view: UsdPreviewViewId,
     explode: Option<UsdPreviewExplodeState>,
+    text: UsdPreviewTextState,
+}
+
+/// The asynchronous authored/composed text snapshot shared by every view of a
+/// preview session. The requested generation is separate from the displayed
+/// generation so a document edit can coalesce behind one in-flight read
+/// without briefly replacing the text with an older snapshot.
+#[derive(Debug, Clone, Default)]
+struct UsdPreviewTextState {
+    requested_generation: Option<u64>,
+    displayed_generation: Option<u64>,
+    authored: Option<String>,
+    composed: Option<String>,
+    loading: bool,
+    error: Option<String>,
+    request: u64,
+}
+
+#[derive(Resource, Default)]
+struct PendingUsdPreviewTextReads {
+    next_request: u64,
+    tasks: Vec<PendingUsdPreviewTextRead>,
+}
+
+struct PendingUsdPreviewTextRead {
+    preview: UsdPreviewId,
+    doc: DocumentId,
+    generation: u64,
+    request: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    task: Task<Result<(String, String), String>>,
+    #[cfg(target_arch = "wasm32")]
+    result: crossbeam_channel::Receiver<Result<(String, String), String>>,
 }
 
 /// The complete baseline for one session's transient explode presentation.
@@ -639,6 +877,14 @@ impl UsdPreviewSession {
     pub fn projection_ready(&self) -> bool {
         self.projection_ready
     }
+
+    /// Whether the authored and composed text snapshot matches the current
+    /// document generation.
+    pub fn text_ready(&self) -> bool {
+        self.text.displayed_generation == self.text.requested_generation
+            && self.text.authored.is_some()
+            && self.text.composed.is_some()
+    }
 }
 
 /// Presentation resources for one USD preview view. All views belonging to a
@@ -655,6 +901,8 @@ pub struct UsdPreviewView {
     projection: UsdPreviewProjection,
     orthographic_scale: f32,
     auto_frame: bool,
+    mode: UsdPreviewViewMode,
+    text_layer: UsdPreviewTextLayer,
 }
 
 impl UsdPreviewView {
@@ -692,6 +940,14 @@ impl UsdPreviewView {
 
     pub fn texture_id(&self) -> Option<egui::TextureId> {
         self.tex_id
+    }
+
+    pub fn mode(&self) -> UsdPreviewViewMode {
+        self.mode
+    }
+
+    pub fn text_layer(&self) -> UsdPreviewTextLayer {
+        self.text_layer
     }
 }
 
@@ -933,6 +1189,7 @@ impl UsdViewportState {
 struct UsdViewportMeasured {
     view: UsdPreviewViewId,
     over_scene: bool,
+    visible: bool,
 }
 
 /// Measurement emitted by an instance preview panel. The workbench owns the
@@ -942,6 +1199,7 @@ struct UsdViewportMeasured {
 struct UsdPreviewViewMeasured {
     view: UsdPreviewViewId,
     over_scene: bool,
+    visible: bool,
 }
 
 /// Return true when a preview's authoritative USD projection inputs changed.
@@ -1139,15 +1397,17 @@ fn on_viewport_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
-    if let Some(rect) = rects.get(USD_VIEWPORT_PANEL_ID) {
-        mark_view_visible(
-            &state,
-            event.view,
-            rect.size,
-            &mut visibility,
-            &budget,
-            &mut cameras,
-        );
+    if event.visible {
+        if let Some(rect) = rects.get(USD_VIEWPORT_PANEL_ID) {
+            mark_view_visible(
+                &state,
+                event.view,
+                rect.size,
+                &mut visibility,
+                &budget,
+                &mut cameras,
+            );
+        }
     }
 }
 
@@ -1165,15 +1425,17 @@ fn on_preview_view_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
-    if let Some(rect) = rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0) {
-        mark_view_visible(
-            &state,
-            event.view,
-            rect.size,
-            &mut visibility,
-            &budget,
-            &mut cameras,
-        );
+    if event.visible {
+        if let Some(rect) = rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0) {
+            mark_view_visible(
+                &state,
+                event.view,
+                rect.size,
+                &mut visibility,
+                &budget,
+                &mut cameras,
+            );
+        }
     }
 }
 
@@ -1312,6 +1574,7 @@ fn create_preview_session(
         projection_ready: false,
         primary_view,
         explode: None,
+        text: UsdPreviewTextState::default(),
     })
 }
 
@@ -1393,6 +1656,8 @@ fn create_preview_view(
         projection: UsdPreviewProjection::default(),
         orthographic_scale: 1.0,
         auto_frame: true,
+        mode: UsdPreviewViewMode::default(),
+        text_layer: UsdPreviewTextLayer::default(),
     })
 }
 
@@ -1771,6 +2036,20 @@ pub struct CloseUsdPreview {
     pub preview: UsdPreviewId,
 }
 
+/// Change only the presentation mode of one existing USD preview view.
+#[Command]
+pub struct SetUsdPreviewViewMode {
+    pub view: UsdPreviewViewId,
+    pub mode: UsdPreviewViewMode,
+}
+
+/// Change which authored/composed snapshot the Text mode displays.
+#[Command]
+pub struct SetUsdPreviewTextLayer {
+    pub view: UsdPreviewViewId,
+    pub layer: UsdPreviewTextLayer,
+}
+
 /// Change the projection of one isolated USD preview view. This changes only
 /// the editor camera; authored USD camera opinions stay read-only presentation
 /// input and are never rewritten by a navigation gesture.
@@ -1961,6 +2240,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         }
+        request_preview_text_read(world, preview);
         world
             .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
             .track_preview(doc, name, rel);
@@ -2084,6 +2364,46 @@ fn on_close_usd_preview(trigger: On<CloseUsdPreview>, mut commands: Commands) {
             return;
         };
         release_preview_projection(world, doc);
+    });
+}
+
+#[on_command(SetUsdPreviewViewMode)]
+fn on_set_usd_preview_view_mode(trigger: On<SetUsdPreviewViewMode>, mut commands: Commands) {
+    let command = trigger.event();
+    let view = command.view;
+    let mode = command.mode;
+    commands.queue(move |world: &mut World| {
+        let mut state = world.resource_mut::<UsdViewportState>();
+        let Some(view_state) = state.view_mut(view) else {
+            drop(state);
+            report_preview_error(
+                world,
+                "usd-preview-mode-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
+        };
+        view_state.mode = mode;
+    });
+}
+
+#[on_command(SetUsdPreviewTextLayer)]
+fn on_set_usd_preview_text_layer(trigger: On<SetUsdPreviewTextLayer>, mut commands: Commands) {
+    let command = trigger.event();
+    let view = command.view;
+    let layer = command.layer;
+    commands.queue(move |world: &mut World| {
+        let mut state = world.resource_mut::<UsdViewportState>();
+        let Some(view_state) = state.view_mut(view) else {
+            drop(state);
+            report_preview_error(
+                world,
+                "usd-preview-text-layer-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
+        };
+        view_state.text_layer = layer;
     });
 }
 
@@ -2849,6 +3169,8 @@ register_commands!(
     on_focus_usd_preview_view,
     on_close_usd_preview_view,
     on_close_usd_preview,
+    on_set_usd_preview_view_mode,
+    on_set_usd_preview_text_layer,
     on_set_usd_preview_projection,
     on_frame_usd_preview_view,
     on_reset_usd_preview_view,
@@ -3028,6 +3350,9 @@ fn report_preview_error(world: &mut World, name: &str, detail: String) {
 /// projection is released separately so shared coordinates survive until
 /// the final session closes.
 fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<DocumentId> {
+    if let Some(mut pending) = world.get_resource_mut::<PendingUsdPreviewTextReads>() {
+        pending.tasks.retain(|read| read.preview != preview);
+    }
     let (session, views) = world.resource_mut::<UsdViewportState>().remove(preview)?;
     let doc = session.doc;
     if let Ok(mut entity) = world.get_entity_mut(session.scene_root) {
@@ -3250,7 +3575,7 @@ fn render_preview_view(
     view_id: UsdPreviewViewId,
     singleton: bool,
 ) {
-    let (tex_id, focused_doc, next_view, projection) = ctx
+    let (tex_id, focused_doc, next_view, projection, mode, text_layer) = ctx
         .resource::<UsdViewportState>()
         .and_then(|state| {
             let view = state.view(view_id)?;
@@ -3264,9 +3589,18 @@ fn render_preview_view(
                 Some(session.doc()),
                 next_view,
                 view.projection(),
+                view.mode(),
+                view.text_layer(),
             ))
         })
-        .unwrap_or((None, None, None, UsdPreviewProjection::default()));
+        .unwrap_or((
+            None,
+            None,
+            None,
+            UsdPreviewProjection::default(),
+            UsdPreviewViewMode::default(),
+            UsdPreviewTextLayer::default(),
+        ));
     let name = focused_doc
         .and_then(|doc| {
             ctx.resource::<DocumentRegistry<UsdDocument>>()
@@ -3278,34 +3612,56 @@ fn render_preview_view(
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(&name).strong());
         if ui
-            .selectable_label(
-                projection == UsdPreviewProjection::Perspective,
-                "Perspective",
-            )
+            .selectable_label(mode == UsdPreviewViewMode::Visual, "Visual")
+            .on_hover_text("Visual — render the composed USD stage")
             .clicked()
         {
-            ctx.trigger(SetUsdPreviewProjection {
+            ctx.trigger(SetUsdPreviewViewMode {
                 view: view_id,
-                projection: UsdPreviewProjection::Perspective,
+                mode: UsdPreviewViewMode::Visual,
             });
         }
         if ui
-            .selectable_label(
-                projection == UsdPreviewProjection::Orthographic,
-                "Orthographic",
-            )
+            .selectable_label(mode == UsdPreviewViewMode::Text, "Text")
+            .on_hover_text("Text — inspect authored or composed USDA")
             .clicked()
         {
-            ctx.trigger(SetUsdPreviewProjection {
+            ctx.trigger(SetUsdPreviewViewMode {
                 view: view_id,
-                projection: UsdPreviewProjection::Orthographic,
+                mode: UsdPreviewViewMode::Text,
             });
         }
-        if ui.button("Frame").clicked() {
-            ctx.trigger(FrameUsdPreviewView { view: view_id });
-        }
-        if ui.button("Reset").clicked() {
-            ctx.trigger(ResetUsdPreviewView { view: view_id });
+        if mode == UsdPreviewViewMode::Visual {
+            if ui
+                .selectable_label(
+                    projection == UsdPreviewProjection::Perspective,
+                    "Perspective",
+                )
+                .clicked()
+            {
+                ctx.trigger(SetUsdPreviewProjection {
+                    view: view_id,
+                    projection: UsdPreviewProjection::Perspective,
+                });
+            }
+            if ui
+                .selectable_label(
+                    projection == UsdPreviewProjection::Orthographic,
+                    "Orthographic",
+                )
+                .clicked()
+            {
+                ctx.trigger(SetUsdPreviewProjection {
+                    view: view_id,
+                    projection: UsdPreviewProjection::Orthographic,
+                });
+            }
+            if ui.button("Frame").clicked() {
+                ctx.trigger(FrameUsdPreviewView { view: view_id });
+            }
+            if ui.button("Reset").clicked() {
+                ctx.trigger(ResetUsdPreviewView { view: view_id });
+            }
         }
         if let Some((preview, view)) = next_view {
             if ui.button("Open view").clicked() {
@@ -3313,8 +3669,28 @@ fn render_preview_view(
             }
         }
     });
-    ui.small("L-drag pan · R-drag orbit · M-drag pan · wheel zoom");
+    if mode == UsdPreviewViewMode::Visual {
+        ui.small("L-drag pan · R-drag orbit · M-drag pan · wheel zoom");
+    }
     ui.separator();
+
+    if mode == UsdPreviewViewMode::Text {
+        if singleton {
+            ctx.trigger(UsdViewportMeasured {
+                view: view_id,
+                over_scene: false,
+                visible: false,
+            });
+        } else {
+            ctx.trigger(UsdPreviewViewMeasured {
+                view: view_id,
+                over_scene: false,
+                visible: false,
+            });
+        }
+        render_preview_text(ui, ctx, view_id, focused_doc, text_layer);
+        return;
+    }
 
     let Some(tex_id) = tex_id else {
         ui.centered_and_justified(|ui| {
@@ -3337,11 +3713,13 @@ fn render_preview_view(
         ctx.trigger(UsdViewportMeasured {
             view: view_id,
             over_scene,
+            visible: true,
         });
     } else {
         ctx.trigger(UsdPreviewViewMeasured {
             view: view_id,
             over_scene,
+            visible: true,
         });
         // Selecting a dock tab is a view-focus action. The instance renderer
         // publishes that choice so all native editor panels follow the same
@@ -3384,6 +3762,150 @@ fn render_preview_view(
             scroll_y,
         });
     }
+}
+
+/// Render the text view over the same preview session. The text is a
+/// generation-matched snapshot of the document's authored layer or the
+/// composed preview layer; this surface is deliberately read-only because
+/// document mutations belong to typed USD commands and the existing source
+/// editor owns direct text edits.
+fn render_preview_text(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    view_id: UsdPreviewViewId,
+    doc: Option<DocumentId>,
+    text_layer: UsdPreviewTextLayer,
+) {
+    let Some(doc) = doc else {
+        ui.centered_and_justified(|ui| ui.label("No USD document is open."));
+        return;
+    };
+    let edit_target = ctx
+        .resource::<UsdViewportState>()
+        .and_then(|state| {
+            let view = state.view(view_id)?;
+            state_session_edit_target(state, view.preview())
+        })
+        .unwrap_or("@root@");
+    let Some((source_path, read_only, dirty, generation, edit_target)) = ctx
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .map(|host| {
+            let document = host.document();
+            let source_path = document
+                .origin()
+                .canonical_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| format!("mem://{}", document.origin().display_name()));
+            (
+                source_path,
+                document.origin().is_read_only(),
+                document.is_dirty(),
+                host.generation(),
+                edit_target,
+            )
+        })
+    else {
+        ui.centered_and_justified(|ui| ui.label("The USD document is no longer available."));
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Source").strong());
+        ui.label(egui::RichText::new(source_path).monospace().weak());
+        ui.separator();
+        ui.label(egui::RichText::new(format!("Layer: {edit_target}")).weak());
+        ui.separator();
+        ui.label(
+            egui::RichText::new(if read_only {
+                "Read-only"
+            } else {
+                "Editable document · text view is read-only"
+            })
+            .weak(),
+        );
+        ui.separator();
+        ui.label(egui::RichText::new(if dirty { "Unsaved" } else { "Saved" }).weak());
+    });
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Text layer").weak());
+        if ui
+            .selectable_label(text_layer == UsdPreviewTextLayer::Authored, "Authored")
+            .on_hover_text("Authored — the document layer used for Save")
+            .clicked()
+        {
+            ctx.trigger(SetUsdPreviewTextLayer {
+                view: view_id,
+                layer: UsdPreviewTextLayer::Authored,
+            });
+        }
+        if ui
+            .selectable_label(text_layer == UsdPreviewTextLayer::Composed, "Composed")
+            .on_hover_text("Composed — the source snapshot rendered by Visual mode")
+            .clicked()
+        {
+            ctx.trigger(SetUsdPreviewTextLayer {
+                view: view_id,
+                layer: UsdPreviewTextLayer::Composed,
+            });
+        }
+    });
+    ui.separator();
+
+    let _ = ctx.resource_scope::<UsdViewportState, _>(|_, state| {
+        let Some(view) = state.view(view_id) else {
+            ui.label("This preview view is no longer available.");
+            return;
+        };
+        let Some(session) = state.session(view.preview()) else {
+            ui.label("This preview session is no longer available.");
+            return;
+        };
+        let fresh = session.text.displayed_generation == Some(generation)
+            && session.text.requested_generation == Some(generation);
+        if !fresh {
+            if let Some(error) = &session.text.error {
+                ui.label(egui::RichText::new(error).weak());
+            } else if session.text.loading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new("Loading USD text…").weak().italics());
+                });
+            } else {
+                ui.label(egui::RichText::new("USD text is not available yet.").weak());
+            }
+            return;
+        }
+        let text = match text_layer {
+            UsdPreviewTextLayer::Authored => session.text.authored.as_deref(),
+            UsdPreviewTextLayer::Composed => session.text.composed.as_deref(),
+        };
+        let Some(text) = text else {
+            ui.label(egui::RichText::new("USD text is not available yet.").weak());
+            return;
+        };
+        let mut text = text;
+        egui::ScrollArea::both()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .interactive(false),
+                );
+            });
+    });
+}
+
+fn state_session_edit_target<'a>(
+    state: &'a UsdViewportState,
+    preview: UsdPreviewId,
+) -> Option<&'a str> {
+    state
+        .session(preview)
+        .map(|session| session.edit_target.as_str())
 }
 
 /// A dockable view over one existing USD preview session. Multiple instances
@@ -3441,6 +3963,7 @@ impl InstancePanel for UsdPreviewViewPanel {
 mod tests {
     use super::*;
     use crate::commands::UsdCommandsPlugin;
+    use crate::document::UsdOp;
     use lunco_workbench::{BrowserAction, BrowserActions};
 
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
@@ -3789,6 +4312,237 @@ mod tests {
                 "explode schema must expose `{field}`"
             );
         }
+    }
+
+    #[test]
+    fn preview_mode_commands_preserve_the_session_and_view_state() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Image>>();
+        app.add_plugins(UsdViewportPlugin);
+
+        let preview = UsdPreviewId(3);
+        let view_id = UsdPreviewViewId(9);
+        let session = create_preview_session(
+            app.world_mut(),
+            preview,
+            DocumentId::new(4),
+            LayerId::root(),
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            view_id,
+        )
+        .expect("preview session resources are available");
+        let view = create_preview_view(
+            app.world_mut(),
+            preview,
+            view_id,
+            session.render_layer(),
+            RenderingQualitySettings::default()
+                .validated_profile()
+                .expect("default quality is valid"),
+        )
+        .expect("preview view resources are available");
+        let orbit = view.orbit().clone();
+        let scene_root = session.scene_root();
+        let mut state = UsdViewportState::default();
+        state.insert(session);
+        assert!(state.insert_view(view).is_ok());
+        app.insert_resource(state);
+
+        app.world_mut().trigger(SetUsdPreviewViewMode {
+            view: view_id,
+            mode: UsdPreviewViewMode::Text,
+        });
+        app.world_mut().trigger(SetUsdPreviewTextLayer {
+            view: view_id,
+            layer: UsdPreviewTextLayer::Composed,
+        });
+        app.update();
+
+        let state = app.world().resource::<UsdViewportState>();
+        assert_eq!(state.session_count(), 1);
+        assert_eq!(state.view_count(), 1);
+        assert_eq!(state.session(preview).unwrap().scene_root(), scene_root);
+        let view = state.view(view_id).expect("preview view remains open");
+        assert_eq!(view.mode(), UsdPreviewViewMode::Text);
+        assert_eq!(view.text_layer(), UsdPreviewTextLayer::Composed);
+        assert_eq!(view.projection(), UsdPreviewProjection::Perspective);
+        assert_eq!(view.orbit().yaw, orbit.yaw);
+        assert_eq!(view.orbit().pitch, orbit.pitch);
+        assert_eq!(view.orbit().distance, orbit.distance);
+        assert_eq!(view.orbit().target, orbit.target);
+
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let registry = registry.read();
+        let schema = lunco_api::discovery::discover_commands(&registry, None);
+        for (name, fields) in [
+            ("SetUsdPreviewViewMode", ["view", "mode"].as_slice()),
+            ("SetUsdPreviewTextLayer", ["view", "layer"].as_slice()),
+        ] {
+            let command = schema
+                .iter()
+                .find(|command| command.name == name)
+                .unwrap_or_else(|| panic!("{name} command is registered"));
+            assert!(!command.defaulted);
+            for field in fields {
+                assert!(
+                    command
+                        .fields
+                        .iter()
+                        .any(|candidate| candidate.name == *field),
+                    "{name} schema must expose `{field}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preview_text_reads_are_generation_matched_and_coalesced() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<DocumentRegistry<UsdDocument>>();
+        app.init_resource::<UsdViewportState>();
+        app.init_resource::<PendingUsdPreviewTextReads>();
+        app.add_systems(Update, drain_pending_usd_preview_text_reads);
+
+        let source = "#usda 1.0\ndef Xform \"Initial\" {}\n";
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .open_file("/tmp/usd_preview_text_generation.usda", source.to_string())
+            .0;
+        let preview = UsdPreviewId(8);
+        let view_id = UsdPreviewViewId(12);
+        let session = create_preview_session(
+            app.world_mut(),
+            preview,
+            doc,
+            LayerId::root(),
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            view_id,
+        )
+        .expect("preview session resources are available");
+        let view = create_preview_view(
+            app.world_mut(),
+            preview,
+            view_id,
+            session.render_layer(),
+            RenderingQualitySettings::default()
+                .validated_profile()
+                .expect("default quality is valid"),
+        )
+        .expect("preview view resources are available");
+        let mut state = UsdViewportState::default();
+        state.insert(session);
+        assert!(state.insert_view(view).is_ok());
+        app.insert_resource(state);
+
+        request_preview_text_read(app.world_mut(), preview);
+        assert_eq!(
+            app.world()
+                .resource::<PendingUsdPreviewTextReads>()
+                .tasks
+                .len(),
+            1
+        );
+        for _ in 0..100 {
+            app.update();
+            if app
+                .world()
+                .resource::<UsdViewportState>()
+                .session(preview)
+                .unwrap()
+                .text_ready()
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let session = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .unwrap();
+        assert!(session.text_ready());
+        assert!(session
+            .text
+            .authored
+            .as_deref()
+            .unwrap()
+            .contains("Initial"));
+        assert!(session
+            .text
+            .composed
+            .as_deref()
+            .unwrap()
+            .contains("Initial"));
+
+        let updated = "#usda 1.0\ndef Xform \"Second\" {}\n";
+        let latest = "#usda 1.0\ndef Xform \"Latest\" {}\n";
+        {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            registry
+                .apply(
+                    doc,
+                    UsdOp::ReplaceSource {
+                        edit_target: LayerId::root(),
+                        text: updated.to_string(),
+                    },
+                )
+                .expect("first replacement applies");
+            registry
+                .apply(
+                    doc,
+                    UsdOp::ReplaceSource {
+                        edit_target: LayerId::root(),
+                        text: latest.to_string(),
+                    },
+                )
+                .expect("second replacement applies");
+        }
+        request_preview_text_read(app.world_mut(), preview);
+        request_preview_text_read(app.world_mut(), preview);
+        assert_eq!(
+            app.world()
+                .resource::<PendingUsdPreviewTextReads>()
+                .tasks
+                .len(),
+            1,
+            "rapid document edits remain behind one text read"
+        );
+
+        for _ in 0..100 {
+            app.update();
+            let session = app
+                .world()
+                .resource::<UsdViewportState>()
+                .session(preview)
+                .unwrap();
+            if session.text_ready()
+                && session
+                    .text
+                    .authored
+                    .as_deref()
+                    .is_some_and(|text| text.contains("Latest"))
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let session = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .unwrap();
+        assert!(session.text_ready());
+        assert!(session.text.authored.as_deref().unwrap().contains("Latest"));
+        assert!(session.text.composed.as_deref().unwrap().contains("Latest"));
+        assert!(!session.text.authored.as_deref().unwrap().contains("Second"));
     }
 
     #[test]

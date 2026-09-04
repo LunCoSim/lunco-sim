@@ -97,6 +97,15 @@ queue plus asynchronous mesh phase have settled. Consumers use the typed
 `projection_ready` state from `InspectUsdViewport`; they do not infer
 readiness from a document generation or camera state.
 
+Each `UsdPreviewView` also exposes Visual and Text modes over that same
+session. Visual mode renders the projected stage; Text mode displays an
+asynchronous, generation-matched authored or composed USDA snapshot as
+read-only text. `SetUsdPreviewViewMode` and `SetUsdPreviewTextLayer` change
+only view presentation, so they preserve the document, projected stage,
+selection, camera, and lifecycle identity. Text snapshots are coalesced per
+session and discarded when the document generation or preview lease changes;
+they do not create a second parser, document registry, or source writer.
+
 When an agent needs to answer “what is visible?” or edit the item a user has
 open, call the UI-owned `InspectUsdViewport` query (or
 `assembly_edit::viewport()`) and correlate its explicit preview/view handles

@@ -148,6 +148,14 @@ the active simulation viewport.
    Navigate the focused view with primary/left-drag pan, secondary/right-drag
    orbit, middle-drag pan, and wheel zoom. The toolbar and agents use the same
    typed commands:
+   `SetUsdPreviewViewMode { view, mode: "visual"|"text" }` and
+   `SetUsdPreviewTextLayer { view, layer: "authored"|"composed" }` switch the
+   presentation of the same preview session. Visual mode owns the shared
+   projected stage and camera controls; Text mode is a read-only,
+   generation-matched USDA snapshot. Switching modes never opens another
+   document or resets selection/camera state. Use the text-layer command only
+   while inspecting authored or composed source; mutations still go through
+   typed USD operations.
    `SetUsdPreviewProjection { view, projection: "perspective"|"orthographic" }`,
    `PanUsdPreviewView { view, delta: [x, y] }`,
    `ZoomUsdPreviewView { view, factor }`, `FrameUsdPreviewView { view }`, and
@@ -171,7 +179,8 @@ the active simulation viewport.
 The built-in wrappers are in
 [`assembly_edit.rhai`](../../assets/scripting/tools/assembly_edit.rhai). The
 preview helpers are `preview_open`, `preview_view_open`,
-`preview_view_focus`, `preview_view_projection`, `preview_view_frame`,
+`preview_view_focus`, `preview_view_mode`, `preview_view_text_layer`,
+`preview_view_projection`, `preview_view_frame`,
 `preview_view_reset`, `preview_view_pan`, `preview_view_zoom`,
 `preview_view_close`, `preview_focus`, `preview_close`,
 `preview_explode_enable`, `preview_explode_update`, and

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**205 commands** across **27** crates. All documented.
+**216 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -28,7 +28,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (12 commands)
+- [`lunco-usd`](#lunco-usd) (23 commands)
 - [`lunco-usd-bevy`](#lunco-usd-bevy) (5 commands)
 - [`lunco-usd-sim`](#lunco-usd-sim) (3 commands)
 
@@ -153,23 +153,22 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SelectUsdPrim`
 
- Select a composed USD prim by its authored path within one open and focused
- USD preview. The preview identity is required because the same path can exist
- in the live scene and in multiple editor documents.
+ Select a composed USD prim in one explicit open and focused preview.
 
- The path is resolved against the selected preview's stage handle and hierarchy
- rather than an episode-specific entity id. This keeps scripted presentation
- commands stable across scene reloads without allowing a same-path entity from
- another document to be selected.
+ The preview lease is part of the identity. A path is not globally unique:
+ the running scene and every open editor document can contain the same
+ authored path. Resolving only by path can therefore select an entity from
+ the wrong document. The handler first validates the lease and then scopes
+ the projection lookup to its stage handle and preview root.
 
 - *defined in:* `crates/lunco-luncosim-edit/src/selection.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` | Open, focused preview that owns the selection. |
-| `path` | `String` | Absolute composed USD prim path in the preview. |
-| `extend` | `bool` | If true, preserve the current selection and add this prim. |
-| `toggle` | `bool` | If true, toggle this prim in the current selection. |
+| `preview` | `UsdPreviewId` |  The isolated USD preview that owns the selection. |
+| `path` | `String` |  Absolute composed USD prim path within that preview's stage. |
+| `extend` | `bool` |   |
+| `toggle` | `bool` |   |
 
 #### `SetSpawnDiagnostics`
 
@@ -512,12 +511,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetObjectProperty`
 
- Set a property on a scene object through the typed appearance/physics command
- boundary. Reflected shader parameters are persisted to the active document's
- runtime USD layer on the bound Shader's `inputs:<name>` attribute; wheel,
- visibility, and PBR fields use their documented USD owners. One general
- command replaces many narrow commands; new properties just add a match arm.
- Drive it from curl after a screenshot to iterate:
+ Set a property on a scene object at runtime (live override — not persisted
+ to USD). One general command instead of many narrow ones; new properties
+ just add a `match` arm. Drive it from curl after a screenshot to iterate:
 
  ```jsonc
  {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -533,10 +529,8 @@ actually call, with the fields the deserializer actually accepts. See the
    binder turns it into a material.
  - any parameter named by the shader's `Material` struct (e.g. `albedo`,
    `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
-   and author the typed value on the bound USD Shader's `inputs:<name>` (requires
-   `shader` set first, or a USD shader material). The shader's reflected schema
-   resolves the value shape; an existing USD declaration preserves its exact
-   role and array shape; colours are `r,g,b`.
+   (requires `shader` set first, or a USD shader material). The shader's
+   reflected schema resolves the type; colours are `r,g,b`.
  - `visible` → `true`/`false` toggles `Visibility`.
  - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
    `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
@@ -725,13 +719,25 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `CloseUsdPreview`
 
- Close one preview lease and release all of its presentation resources.
+ Close one preview session and release all of its presentation resources.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `preview` | `UsdPreviewId` |   |
+
+#### `CloseUsdPreviewView`
+
+ Close one presentation view. Closing the final view also closes its parent
+ preview session because a session without a presentation view cannot be
+ reached from the editor.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
 
 #### `CommitUsdProposal`
 
@@ -779,101 +785,105 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
-#### `OpenUsdPreview`
+#### `ExplodeUsdPreview`
 
- Open one explicit USD document in an isolated Editor preview session. The
- `preview` identity is caller-owned; opening another identity does not replace
- an existing session. Reopening the same identity for its current document
- focuses and updates that session in place; another document replaces only
- that explicit session.
+ Apply a transient, session-scoped explode pose to an explicit USD preview.
+ This command changes only projected Bevy transforms; it never enters the
+ USD document, journal, save state, or simulation projection.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Stable identity of the preview session. |
-| `doc` | `DocumentId` |  USD document to project. |
-| `edit_target` | `LayerId` |  Authored layer used by editor mutations. |
+| `preview` | `UsdPreviewId` |   |
+| `doc` | `DocumentId` |   |
+| `assembly` | `String` |  Exact composed `kind = "assembly"` prim path. |
+| `parts` | `Vec < String >` |  Exact composed prim paths below `assembly`. Rust sorts these paths for  stable offsets, so repeated calls do not depend on caller ordering. |
+| `action` | `UsdPreviewExplodeAction` |   |
+| `axis` | `Option < UsdPreviewExplodeAxis >` |  Required for `enable` and `update`; `null` is accepted for `reset`. |
+| `spacing` | `Option < f32 >` |  Required for `enable` and `update`; `null` is accepted for `reset`. |
 
 #### `FocusUsdPreview`
 
- Select an already-open preview session for the USD dock and Editor surfaces.
- Focusing changes presentation only; every open session continues to receive
- canonical stage updates.
+ Focus an already-open preview session in the USD dock.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Existing preview session to display. |
-
-#### `OpenUsdPreviewView`
-
- Open an additional dockable 3D view over an existing USD preview session.
- The session's projected USD stage is shared; only the camera, light, orbit
- pose, and render target are new. Drag the resulting instance tab to a dock
- edge to create a split.
-
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `preview` | `UsdPreviewId` |  Existing projected session. |
-| `view` | `UsdPreviewViewId` |  Explicit stable identity of the presentation view. |
+| `preview` | `UsdPreviewId` |   |
 
 #### `FocusUsdPreviewView`
 
- Focus one exact USD presentation view and its parent session.
+ Focus one presentation view and its parent USD preview session.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `view` | `UsdPreviewViewId` |  Existing view to focus. |
+| `view` | `UsdPreviewViewId` |   |
 
-#### `CloseUsdPreviewView`
+#### `FrameUsdPreviewView`
 
- Close one USD presentation view and release its camera, light, and render
- target. Closing the final view also closes its parent preview session.
-
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `view` | `UsdPreviewViewId` |  Existing view to close. |
-
-#### `CloseUsdPreview`
-
- Close one preview session and release its views, scene root, and projection.
- Shared document coordinates remain until the last preview session and
- workspace Twin are closed.
+ Fit one preview view to the projected visual bounds of its USD stage.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Existing preview session to close. |
+| `view` | `UsdPreviewViewId` |   |
 
-#### `ExplodeUsdPreview`
+#### `OpenUsdPreview`
 
- Apply a transient CAD-style explode pose to explicit parts of one ready USD
- preview. This changes projected Bevy local transforms only; it does not author
- USD, journal a change, alter save state, or enter physics/simulation. Parts are
- sorted by exact composed path, and nested parts are converted through their
- parent frames. `Enable` captures the original local transforms, `Update`
- reuses them with new spacing/axis values, and `Reset` restores them.
+ Open one explicit document and authored edit target in an isolated preview
+ session. Reopening the same `preview` id for its current document focuses
+ and updates that lease in place; another document replaces only that
+ explicit lease. Other sessions keep their roots, cameras, and stages
+ untouched.
 
 - *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `preview` | `UsdPreviewId` |  Explicit preview session. |
-| `doc` | `DocumentId` |  Document owned by that preview session. |
-| `assembly` | `String` |  Exact composed `kind = "assembly"` prim path. |
-| `parts` | `Vec < String >` |  Non-empty exact composed prim paths below `assembly`. |
-| `action` | `UsdPreviewExplodeAction` |  `Enable`, `Update`, or `Reset` on the reflected command wire. |
-| `axis` | `Option < UsdPreviewExplodeAxis >` |  `X`, `Y`, or `Z`; required for `Enable` and `Update`. |
-| `spacing` | `Option < f32 >` |  Finite positive spacing in assembly-local metres; required for `Enable` and `Update`; `null` is valid for `Reset`. |
+| `preview` | `UsdPreviewId` |  Stable caller-owned identity of the preview session. |
+| `doc` | `DocumentId` |  The USD document to render. |
+| `edit_target` | `LayerId` |  The authored layer to use for editor mutations made from this preview. |
+
+#### `OpenUsdPreviewView`
+
+ Open an additional presentation view over an existing USD preview session.
+ The view id is explicit so persisted layouts and agents can address the
+ exact camera without relying on tab order or display names.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+| `view` | `UsdPreviewViewId` |   |
+
+#### `PanUsdPreviewView`
+
+ Pan one preview view in egui logical screen points. The view converts the
+ delta to its camera plane using the current projection and render-target
+ viewport.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `delta` | `[f32 ; 2]` |   |
+
+#### `ResetUsdPreviewView`
+
+ Restore one preview view's default orbit pose and fit it to its stage.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
 
 #### `ReviewUsdProposal`
 
@@ -916,6 +926,53 @@ actually call, with the fields the deserializer actually accepts. See the
 | `color` | `Option < [f32 ; 3] >` |  `inputs:color` — linear RGB tint multiplied into the image. |
 | `rotation` | `Option < [f32 ; 3] >` |  `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case  is yaw only (`[0, heading, 0]`). |
 | `skybox` | `Option < bool >` |  `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves  the sky black. The lunar case: real bounce light, no visible sky. |
+
+#### `SetUsdPreviewProjection`
+
+ Change the projection of one isolated USD preview view. This changes only
+ the editor camera; authored USD camera opinions stay read-only presentation
+ input and are never rewritten by a navigation gesture.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `projection` | `UsdPreviewProjection` |   |
+
+#### `SetUsdPreviewTextLayer`
+
+ Change which authored/composed snapshot the Text mode displays.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `layer` | `UsdPreviewTextLayer` |   |
+
+#### `SetUsdPreviewViewMode`
+
+ Change only the presentation mode of one existing USD preview view.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `mode` | `UsdPreviewViewMode` |   |
+
+#### `ZoomUsdPreviewView`
+
+ Zoom one preview view by a positive multiplicative factor. Perspective
+ views change orbit distance; orthographic views change projection scale.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `factor` | `f32` |   |
 
 ### `lunco-usd-bevy` <a id="lunco-usd-bevy"></a>
 
@@ -1066,9 +1123,7 @@ actually call, with the fields the deserializer actually accepts. See the
  has confirmed a full reset. The lifecycle mechanic still targets whichever
  scene is loaded.
  Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
- wants (`restart_scene(); pause();`). The pause intent is retained across the
- deferred scene reset and applies once to the replacement scene; an unrelated
- pause from before the restart is not carried over.
+ wanted (`restart_scene(); pause();`).
 
 - *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
 
@@ -1680,6 +1735,23 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-cosim` <a id="lunco-cosim"></a>
 
+#### `ReleaseControl`
+
+ Release the complete vehicle control intent and apply its safe state.
+
+ Every authored command input is cleared in one transaction: rover
+ throttle/steer become zero and its brake is engaged; lander attitude/thrust
+ and RCS inputs become zero. A direct hold on a Modelica command is cleared
+ too. Plant parameters and sensor inputs outside the command surface are left
+ untouched. The safe values remain held until a new owner writes them, so a
+ wired controller cannot resurrect a released command on the next tick.
+
+- *defined in:* `crates/lunco-cosim/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The vehicle whose complete control intent is released. |
+
 #### `ReleasePort`
 
  Release one manual input-port intent and hand that port back to its wiring.
@@ -1695,23 +1767,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target` | `Entity` |  The entity whose hold is released. |
 | `name` | `String` |  Input-port name. |
 
-#### `ReleaseControl`
-
- Release the complete vehicle control intent and apply its safe state.
-
- Authored command inputs are neutralized in one transaction: rover
- throttle/steer become zero and its brake is engaged; lander attitude, thrust,
- and RCS inputs become zero. A direct hold on a Modelica command is cleared too,
- while plant parameters and sensor inputs outside the command surface remain
- untouched. The safe values remain held until a new owner writes them, so a
- wired controller cannot resurrect a released command on the next tick.
-
-- *defined in:* `crates/lunco-cosim/src/lib.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Entity` |  The vehicle whose complete control intent is released. |
-
 #### `SetPorts`
 
  The ONE generic control command: write a batch of named input ports on
@@ -1726,16 +1781,11 @@ actually call, with the fields the deserializer actually accepts. See the
    `roll`/`yaw`) via the [`SimComponent`] backend,
  - a crane/door/factory arm exposes whatever input ports it declares.
 
-Each named value persists at the receiver across fixed ticks until replacement
-or explicit `ReleasePort`/`ReleaseControl`; this persistence applies to the
-vehicle command surface, not to unrelated plant parameters or sensor inputs.
-
  The same command is emitted by the keyboard input path
  (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
  so every surface drives every controllable thing identically. `seq`/`tick`
  carry the prediction bookkeeping (host ack + client input log); it rides
  `SyncChannel::ControlStream` over the network.
-
  Each accepted value persists at the receiver across fixed ticks until that
  port is replaced or released; use [`ReleaseControl`] for the vehicle-wide
  safe state.
@@ -1895,11 +1945,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 
  Focus on a target without taking control.
 
- Switches the avatar to `OrbitCamera` mode centered on the target. For a
- celestial body, the local avatar restores its last user-controlled orbital
- pose for that body's stable ephemeris id. If no pose exists, the orbit writer
- derives the initial direction from the camera's current region in the
- target's resolved inertial BigSpace grid.
+ Switches the avatar to `OrbitCamera` mode centered on the target.
 
 - *defined in:* `crates/lunco-avatar/src/commands.rs`
 
@@ -2046,9 +2092,9 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 
  Activate a registered [`Perspective`](crate::Perspective) by its
  `PerspectiveId` string. The luncosim registers `sandbox_view`,
- `rover_build`, `terrain_sculpt`, and `editor`; `editor` is available in the
- default title-bar switcher while `terrain_sculpt` remains an explicit
- authoring mode. Unknown ids produce a user-visible status error.
+ `rover_build`, `terrain_sculpt`, and `editor`; `editor` is available in
+ the default title-bar switcher while `terrain_sculpt` remains an explicit
+ authored mode. Unknown ids produce a user-visible status error.
 
 - *defined in:* `crates/lunco-workbench/src/perspective_command.rs`
 
@@ -2590,7 +2636,8 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
  The result arrives on the next `Update`: rhai needs full `World` access,
  which an observer cannot hold, so the handler enqueues the snippet and the
  exclusive `drain_world_scripts` system runs it before answering the
- deferred API request with the real stdout.
+ deferred API request with the real stdout. `Update` is intentional because
+ kinematic celestial warp freezes `FixedUpdate`.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 
@@ -2773,7 +2820,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
  path without any UI.
 
  The actual loading is domain-specific: `lunco-modelica` observes this
- and reads `.mo` files; `lunco-usd` observes it for `.usda`, `.usd`, and `.usdc`. Each
+ and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
  Lives here (not in the egui workbench) so headless / sandbox / server
@@ -2899,11 +2946,10 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
  * **celestial** → back on the `Epoch` root, affine identity;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
- * **transport** → Playing at 1×, unless a `SetTimeTransport { playing: false }`
-   command was explicitly issued while the scene transition was pending;
-   that one-shot pause is applied to the replacement scene;
- * **mission calendar** → the authored mission origin. The mission origin itself
-   is preserved so a scene load can apply its `SetMissionEpoch` afterward.
+ * **transport** → Playing at 1×, except for an explicit pause requested while
+   the scene transition was pending, which is applied once to the replacement;
+ * **mission calendar** → the authored mission epoch at tick zero. The epoch
+   itself is preserved so a scene load can apply its `SetMissionEpoch` afterward.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
@@ -2957,7 +3003,8 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
  `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
  64×. Rates below 0.1× or above 64× are rejected. Use `SetClock` for a
- presentation-only celestial rate when a detached celestial clock needs a different scale. This is THE pause command:
+ presentation-only celestial rate when a detached clock is explicitly needed.
+ This is THE pause command:
  exposed on the API/MCP and wrapped by the rhai prelude verbs
  `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
  one-liner can freeze the world.
@@ -2967,7 +3014,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 | Field | Type | Description |
 |---|---|---|
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it. |
-| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for the live transport); `None` leaves it. |
+| `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for  the causal live transport); `None` leaves it. |
 
 ## Celestial, environment & comms
 
@@ -3135,7 +3182,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 
 #### `SetTerrainOverlay`
 
- Arm / re-tune the terrain analysis diagnostic at runtime (MCP / scripting / UI).
+ Arm / re-tune the terrain analysis overlay at runtime (MCP / scripting / UI).
 
  **Every field is optional: an OMITTED field keeps its current value.** So
  `{ "enabled": true }` arms the overlay with the existing angles/opacity, and
@@ -3155,8 +3202,8 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 | `cliff_deg` | `Option < f32 >` |   |
 | `opacity` | `Option < f32 >` |   |
 | `lod_depth` | `Option < bool >` |  Switch the overlay to the LOD-depth view (still needs `enabled`). |
-| `shader` | `Option < String >` |  Replace the diagnostic fragment shader asset. |
-| `vertex_shader` | `Option < String >` |  Replace the diagnostic vertex shader asset. |
+| `shader` | `Option < String >` |  Replace the diagnostic fragment shader asset. Omitted keeps the current  diagnostic material. |
+| `vertex_shader` | `Option < String >` |  Replace the diagnostic vertex shader asset. Omitted keeps the current  diagnostic vertex stage. |
 
 #### `SetTerrainRenderingQuality`
 
@@ -3193,21 +3240,16 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
  16 km map is ~10 M verts; prefer tiled streaming). Detail is **never**
  decimated.
 
- The command path requires an explicit material source. Prefer a USD terrain
- prim with a standard `UsdShade` `material:binding`; for this standalone command,
- `shader` names the fragment source and `vertex_shader` names the CDLOD vertex
- source when `lod_viz` is enabled. The terrain engine does not select a shader.
-
 - *defined in:* `crates/lunco-terrain-surface/src/terrain.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `uri` | `String` |   |
-| `shader` | `String` | Explicit fragment WGSL asset path for the terrain material. Empty is rejected. |
-| `vertex_shader` | `Option < String >` | Explicit CDLOD vertex WGSL asset path; required when `lod_viz` is enabled. |
+| `shader` | `String` |  Fragment shader source for the terrain material. The path is resolved by  the normal asset-source rules; it is not selected by the terrain engine. |
+| `vertex_shader` | `Option < String >` |  CDLOD vertex shader source. Required when `lod_viz` is enabled; omitted  for a static mesh that uses the shader's standard Bevy vertex stage. |
 | `window_m` | `f32` |   |
 | `target_res` | `u32` |  Visual-quality downsample target (samples per side). `0` = native (no  decimation). Re-issue the command with a different value to rebuild the  same site at another quality and compare. |
-| `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles using the authored terrain material instead of  one static mesh; collider/physics unchanged. Production visual path. |
+| `lod_viz` | `bool` |  Stream camera-driven CDLOD tiles using the authored terrain material  instead of one static mesh; collider/physics unchanged. Production visual path. |
 | `collider_ring` | `bool` |  Stream a canonical-res collider ring around runtime physical support  footprints instead of one static full-DEM collider (replaces it — physics  rides the streamed tiles). |
 | `collider` | `crate :: collider_ring :: TerrainColliderSettings` |  Physics-only collider-ring lattice. Omitted command fields use the  documented terrain-physics defaults and never read graphics quality. |
 | `crater_density` | `f32` |  Convenience: add a crater layer at this density (craters per hectare). `0`  (default) = no craters. The USD path instead composes layers as child prims  (see [`crate::terrain_layers`]); this is for the quick command path. |
@@ -3377,7 +3419,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 | Field | Type | Description |
 |---|---|---|
 | `name` | `String` |  Prim name under the mounted scene's `Policies` scope (the identity for  hot-replace); defaults to a sanitized `seam` when empty. |
-| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or `"synth.<name>"` for a generated Modelica source/unit/layout policy. |
+| `seam` | `String` |  The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or  `"synth.<name>"` for a generated Modelica source/unit/layout policy. |
 | `entry` | `String` |  The rhai entry function name. |
 | `source` | `String` |  The rhai source defining `entry` (+ helpers). |
 | `deterministic` | `bool` |  Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)  must be `true`; the host-only authorize gate may be `false`. |
@@ -3524,7 +3566,7 @@ vehicle command surface, not to unrelated plant parameters or sensor inputs.
 
 ---
 
-<!-- 205 commands from the runtime schema; scanned 688 .rs files for docs (0 parse failure(s) skipped).
+<!-- 216 commands from the runtime schema; scanned 685 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

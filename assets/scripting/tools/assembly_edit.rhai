@@ -84,6 +84,24 @@ fn preview_view_projection(view, projection) {
     })
 }
 
+/// Switch one preview view between the shared Visual and Text presentations.
+/// Both modes retain the same document, projected stage, selection, and view
+/// camera; Text is a read-only inspection surface.
+fn preview_view_mode(view, mode) {
+    cmd("SetUsdPreviewViewMode", #{
+        view: view,
+        mode: mode,
+    })
+}
+
+/// Choose the authored or composed USDA snapshot shown by Text mode.
+fn preview_view_text_layer(view, layer) {
+    cmd("SetUsdPreviewTextLayer", #{
+        view: view,
+        layer: layer,
+    })
+}
+
 /// Fit one preview view to the projected visual bounds.
 fn preview_view_frame(view) {
     cmd("FrameUsdPreviewView", #{ view: view })

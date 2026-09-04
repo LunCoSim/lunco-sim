@@ -225,6 +225,8 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |
 | | `SetUsdPreviewProjection` | Choose perspective or orthographic presentation for one explicit USD preview view. |
+| | `SetUsdPreviewViewMode` | Switch one explicit preview view between the shared Visual and read-only Text presentations. |
+| | `SetUsdPreviewTextLayer` | Choose the authored or composed generation-matched USDA snapshot shown by Text mode. |
 | | `PanUsdPreviewView` / `ZoomUsdPreviewView` | Navigate one preview view through its presentation projection without mutating authored USD. |
 | | `FrameUsdPreviewView` / `ResetUsdPreviewView` | Fit or restore one preview view using its projected bounds. |
 | | `ExplodeUsdPreview` | Enable, update, or reset a deterministic transient explode pose for explicit parts of one ready USD preview. |
@@ -583,9 +585,10 @@ for the design.
 The USD Assembly Editor's `InspectUsdViewport` query follows the same owner
 rule. It reports the focused preview/view pair and all explicit USD preview
 leases with their document, edit target, projected generation, independent view
-ids, each view's projection/orbit state, and the session's `projection_ready`
-boundary. Pair it with `ListOpenDocuments` and a captured screenshot to
-identify the exact open item before issuing a typed authoring command.
+ids, each view's mode, text layer, projection/orbit state, and the session's
+`projection_ready`/`text_ready` boundaries. Pair it with `ListOpenDocuments`
+and a captured screenshot to identify the exact open item before issuing a
+typed authoring command.
 
 The UI-owned `InspectUsdSelection` query reports the selection context for the
 focused preview, or for an explicit open `preview` lease. Its `selected` and

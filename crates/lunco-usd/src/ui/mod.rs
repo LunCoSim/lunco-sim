@@ -48,8 +48,9 @@ pub use scene_files::{
 };
 pub use viewport::{
     CloseUsdPreview, CloseUsdPreviewView, ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView,
-    OpenUsdPreview, OpenUsdPreviewView, UsdPreviewExplodeAction, UsdPreviewExplodeAxis,
-    UsdPreviewId, UsdPreviewRenderBudget, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
+    OpenUsdPreview, OpenUsdPreviewView, SetUsdPreviewTextLayer, SetUsdPreviewViewMode,
+    UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId, UsdPreviewRenderBudget,
+    UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMode,
     UsdPreviewViewPanel, UsdViewportPanel, UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID,
     USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };

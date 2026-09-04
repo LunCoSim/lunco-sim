@@ -80,6 +80,17 @@ they never author USD camera or transform opinions. Pan uses the active
 projection and measured render-target viewport to map logical pointer deltas to
 the camera plane.
 
+The same view can switch between `Visual` and `Text` with
+`SetUsdPreviewViewMode`. Visual mode renders the existing projected stage;
+Text mode shows a read-only, asynchronous snapshot of either the authored
+save layer or the runtime-inclusive composed layer, selected with
+`SetUsdPreviewTextLayer`. Both snapshots are keyed by the document generation
+and shared by all views of the session. A mode switch therefore preserves the
+document, stage, camera, selection, and preview lease; it never creates a
+second loader, parser, document, or text writer. `InspectUsdViewport` reports
+the mode, text layer, and `text_ready` state so automation can wait for a
+generation-matched snapshot.
+
 `ExplodeUsdPreview` is the shared preview-only assembly inspection command.
 It requires explicit preview/document/assembly/part identities and supports
 `Enable`, `Update`, and `Reset`. It captures original local transforms in the
