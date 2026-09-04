@@ -185,6 +185,23 @@ fn assembly_ui_templates_use_existing_surfaces_and_workflows() {
 }
 
 #[test]
+fn assembly_tool_libraries_are_discoverable() {
+    use lunco_tools::Tool;
+
+    for name in ["assembly_audit", "assembly_edit", "assembly_ui"] {
+        let (_, source) = lunco_assets::scripting::tool_libraries()
+            .into_iter()
+            .find(|(tool_name, _)| *tool_name == name)
+            .unwrap_or_else(|| panic!("{name}.rhai must be embedded"));
+        let tool = lunco_tools_rhai::RhaiTool::new(name, source);
+        assert!(
+            !tool.functions().is_empty(),
+            "{name} must expose its Rhai functions to ListToolLibraries"
+        );
+    }
+}
+
+#[test]
 fn authored_timeline_requires_one_explicit_operation() {
     let source = lunco_assets::scripting::prelude_files()
         .expect("active prelude source")

@@ -43,8 +43,13 @@ impl Tool for RhaiTool {
         "rhai"
     }
     fn functions(&self) -> Vec<String> {
-        // Syntax-only parse with a bare engine to enumerate fn signatures.
-        Engine::new()
+        // Syntax-only parse with the production Rhai limits. A bare engine's
+        // smaller default expression-depth cap makes valid authored tools
+        // disappear from ListToolLibraries even though runtime binding accepts
+        // them.
+        let mut engine = Engine::new();
+        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+        engine
             .compile(&self.source)
             .ok()
             .map(|ast| {

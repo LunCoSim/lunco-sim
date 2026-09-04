@@ -7989,6 +7989,7 @@ dependencies = [
 name = "lunco-tools-rhai"
 version = "0.1.0"
 dependencies = [
+ "lunco-hooks-rhai",
  "lunco-tools",
  "rhai",
 ]
