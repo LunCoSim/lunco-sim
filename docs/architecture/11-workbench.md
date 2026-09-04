@@ -106,7 +106,12 @@ the side panels for tabbed dock trees.
    the centered application title, transport pause/resume, perspective tabs,
    and native window controls. All controls share one full-height row and the
    title-bar height/control-size tokens from `lunco-theme`; the title remains a
-   visual centre marker and never owns input.
+   visual centre marker and never owns input. The workbench measures the full
+   direct-menu row against egui's live available width and the measured
+   right-side transport, perspective, and window-control group. When those
+   groups cannot coexist, File and View stay direct and the remaining
+   registered menus are exposed under an accessible `More` menu; no command
+   callback or menu state is duplicated.
 2. **Workbench body (below the title bar)** — activity bar, side browser,
    viewport, properties/inspector, and the toggleable bottom panel are arranged
    around the persistent central viewport.

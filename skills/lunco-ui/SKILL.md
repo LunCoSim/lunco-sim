@@ -54,9 +54,14 @@ Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
 `lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER` (`egui::Order::Middle`);
 their scrims use the shared `TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`).
 Workbench menus and window controls are egui `Foreground` surfaces and therefore
-remain above both tutorial layers visually and for input. Keep this one shared
-layer contract; do not rely on system execution order or give a tutorial surface
-a `Foreground`/`Tooltip` order that can cover application controls. The tutorial
+remain above both tutorial layers visually and for input. The workbench measures
+the live menu row and right-side control group; on compact widths it keeps File
+and View direct and places registered domain menus plus Edit, Settings, Help, and
+Time under one keyboard-reachable `More` entry. The direct and overflow surfaces
+call the same menu renderers, so command semantics and callback state have one
+owner. Keep this one shared layer contract; do not rely on system execution order
+or give a tutorial surface a `Foreground`/`Tooltip` order that can cover
+application controls. The tutorial
 draw systems are chained within their shared layer, so their relative paint order
 is deterministic as well.
 
