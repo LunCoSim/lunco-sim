@@ -125,9 +125,11 @@ the active simulation viewport.
    already-known generation can be advanced by a typed delta.
 5. Select the `Editor` perspective from the title-bar switcher, or activate it
    through the typed `ActivatePerspective { id: "editor" }` command, then open
-   an isolated preview with `OpenUsdPreview { preview, doc, edit_target }`; use
-   `FocusUsdPreview { preview }` when changing the visible document. Every
-   panel and selection must remain bound to that `UsdPreviewId`.
+   an isolated preview with `OpenUsdPreview { preview, doc, edit_target }`; the
+   preview's primary view is exposed as an instance-backed dock tab. Use
+   `FocusUsdPreview { preview }` when changing the visible document; it
+   foregrounds that tab. Every panel and selection must remain bound to that
+   `UsdPreviewId`.
 6. For a second 3D view of the same assembly, use
    `OpenUsdPreviewView { preview, view }`. It creates a new camera/render
    target over the existing projected stage; it does not reload or duplicate
@@ -244,13 +246,13 @@ The presentation helpers are in
 `panel_templates(preview, doc, edit_target)` to discover the nine existing
 Editor surfaces/workflows and their explicit handles. `open_session(preview,
 doc, edit_target)` activates the Editor, opens/focuses the explicit preview,
-and foregrounds its viewport. Use `focus`, `open_structure`, `open_inspector`,
+and foregrounds its primary view tab. Use `focus`, `open_structure`, `open_inspector`,
 `open_connections`, `open_animation`, `open_mount`, and `open_review` to focus
 the owning registered panels. Animation is an Environment section and mount
 and review are Inspector sections; persistence is the existing document
 lifecycle command group and has no fabricated panel. These helpers only
-dispatch existing `ActivatePerspective`/`FocusPanel` commands; they do not own
-layout or create parallel document/view state.
+dispatch existing `ActivatePerspective`, preview-focus, and `FocusPanel`
+commands; they do not own layout or create parallel document/view state.
 Discover reflected command shapes with `DiscoverSchema` rather than inventing
 JSON for a new command.
 

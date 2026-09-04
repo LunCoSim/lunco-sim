@@ -436,16 +436,20 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
     world.resource_mut::<PendingUsdPreviewTextReads>().tasks = pending;
 }
 
-/// Bind a browser-admitted document to the one editor preview lease and focus
-/// the USD viewport. The document and root edit target remain explicit, while
-/// repeated clicks reuse the same `EDITOR_PREVIEW_ID` by the lease contract.
+/// Bind a browser-admitted document to its document-scoped preview lease and
+/// focus its identifiable USD view tab. The document and root edit target
+/// remain explicit, while repeated clicks reuse the same document and view.
 fn on_browser_usd_document_ready(
     trigger: On<crate::commands::BrowserUsdDocumentReady>,
     registry: Res<DocumentRegistry<UsdDocument>>,
+    viewport: Res<UsdViewportState>,
     workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
+    let preview = viewport
+        .preview_for_document(doc)
+        .unwrap_or_else(|| UsdPreviewId::for_document(doc));
     // Keep USD's two editor surfaces paired: the native 3D preview is the
     // composed/edit-target view, while the source tab is the lossless USDA
     // text view used for inspection and explicit text edits. Resolve the
@@ -474,12 +478,9 @@ fn on_browser_usd_document_ready(
         }
     }
     commands.trigger(OpenUsdPreview {
-        preview: EDITOR_PREVIEW_ID,
+        preview,
         doc,
         edit_target: LayerId::root(),
-    });
-    commands.trigger(lunco_workbench::FocusPanel {
-        id: USD_VIEWPORT_PANEL_ID.0.to_string(),
     });
 }
 
@@ -767,6 +768,16 @@ impl Default for UsdPreviewId {
     }
 }
 
+impl UsdPreviewId {
+    /// Derive the document-backed preview identity used by the Twin Browser
+    /// for one admitted USD document. The value follows the workbench's
+    /// `DocumentId.raw()` instance convention, keeping the handle stable and
+    /// safe for the JSON/Rhai numeric transport.
+    pub const fn for_document(doc: DocumentId) -> Self {
+        Self(doc.raw())
+    }
+}
+
 /// Stable identity of one presentation view over a USD preview session.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize,
@@ -862,6 +873,10 @@ impl UsdPreviewSession {
 
     pub fn scene_root(&self) -> Entity {
         self.scene_root
+    }
+
+    pub fn primary_view(&self) -> UsdPreviewViewId {
+        self.primary_view
     }
 
     pub fn render_layer(&self) -> usize {
@@ -1020,6 +1035,17 @@ impl UsdViewportState {
 
     pub fn has_preview_for(&self, doc: DocumentId) -> bool {
         self.sessions.values().any(|session| session.doc == doc)
+    }
+
+    /// Return the existing session for a document, if one is already open.
+    /// Browser admission uses this before deriving a document-scoped id so an
+    /// explicitly opened session remains the single presentation owner.
+    pub fn preview_for_document(&self, doc: DocumentId) -> Option<UsdPreviewId> {
+        self.sessions
+            .values()
+            .filter(|session| session.doc == doc)
+            .map(UsdPreviewSession::id)
+            .min_by_key(|preview| preview.0)
     }
 
     pub fn focused_doc(&self) -> Option<DocumentId> {
@@ -2150,11 +2176,20 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             .session(preview)
             .is_some_and(|session| session.doc() == doc)
         {
-            let mut state = world.resource_mut::<UsdViewportState>();
-            if let Some(session) = state.session_mut(preview) {
-                session.edit_target = edit_target;
+            let primary_view = {
+                let mut state = world.resource_mut::<UsdViewportState>();
+                if let Some(session) = state.session_mut(preview) {
+                    session.edit_target = edit_target;
+                }
+                state.focus(preview);
+                state.session(preview).map(UsdPreviewSession::primary_view)
+            };
+            if let Some(view) = primary_view {
+                world.trigger(OpenTab {
+                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    instance: view.0,
+                });
             }
-            state.focus(preview);
             return;
         }
         let preview_profile = match validated_preview_profile(world) {
@@ -2240,6 +2275,10 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         }
+        world.trigger(OpenTab {
+            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            instance: primary_view.0,
+        });
         request_preview_text_read(world, preview);
         world
             .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
@@ -2319,7 +2358,20 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
 fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
     let preview = trigger.event().preview;
     commands.queue(move |world: &mut World| {
-        if !world.resource_mut::<UsdViewportState>().focus(preview) {
+        let primary_view = {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            if !state.focus(preview) {
+                None
+            } else {
+                state.session(preview).map(UsdPreviewSession::primary_view)
+            }
+        };
+        if let Some(view) = primary_view {
+            world.trigger(OpenTab {
+                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                instance: view.0,
+            });
+        } else {
             report_preview_error(
                 world,
                 "usd-preview-focus-failed",
@@ -2333,7 +2385,12 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
 fn on_focus_usd_preview_view(trigger: On<FocusUsdPreviewView>, mut commands: Commands) {
     let view = trigger.event().view;
     commands.queue(move |world: &mut World| {
-        if !world.resource_mut::<UsdViewportState>().focus_view(view) {
+        if world.resource_mut::<UsdViewportState>().focus_view(view) {
+            world.trigger(OpenTab {
+                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                instance: view.0,
+            });
+        } else {
             report_preview_error(
                 world,
                 "usd-preview-view-focus-failed",
@@ -3360,6 +3417,10 @@ fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<Do
         entity.despawn();
     }
     for view in views {
+        world.trigger(CloseTab {
+            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            instance: view.id().0,
+        });
         despawn_preview_view(world, view);
     }
     Some(doc)
@@ -3966,6 +4027,16 @@ mod tests {
     use crate::document::UsdOp;
     use lunco_workbench::{BrowserAction, BrowserActions};
 
+    #[derive(Resource, Default)]
+    struct OpenedPreviewTabs(Vec<(PanelId, u64)>);
+
+    fn record_opened_preview_tab(trigger: On<OpenTab>, mut opened: ResMut<OpenedPreviewTabs>) {
+        let event = *trigger.event();
+        if event.kind == USD_PREVIEW_VIEW_PANEL_ID {
+            opened.0.push((event.kind, event.instance));
+        }
+    }
+
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.
     #[test]
@@ -4546,7 +4617,7 @@ mod tests {
     }
 
     #[test]
-    fn reopening_the_same_preview_reuses_its_lease() {
+    fn reopening_the_same_browser_document_reuses_its_lease() {
         let path = std::env::temp_dir().join("lunco_usd_preview_reopen_test.usda");
         std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
@@ -4568,10 +4639,11 @@ mod tests {
             .trigger(crate::commands::BrowserUsdDocumentReady { doc });
         app.update();
         app.update();
+        let preview = UsdPreviewId::for_document(doc);
         let first_root = app
             .world()
             .resource::<UsdViewportState>()
-            .session(EDITOR_PREVIEW_ID)
+            .session(preview)
             .expect("first preview lease")
             .scene_root();
 
@@ -4583,7 +4655,7 @@ mod tests {
         assert_eq!(state.session_count(), 1);
         assert_eq!(state.focused_doc(), Some(doc));
         assert_eq!(
-            state.session(EDITOR_PREVIEW_ID).unwrap().scene_root(),
+            state.session(preview).unwrap().scene_root(),
             first_root
         );
 
@@ -4716,10 +4788,94 @@ mod tests {
             .doc_for_file(&path)
             .expect("browser action admitted the USD document");
         assert_eq!(state.session_count(), 1);
-        assert_eq!(state.focused_preview_id(), Some(EDITOR_PREVIEW_ID));
+        assert_eq!(
+            state.focused_preview_id(),
+            Some(UsdPreviewId::for_document(doc))
+        );
         assert_eq!(state.focused_doc(), Some(doc));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn browser_documents_keep_distinct_preview_sessions_and_view_tabs() {
+        let first_path = std::env::temp_dir().join("lunco_usd_browser_preview_first.usda");
+        let second_path = std::env::temp_dir().join("lunco_usd_browser_preview_second.usda");
+        let source = "#usda 1.0\ndef Xform \"X\" {}\n";
+        std::fs::write(&first_path, source).unwrap();
+        std::fs::write(&second_path, source).unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<UsdStageAsset>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(UsdViewportPlugin);
+        app.init_resource::<OpenedPreviewTabs>();
+        app.add_observer(record_opened_preview_tab);
+
+        let (first_doc, second_doc) = {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            (
+                registry.open_file(&first_path, source.to_string()).0,
+                registry.open_file(&second_path, source.to_string()).0,
+            )
+        };
+        app.update();
+        app.world_mut()
+            .trigger(crate::commands::BrowserUsdDocumentReady { doc: first_doc });
+        app.world_mut()
+            .trigger(crate::commands::BrowserUsdDocumentReady { doc: second_doc });
+        app.update();
+        app.update();
+
+        let state = app.world().resource::<UsdViewportState>();
+        let first_preview = UsdPreviewId::for_document(first_doc);
+        let second_preview = UsdPreviewId::for_document(second_doc);
+        assert_eq!(state.session_count(), 2);
+        assert_eq!(state.view_count(), 2);
+        assert_eq!(state.session(first_preview).unwrap().doc(), first_doc);
+        assert_eq!(state.session(second_preview).unwrap().doc(), second_doc);
+        assert_ne!(
+            state.session(first_preview).unwrap().scene_root(),
+            state.session(second_preview).unwrap().scene_root()
+        );
+        assert_ne!(
+            state.session(first_preview).unwrap().primary_view(),
+            state.session(second_preview).unwrap().primary_view()
+        );
+        let mut opened_tabs: Vec<_> = app
+            .world()
+            .resource::<OpenedPreviewTabs>()
+            .0
+            .iter()
+            .map(|(_, instance)| *instance)
+            .collect();
+        opened_tabs.sort_unstable();
+        let mut primary_views = vec![
+            state.session(first_preview).unwrap().primary_view().0,
+            state.session(second_preview).unwrap().primary_view().0,
+        ];
+        primary_views.sort_unstable();
+        assert_eq!(opened_tabs, primary_views);
+
+        let _ = std::fs::remove_file(first_path);
+        let _ = std::fs::remove_file(second_path);
+    }
+
+    #[test]
+    fn document_preview_ids_follow_document_instance_identity() {
+        assert_eq!(
+            UsdPreviewId::for_document(DocumentId::new(1)),
+            UsdPreviewId(1)
+        );
+        assert_ne!(
+            UsdPreviewId::for_document(DocumentId::new(1)),
+            UsdPreviewId::for_document(DocumentId::new(2))
+        );
     }
 
     #[test]

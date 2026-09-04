@@ -20,7 +20,7 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::UsdData;
 
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
-use crate::ui::viewport::{OpenUsdPreview, EDITOR_PREVIEW_ID, USD_VIEWPORT_PANEL_ID};
+use crate::ui::viewport::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
 use crate::ui::USD_CONNECTION_CANVAS_PANEL_ID;
 use crate::{
     CommitUsdProposal, LayerId, ReviewUsdProposal, UsdProposalId, UsdProposalReviewAction,
@@ -214,17 +214,18 @@ impl BrowserSection for UsdSceneSection {
             }
         }
 
-        // Clicking any stage / prim row opens or replaces the desktop editor's
-        // explicit preview lease and focuses the viewport tab. The command is
-        // emitted after paint so the egui pass stays a pure read.
+        // Clicking any stage / prim row opens or focuses that document's
+        // explicit preview lease and view tab. The command is emitted after
+        // paint so the egui pass stays a pure read.
         if let Some(doc) = focus_doc {
+            let preview = ctx
+                .resource::<UsdViewportState>()
+                .and_then(|state| state.preview_for_document(doc))
+                .unwrap_or_else(|| UsdPreviewId::for_document(doc));
             ctx.trigger(OpenUsdPreview {
-                preview: EDITOR_PREVIEW_ID,
+                preview,
                 doc,
                 edit_target: LayerId::root(),
-            });
-            ctx.trigger(lunco_workbench::FocusPanel {
-                id: USD_VIEWPORT_PANEL_ID.0.to_string(),
             });
         }
         for action in proposal_actions {

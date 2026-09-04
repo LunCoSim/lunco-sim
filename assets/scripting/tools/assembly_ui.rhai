@@ -102,7 +102,11 @@ fn focus(role, preview, doc, edit_target) {
     if panel == () {
         return #{ ok: false, error: "unknown assembly editor panel role", role: role };
     }
-    let result = cmd("FocusPanel", #{ id: panel });
+    let result = if role == "preview" {
+        cmd("FocusUsdPreview", #{ preview: preview })
+    } else {
+        cmd("FocusPanel", #{ id: panel })
+    };
     #{ ok: result.ok, role: role, panel: panel, preview: preview, doc: doc, edit_target: edit_target, command: result }
 }
 

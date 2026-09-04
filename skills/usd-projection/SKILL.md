@@ -118,10 +118,14 @@ simulation viewport.
 The Files section sends a `.usda`, `.usd`, or `.usdc` click through the existing
 `BrowserAction::OpenFile` and async document pipeline. The emitting Twin's resolved absolute path is
 preserved, so an inactive Twin is not accidentally anchored on the active one.
-Once the document is admitted, the viewport binds it to `EDITOR_PREVIEW_ID`
-with `LayerId::root()` and focuses the USD panel. Pending browser reads are
-cancelled on `TwinClosed`, and repeated clicks coalesce/reuse the same document
-and preview lease.
+Once the document is admitted, the viewport derives its document-backed
+`UsdPreviewId::for_document` with `LayerId::root()`, opens the session's primary
+`UsdPreviewView` as an instance-backed dock tab, and focuses that exact tab.
+Pending browser reads are cancelled on `TwinClosed`, and repeated clicks
+coalesce/reuse the same document, preview session, and view tab. Explicit
+`FocusUsdPreview` and `FocusUsdPreviewView` commands foreground their matching
+instance tab as well; replacing or closing a session removes its view tabs with
+the presentation resources.
 The preview root carries `UsdPreviewOnly`, the USD projection ownership fence.
 Consumers that can create simulation side effects must use the shared bounded
 `is_preview_only` ancestry helper rather than names, stage handles, or missing

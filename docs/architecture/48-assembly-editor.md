@@ -81,7 +81,10 @@ name convention, or ECS-only grouping state is introduced.
   `RectLight` prims remain assembly content.
   A click on a `.usda`, `.usd`, or `.usdc` file in any open Twin resolves that file at the emitting
   Twin's path, admits it through the existing async `OpenFile` pipeline, then
-  opens/focuses the stable editor session; it never becomes `LoadScene`.
+  opens/focuses the document-scoped preview session and its primary view tab;
+  it never becomes `LoadScene`. The browser derives the session identity from
+  `DocumentId`, so opening another document cannot retarget the first
+  document's dock or leave its source tab editing a different preview.
 - `SelectUsdPrim` is the editor's path-selection command. It requires the
   focused `UsdPreviewId` and resolves the path only against that session's
   stage handle and preview-root hierarchy, so identical paths in the live
@@ -134,6 +137,11 @@ name convention, or ECS-only grouping state is introduced.
   selection is only the focused-session projection; the editor-owned session
   selection stores canonical prim paths and restores fresh ECS projections when
   focus changes or a document is reprojected.
+- The primary `UsdPreviewView` is also an instance-backed workbench tab. The
+  `OpenUsdPreview`, `FocusUsdPreview`, and `FocusUsdPreviewView` boundaries
+  foreground that exact tab; replacing or closing a session closes its view
+  tabs with the render resources. Additional views continue to share the
+  session's projected stage and only add presentation cameras and targets.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
 
@@ -354,13 +362,13 @@ Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and
 Environment panel ids, plus the existing animation, mount, review, and
 persistence sections/workflows. `open_session` takes an explicit
 `UsdPreviewId`/`DocumentId`/edit target, then uses `ActivatePerspective`,
-`OpenUsdPreview`, and `FocusPanel`; opening the preview already selects its
-session lease. It does not create a second layout, document binding, selection
-store, or editor state. Mount and review remain Inspector sections, animation
-remains an Environment section, and persistence remains the existing lifecycle
-commands and File menu rather than a fabricated panel. Agent workflows
-therefore use the same presentation and authoring surfaces as a human without
-introducing another UI runtime.
+`OpenUsdPreview`, and the typed `FocusUsdPreview` boundary; opening the preview
+also exposes and focuses its primary view tab. It does not create a second
+layout, document binding, selection store, or editor state. Mount and review
+remain Inspector sections, animation remains an Environment section, and
+persistence remains the existing lifecycle commands and File menu rather than
+a fabricated panel. Agent workflows therefore use the same presentation and
+authoring surfaces as a human without introducing another UI runtime.
 
 `assembly_ui::panel_templates(preview, doc, edit_target)` returns nine
 descriptors. Each contains the explicit session handles and a capability list;

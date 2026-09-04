@@ -101,10 +101,13 @@ baseline; all views over one session see the same transient pose.
 
 Clicking a USD file in any open Twin's Files section resolves that Twin's
 absolute path, opens the file through `OpenFile` and the async document
-registry, then binds the admitted `DocumentId` to `EDITOR_PREVIEW_ID`. This is
-document inspection only; it never replaces the running scene. Repeated clicks
-reuse the existing file identity and preview lease, while pending reads owned
-by a closed Twin are cancelled.
+registry, then binds the admitted `DocumentId` to its document-backed
+`UsdPreviewId::for_document` session and primary view tab. This is document
+inspection only; it never replaces the running scene. Repeated clicks reuse the
+existing file identity, preview session, and view tab, while pending reads
+owned by a closed Twin are cancelled. An explicit `FocusUsdPreview` or
+`FocusUsdPreviewView` also foregrounds the matching instance tab, so the dock,
+document, and agent edit context cannot silently diverge.
 
 Native Assembly Editor panels key their derived state by `UsdPreviewId`. Each
 open session retains its own prim tree, connection canvas, parameter/variant/
