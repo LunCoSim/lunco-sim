@@ -65,6 +65,16 @@ struct SetPorts {
     tick: u64,
 }
 
+/// Test-only observer for the production `ReleaseControl` safe-stop command.
+/// The prelude deliberately uses this command for arrival braking, so the
+/// harness records the authoritative release path rather than pretending a
+/// brake is another drive-port write.
+#[Command]
+struct ReleaseControl {
+    #[authz_target]
+    target: Entity,
+}
+
 #[on_command(SetPorts)]
 fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<BrakeCount>) {
     let get = |name: &str| cmd.writes.iter().find(|(n, _)| n == name).map(|(_, v)| *v);
@@ -80,6 +90,11 @@ fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut
         log.0
             .push((get("throttle").unwrap_or(0.0), get("steer").unwrap_or(0.0)));
     }
+}
+
+#[on_command(ReleaseControl)]
+fn on_release_control(trigger: On<ReleaseControl>, mut brakes: ResMut<BrakeCount>) {
+    brakes.0 += 1;
 }
 
 // A result-reporting command that "spawns" something and reports the new gid
@@ -120,7 +135,7 @@ fn on_report(trigger: On<Report>, mut cap: ResMut<CapturedData>) {
     cap.0.push(cmd.value);
 }
 
-register_commands!(on_drive, on_spawn, on_report);
+register_commands!(on_drive, on_release_control, on_spawn, on_report);
 
 // ── Reflect targets for the native get/set verbs ──────────────────────────────
 // A component and a resource, both reflect-registered, exercise the symmetric
@@ -207,6 +222,11 @@ fn spawn_rover(app: &mut App) -> Entity {
             Transform::from_xyz(0.0, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 0.0)),
             GlobalEntityId::from_raw(ROVER_GID),
+            // Match the authored capability every production skid rover
+            // receives. Navigation is fail-closed without this component;
+            // the fixture must not exercise a vehicle type the runtime cannot
+            // authoritatively identify.
+            lunco_core::SteeringGeometry::Differential,
             ChildOf(frame),
         ))
         .id();
@@ -227,6 +247,7 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             Transform::from_xyz(x, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
+            lunco_core::SteeringGeometry::Differential,
             lunco_core::ControlBinding { binds: Vec::new() },
             lunco_core::UsdPrimKind("rover".to_string()),
             ChildOf(frame),

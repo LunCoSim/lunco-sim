@@ -1716,7 +1716,6 @@ fn spawn_prim_op(
             Ok(plan) => UsdInstanceProjection {
                 root: None,
                 plan: Arc::new(plan),
-                canonical_generation: 0,
             },
             Err(error) => {
                 error!(
@@ -2024,7 +2023,6 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         let projection = UsdInstanceProjection {
             root: None,
             plan: Arc::new(plan),
-            canonical_generation: 0,
         };
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             continue;

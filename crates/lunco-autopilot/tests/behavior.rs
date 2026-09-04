@@ -9,7 +9,27 @@ use lunco_autopilot::{
     TargetStates,
 };
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
+use lunco_core::{NavigationState, SteeringGeometry};
 use std::sync::Arc;
+
+fn nav_setpoint_once(
+    pos: GridPos,
+    fwd: Vec3,
+    target: GridPos,
+    speed: f64,
+    radius: f32,
+    geometry: SteeringGeometry,
+) -> (f64, f64, f64, bool) {
+    let mut state = NavigationState::Uninitialized;
+    let command = nav_setpoint(pos, fwd, target, speed, radius, geometry, &mut state)
+        .expect("test pose and navigation parameters are valid");
+    (
+        command.throttle,
+        command.steer,
+        command.brake,
+        command.arrived,
+    )
+}
 
 #[test]
 fn json_tree_drives_and_sequences_waypoints() {
@@ -24,6 +44,7 @@ fn json_tree_drives_and_sequences_waypoints() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -58,21 +79,23 @@ fn json_tree_drives_and_sequences_waypoints() {
 
 #[test]
 fn nav_setpoint_brakes_within_radius_drives_when_far() {
-    let (_t, _s, brake, arrived) = nav_setpoint(
+    let (_t, _s, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::X,
         GridPos(DVec3::new(0.5, 0.0, 0.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
     assert!(arrived && brake > 0.5, "within radius → arrived + brake");
 
-    let (throttle, _s, _b, arrived) = nav_setpoint(
+    let (throttle, _s, _b, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::X,
         GridPos(DVec3::new(50.0, 0.0, 0.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
     assert!(
         !arrived && throttle > 0.0,
@@ -81,54 +104,75 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
 }
 
 #[test]
-fn nav_setpoint_reverses_toward_a_behind_goal() {
-    let (throttle, steer, brake, arrived) = nav_setpoint(
+fn nav_setpoint_uses_shared_rolling_heading_recovery() {
+    let (throttle, steer, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::NEG_Z,
         GridPos(DVec3::new(0.0, 0.0, 8.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
 
     assert!(
+        throttle < -0.59 && steer.abs() < 1e-6,
+        "directly rearward recovery must use shared straight reverse travel, got throttle={throttle}, steer={steer}"
+    );
+    assert_eq!(brake, 0.0);
+    assert!(!arrived);
+
+    let (throttle, steer, brake, arrived) = nav_setpoint_once(
+        GridPos(DVec3::ZERO),
+        Vec3::NEG_Z,
+        GridPos(DVec3::new(0.0, 0.0, 8.0)),
+        0.6,
+        2.0,
+        SteeringGeometry::Ackermann,
+    );
+    assert!(
         throttle < -0.59,
-        "a straight-behind goal must use reverse drive, got throttle={throttle}"
+        "Ackermann must use rolling reverse, got {throttle}"
     );
     assert!(
         steer.abs() < 1e-6,
-        "a straight-behind goal needs no steering, got steer={steer}"
+        "straight reverse needs no steer, got {steer}"
     );
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 }
 
 #[test]
-fn nav_setpoint_keeps_a_side_goal_in_forward_drive_band() {
-    let (throttle, steer, brake, arrived) = nav_setpoint(
+fn nav_setpoint_uses_the_shared_steering_sign_for_a_side_goal() {
+    let (throttle, steer, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::NEG_Z,
         GridPos(DVec3::new(8.0, 0.0, 0.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
 
     assert!(
         throttle > 0.0,
-        "a broadside goal must not flip reverse on a tiny heading error, got throttle={throttle}"
+        "a broadside goal must stay in the forward drive band, got throttle={throttle}"
     );
-    assert!(steer > 0.9, "a right-side goal must steer right, got steer={steer}");
+    assert!(
+        steer > 0.9,
+        "a right-side goal must steer right, got steer={steer}"
+    );
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 }
 
 #[test]
 fn nav_setpoint_keeps_forward_motion_for_a_goal_once_heading_is_recovered() {
-    let (throttle, steer, brake, arrived) = nav_setpoint(
+    let (throttle, steer, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::Z,
         GridPos(DVec3::new(0.0, 0.0, 8.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
 
     assert!(throttle > 0.0, "recovered heading must drive forward");
@@ -152,12 +196,13 @@ fn waypoint_navigation_uses_shared_vehicle_frame_on_the_yaw_plane() {
 
     // From the origin, a waypoint along the rotated -X heading is aligned and
     // therefore must not produce a lateral steering command.
-    let (throttle, steer, brake, arrived) = nav_setpoint(
+    let (throttle, steer, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         forward,
         GridPos(DVec3::new(-20.0, 0.0, 0.0)),
         0.6,
         2.0,
+        SteeringGeometry::Differential,
     );
     assert!(throttle > 0.0 && steer.abs() < 1e-6 && brake == 0.0 && !arrived);
 }
@@ -175,6 +220,7 @@ fn one_way_tree_completion_is_latched_by_its_host() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (1.0, 0.0, 0.0),
@@ -207,6 +253,7 @@ fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[DVec3], max: usize
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -267,6 +314,7 @@ fn selector_with_arrived_guard_brakes_when_close_drives_when_far() {
     let mut far = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -285,6 +333,7 @@ fn selector_with_arrived_guard_brakes_when_close_drives_when_far() {
     let mut near = DriveCtx {
         pos: GridPos(DVec3::new(10.0, 0.0, 0.0)),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -306,6 +355,7 @@ fn wait_latches_a_mission_time_deadline_and_resets_across_repeats() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -376,6 +426,7 @@ fn parallel_require_one_succeeds_when_first_child_arrives() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -401,6 +452,7 @@ fn face_pivots_in_place_then_succeeds_when_aligned() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -433,6 +485,7 @@ fn invert_negates_the_arrived_condition() {
     let mut far = DriveCtx {
         pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -445,6 +498,7 @@ fn invert_negates_the_arrived_condition() {
     let mut near = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -461,6 +515,7 @@ fn force_and_retry_decorators_map_and_re_attempt() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -501,6 +556,7 @@ fn reactive_selector_switches_to_brake_the_instant_it_arrives() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::new(50.0, 0.0, 0.0)),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -541,6 +597,7 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -609,6 +666,7 @@ fn intercept_leads_a_moving_target_and_succeeds_on_contact() {
     let mut ctx = DriveCtx {
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
@@ -677,6 +735,7 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
         self_gid: 1,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Arc::new(targets),
@@ -741,6 +800,7 @@ fn facing_guards_heading_and_hold_stays_running() {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),
@@ -752,6 +812,7 @@ fn facing_guards_heading_and_hold_stays_running() {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::Z,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),
@@ -779,6 +840,7 @@ fn cooldown_blocks_re_entry_for_the_lockout_window() {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),
@@ -813,6 +875,7 @@ fn path_blocked_reads_the_forward_raycast_clearance() {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),
@@ -851,6 +914,7 @@ fn steer_clear_goes_straight_when_open_and_turns_toward_the_open_side() {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),

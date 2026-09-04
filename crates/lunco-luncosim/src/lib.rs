@@ -4765,6 +4765,7 @@ fn activate_offscreen_camera(
             &bevy::camera::RenderTarget,
             bevy::ecs::query::Has<Camera3d>,
             bevy::ecs::query::Has<lunco_render::SceneCamera>,
+            Option<&lunco_usd_bevy::UsdPrimPath>,
             bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
             bevy::ecs::query::Has<lunco_core::LocalAvatar>,
             bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
@@ -4772,6 +4773,7 @@ fn activate_offscreen_camera(
         Without<OffscreenRenderCamera>,
     >,
     mirror_sources: Query<&OffscreenRenderCamera>,
+    selection: Res<lunco_usd_bevy::camera_switch::ViewportCameraSelection>,
     mut commands: Commands,
     mut warned: Local<bool>,
 ) {
@@ -4790,13 +4792,15 @@ fn activate_offscreen_camera(
     let active_path = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _, _)| {
-                c.is_active
-                    && *has_pipeline
-                    && *has_scene
-                    && *has_path
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
-            })
+            .filter(
+                |(_, c, target, has_pipeline, has_scene, _, has_path, _, _)| {
+                    c.is_active
+                        && *has_pipeline
+                        && *has_scene
+                        && *has_path
+                        && matches!(target, bevy::camera::RenderTarget::Image(_))
+                },
+            )
             .map(|(entity, ..)| entity)
             .collect(),
         "active cinematic camera",
@@ -4806,12 +4810,14 @@ fn activate_offscreen_camera(
     let path_driven = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, _, target, has_pipeline, has_scene, has_path, _, _)| {
-                *has_pipeline
-                    && *has_scene
-                    && *has_path
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
-            })
+            .filter(
+                |(_, _, target, has_pipeline, has_scene, _, has_path, _, _)| {
+                    *has_pipeline
+                        && *has_scene
+                        && *has_path
+                        && matches!(target, bevy::camera::RenderTarget::Image(_))
+                },
+            )
             .map(|(entity, ..)| entity)
             .collect(),
         "cinematic camera path",
@@ -4823,16 +4829,40 @@ fn activate_offscreen_camera(
     let active_authored = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _, _)| {
-                c.is_active
-                    && *has_pipeline
-                    && *has_scene
-                    && !*has_path
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
-            })
+            .filter(
+                |(_, c, target, has_pipeline, has_scene, _, has_path, _, _)| {
+                    c.is_active
+                        && *has_pipeline
+                        && *has_scene
+                        && !*has_path
+                        && matches!(target, bevy::camera::RenderTarget::Image(_))
+                },
+            )
             .map(|(entity, ..)| entity)
             .collect(),
         "active authored camera",
+        &mut warned,
+        &mut ambiguous,
+    );
+    // A camera-track cut is an explicit director selection, but it is not a
+    // `CameraPathDriven` curve. Preserve that selected authored camera after
+    // the window target is retargeted to the capture image; otherwise the
+    // offscreen owner would silently drop a valid mounted or authored track
+    // camera between the director and recorder boundaries.
+    let requested = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(
+                |(entity, _, target, has_pipeline, has_scene, path, _, _, _)| {
+                    *has_pipeline
+                        && *has_scene
+                        && selection.matches_requested(*entity, *path)
+                        && matches!(target, bevy::camera::RenderTarget::Image(_))
+                },
+            )
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "explicitly selected authored camera",
         &mut warned,
         &mut ambiguous,
     );
@@ -4843,7 +4873,7 @@ fn activate_offscreen_camera(
         cameras
             .iter()
             .filter(
-                |(entity, _, target, has_pipeline, has_scene, _, has_avatar, _)| {
+                |(entity, _, target, has_pipeline, has_scene, _, _, has_avatar, _)| {
                     *has_pipeline
                         && *has_scene
                         && *has_avatar
@@ -4860,6 +4890,7 @@ fn activate_offscreen_camera(
     let selected = (!ambiguous)
         .then(|| {
             active_path
+                .or(requested)
                 .or(path_driven)
                 .or(active_authored)
                 .or(local_avatar)
@@ -4873,6 +4904,7 @@ fn activate_offscreen_camera(
         target,
         has_pipeline,
         has_scene,
+        _path,
         _has_path,
         _has_avatar,
         has_lod_origin,

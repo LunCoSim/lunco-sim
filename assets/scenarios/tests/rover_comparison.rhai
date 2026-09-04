@@ -72,7 +72,7 @@ fn on_start(me) {
     // The course parent carries a uniform Y/Z compression for this bounded
     // acceptance fixture. The authored obstacle sequence stays intact, while
     // the conservative traverse still reaches its terminal station within the
-    // 30-second smoke bound.
+    // bounded acceptance window after the corrected contact-load conversion.
     this.run_s = 48.0;
     this.next_sample = 0.0;
 

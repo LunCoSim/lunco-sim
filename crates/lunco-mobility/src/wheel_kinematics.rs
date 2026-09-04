@@ -51,18 +51,22 @@ pub fn wheel_heading(chassis_rot: GridRot, wheel_local_rot: DQuat) -> (DVec3, DV
     )
 }
 
-/// Linear velocity of the hub: `v + ω × r`, where `r = hub_pos − chassis_pos`
-/// is the lever arm — both ends typed grid-absolute, so the CQ-201 invariant
-/// (same frame on both terms) holds by construction. `chassis_ang` is
-/// frame-safe (see module docs).
+/// Linear velocity of a point on a rigid body: `v + ω × r`, where `r` is
+/// measured from the body's world centre of mass. Both positions are typed
+/// grid-absolute, so the CQ-201 invariant (same frame on both terms) holds by
+/// construction. `body_ang` is frame-safe (big_space only translates the
+/// origin, never rotates).
 #[inline]
-pub fn wheel_hub_velocity(
-    chassis_lin: DVec3,
-    chassis_ang: DVec3,
-    hub_pos: GridPos,
-    chassis_pos: GridPos,
+pub fn body_point_velocity(
+    body_lin: DVec3,
+    body_ang: DVec3,
+    point_pos: GridPos,
+    body_pos: GridPos,
+    body_rot: GridRot,
+    center_of_mass: DVec3,
 ) -> DVec3 {
-    chassis_lin + chassis_ang.cross(hub_pos - chassis_pos)
+    let center = body_pos + body_rot.0 * center_of_mass;
+    body_lin + body_ang.cross(point_pos - center)
 }
 
 /// Free-rolling axle rate ω (rad/s) for a wheel rolling on the ground at the
@@ -110,7 +114,14 @@ mod tests {
         let lin = DVec3::new(2.0, 0.0, 0.0);
         let ang = DVec3::Z;
         let hub = GridPos(DVec3::new(1.0, 0.0, 0.0));
-        let v = wheel_hub_velocity(lin, ang, hub, GridPos(DVec3::ZERO));
+        let v = body_point_velocity(
+            lin,
+            ang,
+            hub,
+            GridPos(DVec3::ZERO),
+            GridRot(DQuat::IDENTITY),
+            DVec3::ZERO,
+        );
         approx(v, DVec3::new(2.0, 1.0, 0.0));
     }
 

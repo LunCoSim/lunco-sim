@@ -1050,12 +1050,6 @@ pub struct UsdInstanceProjection {
     /// is inherited by every projected descendant.
     pub root: Option<Entity>,
     pub plan: Arc<UsdStageProjectionPlan>,
-    /// Canonical-stage generation for which this prepared plan is valid.
-    ///
-    /// The generation is assigned when the live stage sink admits the
-    /// reference. Any later authored change advances the generation and
-    /// makes the entity reader use the live composed stage again.
-    pub canonical_generation: u64,
 }
 
 /// A USD instance member's *role*: its prim path relative to the instance root.
@@ -2777,11 +2771,7 @@ mod scene_mount_tests {
         q_preview_only: Query<(), With<UsdPreviewOnly>>,
         q_child_of: Query<&ChildOf>,
     ) {
-        assert!(is_preview_only(
-            expected.root,
-            &q_child_of,
-            &q_preview_only
-        ));
+        assert!(is_preview_only(expected.root, &q_child_of, &q_preview_only));
         assert!(is_preview_only(
             expected.child,
             &q_child_of,

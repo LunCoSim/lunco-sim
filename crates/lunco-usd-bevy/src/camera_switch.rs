@@ -113,6 +113,20 @@ pub struct CameraContractStatus {
 }
 
 impl ViewportCameraSelection {
+    /// Whether `entity` is the camera most recently selected by an explicit
+    /// director or operator command. The authored path is the stable identity
+    /// across asynchronous USD re-projection; the entity argument keeps the
+    /// offscreen renderer on the same selected camera in the current world.
+    pub fn matches_requested(&self, entity: Entity, path: Option<&UsdPrimPath>) -> bool {
+        match (&self.requested, path) {
+            (Some(RequestedCamera::Entity(requested)), _) => *requested == entity,
+            (Some(RequestedCamera::Authored(requested)), Some(path)) => {
+                requested.stage == path.stage_handle.id() && requested.path == path.path
+            }
+            _ => false,
+        }
+    }
+
     /// Revision observed by the authored camera-track sampler.
     pub(crate) fn director_revision(&self) -> u64 {
         self.director_revision

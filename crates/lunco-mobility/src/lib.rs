@@ -40,7 +40,7 @@ pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
 use wheel_spin::update_wheel_spin;
 
 pub mod wheel_kinematics;
-use wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
+use wheel_kinematics::wheel_hub_pose;
 
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
@@ -1184,14 +1184,7 @@ fn apply_wheel_suspension(
                     // tilted contacts that ring hardest.
                     // Positive relative_vel = wheel moving toward ground (compressing).
                     // Negative relative_vel = wheel moving away from ground (extending).
-                    let lin_vel = forces.linear_velocity();
-                    let ang_vel = forces.angular_velocity();
-                    let velocity_at_wheel = wheel_hub_velocity(
-                        lin_vel,
-                        ang_vel,
-                        world_pos,
-                        GridPos(forces.position().0),
-                    );
+                    let velocity_at_wheel = forces.velocity_at_point(world_pos.0);
                     let relative_vel = -velocity_at_wheel.dot(hit.normal);
 
                     let total_force_mag = suspension_force_mag(
@@ -1843,21 +1836,24 @@ fn sync_input_ports(
 
 /// Apply the vessel-wide brake command independently of drive allocation.
 ///
-/// Every vehicle control surface has an [`OutputPorts`] index. Braking is a
+/// A vehicle may expose an [`OutputPorts`] index, but braking is a
 /// mechanism shared by all authored drive networks: it owns
 /// [`InputPorts::brake_active`] (used by the tire solve) and the discrete
 /// `brake` actuator port. The drive allocation and steering laws remain in the
 /// authored Modelica/Rhai network; this function only realizes the brake input
 /// at the generic vehicle boundary.
 fn apply_vehicle_brake(
-    mut q: Query<(&mut InputPorts, &OutputPorts)>,
+    mut q: Query<(&mut InputPorts, Option<&OutputPorts>)>,
     mut q_ports: Query<&mut Port>,
 ) {
     for (mut inputs, actuators) in &mut q {
-        inputs.brake_active = inputs.cmd("brake") > 0.5;
-        if let Some(port_b) = actuators.get("brake") {
-            if let Ok(mut port) = q_ports.get_mut(port_b) {
-                port.value = if inputs.brake_active { 1.0 } else { 0.0 };
+        let brake_active = inputs.cmd("brake") > 0.5;
+        inputs.brake_active = brake_active;
+        if let Some(actuators) = actuators {
+            if let Some(port_b) = actuators.get("brake") {
+                if let Ok(mut port) = q_ports.get_mut(port_b) {
+                    port.value = if inputs.brake_active { 1.0 } else { 0.0 };
+                }
             }
         }
     }
@@ -2141,6 +2137,21 @@ mod force_law_tests {
 
         assert!(app.world().get::<InputPorts>(vehicle).unwrap().brake_active);
         assert_eq!(app.world().get::<Port>(brake_port).unwrap().value, 1.0);
+    }
+
+    #[test]
+    fn generated_network_control_surface_releases_brake_without_output_ports() {
+        let mut app = App::new();
+        app.add_systems(Update, apply_vehicle_brake);
+
+        let mut inputs = InputPorts::new(&["throttle", "steer", "brake"]);
+        inputs.values.insert("brake".to_string(), 0.0);
+        inputs.brake_active = true;
+        let vehicle = app.world_mut().spawn(inputs).id();
+
+        app.update();
+
+        assert!(!app.world().get::<InputPorts>(vehicle).unwrap().brake_active);
     }
 
     // ── Single-track lean: contact-plane traction basis ─────────────────────

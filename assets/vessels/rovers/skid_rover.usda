@@ -67,6 +67,9 @@ def Xform "SkidRover" (
     }
 )
 {
+    # The drive law is differential: heading recovery may pivot the chassis
+    # without requiring a rolling reverse arc.
+    uniform token lunco:steeringGeometry = "differential"
     def Camera "FrontCamera" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )

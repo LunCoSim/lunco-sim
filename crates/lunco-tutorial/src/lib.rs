@@ -1199,7 +1199,13 @@ fn on_scene_transition_completed(
                 let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
                     return;
                 };
-                if request.world.as_deref() != Some(path.as_str()) {
+                // A replacement may have requested the same world while the
+                // outgoing scene was still completing its load transaction.
+                // That request deliberately stays behind the queued Clear;
+                // attaching here would start the lesson on the outgoing load
+                // edge, and the subsequent clear would tear it down while
+                // consuming the only pending reload request.
+                if request.world.as_deref() != Some(path.as_str()) || request.clear_before_load {
                     world.resource_mut::<PendingTutorialStart>().0 = Some(request);
                     return;
                 }
@@ -2397,6 +2403,89 @@ mod tests {
             ),
             lunco_core::SceneTransitionRequest::Clear,
         ]));
+    }
+
+    /// If a tutorial replacement is queued while the outgoing scene's load is
+    /// still finishing, the matching load edge must not attach the lesson.
+    /// The explicit clear edge owns teardown; only its completion may request
+    /// the replacement load.
+    #[test]
+    fn replacement_waits_for_clear_when_load_completion_arrives_first() {
+        #[derive(Resource, Default)]
+        struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.insert_resource(lunco_core::SceneMountState::default());
+        let root = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/QueuedReplacement".into(),
+            title: "Queued replacement".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+        app.insert_resource(TransitionsSeen::default());
+        app.add_observer(
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().request.clone());
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/QueuedReplacement".into(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![lunco_core::SceneTransitionRequest::Clear]
+        );
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+
+        // The outgoing load reaches its terminal edge before the queued clear
+        // is dispatched. It must not steal the replacement request.
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![lunco_core::SceneTransitionRequest::Clear]
+        );
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::Clear,
+            });
+        app.update();
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![
+                lunco_core::SceneTransitionRequest::Clear,
+                lunco_core::SceneTransitionRequest::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            ]
+        );
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
     }
 
     /// Replacing a world-backed lesson must clear the outgoing world before

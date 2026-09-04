@@ -6,13 +6,12 @@
 //! matches the physics the rover is actually experiencing.
 
 use avian3d::prelude::*;
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::InputPorts;
 
-use crate::wheel_kinematics::{wheel_heading, wheel_hub_pose, wheel_hub_velocity};
-use crate::{WheelBodyMount, WheelRaycast};
+use crate::wheel_kinematics::{body_point_velocity, wheel_heading, wheel_hub_pose};
+use crate::{Suspension, WheelBodyMount, WheelRaycast};
 
 /// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
 /// for a wheel of inertia `i` (`τ = I·ω/dt`). The brake applies the negative
@@ -53,6 +52,7 @@ pub(crate) fn update_wheel_spin(
         &mut WheelRaycast,
         &Transform,
         &RayHits,
+        &Suspension,
         &WheelBodyMount,
     )>,
     mut q_ports: ParamSet<(
@@ -65,6 +65,7 @@ pub(crate) fn update_wheel_spin(
             &AngularVelocity,
             &Position,
             &Rotation,
+            &ComputedCenterOfMass,
             Option<&InputPorts>,
             &RigidBody,
             // Client proxies are Kinematic with avian velocity zeroed; their real
@@ -95,8 +96,7 @@ pub(crate) fn update_wheel_spin(
     if dt <= 0.0 {
         return;
     }
-
-    for (entity, mut wheel, local_tf, hits, mount) in q_wheels.iter_mut() {
+    for (entity, mut wheel, local_tf, hits, suspension, mount) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -142,7 +142,9 @@ pub(crate) fn update_wheel_spin(
         let braking = lunco_core::architecture::owning_input_ports(entity, &q_child_of, &q_inputs)
             .map(|c| c.brake_active)
             .unwrap_or(false);
-        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(mount.body) {
+        if let Ok((lin, ang, pos, rot, center_of_mass, _inputs, body, motion)) =
+            q_chassis.get(mount.body)
+        {
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
             // (host / the owned rover), or the delivered snapshot hint on a
@@ -150,9 +152,10 @@ pub(crate) fn update_wheel_spin(
             // hint branch a replicated rover rolls visibly across the ground with
             // dead, non-spinning wheels.
             let (vlin, vang) = if matches!(body, RigidBody::Kinematic) {
-                motion
-                    .map(|m| (m.lin, m.ang))
-                    .unwrap_or((DVec3::ZERO, DVec3::ZERO))
+                let Some(motion) = motion else {
+                    continue;
+                };
+                (motion.lin, motion.ang)
             } else {
                 (lin.0, ang.0)
             };
@@ -162,21 +165,36 @@ pub(crate) fn update_wheel_spin(
             // the slip lever once the rover drove off origin (CQ-201).
             let wheel_local_rotation =
                 mount.local.rotation.as_dquat() * local_tf.rotation.as_dquat();
-            let (hub_pos, _) = wheel_hub_pose(
+            let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(pos.0),
                 GridRot(rot.0),
                 mount.local.translation.as_dvec3(),
                 wheel_local_rotation,
             );
-            let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, GridPos(pos.0));
             let (wheel_forward, wheel_right) = wheel_heading(GridRot(rot.0), wheel_local_rotation);
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.
-            let normal = contact.as_ref().map(|h| h.normal).unwrap_or(DVec3::Y);
-            basis = crate::contact_plane_basis(wheel_forward, wheel_right, normal);
-            v_long = hub_vel.dot(basis.0);
-            v_lat = hub_vel.dot(basis.1);
+            if let Some(hit) = contact {
+                let contact_pos = crate::raycast_contact_point(
+                    hub_pos.0,
+                    hub_rot.0,
+                    suspension.rest_length,
+                    r,
+                    hit.distance,
+                );
+                let contact_vel = body_point_velocity(
+                    vlin,
+                    vang,
+                    GridPos(contact_pos),
+                    GridPos(pos.0),
+                    GridRot(rot.0),
+                    center_of_mass.0,
+                );
+                basis = crate::contact_plane_basis(wheel_forward, wheel_right, hit.normal);
+                v_long = contact_vel.dot(basis.0);
+                v_lat = contact_vel.dot(basis.1);
+            }
         }
 
         // Brake torque opposes the current spin, clamped to the authored peak.
@@ -303,7 +321,6 @@ pub(crate) fn update_wheel_spin(
             (0.0, 0.0)
         };
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
-
         // Compose the visual mesh rotation from the canonical spin state: steer
         // yaw (from the wheel entity's local transform) · roll about the axle ·
         // cylinder-on-its-side base. Rebuilding from the wrapped absolute angle
@@ -397,6 +414,7 @@ mod tests {
                 RigidBody::Dynamic,
                 Position(DVec3::ZERO),
                 Rotation::default(),
+                ComputedCenterOfMass::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
                 OutputPorts::default(),
@@ -497,6 +515,7 @@ mod tests {
                 RigidBody::Dynamic,
                 Position(DVec3::ZERO),
                 Rotation::default(),
+                ComputedCenterOfMass::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(DVec3::ZERO),
                 OutputPorts::default(),

@@ -47,6 +47,8 @@ def Xform "SixWheelRover" (
     }
 )
 {
+    # The six wheel drive law mixes left/right traction and can pivot in place.
+    uniform token lunco:steeringGeometry = "differential"
     def Camera "FrontCamera" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )

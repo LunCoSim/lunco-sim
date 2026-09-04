@@ -62,6 +62,8 @@ pub mod exposure;
 pub mod faults;
 
 pub mod mobility;
+/// Shared, capability-aware rover navigation command law.
+pub mod navigation;
 
 pub mod tools;
 
@@ -79,6 +81,9 @@ pub use faults::{
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
+pub use navigation::{
+    approach_factor, nav_setpoint, steering_command, NavigationCommand, NavigationState,
+};
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
@@ -975,6 +980,7 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<GlobalEntityId>()
             .register_type::<Provenance>()
             .register_type::<CameraFollow>()
+            .register_type::<SteeringGeometry>()
             .register_type::<SimTick>();
 
         // All always-on core/substrate resources live in one function so a

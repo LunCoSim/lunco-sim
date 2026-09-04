@@ -38,6 +38,8 @@ def Xform "SixWheelIndependent" (
     prepend references = @lunco://components/mobility/drive_laws/modelica_six_independent.usda@</DriveLaw>
 )
 {
+    # Independent wheel channels are composed into a differential skid law.
+    uniform token lunco:steeringGeometry = "differential"
     def Camera "FrontCamera" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )

@@ -43,7 +43,7 @@ fn scalar(d: &Dynamic) -> Option<f64> {
 /// array, a non-numeric element, or a non-finite component from a degenerate
 /// orientation. Rejecting non-finite input HERE keeps every operation below
 /// total.
-fn to_vec3(d: &Dynamic) -> Option<DVec3> {
+pub(crate) fn to_vec3(d: &Dynamic) -> Option<DVec3> {
     let a = d.read_lock::<rhai::Array>()?;
     if a.len() != 3 {
         return None;

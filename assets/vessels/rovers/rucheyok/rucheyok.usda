@@ -29,6 +29,8 @@ def Xform "Rucheyok" (
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
 )
 {
+    # The authored drive law is differential skid steering.
+    uniform token lunco:steeringGeometry = "differential"
     uniform bool lunco:spawnable = true
 
     # Rucheyok is authored at its own larger scale. Keep the shared camera

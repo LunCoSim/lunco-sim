@@ -507,6 +507,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .runtime
                     .call_hook(entity, ScenarioHook::Stop, state.gid);
             }
+            bridge_core::clear_script_navigation(state.gid as u64);
             driver.runtime.forget(entity);
         });
     }
@@ -683,6 +684,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
                     }
+                    bridge_core::clear_script_navigation(gid as u64);
                     st.started = false;
                     match runtime.compile(entity, source, params, asset_id.as_deref()) {
                         CompileOutcome::Failed(diag) => {
@@ -778,6 +780,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, st.gid);
                     }
+                    bridge_core::clear_script_navigation(st.gid as u64);
                     runtime.forget(entity);
                 }
             }

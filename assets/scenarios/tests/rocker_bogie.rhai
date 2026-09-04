@@ -21,6 +21,11 @@
 //
 // `emit("ROCKER_BOGIE", "PASS"|"FAIL")`.
 
+// The step is a quarter metre high, so a settled left rocker must retain a
+// measurable hinge deflection. This is an absolute physical-load floor; the
+// landing transient is intentionally not used as its reference.
+const STEP_SETTLED_LOAD_FLOOR_RAD = 0.01;
+
 fn on_start(me) {
     this.t = 0.0;
     this.settle_s = 10.0;   // drop onto the step, then ring down
@@ -108,29 +113,13 @@ fn verdict(s) {
 
     if s.l != () && s.r != () {
         if s.coupled > 0.5 {
-            // ── STILL ON THE STEP AT THE VERDICT ────────────────────────────
-            // `peak_l` is a RUNNING MAXIMUM, so it is satisfied by the landing
-            // transient alone — a rover that settles onto the step and then creeps
-            // OFF it reads "level chassis, L + R ~ 0" at t = 10 and passes for the
-            // same reason a rover with no differential would: nothing is loading
-            // it. That is not hypothetical. It is what the rover did while its hull
-            // carried `linearDamping = 0.4` (invented air drag, since removed): it
-            // slid off at t ~ 8 and this test called it green.
-            //
-            // So assert the load is STILL THERE when the verdict is taken. The
-            // uncoupled branch already has this, in its `tilt > 10` control.
-            // 0.25, not 0.5: `peak_l` includes the LANDING TRANSIENT, which
-            // overshoots the settled angle, so half of it is a bar a genuinely
-            // loaded rover can miss (measured 0.0148 against a 0.0299 peak — off by
-            // 0.00015). The failure this exists to catch is not marginal at all:
-            // an unloaded rover reads |L| ≈ 0.000, i.e. ~2% of peak.
+            // The landing transient is intentionally excluded from this check:
+            // it is not a physical load contract and decays before the settled
+            // verdict. The authored step must leave a measurable hinge deflection.
             let m_loaded = "coupled: the step must still be loading the suspension at the verdict";
-            m_loaded += " — |L| = " + r4(s.l.abs()) + " against a peak of " + r4(s.peak_l);
-            m_loaded += ", so the rover has come off the step and every check below is being read";
-            m_loaded += " on an unloaded, trivially level rover";
-            let load_now = s.l.abs();
-            let load_bar = 0.25 * s.peak_l;
-            f.push(t_true(load_now > load_bar, m_loaded));
+            m_loaded += " — |L| = " + r4(s.l.abs()) + " against the settled floor " +
+                r4(STEP_SETTLED_LOAD_FLOOR_RAD) + " rad";
+            f.push(t_true(s.l.abs() > STEP_SETTLED_LOAD_FLOOR_RAD, m_loaded));
             // Sum, not ratio: the authored invariant is `L + R ~ 0`, and near zero
             // a ratio test is noise.
             //
