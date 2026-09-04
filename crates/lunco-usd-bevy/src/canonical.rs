@@ -797,7 +797,10 @@ impl CanonicalStages {
     /// Referenced runtime instances carry an immutable plan remapped to their
     /// authored scene path. That plan is the read source for the instance
     /// subtree; the scene's live stage remains the source for edits and for
-    /// ordinary authored prims.
+    /// ordinary authored prims. Runtime-layer edits do not replace this read
+    /// surface: they change the instance root's authored pose and metadata,
+    /// while the prepared plan remains the source of the referenced asset's
+    /// local topology and transforms.
     pub fn reader_for_entity<'a>(
         &'a self,
         asset: bevy::asset::AssetId<UsdStageAsset>,
@@ -805,12 +808,7 @@ impl CanonicalStages {
         instance: Option<&'a crate::UsdInstanceProjection>,
     ) -> (UsdReadSource<'a>, u64) {
         if let Some(instance) = instance {
-            if instance.canonical_generation == self.generation_for(asset) {
-                return (
-                    UsdReadSource::Prepared(instance.plan.as_ref()),
-                    instance.canonical_generation,
-                );
-            }
+            return (UsdReadSource::Prepared(instance.plan.as_ref()), 0);
         }
         self.reader_for(asset, stage_asset)
     }

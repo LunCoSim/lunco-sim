@@ -73,7 +73,7 @@ use lunco_cosim::{
     avian_queries::RaycastObservation, ForceActuator, JointTorqueActuator, TorqueActuator,
 };
 use lunco_materials::ShaderLook;
-use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
+use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
     DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
     SuspensionSpring, WheelRaycast,
@@ -1540,11 +1540,13 @@ fn process_usd_sim_prim_read(
                         inactive[2] as f32,
                         material.emissive.alpha,
                     );
-                    commands.entity(entity).try_insert(marker::WaypointVisualLook {
-                        active: material.clone(),
-                        inactive: inactive_look,
-                        marker_path,
-                    });
+                    commands
+                        .entity(entity)
+                        .try_insert(marker::WaypointVisualLook {
+                            active: material.clone(),
+                            inactive: inactive_look,
+                            marker_path,
+                        });
                 }
             }
         }
@@ -2152,6 +2154,31 @@ fn process_usd_sim_prim_read(
         .into_iter()
         .any(|child| child.name() == Some("Controls"));
     if owns_control_surface {
+        if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
+            // Steering geometry is a required authored capability of every
+            // controllable vehicle. It is read at the same ownership boundary as
+            // Controls, so native and scripted navigation cannot silently disagree
+            // about whether the body can pivot or must roll through a turn.
+            match reader
+                .text(&sdf_path, "lunco:steeringGeometry")
+                .and_then(|value| lunco_core::parse_steering_geometry(&value))
+            {
+                Some(geometry) => {
+                    commands.entity(entity).try_insert(geometry);
+                }
+                None => {
+                    commands
+                        .entity(entity)
+                        .remove::<lunco_core::SteeringGeometry>();
+                    push_usd_sim_diagnostic(
+                        diagnostics,
+                        &prim_path.path,
+                        "missing-steering-geometry",
+                        "controllable vehicle must author lunco:steeringGeometry as differential or ackermann",
+                    );
+                }
+            }
+        }
         collect_behavior_sources(reader, &sdf_path, &mut behavior_sources);
     }
     // A BT.CPP file may contain several named BehaviorTree definitions; its
@@ -3316,6 +3343,7 @@ fn animate_proxy_physical_wheels(
             &RigidBody,
             &Position,
             &Rotation,
+            &ComputedCenterOfMass,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
         (With<lunco_core::MobilityRoot>, Without<PhysicalWheel>),
@@ -3353,15 +3381,21 @@ fn animate_proxy_physical_wheels(
             };
             cursor = parent;
         };
-        let Some((_body, pos, rot, motion)) = root else {
+        let Some((_body, pos, rot, center_of_mass, motion)) = root else {
             continue;
         };
         // Chassis velocity arrives via the delivered hint (the proxy's avian
         // velocity is force-zeroed). Ground speed of the hub along the wheel's
         // forward axis → rolling rate ω = v_long / r.
-        let (vlin, vang) = motion
-            .map(|m| (m.lin, m.ang))
-            .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+        let Some(motion) = motion else {
+            // A proxy without a delivered chassis-motion sample has no
+            // authoritative rolling input. Leave its visual state untouched
+            // until the replication boundary supplies one; inventing a zero
+            // velocity here masks a broken transport and can make a stopped
+            // wheel look like a valid simulation state.
+            continue;
+        };
+        let (vlin, vang) = (motion.lin, motion.ang);
         // Reconstruct the hub in the Avian cell-local frame from the chassis pose +
         // the authored vehicle mount offset, exactly as
         // `proxy_wheel_pose`/`reconstruct_proxy_wheels` do. The old code read
@@ -3375,7 +3409,14 @@ fn animate_proxy_physical_wheels(
             wheel.mount_local.as_dvec3(),
             DQuat::IDENTITY,
         );
-        let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, chassis_pos);
+        let hub_vel = body_point_velocity(
+            vlin,
+            vang,
+            hub_pos,
+            chassis_pos,
+            GridRot(rot.0),
+            center_of_mass.0,
+        );
         let forward = VehicleFrame::forward(GridRot(wheel_rot.0));
         let Some(w) = wheel_roll_rate(hub_vel, forward, wheel.wheel_radius as f64) else {
             continue;
@@ -4317,6 +4358,7 @@ mod proxy_wheel_tests {
                 // hand-built test entity must carry it too now that the spin system
                 // reconstructs the hub from the chassis pose (CQ-201 fix).
                 Rotation::default(),
+                ComputedCenterOfMass::default(),
                 lunco_core::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
@@ -4405,6 +4447,7 @@ mod proxy_wheel_tests {
                 RigidBody::Kinematic,
                 Position(DVec3::ZERO),
                 Rotation::default(),
+                ComputedCenterOfMass::default(),
                 lunco_core::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
@@ -4484,6 +4527,7 @@ mod proxy_wheel_tests {
                 RigidBody::Kinematic,
                 Position(DVec3::ZERO),
                 Rotation::default(),
+                ComputedCenterOfMass::default(),
                 lunco_core::ReplicatedChassisMotion {
                     lin: DVec3::ZERO,
                     ang,

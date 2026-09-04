@@ -627,8 +627,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // world_forward(id) -> [x, y, z] unit heading in the active frame, or ().
     // The ONE read rhai can't derive itself (orientation needs the ECS
-    // BigSpace hierarchy). All steering MATH stays in rhai (the prelude);
-    // this just exposes the heading vector, like world_pos exposes position.
+    // BigSpace hierarchy). Navigation policy is exposed separately by the
+    // language-neutral `nav_command`; this just exposes the heading vector,
+    // like world_pos exposes position.
     engine.register_fn("world_forward", |id: i64| -> Dynamic {
         match bridge_core::world_forward(id as u64) {
             Some(v) => RhaiBuilder.array(vec![
@@ -639,6 +640,31 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
             None => Dynamic::UNIT,
         }
     });
+
+    // nav_command(id, target, speed, radius) ->
+    // #{ throttle, steer, brake, arrived } or () when the authored vehicle
+    // capability/authoritative pose cannot produce a command. The navigation
+    // law and its Ackermann leg state live in the language-neutral bridge/core;
+    // Rhai only adapts the native vector/map representation.
+    engine.register_fn(
+        "nav_command",
+        |id: i64, target: Dynamic, speed: f64, radius: f64| -> Dynamic {
+            let Some(target) = crate::rhai_math::to_vec3(&target) else {
+                return Dynamic::UNIT;
+            };
+            let Some(command) =
+                bridge_core::navigation_command(id as u64, target, speed, radius as f32)
+            else {
+                return Dynamic::UNIT;
+            };
+            let mut map = Map::new();
+            map.insert("throttle".into(), Dynamic::from_float(command.throttle));
+            map.insert("steer".into(), Dynamic::from_float(command.steer));
+            map.insert("brake".into(), Dynamic::from_float(command.brake));
+            map.insert("arrived".into(), Dynamic::from_bool(command.arrived));
+            Dynamic::from_map(map)
+        },
+    );
 
     // world_rotation(id) -> [x, y, z, w] active-frame orientation, or ().
     // The general orientation accessor: up/forward/right are `quat * axis`,

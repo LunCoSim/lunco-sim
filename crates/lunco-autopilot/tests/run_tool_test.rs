@@ -15,6 +15,7 @@ fn ctx() -> DriveCtx {
         self_gid: 0,
         pos: GridPos(DVec3::ZERO),
         fwd: Vec3::X,
+        steering_geometry: lunco_core::SteeringGeometry::Differential,
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Default::default(),

@@ -177,6 +177,7 @@ def Xform "LintSelftest" (
 
         def PhysicsRevoluteJoint "WheelJoint"
         {
+            bool lunco:lintOnly = true
             rel physics:body0 = </LintSelftest/Vehicle>
             rel physics:body1 = </LintSelftest/Vehicle/Wheel>
             uniform token physics:axis = "X"
@@ -214,6 +215,7 @@ def Xform "LintSelftest" (
 
     def PhysicsFixedJoint "BadJoint"
     {
+        bool lunco:lintOnly = true
         rel physics:body0 = </LintSelftest/Anchor>
         rel physics:body1 = </LintSelftest/NotABody>
     }
@@ -273,6 +275,7 @@ def Xform "LintSelftest" (
 
             def PhysicsRevoluteJoint "YawJoint"
             {
+                bool lunco:lintOnly = true
                 rel physics:body0 = </LintSelftest/MountHost/Mount>
                 rel physics:body1 = </LintSelftest/MountHost/Mount/Head>
                 uniform token physics:axis = "Y"
@@ -381,6 +384,7 @@ def Xform "LintSelftest" (
 
         def PhysicsSphericalJoint "Foot_Gimbal"
         {
+            bool lunco:lintOnly = true
             rel physics:body0 = </LintSelftest/Leg/Strut>
             rel physics:body1 = </LintSelftest/Leg/Foot>
         }
@@ -559,6 +563,9 @@ def Xform "LintSelftest" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        # The valid graph is still an authoring control for RunLint, not a
+        # live Modelica participant in this deliberately malformed scene.
+        uniform token purpose = "guide"
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </LintSelftest/HealthyBattery>,

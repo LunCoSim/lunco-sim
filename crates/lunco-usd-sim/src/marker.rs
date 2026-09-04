@@ -94,7 +94,7 @@ pub fn sync_waypoint_visuals(
 }
 
 #[cfg(test)]
-mod tests {
+mod waypoint_visual_tests {
     use super::{sync_waypoint_visuals, WaypointVisualLook};
     use bevy::prelude::*;
     use lunco_autopilot::usd_tree::ReachedWaypoints;
@@ -236,7 +236,7 @@ pub fn scale_screen_constant_markers(
 }
 
 #[cfg(test)]
-mod tests {
+mod screen_constant_marker_tests {
     use super::*;
 
     const LUNAR_DISTANCE_M: f64 = 384_400_000.0;

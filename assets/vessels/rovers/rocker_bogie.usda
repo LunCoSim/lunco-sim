@@ -42,6 +42,9 @@ def Xform "RockerBogie" (
     }
 )
 {
+    # The authored drive law is front-steered Ackermann; heading recovery must
+    # keep a signed rolling command because this chassis cannot pivot in place.
+    uniform token lunco:steeringGeometry = "ackermann"
     def Camera "FrontCamera" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )

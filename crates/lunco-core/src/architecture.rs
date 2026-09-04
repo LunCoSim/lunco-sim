@@ -265,6 +265,31 @@ pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
     }
 }
 
+/// Steering geometry exposed by a vessel's authored command surface.
+///
+/// Navigation uses this authored capability to select physical steering
+/// authority while keeping one command law and one signed rolling recovery
+/// contract for every rover. This is a capability of the vehicle, not a
+/// Rust-side asset-name heuristic.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+#[reflect(Component)]
+pub enum SteeringGeometry {
+    /// Independent left/right wheel demand with direct yaw authority.
+    Differential,
+    /// Front-steered geometry with finite-radius turning.
+    Ackermann,
+}
+
+/// Parse the authored `lunco:steeringGeometry` token. Unknown or empty values
+/// are rejected so a vehicle cannot silently receive the wrong steering law.
+pub fn parse_steering_geometry(s: &str) -> Option<SteeringGeometry> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "differential" | "skid" | "skid_steer" => Some(SteeringGeometry::Differential),
+        "ackermann" | "front_steer" => Some(SteeringGeometry::Ackermann),
+        _ => None,
+    }
+}
+
 /// Per-vessel **intent → port** binding: while a [`UserIntent`] is active it
 /// contributes `scale` to the named input port. Multiple entries may share an
 /// intent, or a port (e.g. `MoveForward`/`MoveBackward` summing into `throttle`

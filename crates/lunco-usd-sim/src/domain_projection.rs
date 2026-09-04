@@ -25,6 +25,23 @@ use rumoca_compile::parsing::Causality;
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
 // lint fact producer. See `lunco_usd_bevy::program`.
 pub use lunco_usd_bevy::program::is_domain_network_root;
+
+/// Whether a composed component collection is executable in the live runtime.
+///
+/// `is_domain_network_root` deliberately answers the structural USD question
+/// for both runtime and authoring tools. A guide collection is still a real
+/// composed graph and must remain visible to `RunLint`, but its members are
+/// annotation/fixture data rather than solver participants. Keeping this
+/// execution policy at the projection boundary prevents malformed authoring
+/// fixtures from entering Modelica while preserving one reader for lint facts.
+pub fn is_runtime_domain_network_root(
+    view: &dyn lunco_usd_bevy::read::UsdReadObject,
+    prim: &SdfPath,
+) -> bool {
+    is_domain_network_root(view, prim)
+        && view.text(prim, "purpose").as_deref() != Some("guide")
+        && view.boolean(prim, "lunco:lintOnly") != Some(true)
+}
 use lunco_usd_bevy::program::{
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
@@ -1717,7 +1734,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         model_name: &str,
         _ctx: &SynthContext<'_>,
     ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
-        if !is_domain_network_root(view, root) {
+        if !is_runtime_domain_network_root(view, root) {
             return Ok(SynthOutcome::NotMine);
         }
 
@@ -2215,6 +2232,10 @@ struct PendingDomainProjection {
     entity: Entity,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
+    /// Prepared runtime instances are immutable read surfaces. Their scene
+    /// stage generation may advance when the spawn layer is authored, so the
+    /// canonical-generation fence only applies to ordinary scene plans.
+    instance_plan: bool,
     root_path: String,
     model_name: String,
     requested: String,
@@ -2224,8 +2245,9 @@ struct PendingDomainProjection {
 
 /// In-flight domain synthesis owned by the scene projection lifecycle.
 ///
-/// One network has one synthesis owner, and completion is fenced by the USD
-/// entity and canonical-stage generation before it can publish a result.
+/// One network has one synthesis owner. Completion is fenced by the USD entity
+/// and either the ordinary canonical-stage generation or the exact immutable
+/// prepared instance plan before it can publish a result.
 #[derive(Resource, Default)]
 pub struct PendingDomainProjections {
     tasks: Vec<PendingDomainProjection>,
@@ -2241,6 +2263,7 @@ fn queue_domain_projection(
     requested: String,
     synthesizer: Arc<dyn DomainSynthesizer>,
     plan: Arc<lunco_usd_bevy::UsdStageProjectionPlan>,
+    instance_plan: bool,
     classes: MemberClasses,
 ) {
     let root_path_string = root_path.to_string();
@@ -2256,6 +2279,7 @@ fn queue_domain_projection(
         entity,
         stage_id,
         stage_generation,
+        instance_plan,
         root_path: root_path_string,
         model_name,
         requested,
@@ -2606,12 +2630,23 @@ pub fn project_domain_islands(
             if pending.tasks.iter().any(|task| task.entity == entity) {
                 continue;
             }
-            let plan = stages
-                .get(&prim.stage_handle)
-                .map(|asset| asset.projection_plan.clone())
-                .expect("loaded USD asset always carries a prepared projection plan");
+            // A runtime reference owns a remapped prepared plan.  The scene's
+            // base plan contains only the stage as it was loaded and therefore
+            // cannot see the referenced component collection added by a later
+            // spawn.  Keep the task on the same immutable read surface that
+            // admitted the root so discovery and synthesis cannot disagree
+            // about the composed network.
+            let plan = instance_projection
+                .map(|projection| projection.plan.clone())
+                .unwrap_or_else(|| {
+                    stages
+                        .get(&prim.stage_handle)
+                        .expect("loaded USD asset always carries a prepared projection plan")
+                        .projection_plan
+                        .clone()
+                });
             let plan_view: &dyn ComposedReader = &reader;
-            if !is_domain_network_root(plan_view, &root_path) {
+            if !is_runtime_domain_network_root(plan_view, &root_path) {
                 continue;
             }
             let Some((requested, synthesizer)) =
@@ -2630,6 +2665,7 @@ pub fn project_domain_islands(
                 requested,
                 synthesizer,
                 plan,
+                instance_projection.is_some(),
                 classes.clone(),
             );
             continue;
@@ -2638,7 +2674,7 @@ pub fn project_domain_islands(
         // collection.  Keep this structural gate ahead of synthesizer
         // selection: deriving ownership for an ordinary prim would walk its
         // collection metadata even though it cannot be a network root.
-        if !is_domain_network_root(&reader, &root_path) {
+        if !is_runtime_domain_network_root(&reader, &root_path) {
             continue;
         }
         // Domain ownership is derived from the typed member role schemas. A
@@ -2694,6 +2730,7 @@ pub fn poll_domain_projection_tasks(
         &UsdPrimPath,
         Option<&DomainProjectionState>,
         Option<&ModelicaModel>,
+        Option<&UsdInstanceProjection>,
     )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -2710,7 +2747,8 @@ pub fn poll_domain_projection_tasks(
             continue;
         };
         let task = pending.tasks.swap_remove(index);
-        let Ok((prim, previous, installed_model)) = prims.get(task.entity) else {
+        let Ok((prim, previous, installed_model, instance_projection)) = prims.get(task.entity)
+        else {
             continue;
         };
         if prim.stage_handle.id() != task.stage_id {
@@ -2719,7 +2757,14 @@ pub fn poll_domain_projection_tasks(
         let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        if canonical.generation_for(task.stage_id) != task.stage_generation {
+        if task.instance_plan {
+            let Some(instance_projection) = instance_projection else {
+                continue;
+            };
+            if !Arc::ptr_eq(&task.plan, &instance_projection.plan) {
+                continue;
+            }
+        } else if canonical.generation_for(task.stage_id) != task.stage_generation {
             continue;
         }
         let Ok(root_path) = SdfPath::new(&task.root_path) else {
@@ -4075,7 +4120,7 @@ pub(crate) fn domain_projection_due(
 /// and does not compile an incomplete model. Completion and failure are driven
 /// by the Modelica asset events; there is no time-based give-up path.
 pub fn resolve_member_classes(
-    prims: Query<&UsdPrimPath>,
+    prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
     added: Query<(), Added<UsdPrimPath>>,
     mut classes: ResMut<MemberClasses>,
     mut projection_dirty: ResMut<ProjectionDirty>,
@@ -4128,17 +4173,18 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        for prim in &prims {
+        for (_entity, prim, instance_projection) in &prims {
             let id = prim.stage_handle.id();
             let Some(stage_asset) = stages.get(&prim.stage_handle) else {
                 continue;
             };
-            let (reader, _generation) = canonical.reader_for(id, stage_asset);
+            let (reader, _generation) =
+                canonical.reader_for_entity(id, stage_asset, instance_projection);
             let view: &dyn ComposedReader = &reader;
             let Ok(root) = SdfPath::new(&prim.path) else {
                 continue;
             };
-            if !is_domain_network_root(view, &root) {
+            if !is_runtime_domain_network_root(view, &root) {
                 continue;
             }
             let Ok(members) = view.collection_members(&root, "components") else {

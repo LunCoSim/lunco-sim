@@ -166,6 +166,7 @@ model PositionPID3D
 
   Real max_thrust_accel;
   Real thrust_accel;
+  Real effective_thrust_projection;
   Real unsaturated_throttle;
   Real pitch_command_raw;
   Real roll_command_raw;
@@ -233,14 +234,19 @@ equation
   navigation.lateral_velocity_correction_gain = lateral_velocity_correction_gain;
 
   // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
-  // its own live gains; no axis is a copied or hidden special case.
+  // its own live gains; no axis is a copied or hidden special case. The
+  // lateral feedback point is the predicted intersection with the landing
+  // plane, so cross-range velocity is acted on while there is still altitude
+  // and thrust authority to remove it. The measured position remains the
+  // landing qualification signal below.
   pid_x.setpoint = target_x;
-  pid_x.measurement = navigation.nav_pos_x;
-  // The outer lateral loop is a standard position/velocity PD controller. The
-  // navigation observer supplies both terms from the IMU and terrain-return
-  // correction; it never reads the rigid-body truth pose. A zero target rate is
-  // deliberate: the derivative term brakes the measured cross-range velocity
-  // while the proportional term brings the vehicle to the marked pad.
+  pid_x.measurement = predicted_landing_x;
+  // The outer lateral loop is a position/velocity PD controller over the
+  // predicted landing point. The navigation observer supplies both terms from
+  // the IMU and terrain-return correction; it never reads the rigid-body truth
+  // pose. A zero target rate is deliberate: the derivative term brakes the
+  // measured cross-range velocity while the proportional term brings the
+  // projected touchdown to the marked pad.
   pid_x.setpoint_rate = target_vel_x;
   pid_x.measurement_rate = navigation.nav_vel_x;
   pid_x.kp = kp_x;
@@ -277,7 +283,8 @@ equation
   // explicit target radius is the GNC mission contract; it is not inferred
   // from a presentation timer.
   horizontal_target_error = sqrt(
-    pid_x.error * pid_x.error + pid_z.error * pid_z.error);
+    (target_x - navigation.nav_pos_x) * (target_x - navigation.nav_pos_x)
+      + (target_z - navigation.nav_pos_z) * (target_z - navigation.nav_pos_z));
   // The broad zone is a mission event, not a proportional throttle fade. It
   // remains deliberately separate from the final handoff gate below: being
   // close enough to start the terminal approach is not the same as being
@@ -361,7 +368,7 @@ equation
   pid_y.anti_windup_gain = anti_windup_gain;
 
   pid_z.setpoint = target_z;
-  pid_z.measurement = navigation.nav_pos_z;
+  pid_z.measurement = predicted_landing_z;
   pid_z.setpoint_rate = target_vel_z;
   pid_z.measurement_rate = navigation.nav_vel_z;
   pid_z.kp = kp_z;
@@ -437,7 +444,7 @@ equation
   // still bounds the result when the vehicle cannot make the requested force.
   thrust_accel = max(requested_thrust_accel,
     vertical_limiter_output
-      / max(minimum_engine_alignment, thrust_vertical_projection));
+      / max(minimum_vertical_accel_mps2, effective_thrust_projection));
   unsaturated_throttle = thrust_accel
     / max(minimum_thrust_accel_mps2, max_thrust_accel);
 
@@ -472,6 +479,14 @@ equation
   engine_alignment_gate = noEvent(max(0.0, min(1.0,
     (thrust_vertical_projection - minimum_engine_alignment)
       / max(1.0e-9, engine_full_alignment - minimum_engine_alignment))));
+  // The alignment gate is part of the available actuator authority. Applying
+  // it only after normalizing the requested acceleration under-delivers the
+  // vertical command throughout the recovery ramp: the controller compensates
+  // for the measured axis projection, then the gate removes that compensation.
+  // Normalize against the complete physical path so the command stays honest
+  // while the gate still shuts the engine off below its safe envelope.
+  effective_thrust_projection = thrust_vertical_projection
+    * engine_alignment_gate;
 
   // Body +Y is the engine axis. A requested lateral acceleration is physically
   // achievable only when the available vertical thrust can support the
@@ -556,7 +571,7 @@ equation
     + (target_y - navigation.nav_pos_y) * (target_y - navigation.nav_pos_y)
     + (target_z - navigation.nav_pos_z) * (target_z - navigation.nav_pos_z));
   measured_altitude = navigation.measured_altitude;
-  position_error_x = pid_x.error;
-  position_error_y = pid_y.error;
-  position_error_z = pid_z.error;
+  position_error_x = target_x - navigation.nav_pos_x;
+  position_error_y = target_y - navigation.nav_pos_y;
+  position_error_z = target_z - navigation.nav_pos_z;
 end PositionPID3D;

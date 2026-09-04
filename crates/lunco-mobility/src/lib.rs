@@ -40,7 +40,7 @@ pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
 use wheel_spin::update_wheel_spin;
 
 pub mod wheel_kinematics;
-use wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
+use wheel_kinematics::wheel_hub_pose;
 
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
@@ -1184,14 +1184,7 @@ fn apply_wheel_suspension(
                     // tilted contacts that ring hardest.
                     // Positive relative_vel = wheel moving toward ground (compressing).
                     // Negative relative_vel = wheel moving away from ground (extending).
-                    let lin_vel = forces.linear_velocity();
-                    let ang_vel = forces.angular_velocity();
-                    let velocity_at_wheel = wheel_hub_velocity(
-                        lin_vel,
-                        ang_vel,
-                        world_pos,
-                        GridPos(forces.position().0),
-                    );
+                    let velocity_at_wheel = forces.velocity_at_point(world_pos.0);
                     let relative_vel = -velocity_at_wheel.dot(hit.normal);
 
                     let total_force_mag = suspension_force_mag(

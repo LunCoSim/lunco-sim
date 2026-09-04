@@ -36,7 +36,7 @@ fn on_tick(me) {
     // acceptance failure.
     if !this.spawn_issued && this.elapsed >= 1.0 {
         let result = cmd("SpawnEntity", #{
-            entry_id: "ackermann_rover",
+            entry_id: "skid_rover",
             position: [0.0, 1.0, 0.0],
         });
         if !result.ok {
@@ -52,11 +52,11 @@ fn on_tick(me) {
     if this.rover < 0 {
         // Runtime spawns receive unique authored prim paths and their human
         // labels are not the identity contract. Resolve authored catalog identity.
-        this.rover = find_catalog("ackermann_rover");
+        this.rover = find_catalog("skid_rover");
         if this.rover < 0 {
             if this.elapsed > 10.0 {
                 this.done = true;
-                runtime_waypoint_fail("spawned Ackermann rover did not materialize");
+                runtime_waypoint_fail("spawned skid rover did not materialize");
             }
             return;
         }
@@ -78,10 +78,10 @@ fn on_tick(me) {
         let result = cmd("AddRuntimeWaypoint", #{
             target: this.rover,
             // Put the sensor behind the default -Z heading. This deliberately
-            // exercises the front-steered rover's bounded reverse approach;
+            // exercises the rover's bounded heading-recovery approach;
             // spawning it on top would be initial penetration, not a
             // CollisionStart enter event.
-            position: [0.0, 0.0, 8.0],
+            position: [0.0, 0.0, -8.0],
         });
         if !result.ok {
             this.done = true;
@@ -97,7 +97,7 @@ fn on_tick(me) {
             target: this.rover,
             // A second leg proves that runtime markers stay in patrol order
             // instead of becoming independent visual pins.
-            position: [8.0, 0.0, 8.0],
+            position: [8.0, 0.0, -8.0],
         });
         if !result.ok {
             this.done = true;
@@ -127,9 +127,9 @@ fn on_tick(me) {
     }
 
     // The route intentionally includes a reverse approach. At the authored
-    // 0.6 m/s setpoint and 0.5 rad steering limit, this is a route-liveness
-    // budget, not a physics-substep budget; it leaves bounded room for the
-    // Ackermann rover to turn and converge without masking solver instability.
+    // 0.6 m/s setpoint this is a route-liveness budget, not a physics-substep
+    // budget; the rover's authored differential drive can pivot and converge
+    // without masking solver instability.
     if this.elapsed > 180.0 {
         this.done = true;
         let detail = "RuntimeWaypointStatus query unavailable";

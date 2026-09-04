@@ -917,15 +917,9 @@ pub(crate) fn reconcile_structural_live(
                         }
                     }
                 };
-                let mut instance_projection = world
+                let instance_projection = world
                     .get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
                     .and_then(|mut pending| pending.take(id, path));
-                if let Some(projection) = instance_projection.as_mut() {
-                    projection.canonical_generation = world
-                        .get_non_send::<CanonicalStages>()
-                        .and_then(|stages| stages.get(id))
-                        .map_or(0, |stage| stage.generation);
-                }
                 let catalog_id = instance_projection.as_ref().and_then(|_| {
                     world
                         .non_send::<CanonicalStages>()

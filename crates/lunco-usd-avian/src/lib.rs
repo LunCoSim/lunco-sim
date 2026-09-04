@@ -708,7 +708,7 @@ fn resolve_joint_drive_motor_model(
         Err(LiveDriveMassPropertiesError::Invalid) => {
             return ResolvedJointDrive::Invalid(
                 lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            )
+            );
         }
     };
     let properties1 = match live_drive_mass_properties(mass_properties, body1) {
@@ -717,7 +717,7 @@ fn resolve_joint_drive_motor_model(
         Err(LiveDriveMassPropertiesError::Invalid) => {
             return ResolvedJointDrive::Invalid(
                 lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            )
+            );
         }
     };
 
@@ -732,9 +732,9 @@ fn resolve_joint_drive_motor_model(
         1.0 / inverse_mass
     } else if pending.joint_type == "PhysicsRevoluteJoint" {
         let scalar_inertia = |properties: Option<LiveDriveMassProperties>,
-                               pose: Option<(DVec3, DQuat)>,
-                               local_axis: DVec3,
-                               local_anchor: DVec3|
+                              pose: Option<(DVec3, DQuat)>,
+                              local_axis: DVec3,
+                              local_anchor: DVec3|
          -> Result<Option<f64>, ResolvedJointDrive> {
             let Some(properties) = properties else {
                 return Ok(None);
@@ -1843,6 +1843,10 @@ fn apply_collision_groups(
 /// to it, so an ancestor's scale is baked into a descendant's world position — exactly
 /// how the renderer places it. A prepared reference reader ends at its asset root;
 /// scene ancestors are outside that read surface and contribute no local transform.
+/// The walk skips absent outer ancestors until it reaches the first prim in the
+/// read surface, then requires the remainder of the path to be contiguous. This
+/// preserves the reference-instance boundary without silently bridging a missing
+/// prim inside the composed asset.
 /// An omitted xform stack composes as USD identity; malformed authored data is returned
 /// as an error.
 pub fn world_transform(
@@ -1864,15 +1868,22 @@ pub fn world_transform(
         cur = p.parent();
     }
     let mut acc = Transform::IDENTITY;
+    let mut in_read_surface = false;
     for p in chain.iter().rev() {
         // A prepared reference-instance reader deliberately contains the
-        // composed asset subtree, not the owning scene's ancestors. The first
-        // absent ancestor is therefore the asset boundary and contributes no
-        // local transform. An authored prim that is present still goes through
-        // the strict transform reader below, so malformed USD remains an error.
+        // composed asset subtree, not the owning scene's ancestors. Skip those
+        // absent outer ancestors; once the asset root is found, a missing
+        // interior prim stops composition at that boundary rather than inventing
+        // a transform across the gap. An authored prim that is present still
+        // goes through the strict transform reader below, so malformed USD
+        // remains an error.
         if !reader.has_prim(p) {
-            break;
+            if in_read_surface {
+                break;
+            }
+            continue;
         }
+        in_read_surface = true;
         if let Some(local) = reader.local_transform_at(p, 0.0)? {
             acc = acc.mul_transform(local);
         }
@@ -2623,6 +2634,13 @@ fn on_add_usd_prim(
     if wheel_owned {
         return;
     }
+    // Authoring/lint fixtures remain in the composed stage so the linter can
+    // inspect their faults, but they are not runtime constraints.  Apply this
+    // admission policy before the invalid-joint fault path: a deliberately
+    // malformed guide joint must not poison the live physics hold gate.
+    if reader.boolean(&sdf_path, "lunco:lintOnly") == Some(true) {
+        return;
+    }
     if let Some(joint) = read_joint_spec(&reader, &sdf_path) {
         commands.entity(entity).try_insert(joint);
     } else if is_physics_joint && reader.boolean(&sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
@@ -2734,6 +2752,190 @@ fn seated_body1_velocity(
         .unwrap_or(body0_anchor_velocity);
     let target_linear = target_anchor_velocity - target_angular.cross(body1_anchor_offset);
     (target_linear, target_angular)
+}
+
+/// The authored frame and free degrees of freedom used to seat a pending
+/// constraint before Avian's first solve.
+///
+/// USD joints and synthesized wheel joints use the same admission boundary.
+/// Keeping the frame here means a synthesized constraint cannot bypass the
+/// position/orientation/velocity projection that authored joints receive.
+#[derive(Clone, Copy, Debug)]
+enum JointSeatKind {
+    Fixed,
+    Prismatic,
+    Revolute,
+    Spherical,
+    Distance,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct JointSeat {
+    local_pos0: DVec3,
+    local_pos1: DVec3,
+    local_rot0: DQuat,
+    local_rot1: DQuat,
+    axis: DVec3,
+    kind: JointSeatKind,
+}
+
+impl JointSeat {
+    fn usd(pending: &PendingUsdJoint) -> Option<Self> {
+        let kind = match pending.joint_type.as_str() {
+            "PhysicsFixedJoint" => JointSeatKind::Fixed,
+            "PhysicsPrismaticJoint" => JointSeatKind::Prismatic,
+            "PhysicsRevoluteJoint" => JointSeatKind::Revolute,
+            "PhysicsSphericalJoint" => JointSeatKind::Spherical,
+            "PhysicsDistanceJoint" => JointSeatKind::Distance,
+            _ => return None,
+        };
+        Some(Self {
+            local_pos0: pending.local_pos0,
+            local_pos1: pending.local_pos1,
+            local_rot0: pending.local_rot0,
+            local_rot1: pending.local_rot1,
+            axis: pending.axis,
+            kind,
+        })
+    }
+}
+
+/// Seat a joint's body1 against body0's authored frame and project its initial
+/// velocity onto the joint's actual free degrees of freedom.
+///
+/// This is deliberately called at the common pending-joint admission boundary,
+/// after both Avian body states exist and before the next fixed solve. It is the
+/// one startup state transition for both authored USD joints and synthesized
+/// wheel joints. A missing state is not guessed: the pending joint remains
+/// admissible, and Avian's normal body initialization owns that endpoint.
+fn seat_joint_bodies(
+    label: &str,
+    body0: Entity,
+    body1: Entity,
+    seat: JointSeat,
+    q_pose: &mut Query<(&mut Position, &mut Rotation)>,
+    q_vel: &mut Query<(&mut LinearVelocity, &mut AngularVelocity)>,
+    q_authored_velocity: &Query<&AuthoredInitialVelocity>,
+    commands: &mut Commands,
+) {
+    let pose0 = q_pose
+        .get(body0)
+        .ok()
+        .map(|(position, rotation)| (GridPos(position.0), rotation.0));
+    let pose1 = q_pose
+        .get(body1)
+        .ok()
+        .map(|(position, rotation)| (GridPos(position.0), rotation.0));
+    let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) else {
+        return;
+    };
+
+    let locks_rotation = matches!(seat.kind, JointSeatKind::Fixed | JointSeatKind::Prismatic);
+    let r1_target = r0 * seat.local_rot0 * seat.local_rot1.inverse();
+    let angle = if locks_rotation {
+        r1.angle_between(r1_target)
+    } else {
+        0.0
+    };
+    let r1_seated = if locks_rotation { r1_target } else { r1 };
+    let anchor0_world = p0 + r0 * seat.local_pos0;
+    let anchor1_world = p1 + r1_seated * seat.local_pos1;
+    let delta = anchor0_world - anchor1_world;
+    let p1_seated = p1 + delta;
+    let seat_pos = delta.length() > JOINT_SEAT_EPS;
+    let seat_rot = angle > JOINT_SEAT_ANGLE_EPS;
+
+    if seat_pos || seat_rot {
+        let worst = delta.length().max(angle);
+        let detail = format!(
+            "[usd-avian] joint {label} starts violated by {:.3} m / {:.3} rad — seating body1 {:?} onto the authored joint frame",
+            delta.length(), angle, body1,
+        );
+        if worst > JOINT_SEAT_ERROR_THRESHOLD {
+            error!("{detail}");
+        } else {
+            warn!("{detail}");
+        }
+        if let Ok((mut position, mut rotation)) = q_pose.get_mut(body1) {
+            if seat_rot {
+                rotation.0 = r1_target;
+            }
+            if seat_pos {
+                position.0 += delta;
+            }
+        }
+    }
+
+    let seats_anchor_velocity = matches!(
+        seat.kind,
+        JointSeatKind::Fixed
+            | JointSeatKind::Prismatic
+            | JointSeatKind::Revolute
+            | JointSeatKind::Spherical
+    );
+    if !seats_anchor_velocity {
+        return;
+    }
+
+    let authored0 = q_authored_velocity.get(body0).ok().copied();
+    let authored1 = q_authored_velocity.get(body1).ok().copied();
+    let Some((lin0, ang0)) = q_vel.get(body0).ok().map(|(linear, angular)| {
+        (
+            authored0
+                .and_then(|velocity| velocity.linear)
+                .unwrap_or(linear.0),
+            authored0
+                .and_then(|velocity| velocity.angular)
+                .unwrap_or(angular.0),
+        )
+    }) else {
+        return;
+    };
+    let Some((lin1, ang1)) = q_vel.get(body1).ok().map(|(linear, angular)| {
+        (
+            authored1
+                .and_then(|velocity| velocity.linear)
+                .unwrap_or(linear.0),
+            authored1
+                .and_then(|velocity| velocity.angular)
+                .unwrap_or(angular.0),
+        )
+    }) else {
+        return;
+    };
+
+    let joint_axis_world = (r0 * seat.local_rot0 * seat.axis).normalize_or_zero();
+    let free_linear_axis_world =
+        matches!(seat.kind, JointSeatKind::Prismatic).then_some(joint_axis_world);
+    let free_angular_axis_world =
+        matches!(seat.kind, JointSeatKind::Revolute).then_some(joint_axis_world);
+    let all_angular_free = matches!(seat.kind, JointSeatKind::Spherical);
+    let (target_lin, target_ang) = seated_body1_velocity(
+        p0.0,
+        p1_seated.0,
+        anchor0_world.0,
+        lin0,
+        ang0,
+        lin1,
+        ang1,
+        free_linear_axis_world,
+        free_angular_axis_world,
+        all_angular_free,
+        authored1.is_some_and(|velocity| velocity.linear.is_some() || velocity.angular.is_some()),
+    );
+    if (lin1 - target_lin).length() > JOINT_SEAT_EPS
+        || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
+    {
+        if let Ok((mut linear, mut angular)) = q_vel.get_mut(body1) {
+            linear.0 = target_lin;
+            angular.0 = target_ang;
+        }
+        // The authored child velocity has now been projected through its joint
+        // contract. Dynamic admission must not reapply the unconstrained value.
+        commands
+            .entity(body1)
+            .try_remove::<AuthoredInitialVelocity>();
+    }
 }
 
 #[cfg(test)]
@@ -2877,9 +3079,7 @@ fn build_usd_physics_joints(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     q_instance_projection: Query<&UsdInstanceProjection>,
-    mut q_pose: Query<(&mut Position, &mut Rotation)>,
-    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
-    q_authored_velocity: Query<&AuthoredInitialVelocity>,
+    q_pose: Query<(&Position, &Rotation)>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut resolve_ticks: Local<EntityHashMap<u32>>,
@@ -3046,15 +3246,9 @@ fn build_usd_physics_joints(
         // world/static endpoint has no finite mass properties and contributes
         // zero inverse inertia to the effective coordinate.
         let drive_pose0 = body0_ent
-            .and_then(|entity| q_pose
-                .get(entity)
-                .ok()
-                .map(|(p, r)| (GridPos(p.0).0, r.0)));
+            .and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (GridPos(p.0).0, r.0)));
         let drive_pose1 = body1_ent
-            .and_then(|entity| q_pose
-                .get(entity)
-                .ok()
-                .map(|(p, r)| (GridPos(p.0).0, r.0)));
+            .and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (GridPos(p.0).0, r.0)));
         let resolved_drive_model = match pending.drive {
             None => None,
             Some(drive) => match resolve_joint_drive_motor_model(
@@ -3117,191 +3311,9 @@ fn build_usd_physics_joints(
             pending.joint_type, pending.body0_path, pending.body1_path,
         );
 
-        // Seat the joint at its authored anchors before the solver sees it.
-        //
-        // The authored anchors ARE the joint: `physics:localPos0/1` say where the
-        // two bodies are held together. A scene whose body transforms disagree with
-        // them (overriding one body's `xformOp:translate` and not its partner's)
-        // hands the solver a constraint violated by metres, which it resolves
-        // impulsively — the bodies are yanked together and the pair explodes.
-        //
-        // Attachment is a KINEMATIC event, not a dynamic one, so `body1` moves to
-        // satisfy the anchors and the solver starts from a consistent state. The
-        // warning is deliberate: seating silently would hide a scene error whose
-        // real fix belongs in the USD.
-        //
-        // Seating covers POSITION, ORIENTATION and VELOCITY, because a constraint
-        // is violated in all three and the solver resolves each one impulsively.
-        // Position alone is not enough: two constrained bodies carrying
-        // incompatible velocities must have the LOCKED part of that difference
-        // nulled before the first solver step. The resulting impulse acts at the
-        // anchor's lever arm from each centre of mass — i.e. it arrives as a
-        // torque and the pair tumbles. A prismatic keeps one translational DOF
-        // free, but it still locks orientation and the two transverse anchor
-        // velocities, so handing the solver a release-state discontinuity there
-        // is still an impulse request.
-        //
-        // Orientation is seated for the joint types that lock ALL THREE rotational
-        // DOF: `PhysicsFixedJoint` and `PhysicsPrismaticJoint`. Both hold
-        // `rot0 · localRot0 == rot1 · localRot1`, which pins body1's orientation to
-        // exactly one value, so the correction is unambiguous. A revolute or
-        // spherical joint leaves rotational DOF free by design — forcing agreement
-        // there would destroy authored state (a revolute joint's whole purpose is
-        // that the bodies' orientations differ), so those are REPORTED and left to
-        // the solver. Velocity is projected for both locked joint types: a weld
-        // has no free relative motion, while a slider retains only its axial rate.
-        //
-        // The measure is against the joint FRAMES, not the raw body rotations,
-        // which is what makes a raked mechanism checkable: a landing leg whose
-        // `localRot` agrees with its `xformOp:rotateXYZ` reads as satisfied, and
-        // one whose frames disagree reads as the violation it is.
-        let locks_rotation = matches!(
-            pending.joint_type.as_str(),
-            "PhysicsFixedJoint" | "PhysicsPrismaticJoint"
-        );
-        // avian `Position` is a grid-absolute point — wrap at the read so the
-        // anchor math below type-checks as grid + body-local offset.
-        let pose0 = drive_pose0.map(|(position, rotation)| (GridPos(position), rotation));
-        let pose1 = drive_pose1.map(|(position, rotation)| (GridPos(position), rotation));
-
-        if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
-            // The orientation the constraint demands of body1:
-            // `rot1 = rot0 · localRot0 · localRot1⁻¹`.
-            let r1_target = r0 * pending.local_rot0 * pending.local_rot1.inverse();
-            // Seat orientation FIRST, then measure position against the corrected
-            // orientation: rotating body1 swings its anchor through `local_pos1`,
-            // so a delta computed from the old rotation would leave a residual
-            // exactly as large as that swing.
-            let angle = if locks_rotation {
-                r1.angle_between(r1_target)
-            } else {
-                0.0
-            };
-            let r1_seated = if locks_rotation { r1_target } else { r1 };
-
-            let anchor0_world = p0 + r0 * pending.local_pos0;
-            let anchor1_world = p1 + r1_seated * pending.local_pos1;
-            let delta = anchor0_world - anchor1_world;
-            let p1_seated = p1 + delta;
-
-            // Sub-millimetre / sub-milliradian slack is just float noise from the
-            // USD→physics transform chain; correcting it would fight the solver
-            // every reload.
-            let seat_pos = delta.length() > JOINT_SEAT_EPS;
-            let seat_rot = angle > JOINT_SEAT_ANGLE_EPS;
-
-            if seat_pos || seat_rot {
-                let worst = delta.length().max(angle);
-                // The whole joint FRAME is printed because a violation is ambiguous
-                // without it: the same delta arises from bodies placed wrongly AND
-                // from an anchor or basis that failed to read and defaulted to
-                // identity, and those have opposite fixes. Zeros/identities here
-                // with a non-zero delta mean the read/derive fell through, not that
-                // the scene is misplaced. An ANGULAR violation on a raked mechanism
-                // is nearly always a missing `physics:localRot1`: body0's frame is
-                // authored off-cardinal and body1's is left at identity, so the
-                // joint demands body1 sit square to body0.
-                let detail = format!(
-                    "[usd-avian] joint {} starts violated by {:.3} m / {:.3} rad — seating \
-                     `{}` onto the authored joint frame. frame0: localPos0={:?} localRot0={:?}, \
-                     frame1: localPos1={:?} localRot1={:?}, body0 at {:?}, body1 at {:?}. \
-                     (Check `xformOp:translate`, any rotate/orient op, and `physics:velocity` \
-                     on BOTH bodies against `physics:localPos0/1` and `physics:localRot0/1`.)",
-                    joint_prim_path.path,
-                    delta.length(),
-                    angle,
-                    pending.body1_path,
-                    pending.local_pos0,
-                    pending.local_rot0,
-                    pending.local_pos1,
-                    pending.local_rot1,
-                    p0.0,
-                    p1.0,
-                );
-                // A metre-scale seat is a scene bug every time; do not let it hide
-                // among ordinary warnings.
-                if worst > JOINT_SEAT_ERROR_THRESHOLD {
-                    error!("{detail}");
-                } else {
-                    warn!("{detail}");
-                }
-
-                if let Ok((mut pos1, mut rot1)) = q_pose.get_mut(b1) {
-                    if seat_rot {
-                        rot1.0 = r1_target;
-                    }
-                    if seat_pos {
-                        pos1.0 += delta;
-                    }
-                }
-            }
-
-            // Seat every point-constrained joint in velocity space too. A
-            // spherical footpad may rotate at its ball joint, and a revolute
-            // link may rotate about its hinge, but neither may begin with its
-            // anchor stationary while the parent vehicle is already moving.
-            // Preserve only explicitly authored rates in each joint's free DOF;
-            // otherwise the child inherits coherent parent motion.
-            let seats_anchor_velocity = matches!(
-                pending.joint_type.as_str(),
-                "PhysicsFixedJoint"
-                    | "PhysicsPrismaticJoint"
-                    | "PhysicsRevoluteJoint"
-                    | "PhysicsSphericalJoint"
-            );
-            if seats_anchor_velocity {
-                let authored0 = q_authored_velocity.get(b0).ok().copied();
-                let authored1 = q_authored_velocity.get(b1).ok().copied();
-                let motion0 = q_vel.get(b0).ok().map(|(l, a)| {
-                    (
-                        authored0.and_then(|v| v.linear).unwrap_or(l.0),
-                        authored0.and_then(|v| v.angular).unwrap_or(a.0),
-                    )
-                });
-                let motion1 = q_vel.get(b1).ok().map(|(l, a)| {
-                    (
-                        authored1.and_then(|v| v.linear).unwrap_or(l.0),
-                        authored1.and_then(|v| v.angular).unwrap_or(a.0),
-                    )
-                });
-                if let (Some((lin0, ang0)), Some((lin1, ang1))) = (motion0, motion1) {
-                    let joint_axis_world =
-                        (r0 * pending.local_rot0 * pending.axis).normalize_or_zero();
-                    let free_linear_axis_world =
-                        (pending.joint_type == "PhysicsPrismaticJoint").then_some(joint_axis_world);
-                    let free_angular_axis_world =
-                        (pending.joint_type == "PhysicsRevoluteJoint").then_some(joint_axis_world);
-                    let all_angular_free = pending.joint_type == "PhysicsSphericalJoint";
-                    let (target_lin, target_ang) = seated_body1_velocity(
-                        p0.0,
-                        p1_seated.0,
-                        anchor0_world.0,
-                        lin0,
-                        ang0,
-                        lin1,
-                        ang1,
-                        free_linear_axis_world,
-                        free_angular_axis_world,
-                        all_angular_free,
-                        authored1.is_some_and(|v| v.linear.is_some() || v.angular.is_some()),
-                    );
-                    if (lin1 - target_lin).length() > JOINT_SEAT_EPS
-                        || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
-                    {
-                        if let Ok((mut lin1, mut ang1)) = q_vel.get_mut(b1) {
-                            lin1.0 = target_lin;
-                            ang1.0 = target_ang;
-                        }
-                        // The authored child velocity has now been projected
-                        // through its joint contract. Do not let dynamic
-                        // admission reapply the unconstrained value on the
-                        // next Update boundary.
-                        commands.entity(b1).try_remove::<AuthoredInitialVelocity>();
-                    }
-                }
-            }
-        }
-
+        // The one seating contract is shared by authored USD joints and
+        // synthesized wheel joints. It runs at the pending-joint admission
+        // boundary, after the body states exist and before the next solver step.
         // Put the avian joint component ON the joint prim entity itself (it
         // already carries `UsdPrimPath` + the loader-assigned `GlobalEntityId`)
         // rather than spawning a fresh anonymous entity. This makes the joint
@@ -3328,7 +3340,13 @@ fn build_usd_physics_joints(
                             .expect("resolved USD prismatic drive motor"),
                     };
                 }
-                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                attach_joint(
+                    &mut commands,
+                    joint_entity,
+                    b0,
+                    b1,
+                    JointSpec::new(joint).with_usd_seat(pending),
+                );
                 true
             }
             "PhysicsRevoluteJoint" => {
@@ -3349,7 +3367,13 @@ fn build_usd_physics_joints(
                             .expect("resolved USD revolute drive motor"),
                     };
                 }
-                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                attach_joint(
+                    &mut commands,
+                    joint_entity,
+                    b0,
+                    b1,
+                    JointSpec::new(joint).with_usd_seat(pending),
+                );
                 true
             }
             "PhysicsFixedJoint" => {
@@ -3364,7 +3388,8 @@ fn build_usd_physics_joints(
                             .with_local_anchor2(pending.local_pos1)
                             .with_local_basis1(pending.local_rot0)
                             .with_local_basis2(pending.local_rot1),
-                    ),
+                    )
+                    .with_usd_seat(pending),
                 );
                 true
             }
@@ -3388,7 +3413,13 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                attach_joint(
+                    &mut commands,
+                    joint_entity,
+                    b0,
+                    b1,
+                    JointSpec::new(joint).with_usd_seat(pending),
+                );
                 true
             }
             "PhysicsDistanceJoint" => {
@@ -3416,7 +3447,8 @@ fn build_usd_physics_joints(
                             .with_local_anchor1(pending.local_pos0)
                             .with_local_anchor2(pending.local_pos1)
                             .with_limits(min, max),
-                    ),
+                    )
+                    .with_usd_seat(pending),
                 );
                 true
             }
@@ -3497,7 +3529,7 @@ pub fn attach_joint<J: Component + Clone>(
     body1: Entity,
     joint: JointSpec<J>,
 ) {
-    let JointSpec(joint) = joint;
+    let JointSpec { joint, seat } = joint;
     // Rule 1, and it lands NOW rather than with the joint: a jointed pair must
     // never reach the narrow phase, and a contact formed during the wait cannot
     // be cleaned up afterwards without corrupting avian's island bookkeeping.
@@ -3508,6 +3540,7 @@ pub fn attach_joint<J: Component + Clone>(
             body0,
             body1,
             joint,
+            seat,
         },
         PendingJointAdmission { body0, body1 },
     ));
@@ -3580,13 +3613,28 @@ impl Plugin for JointAttachPlugin {
 /// Within this module the wrapper is transparent, because this is where joints
 /// are built; the guard is against a SECOND attachment site appearing elsewhere,
 /// which is exactly how the wheel joint came to bypass the admission gate.
-pub struct JointSpec<J: Component + Clone>(J);
+pub struct JointSpec<J: Component + Clone> {
+    joint: J,
+    seat: Option<JointSeat>,
+}
 
 impl<J: Component + Clone> JointSpec<J> {
     /// Wrap a constructed constraint. Private to this crate: a joint is built by
     /// one of the builders here, never assembled by a caller.
     pub(crate) fn new(joint: J) -> Self {
-        Self(joint)
+        Self { joint, seat: None }
+    }
+
+    fn with_seat(mut self, seat: JointSeat) -> Self {
+        self.seat = Some(seat);
+        self
+    }
+
+    fn with_usd_seat(self, pending: &PendingUsdJoint) -> Self {
+        match JointSeat::usd(pending) {
+            Some(seat) => self.with_seat(seat),
+            None => self,
+        }
     }
 }
 
@@ -3605,6 +3653,8 @@ pub struct PendingJoint<J: Component + Clone> {
     pub body1: Entity,
     /// The constraint to install once both bodies are admitted.
     pub joint: J,
+    /// Common authored-frame seating contract, when this joint has one.
+    seat: Option<JointSeat>,
 }
 
 /// Cross-kind lifecycle marker for a joint parked by [`attach_joint`].
@@ -3662,6 +3712,9 @@ pub fn admit_pending_joints<J: Component + Clone>(
     pending: Query<(Entity, &PendingJoint<J>)>,
     admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
     bodies: Query<&RigidBody>,
+    mut q_pose: Query<(&mut Position, &mut Rotation)>,
+    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
+    q_authored_velocity: Query<&AuthoredInitialVelocity>,
     mut commands: Commands,
 ) {
     for (entity, p) in pending.iter() {
@@ -3674,6 +3727,18 @@ pub fn admit_pending_joints<J: Component + Clone>(
         // Both static ⇒ nothing to solve, and avian panics on the pair.
         if !admitted.contains(p.body0) && !admitted.contains(p.body1) {
             continue;
+        }
+        if let Some(seat) = p.seat {
+            seat_joint_bodies(
+                "pending joint",
+                p.body0,
+                p.body1,
+                seat,
+                &mut q_pose,
+                &mut q_vel,
+                &q_authored_velocity,
+                &mut commands,
+            );
         }
         commands
             .entity(entity)
@@ -3705,6 +3770,14 @@ pub fn wheel_revolute_joint(
             .with_local_anchor2(DVec3::ZERO)
             .with_hinge_axis(axle),
     )
+    .with_seat(JointSeat {
+        local_pos0: mount_local,
+        local_pos1: DVec3::ZERO,
+        local_rot0: DQuat::IDENTITY,
+        local_rot1: DQuat::IDENTITY,
+        axis: axle,
+        kind: JointSeatKind::Revolute,
+    })
 }
 
 /// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full
@@ -4692,6 +4765,9 @@ def PhysicsRevoluteJoint "Hinge" (
     #[test]
     fn angular_force_drive_uses_authored_effective_inertia() {
         let source = "#usda 1.0\n\
+(\n\
+    metersPerUnit = 1\n\
+)\n\
 def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
 {\n\
     float physics:mass = 10.0\n\
@@ -4708,7 +4784,7 @@ def PhysicsRevoluteJoint \"Hinge\" ( prepend apiSchemas = [\"PhysicsDriveAPI:ang
     rel physics:body1 = </Host/Link>\n\
     uniform token physics:axis = \"Y\"\n\
     point3f physics:localPos0 = (1.0, 0.0, 0.0)\n\
-    point3f physics:localPos1 = (0.0, 1.0, 0.0)\n\
+    point3f physics:localPos1 = (1.0, 1.0, 0.0)\n\
     uniform token drive:angular:physics:type = \"force\"\n\
     float drive:angular:physics:stiffness = 300.0\n\
     float drive:angular:physics:damping = 30.0\n\
@@ -4858,7 +4934,7 @@ def PhysicsPrismaticJoint "FixtureSpring" (
             &lunco_usd_bevy::StageRecipe::from_source("lint_only.usda", source),
         )
         .expect("compose lint-only fixture");
-        let view = StageView::new(&stage);
+        let view = stage.view();
         let path = SdfPath::new("/FixtureSpring").expect("joint path");
 
         assert!(
@@ -5745,8 +5821,8 @@ def Cube "Part" (
             2,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe {
             root_id: "child.usda".to_string(),
@@ -5766,8 +5842,8 @@ def Cube "Part" (
             2,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].0 .0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

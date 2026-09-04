@@ -36,6 +36,7 @@ use lunco_behavior::{
 };
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
+pub use lunco_core::{nav_setpoint, steering_command, NavigationCommand, NavigationState};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
 /// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
@@ -176,6 +177,9 @@ pub struct DriveCtx {
     pub pos: GridPos,
     /// Vessel forward (unit).
     pub fwd: Vec3,
+    /// Authored steering geometry of the vessel. Navigation uses this
+    /// capability to keep heading recovery physically realizable.
+    pub steering_geometry: lunco_core::SteeringGeometry,
     /// Current mission time in seconds — [`lunco_time::WorldTime::sim_secs`], the one
     /// clock (never Bevy's `Time`). Time-based leaves such as [`WaitNode`] latch a
     /// deadline against it, so they freeze whenever the sim is paused or warped.
@@ -889,12 +893,22 @@ fn leaf_drive_to_arming(
     radius: f32,
     arm: Option<Arc<AtomicBool>>,
 ) -> BoxNode<DriveCtx> {
+    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let (throttle, steer, brake, arrived) = nav_setpoint_forward(
-            ctx.pos, ctx.fwd, target, speed, radius,
-        );
-        ctx.out = (throttle, steer, brake);
-        if arrived {
+        let Some(command) = nav_setpoint(
+            ctx.pos,
+            ctx.fwd,
+            target,
+            speed,
+            radius,
+            ctx.steering_geometry,
+            &mut navigation_state,
+        ) else {
+            ctx.out = NavigationCommand::brake().into_tuple();
+            return Status::Running;
+        };
+        ctx.out = command.into_tuple();
+        if command.arrived {
             Status::Success
         } else {
             // Away from the waypoint → the next arrival is a real one.
@@ -1006,7 +1020,7 @@ fn leaf_steer_clear(speed: f64) -> BoxNode<DriveCtx> {
         };
         let to = Quat::from_rotation_y(open) * fwd;
         let cy = fwd.z * to.x - fwd.x * to.z;
-        let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
+        let steer = steering_command(cy, 1.0, 1.0, ctx.steering_geometry);
         // Ease throttle with how much room is ahead (never below a crawl).
         let throttle = speed * (ahead / range).clamp(0.2, 1.0) as f64;
         ctx.out = (throttle, steer, 0.0);
@@ -1040,14 +1054,25 @@ fn leaf_facing(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
 /// while the target resolves and returns `Failure` (braking) if it drops out of the
 /// map (despawned / out of scope), letting a fallback branch take the wheel.
 fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
+    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         match ctx.targets.get(&target_gid) {
             Some(st) => {
                 // Reuse the drive math; within `radius` it returns brake+arrived, which
                 // for a follow means "hold station here", so we stay Running regardless.
-                let (throttle, steer, brake, _arrived) =
-                    nav_setpoint(ctx.pos, ctx.fwd, st.pos, speed, radius);
-                ctx.out = (throttle, steer, brake);
+                let Some(command) = nav_setpoint(
+                    ctx.pos,
+                    ctx.fwd,
+                    st.pos,
+                    speed,
+                    radius,
+                    ctx.steering_geometry,
+                    &mut navigation_state,
+                ) else {
+                    ctx.out = NavigationCommand::brake().into_tuple();
+                    return Status::Running;
+                };
+                ctx.out = command.into_tuple();
                 Status::Running
             }
             None => {
@@ -1064,13 +1089,24 @@ fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
 /// `radius` of the target's *actual* position — a catch-it pursuit that finishes,
 /// unlike open-ended [`leaf_follow`]); `Failure` (braking) if the target vanishes.
 fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNode<DriveCtx> {
+    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         match ctx.targets.get(&target_gid) {
             Some(st) => {
                 let aim = st.pos + st.vel * lead; // predicted lead point (GridPos + DVec3)
-                let (throttle, steer, brake, _) =
-                    nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius);
-                ctx.out = (throttle, steer, brake);
+                let Some(command) = nav_setpoint(
+                    ctx.pos,
+                    ctx.fwd,
+                    aim,
+                    speed,
+                    radius,
+                    ctx.steering_geometry,
+                    &mut navigation_state,
+                ) else {
+                    ctx.out = NavigationCommand::brake().into_tuple();
+                    return Status::Running;
+                };
+                ctx.out = command.into_tuple();
                 // Done when we reach the TARGET itself (not the lead point) within radius.
                 if (st.pos - ctx.pos).length() < radius as f64 {
                     Status::Success
@@ -1086,10 +1122,11 @@ fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNod
     }))
 }
 
-/// Leaf: turn in place to face `target` — steer toward it with **no throttle**, so
-/// the skid rover pivots without translating; `Success` once the heading is within
-/// `tolerance_deg` degrees of the target. Uses the same yaw-plane steering sign as
-/// [`nav_setpoint`]. Relative direction, so floating-origin invariant.
+/// Leaf: command the steering surface toward `target` with **no throttle**;
+/// `Success` once the heading is within `tolerance_deg` degrees of the target.
+/// The drive law decides how that steering-only command responds. Uses the same
+/// yaw-plane steering sign as [`nav_setpoint`]. Relative direction, so
+/// floating-origin invariant.
 fn leaf_face(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
     let align_dot = tolerance_deg.to_radians().cos();
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
@@ -1108,16 +1145,8 @@ fn leaf_face(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
             return Status::Success;
         }
         let cy = fwd.z * to.x - fwd.x * to.z;
-        let steer: f32 = if dot < 0.0 {
-            if cy >= 0.0 {
-                -1.0
-            } else {
-                1.0
-            } // target behind → hard pivot toward it
-        } else {
-            (-cy * 2.5).clamp(-1.0, 1.0)
-        };
-        ctx.out = (0.0, steer as f64, 0.0); // steer only — pivot in place
+        let steer = steering_command(cy, 1.0, dist, ctx.steering_geometry);
+        ctx.out = (0.0, steer, 0.0); // steer only; the active drive law owns the response
         Status::Running
     }))
 }
@@ -1433,85 +1462,6 @@ impl AutopilotBehaviorSpec {
     }
 }
 
-/// Steering math (Rust): from the vessel's world pose and a goal, return
-/// `(throttle, steer, brake, arrived)` in `[-1, 1]`. Steer toward the goal on the
-/// yaw plane and use signed throttle when the goal is behind, so both
-/// differential and front-steered authored drive laws can make progress. A
-/// zero-throttle pivot is not a generic vehicle operation: Ackermann vehicles
-/// have equal left/right axle drive and cannot rotate in place. Brake + `arrived`
-/// within `radius`. This is COMPUTATION, so it lives in Rust — rhai is glue-only.
-/// Steering is a *relative* direction, so it is invariant to the floating-origin
-/// offset.
-pub fn nav_setpoint(
-    pos: GridPos,
-    fwd: Vec3,
-    target: GridPos,
-    speed: f64,
-    radius: f32,
-) -> (f64, f64, f64, bool) {
-    let to = target - pos; // grid − grid = frame-free offset (f64)
-    let dist = to.length();
-    if dist < radius as f64 {
-        return (0.0, 0.0, 1.0, true); // arrived → brake
-    }
-    // Unit direction to goal: frame-free and unit-length, so f32 is exact enough
-    // for steering — only absolute grid positions must stay f64.
-    let to = (to / dist).as_vec3();
-    let fwd = fwd.normalize_or_zero();
-    // Yaw-plane cross `(forward × to).y` and forward/goal alignment `dot`. Skid
-    // mix is `left = drive + steer`, so `+steer` yaws right; we steer `-cy` to
-    // turn toward the goal (matches the prelude `steer_to` sign convention).
-    // The authored Ackermann law consumes the same signed throttle/steer
-    // surface, so this remains a vehicle-neutral command policy.
-    let cy = fwd.z * to.x - fwd.x * to.z;
-    let dot = fwd.dot(to);
-    // Treat the near-sideways band as a forward manoeuvre.  A vehicle that is
-    // exactly broadside to a goal has no meaningful forward/back decision, and
-    // choosing reverse from a tiny signed yaw error makes the command flip
-    // every tick while an Ackermann rover is trying to turn.  Reverse only
-    // once the goal is unambiguously behind the vehicle.
-    const REVERSE_ALIGNMENT: f32 = -0.25;
-    let travel_sign: f64 = if dot < REVERSE_ALIGNMENT { -1.0 } else { 1.0 };
-    let steer = (-cy as f64 * 2.5 * travel_sign).clamp(-1.0, 1.0);
-    let alignment = dot.abs() as f64;
-    let throttle = speed * travel_sign * (0.25 + 0.75 * alignment).clamp(0.25, 1.0);
-    (throttle, steer, 0.0, false)
-}
-
-/// Forward-only form used by a `drive_to` leaf. High-level routes must not
-/// reverse merely because a waypoint is behind the rover: a front-steered
-/// vehicle cannot turn while reversing with the same steering geometry, and a
-/// one-tick sign change can make it oscillate around a waypoint. Instead, keep
-/// the requested forward throttle and use the ordinary steering surface to
-/// perform a bounded turn. The exact 180-degree case chooses the same stable
-/// pivot direction as [`leaf_face`].
-fn nav_setpoint_forward(
-    pos: GridPos,
-    fwd: Vec3,
-    target: GridPos,
-    speed: f64,
-    radius: f32,
-) -> (f64, f64, f64, bool) {
-    let to = target - pos;
-    let dist = to.length();
-    if dist < radius as f64 {
-        return (0.0, 0.0, 1.0, true);
-    }
-
-    let to = (to / dist).as_vec3();
-    let fwd = fwd.normalize_or_zero();
-    let cy = fwd.z * to.x - fwd.x * to.z;
-    let dot = fwd.dot(to);
-    let steer = if dot < 0.0 && cy.abs() < f32::EPSILON {
-        -1.0
-    } else {
-        (-cy as f64 * 2.5).clamp(-1.0, 1.0)
-    };
-    let alignment = dot.max(0.0) as f64;
-    let throttle = speed * (0.25 + 0.75 * alignment).clamp(0.25, 1.0);
-    (throttle, steer, 0.0, false)
-}
-
 // ── Systems ──────────────────────────────────────────────────────────────────
 
 /// Host/standalone: when an [`Autopilot`] appears, register its `AiAgent` session
@@ -1636,6 +1586,7 @@ pub fn drive_autopilots(
         Option<&mut AutopilotExecutionState>,
     )>,
     q_gid: Query<&GlobalEntityId>,
+    q_steering_geometry: Query<&lunco_core::SteeringGeometry>,
     // The pose boundary selects Avian's authoritative position/rotation for a
     // physical vessel and the composed hierarchy for non-physical targets.
     // Navigation must not combine a physics rotation with a render-frame
@@ -1727,12 +1678,30 @@ pub fn drive_autopilots(
                     .as_ref()
                     .and_then(|c| c.0.get(&ap.vessel).copied())
                     .unwrap_or_default();
+                let Ok(&steering_geometry) = q_steering_geometry.get(ap.vessel) else {
+                    commands.trigger(SetPorts {
+                        target: ap.vessel,
+                        writes: vec![
+                            ("throttle".to_string(), 0.0),
+                            ("steer".to_string(), 0.0),
+                            ("brake".to_string(), 1.0),
+                        ],
+                        seq: 0,
+                        tick: 0,
+                    });
+                    warn_once!(
+                        "[autopilot] vessel {:?} has no authored lunco:steeringGeometry; holding brake",
+                        ap.vessel
+                    );
+                    continue;
+                };
                 let mut ctx = DriveCtx {
                     self_gid: gid.get(),
                     // Active physics frame, matching `targets` above and the
                     // authored coordinates the leaves compare against.
                     pos: self_pos,
                     fwd,
+                    steering_geometry,
                     now,
                     // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
                     // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
@@ -2468,31 +2437,97 @@ mod tests {
     }
 
     #[test]
-    fn drive_to_rear_goal_turns_with_forward_throttle() {
-        let (throttle, steer, brake, arrived) = nav_setpoint_forward(
+    fn drive_to_rear_goal_uses_shared_reverse_travel() {
+        let (throttle, steer, brake, arrived) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
             Vec3::NEG_Z,
             GridPos(DVec3::new(8.0, 0.0, 3.0)),
             0.6,
             2.0,
+            lunco_core::SteeringGeometry::Differential,
         );
-        assert!(throttle > 0.0);
+        assert!(throttle < 0.0);
         assert!(steer.abs() > 0.8);
         assert_eq!(brake, 0.0);
         assert!(!arrived);
 
         // The exact 180-degree case has no cross-product sign. It still needs
-        // a deterministic hard turn; otherwise the route would command a
-        // straight drive forever while the goal remains behind.
-        let (throttle, steer, _, _) = nav_setpoint_forward(
+        // a deterministic straight reverse command; otherwise the route would
+        // have no progress when the goal is directly behind.
+        let (throttle, steer, _, _) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
             Vec3::NEG_Z,
             GridPos(DVec3::new(0.0, 0.0, 8.0)),
             0.6,
             2.0,
+            lunco_core::SteeringGeometry::Differential,
+        );
+        assert!(throttle < 0.0);
+        assert!(steer.abs() < 0.01);
+
+        let (throttle, steer, brake, arrived) = nav_setpoint_once(
+            GridPos(DVec3::ZERO),
+            Vec3::Z,
+            GridPos(DVec3::new(0.0, 0.0, 8.0)),
+            0.6,
+            2.0,
+            lunco_core::SteeringGeometry::Differential,
         );
         assert!(throttle > 0.0);
-        assert_eq!(steer, -1.0);
+        assert!(steer.abs() < 0.01);
+        assert_eq!(brake, 0.0);
+        assert!(!arrived);
+    }
+
+    #[test]
+    fn drive_to_ackermann_rolls_when_goal_is_behind() {
+        let (throttle, steer, brake, arrived) = nav_setpoint_once(
+            GridPos(DVec3::ZERO),
+            Vec3::NEG_Z,
+            GridPos(DVec3::new(0.0, 0.0, 8.0)),
+            0.6,
+            2.0,
+            lunco_core::SteeringGeometry::Ackermann,
+        );
+        assert!(throttle < 0.0);
+        assert!(steer.abs() < 0.01);
+        assert_eq!(brake, 0.0);
+        assert!(!arrived);
+    }
+
+    #[test]
+    fn drive_to_ackermann_uses_the_authored_heading_sign() {
+        let (throttle, steer, brake, arrived) = nav_setpoint_once(
+            GridPos(DVec3::ZERO),
+            Vec3::NEG_Z,
+            GridPos(DVec3::new(8.0, 0.0, -8.0)),
+            0.6,
+            2.0,
+            lunco_core::SteeringGeometry::Ackermann,
+        );
+        assert!(throttle > 0.0);
+        assert!(steer > 0.1, "steer={steer} must turn toward +X");
+        assert_eq!(brake, 0.0);
+        assert!(!arrived);
+    }
+
+    fn nav_setpoint_once(
+        pos: GridPos,
+        fwd: Vec3,
+        target: GridPos,
+        speed: f64,
+        radius: f32,
+        geometry: lunco_core::SteeringGeometry,
+    ) -> (f64, f64, f64, bool) {
+        let mut state = NavigationState::Uninitialized;
+        let command = nav_setpoint(pos, fwd, target, speed, radius, geometry, &mut state)
+            .expect("test pose and navigation parameters are valid");
+        (
+            command.throttle,
+            command.steer,
+            command.brake,
+            command.arrived,
+        )
     }
 
     fn ctx_at(x: f64) -> DriveCtx {
@@ -2500,6 +2535,7 @@ mod tests {
             self_gid: 0,
             pos: GridPos(DVec3::new(x, 0.0, 0.0)),
             fwd: Vec3::X,
+            steering_geometry: lunco_core::SteeringGeometry::Differential,
             now: 0.0,
             out: (0.0, 0.0, 0.0),
             targets: Default::default(),

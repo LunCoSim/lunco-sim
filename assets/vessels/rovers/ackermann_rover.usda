@@ -48,6 +48,9 @@ def Xform "AckermannRover" (
     }
 
     uniform bool lunco:spawnable = true
+    # Autopilot heading recovery must keep a signed rolling command: this
+    # vehicle's front-steered geometry cannot pivot with zero wheel drive.
+    uniform token lunco:steeringGeometry = "ackermann"
 
     float physics:mass = 1000.0
     # Authored principal inertia for the 2.0 m × 0.3 m × 3.5 m chassis. The

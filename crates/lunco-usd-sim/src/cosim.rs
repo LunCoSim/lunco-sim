@@ -2815,7 +2815,7 @@ pub fn rewire_usd_connections(
             // skipping that would leave the island's demand inputs permanently
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
-                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
+                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
                 && lunco_usd_bevy::program::is_network_boundary_output(view, &sink_sdf, &attr)
             {
                 continue;
@@ -2827,7 +2827,7 @@ pub fn rewire_usd_connections(
             // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
             // when the contract arrives.
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
+                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
                 && lunco_usd_bevy::program::internal_network_input_source(
                     view, &sink_sdf, sink_conn,
                 )
@@ -2836,7 +2836,7 @@ pub fn rewire_usd_connections(
                 continue;
             }
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_domain_network_root(view, &sink_sdf)
+                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
                 && !has_modelica
             {
                 continue;

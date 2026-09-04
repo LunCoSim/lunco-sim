@@ -496,12 +496,14 @@ pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<Prismat
     })
 }
 
-/// Avian runs one biased contact solve and one relaxation solve per substep.
-/// `ContactPoint::normal_impulse` accumulates the full clamped normal impulse
-/// once in each of those two phases, so the exposed value is two solver-phase
-/// sums of the physical impulse. Convert it to the load delivered over one
-/// co-simulation master interval here, at the Avian/physics boundary.
-const AVIAN_CONTACT_SOLVER_PHASES: f64 = 2.0;
+/// Avian's `ContactPoint::normal_impulse` is a diagnostic accumulation of the
+/// clamped contact impulse across the substep solver's carried warm-start and
+/// its biased and relaxation passes. The accumulation has two solver-phase
+/// samples of the physical contact impulse for the current solver contract:
+/// one biased solve and one relaxation solve. Keep that
+/// conversion here, at the Avian/physics boundary, so tire realizations do not
+/// each invent a different load interpretation.
+const AVIAN_CONTACT_IMPULSE_SAMPLES: f64 = 2.0;
 
 /// Convert Avian's accumulated normal contact impulse to the physical load
 /// delivered over one master physics interval.
@@ -512,7 +514,7 @@ const AVIAN_CONTACT_SOLVER_PHASES: f64 = 2.0;
 #[inline]
 pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
     if normal_impulse.is_finite() && physics_dt > 0.0 {
-        normal_impulse / (physics_dt * AVIAN_CONTACT_SOLVER_PHASES)
+        normal_impulse / (physics_dt * AVIAN_CONTACT_IMPULSE_SAMPLES)
     } else {
         0.0
     }
@@ -1259,9 +1261,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contact_impulse_uses_the_master_interval_once() {
-        assert_eq!(contact_force_from_impulse(32.4, 1.0), 16.2);
-        assert_eq!(contact_force_from_impulse(0.324, 0.01), 16.2);
+    fn contact_impulse_uses_the_current_avian_accumulator_contract() {
+        assert!((contact_force_from_impulse(32.4, 1.0) - 16.2).abs() < 1.0e-12);
+        assert!((contact_force_from_impulse(0.324, 0.01) - 16.2).abs() < 1.0e-12);
     }
 
     #[test]

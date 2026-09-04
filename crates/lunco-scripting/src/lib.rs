@@ -336,6 +336,8 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.init_resource::<ScriptRegistry>();
+        #[cfg(any(feature = "rhai", feature = "python"))]
+        app.init_resource::<bridge_core::ScriptNavigationStates>();
         #[cfg(feature = "rhai")]
         app.init_resource::<policy::ScriptedPolicyRegistry>();
         // Attended (a person is watching) or not — read by the `is_unattended()`

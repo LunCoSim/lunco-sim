@@ -13,6 +13,7 @@ use lunco_core::architecture::Port;
 use lunco_core::InputPorts;
 use lunco_cosim::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
 
+use crate::wheel_kinematics::body_point_velocity;
 use crate::{
     contact_plane_basis, longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph,
 };
@@ -57,8 +58,14 @@ struct BodyState {
 
 impl BodyState {
     fn velocity_at_point(self, point: DVec3) -> DVec3 {
-        let center = self.position + self.rotation * self.center_of_mass;
-        self.linear_velocity + self.angular_velocity.cross(point - center)
+        body_point_velocity(
+            self.linear_velocity,
+            self.angular_velocity,
+            lunco_core::coords::GridPos(point),
+            lunco_core::coords::GridPos(self.position),
+            lunco_core::coords::GridRot(self.rotation),
+            self.center_of_mass,
+        )
     }
 }
 
@@ -175,11 +182,10 @@ pub fn apply_jointed_tire_forces(
             };
             let axle_torque = port.value + brake_torque;
 
-            let hub = wheel_state.position;
-            let other_hub_velocity = |other: Option<Entity>| {
+            let other_velocity_at = |other: Option<Entity>, point: DVec3| {
                 other
                     .and_then(|entity| body_state(&q_state, entity))
-                    .map(|state| state.velocity_at_point(hub))
+                    .map(|state| state.velocity_at_point(point))
                     .unwrap_or(DVec3::ZERO)
             };
 
@@ -196,7 +202,6 @@ pub fn apply_jointed_tire_forces(
                 } else {
                     pair.body1
                 };
-                let hub_velocity = wheel_state.velocity_at_point(hub) - other_hub_velocity(other);
                 for manifold in &pair.manifolds {
                     // The contact normal points from collider1 to collider2. Flip
                     // it when the wheel is collider/body1 so the tire sees the
@@ -208,6 +213,15 @@ pub fn apply_jointed_tire_forces(
                     };
                     let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
                     for point in &manifold.points {
+                        // Avian's `normal_impulse` is a diagnostic accumulation of
+                        // the full and relaxation solver phases. It is not the
+                        // impulse delivered by one physical substep. The
+                        // warm-start value is the clamped impulse from the last
+                        // solved substep; scale that one physical impulse by the
+                        // live solver resolution to recover the load over this
+                        // master interval. This keeps the contact readout tied to
+                        // Avian's actual solver contract instead of a phase-count
+                        // calibration.
                         let normal_force = lunco_physics::contact_force_from_impulse(
                             point.normal_impulse,
                             full_dt,
@@ -215,8 +229,16 @@ pub fn apply_jointed_tire_forces(
                         if normal_force <= 0.0 {
                             continue;
                         }
-                        let v_long = hub_velocity.dot(forward);
-                        let v_lat = hub_velocity.dot(right);
+                        // A jointed tire's translational slip is measured at the
+                        // wheel hub. The wheel's axial spin is represented exactly
+                        // once by `omega` below; measuring at the contact point
+                        // would feed suspension/steering angular motion back into
+                        // lateral slip. The resulting force still acts at Avian's
+                        // saved contact point, so the lever arm remains physical.
+                        let contact_velocity = wheel_state.velocity_at_point(wheel_state.position)
+                            - other_velocity_at(other, wheel_state.position);
+                        let v_long = contact_velocity.dot(forward);
+                        let v_lat = contact_velocity.dot(right);
                         total_normal_force += normal_force;
                         contacts.push(TireContact {
                             point: point.point,

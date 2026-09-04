@@ -123,18 +123,8 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "[x,y,z] | ()",
         "Pure vector scaling.",
     ),
-    (
-        "vlen",
-        "vlen(a)",
-        "f64 | ()",
-        "Pure vector length.",
-    ),
-    (
-        "vdot",
-        "vdot(a, b)",
-        "f64 | ()",
-        "Pure vector dot product.",
-    ),
+    ("vlen", "vlen(a)", "f64 | ()", "Pure vector length."),
+    ("vdot", "vdot(a, b)", "f64 | ()", "Pure vector dot product."),
     (
         "vnorm",
         "vnorm(a)",
@@ -170,6 +160,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "world_pos(id)",
         "[x, y, z] | ()",
         "f64 position in the active simulation frame (site-local on a surface); stable across camera recentering and celestial ancestor motion.",
+    ),
+    (
+        "nav_command",
+        "nav_command(id, target, speed, radius)",
+        "#{ throttle, steer, brake, arrived } | ()",
+        "Compute one authored-capability-aware navigation command through the shared host law; () means the authoritative pose or steering geometry is unavailable and the caller must hold brake.",
     ),
     (
         "geolocation",
