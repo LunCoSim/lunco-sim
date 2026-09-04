@@ -1667,6 +1667,11 @@ fn paint_completion_status(
     response.on_hover_text(if done { "Completed" } else { "Not completed" })
 }
 
+#[cfg(feature = "ui")]
+fn tutorial_menu_width(ui: &egui::Ui, requested_max_width: f32) -> f32 {
+    lunco_workbench::menu_popup_max_width(ui.ctx().content_rect().width(), requested_max_width)
+}
+
 /// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
 /// a completion tick; clicking starts one. Shared by every workbench app.
 #[cfg(feature = "ui")]
@@ -1691,8 +1696,7 @@ fn register_tutorials_menu(world: &mut World) {
         }
     });
     layout.register_custom_menu("Tutorials", |ui, ctx| {
-        let menu_max_width = (ui.ctx().viewport_rect().width() - 32.0).clamp(180.0, MENU_MAX_WIDTH);
-        ui.set_max_width(menu_max_width);
+        ui.set_width(tutorial_menu_width(ui, MENU_MAX_WIDTH));
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1752,20 +1756,21 @@ fn register_tutorials_menu(world: &mut World) {
                 .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
-                let menu_max_width =
-                    (ui.ctx().viewport_rect().width() - 32.0).clamp(180.0, MENU_MAX_WIDTH);
+                let menu_max_width = tutorial_menu_width(ui, MENU_MAX_WIDTH);
                 let menu_max_height =
-                    (ui.ctx().viewport_rect().height() - 96.0).clamp(160.0, MENU_MAX_HEIGHT);
-                ui.set_max_width(menu_max_width);
+                    (ui.ctx().content_rect().height() - 96.0).clamp(160.0, MENU_MAX_HEIGHT);
+                ui.set_width(menu_max_width);
                 egui::ScrollArea::vertical()
                     .max_height(menu_max_height)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
                             let clicked = ui
                                 .horizontal(|ui| {
                                     paint_completion_status(ui, done, &theme);
-                                    ui.add(
+                                    ui.add_sized(
+                                        [ui.available_width(), 0.0],
                                         egui::Button::new(format!(
                                             "{} · {}",
                                             meta.title,

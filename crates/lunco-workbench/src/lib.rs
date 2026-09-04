@@ -5583,6 +5583,16 @@ const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
 const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
 const SETTINGS_SUBMENU_MAX_WIDTH: f32 = 640.0;
 
+/// Bound a menu's requested width to the usable egui content viewport.
+///
+/// Menu callbacks use the result with `Ui::set_width`, which keeps the popup
+/// from growing back to an intrinsic long-label width after the callback has
+/// established its content policy.
+pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32 {
+    let available = (content_width - STATUS_POPUP_VIEWPORT_MARGIN).max(1.0);
+    available.min(requested_max_width.max(1.0))
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
     Discrete(u64),
@@ -5609,9 +5619,7 @@ fn status_popup_width(content_width: f32) -> f32 {
 }
 
 fn settings_submenu_max_width(content_width: f32) -> f32 {
-    (content_width - STATUS_POPUP_VIEWPORT_MARGIN)
-        .max(0.0)
-        .min(SETTINGS_SUBMENU_MAX_WIDTH)
+    menu_popup_max_width(content_width, SETTINGS_SUBMENU_MAX_WIDTH)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6599,6 +6607,13 @@ mod tests {
             settings_submenu_max_width(4000.0),
             SETTINGS_SUBMENU_MAX_WIDTH
         );
+    }
+
+    #[test]
+    fn menu_popup_width_never_exceeds_the_content_viewport() {
+        assert_eq!(menu_popup_max_width(200.0, 420.0), 176.0);
+        assert_eq!(menu_popup_max_width(1024.0, 420.0), 420.0);
+        assert_eq!(menu_popup_max_width(4000.0, 420.0), 420.0);
     }
 
     #[test]
