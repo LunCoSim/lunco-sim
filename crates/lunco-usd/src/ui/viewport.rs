@@ -340,8 +340,6 @@ pub struct OrbitCamera {
     pub drag_sensitivity: f32,
     /// Fractional distance change per scroll unit (0.001 ≈ 0.1% per px).
     pub zoom_sensitivity: f32,
-    /// World-space pan distance per pointer pixel, scaled by orbit distance.
-    pub pan_sensitivity: f32,
     /// Lower/upper clamps on `distance` so the user can't fly into
     /// the target or out to infinity.
     pub min_distance: f32,
@@ -365,7 +363,6 @@ impl Default for OrbitCamera {
             target: Vec3::ZERO,
             drag_sensitivity: 0.008,
             zoom_sensitivity: 0.0015,
-            pan_sensitivity: 0.002,
             min_distance: 0.5,
             max_distance: 5_000.0,
             min_orthographic_scale: 0.01,
@@ -395,12 +392,74 @@ impl OrbitCamera {
     }
 
     /// Pan the orbit target in the camera's screen plane.
-    pub fn apply_pan(&mut self, delta: egui::Vec2) {
+    ///
+    /// `delta` and `viewport_size` are egui logical points. The conversion is
+    /// derived from the active presentation projection, so perspective pans
+    /// track the orbit target at any distance and orthographic pans remain
+    /// independent of the orbit distance. A positive screen-Y delta moves the
+    /// target up so the rendered assembly follows the pointer downward.
+    pub fn apply_pan(
+        &mut self,
+        delta: egui::Vec2,
+        viewport_size: Vec2,
+        projection: &Projection,
+        mode: UsdPreviewProjection,
+        orthographic_scale: f32,
+    ) -> bool {
+        let Some(world_delta) =
+            self.pan_delta(delta, viewport_size, projection, mode, orthographic_scale)
+        else {
+            return false;
+        };
+        self.target += world_delta;
+        true
+    }
+
+    fn pan_delta(
+        &self,
+        delta: egui::Vec2,
+        viewport_size: Vec2,
+        projection: &Projection,
+        mode: UsdPreviewProjection,
+        orthographic_scale: f32,
+    ) -> Option<Vec3> {
+        if !delta.is_finite()
+            || !viewport_size.is_finite()
+            || viewport_size.x <= f32::EPSILON
+            || viewport_size.y <= f32::EPSILON
+        {
+            return None;
+        }
+
+        let aspect_ratio = viewport_size.x / viewport_size.y;
+        let vertical_extent = match (mode, projection) {
+            (UsdPreviewProjection::Perspective, Projection::Perspective(projection)) => {
+                if !projection.fov.is_finite()
+                    || projection.fov <= 0.0
+                    || projection.fov >= std::f32::consts::PI
+                    || !self.distance.is_finite()
+                    || self.distance <= 0.0
+                {
+                    return None;
+                }
+                2.0 * self.distance * (projection.fov * 0.5).tan()
+            }
+            (UsdPreviewProjection::Orthographic, Projection::Orthographic(_)) => {
+                if !orthographic_scale.is_finite() || orthographic_scale <= 0.0 {
+                    return None;
+                }
+                2.0 * orthographic_scale
+            }
+            _ => return None,
+        };
+        let horizontal_extent = vertical_extent * aspect_ratio;
         let transform = self.transform();
         let right = transform.rotation * Vec3::X;
         let up = transform.rotation * Vec3::Y;
-        let scale = self.distance * self.pan_sensitivity;
-        self.target -= (right * delta.x + up * delta.y) * scale;
+        Some(
+            -right * (delta.x * horizontal_extent / viewport_size.x)
+                + up * (delta.y * vertical_extent / viewport_size.y),
+        )
     }
 
     /// Return the multiplicative zoom factor represented by one scroll delta.
@@ -1048,6 +1107,7 @@ struct UsdViewportOrbitInput {
     view: UsdPreviewViewId,
     drag: egui::Vec2,
     pan: egui::Vec2,
+    viewport_size: egui::Vec2,
     scroll_y: f32,
 }
 
@@ -1154,14 +1214,28 @@ fn on_viewport_orbit_input(
     if input.drag == egui::Vec2::ZERO && input.pan == egui::Vec2::ZERO && input.scroll_y == 0.0 {
         return;
     }
+    let Some(camera) = state.view(input.view).map(|view| view.camera) else {
+        return;
+    };
+    let Ok((mut transform, mut projection)) = cameras.get_mut(camera) else {
+        return;
+    };
     let Some(view) = state.view_mut(input.view) else {
         return;
     };
+    if input.pan != egui::Vec2::ZERO
+        && !view.orbit.apply_pan(
+            input.pan,
+            Vec2::new(input.viewport_size.x, input.viewport_size.y),
+            &projection,
+            view.projection,
+            view.orthographic_scale,
+        )
+    {
+        return;
+    }
     if input.drag != egui::Vec2::ZERO {
         view.orbit.apply_drag(input.drag);
-    }
-    if input.pan != egui::Vec2::ZERO {
-        view.orbit.apply_pan(input.pan);
     }
     if input.scroll_y != 0.0 {
         match view.projection {
@@ -1176,12 +1250,9 @@ fn on_viewport_orbit_input(
         }
     }
     view.auto_frame = false;
-    let camera = view.camera;
-    if let Ok((mut transform, mut projection)) = cameras.get_mut(camera) {
-        *transform = view.orbit.transform();
-        if let Projection::Orthographic(projection) = &mut *projection {
-            projection.scale = view.orthographic_scale;
-        }
+    *transform = view.orbit.transform();
+    if let Projection::Orthographic(projection) = &mut *projection {
+        projection.scale = view.orthographic_scale;
     }
 }
 
@@ -1721,8 +1792,9 @@ pub struct ResetUsdPreviewView {
     pub view: UsdPreviewViewId,
 }
 
-/// Pan one preview view in screen-pixel units. The view converts the delta to
-/// its camera plane using the current orbit distance.
+/// Pan one preview view in egui logical screen points. The view converts the
+/// delta to its camera plane using the current projection and render-target
+/// viewport.
 #[Command]
 pub struct PanUsdPreviewView {
     pub view: UsdPreviewViewId,
@@ -2113,22 +2185,67 @@ fn on_pan_usd_preview_view(trigger: On<PanUsdPreviewView>, mut commands: Command
             );
             return;
         }
-        let camera = {
+        let Some((camera, mode, orthographic_scale)) = world
+            .resource::<UsdViewportState>()
+            .view(view)
+            .map(|view_state| {
+                (
+                    view_state.camera,
+                    view_state.projection,
+                    view_state.orthographic_scale,
+                )
+            })
+        else {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
+        };
+        let Some(viewport_size) = world
+            .get::<Camera>(camera)
+            .and_then(|camera| camera.logical_viewport_size())
+        else {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} camera viewport is unavailable", view.0),
+            );
+            return;
+        };
+        let Some(projection) = world.get::<Projection>(camera).cloned() else {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} camera projection is unavailable", view.0),
+            );
+            return;
+        };
+        let applied = {
             let mut viewport = world.resource_mut::<UsdViewportState>();
-            let Some(view_state) = viewport.view_mut(view) else {
-                drop(viewport);
-                report_preview_error(
-                    world,
-                    "usd-preview-pan-failed",
-                    format!("view {} is not open", view.0),
-                );
-                return;
-            };
-            view_state
-                .orbit
-                .apply_pan(egui::Vec2::new(delta[0], delta[1]));
-            view_state.auto_frame = false;
-            view_state.camera
+            let view_state = viewport
+                .view_mut(view)
+                .expect("preview view remains registered");
+            let applied = view_state.orbit.apply_pan(
+                egui::Vec2::new(delta[0], delta[1]),
+                viewport_size,
+                &projection,
+                mode,
+                orthographic_scale,
+            );
+            if applied {
+                view_state.auto_frame = false;
+            }
+            applied
+        };
+        if !applied {
+            report_preview_error(
+                world,
+                "usd-preview-pan-failed",
+                format!("view {} received an invalid pan geometry", view.0),
+            );
+            return;
         };
         let transform = world
             .resource::<UsdViewportState>()
@@ -3237,29 +3354,33 @@ fn render_preview_view(
         }
     }
 
-    let (drag, pan, scroll_y) = if response.hovered() || response.contains_pointer() {
-        ui.ctx().input(|input| {
-            let pointer = &input.pointer;
-            let delta = pointer.delta();
-            let primary = pointer.button_down(egui::PointerButton::Primary);
-            let middle = pointer.button_down(egui::PointerButton::Middle);
-            let secondary = pointer.button_down(egui::PointerButton::Secondary);
-            let (orbit, pan) =
-                preview_drag_channels(primary, middle, secondary, input.modifiers.shift);
-            (
-                orbit.then_some(delta).unwrap_or_default(),
-                pan.then_some(delta).unwrap_or_default(),
-                input.smooth_scroll_delta.y,
-            )
-        })
+    let (drag, pan) = if response.dragged() {
+        let shift = ui.ctx().input(|input| input.modifiers.shift);
+        let (orbit, pan) = preview_drag_channels(
+            response.dragged_by(egui::PointerButton::Primary),
+            response.dragged_by(egui::PointerButton::Middle),
+            response.dragged_by(egui::PointerButton::Secondary),
+            shift,
+        );
+        let delta = response.drag_delta();
+        (
+            orbit.then_some(delta).unwrap_or_default(),
+            pan.then_some(delta).unwrap_or_default(),
+        )
     } else {
-        (egui::Vec2::ZERO, egui::Vec2::ZERO, 0.0)
+        (egui::Vec2::ZERO, egui::Vec2::ZERO)
+    };
+    let scroll_y = if response.hovered() || response.contains_pointer() {
+        ui.ctx().input(|input| input.smooth_scroll_delta.y)
+    } else {
+        0.0
     };
     if drag != egui::Vec2::ZERO || pan != egui::Vec2::ZERO || scroll_y != 0.0 {
         ctx.trigger(UsdViewportOrbitInput {
             view: view_id,
             drag,
             pan,
+            viewport_size: response.rect.size(),
             scroll_y,
         });
     }
@@ -3989,7 +4110,14 @@ mod tests {
         let original_target = orbit.target;
         let original_distance = orbit.distance;
 
-        orbit.apply_pan(egui::Vec2::new(40.0, -18.0));
+        let projection = preview_projection(UsdPreviewProjection::Perspective, 1.0);
+        assert!(orbit.apply_pan(
+            egui::Vec2::new(40.0, -18.0),
+            Vec2::new(800.0, 600.0),
+            &projection,
+            UsdPreviewProjection::Perspective,
+            1.0,
+        ));
         orbit.apply_zoom(12.0);
 
         assert_ne!(orbit.target, original_target);
@@ -3997,6 +4125,72 @@ mod tests {
         assert!(orbit.distance.is_finite());
         assert!(orbit.distance < original_distance);
         assert!((orbit.zoom_factor(12.0) - 0.982).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn preview_pan_follows_pointer_in_both_screen_axes() {
+        let projection = preview_projection(UsdPreviewProjection::Perspective, 1.0);
+        let mut orbit = OrbitCamera::default();
+        let transform = orbit.transform();
+        let right = transform.rotation * Vec3::X;
+        let up = transform.rotation * Vec3::Y;
+
+        assert!(orbit.apply_pan(
+            egui::Vec2::new(20.0, 30.0),
+            Vec2::new(800.0, 600.0),
+            &projection,
+            UsdPreviewProjection::Perspective,
+            1.0,
+        ));
+
+        let target_delta = orbit.target;
+        assert!(target_delta.dot(right) < 0.0);
+        assert!(target_delta.dot(up) > 0.0);
+    }
+
+    #[test]
+    fn preview_pan_uses_projection_scale_not_fixed_sensitivity() {
+        let perspective = preview_projection(UsdPreviewProjection::Perspective, 1.0);
+        let mut near = OrbitCamera::default();
+        near.distance = 2.0;
+        let mut far = near.clone();
+        far.distance = 4.0;
+        assert!(near.apply_pan(
+            egui::Vec2::new(40.0, 20.0),
+            Vec2::new(800.0, 600.0),
+            &perspective,
+            UsdPreviewProjection::Perspective,
+            1.0,
+        ));
+        assert!(far.apply_pan(
+            egui::Vec2::new(40.0, 20.0),
+            Vec2::new(800.0, 600.0),
+            &perspective,
+            UsdPreviewProjection::Perspective,
+            1.0,
+        ));
+        assert!((far.target.length() / near.target.length() - 2.0).abs() < 1.0e-5);
+
+        let orthographic = preview_projection(UsdPreviewProjection::Orthographic, 2.0);
+        let mut low = OrbitCamera::default();
+        low.distance = 2.0;
+        let mut high = low.clone();
+        high.distance = 200.0;
+        assert!(low.apply_pan(
+            egui::Vec2::new(40.0, 20.0),
+            Vec2::new(800.0, 600.0),
+            &orthographic,
+            UsdPreviewProjection::Orthographic,
+            2.0,
+        ));
+        assert!(high.apply_pan(
+            egui::Vec2::new(40.0, 20.0),
+            Vec2::new(800.0, 600.0),
+            &orthographic,
+            UsdPreviewProjection::Orthographic,
+            2.0,
+        ));
+        assert!((high.target.length() - low.target.length()).abs() < 1.0e-5);
     }
 
     #[test]

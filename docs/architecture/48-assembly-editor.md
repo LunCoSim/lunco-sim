@@ -92,7 +92,9 @@ name convention, or ECS-only grouping state is introduced.
   from per-frame pointer deltas. `SetUsdPreviewProjection`,
   `PanUsdPreviewView`, `ZoomUsdPreviewView`, `FrameUsdPreviewView`, and
   `ResetUsdPreviewView` are the same typed boundary for agents and UI
-  controls. Perspective and orthographic are presentation modes only; no
+  controls. Pan converts logical pointer deltas through the active projection
+  and measured render-target viewport, so it follows the pointer at both
+  normal and close orbit distances. Perspective and orthographic are presentation modes only; no
   authored USD camera or stage transform is rewritten by navigation. `Frame`
   uses the projected Bevy `Aabb` hierarchy, so it does not duplicate USD
   traversal or invent asset-specific camera poses. `InspectUsdViewport`

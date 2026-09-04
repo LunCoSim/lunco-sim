@@ -76,7 +76,9 @@ perspective/orthographic mode, fit-to-bounds, and reset. The typed commands
 `SetUsdPreviewProjection`, `PanUsdPreviewView`, `ZoomUsdPreviewView`,
 `FrameUsdPreviewView`, and `ResetUsdPreviewView` are shared by the toolbar and
 agent/Rhai automation. They operate on projected Bevy bounds and camera state;
-they never author USD camera or transform opinions.
+they never author USD camera or transform opinions. Pan uses the active
+projection and measured render-target viewport to map logical pointer deltas to
+the camera plane.
 
 `ExplodeUsdPreview` is the shared preview-only assembly inspection command.
 It requires explicit preview/document/assembly/part identities and supports

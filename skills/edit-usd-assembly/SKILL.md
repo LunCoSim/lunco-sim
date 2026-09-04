@@ -152,7 +152,9 @@ the active simulation viewport.
    `PanUsdPreviewView { view, delta: [x, y] }`,
    `ZoomUsdPreviewView { view, factor }`, `FrameUsdPreviewView { view }`, and
    `ResetUsdPreviewView { view }`. These are view presentation operations; they
-   do not author USD camera or transform values. `Frame` uses the projected
+   do not author USD camera or transform values. Pan converts logical pointer
+   deltas through the active projection and measured render-target viewport.
+   `Frame` uses the projected
    visual bounds, and `InspectUsdViewport` reports projection, target, distance,
    and orthographic scale for screenshot correlation.
 

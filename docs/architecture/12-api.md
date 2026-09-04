@@ -225,7 +225,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |
 | | `SetUsdPreviewProjection` | Choose perspective or orthographic presentation for one explicit USD preview view. |
-| | `PanUsdPreviewView` / `ZoomUsdPreviewView` | Navigate one preview view without mutating authored USD. |
+| | `PanUsdPreviewView` / `ZoomUsdPreviewView` | Navigate one preview view through its presentation projection without mutating authored USD. |
 | | `FrameUsdPreviewView` / `ResetUsdPreviewView` | Fit or restore one preview view using its projected bounds. |
 | | `ExplodeUsdPreview` | Enable, update, or reset a deterministic transient explode pose for explicit parts of one ready USD preview. |
 | | `AttachProgram` | Attach a source-backed program with explicit scalar ports, defaults, and USD connections. |
