@@ -123,12 +123,14 @@ the side panels for tabbed dock trees.
 5. **Viewport (center)** — the 3D world. **Structurally persistent** —
    always the central region of the window. Not a panel, not a tile.
    Cannot be closed or docked-over. The workbench contributes only the
-   viewport's *visibility* (a perspective without a viewport panel hides 3D)
-   into `lunco_core::SceneViewport`; it never sets camera `is_active` — the
-   single-authority reconciler in `lunco-usd-bevy` actuates that (see
-   [`17-view-and-intent.md §6`](17-view-and-intent.md)). The 3D renders
-   full-window (`SceneViewport::rect` is `None`) and the chrome is layered on
-   top of it — see § 3.1.
+   viewport's *visibility* into `lunco_core::SceneViewport`; it never sets
+   camera `is_active` — the single-authority reconciler in `lunco-usd-bevy`
+   actuates that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)). A
+   perspective with central content hides 3D when it has no viewport panel; a
+   full-window presentation perspective may explicitly keep the scene visible
+   behind transient side or bottom panels. The 3D renders full-window
+   (`SceneViewport::rect` is `None`) and the chrome is layered on top of it —
+   see § 3.1.
 6. **Properties / Inspector (right)** — context-aware content for the
    current selection and workspace. See § 6.
 7. **Bottom panel (toggleable)** — workspace-dependent: Console, Plots,
@@ -174,12 +176,15 @@ quality changes, camera replacement, resize, and Twin teardown. A private
 load-preserving UI texture would accumulate panels removed by a perspective
 switch and is not a valid composition.
 
-When no window `Camera3d` is active at all (Design perspective, the Modelica
-workbench, or the short handoff while a selected camera is being activated),
-the workbench paints a full-window themed backdrop on egui's background layer.
-It checks the selected camera's actual `Camera::is_active` state, not only the
-selection binding, so direct perspective switches show an intentional loading
-surface until the scene camera is ready.
+When no window `Camera3d` is active at all (a central-content perspective, the
+Modelica workbench, or the short handoff while a selected camera is being
+activated), the workbench paints a full-window themed backdrop on egui's
+background layer. It checks the selected camera's actual `Camera::is_active`
+state, not only the selection binding, so direct perspective switches show an
+intentional loading surface until the scene camera is ready. A perspective that
+uses the full window as its viewport declares that contract through
+`Perspective::scene_visible_when_docked`; opening a transient panel in that
+mode therefore does not deactivate the scene or replace it with the backdrop.
 
 Domain-owned diagram overlays remain leaf-local. A direct painter uses the
 owning leaf's clip rectangle, and a separate egui `Area` constrains itself to
@@ -309,6 +314,13 @@ it appears in the default title-bar switcher. Luncosim keeps `terrain_sculpt`
 registered for authored flows and hides it from everyday navigation; the
 Assembly Editor is an ordinary user-facing perspective and appears in the
 switcher. This does not remove or duplicate either authoring mode.
+
+The layout's viewport visibility is also an explicit perspective contract.
+Perspectives with a central editor surface keep the scene hidden unless their
+slot intent includes `ViewportPanel`. A full-window presentation perspective
+such as luncosim's View sets `Perspective::scene_visible_when_docked()` so
+focused tutorial or user panels can be painted over the live scene without
+turning the scene camera off.
 
 ### Guided presentation ownership
 

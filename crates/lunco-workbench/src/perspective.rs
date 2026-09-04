@@ -62,6 +62,19 @@ pub trait Perspective: Send + Sync + 'static {
         true
     }
 
+    /// Whether the live 3D scene remains visible when this perspective's
+    /// transient side or bottom panels are opened.
+    ///
+    /// A presentation perspective can use the full window as its viewport
+    /// instead of mounting [`crate::viewport::ViewportPanel`]. Such a
+    /// perspective must opt in here so opening a panel does not turn its
+    /// full-window scene off. Perspectives whose central content owns the
+    /// window remain hidden by default unless their layout contains the
+    /// viewport panel.
+    fn scene_visible_when_docked(&self) -> bool {
+        false
+    }
+
     /// Revision of the authored default layout.
     ///
     /// Increment this when a perspective's canonical slot arrangement changes.
@@ -78,6 +91,14 @@ pub trait Perspective: Send + Sync + 'static {
 // ─────────────────────────────────────────────────────────────────────
 
 impl WorkbenchLayout {
+    /// Whether the active perspective owns a full-window scene that should
+    /// remain behind transient dock chrome even without a viewport panel tab.
+    pub(crate) fn active_perspective_scene_visible_when_docked(&self) -> bool {
+        self.active_perspective
+            .and_then(|active| self.perspectives.iter().find(|p| p.id() == active))
+            .is_some_and(|perspective| perspective.scene_visible_when_docked())
+    }
+
     /// Dock a single panel in the side browser. Pass `None` to remove
     /// the side browser from the current workspace's preset.
     pub fn set_side_browser(&mut self, id: Option<PanelId>) {

@@ -105,6 +105,14 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+Workbench perspectives publish scene visibility as layout intent. A perspective
+that uses the full window as its 3D presentation must opt into
+`Perspective::scene_visible_when_docked()` so opening a transient side or
+bottom panel does not deactivate the selected scene camera or paint the themed
+backdrop over the whole frame. Central editor perspectives remain hidden unless
+their slot intent includes `ViewportPanel`; the Workbench still never writes
+`Camera::is_active`, and `lunco-usd-bevy` remains the sole camera reconciler.
+
 ### Temporary diagnostic visuals
 
 Temporary camera/collider/dynamics diagnostics are runtime presentation, not

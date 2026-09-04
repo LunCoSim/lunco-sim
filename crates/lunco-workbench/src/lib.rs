@@ -3986,6 +3986,19 @@ fn truncate_title_to_width(ui: &egui::Ui, title: &str, max_width: f32) -> String
     String::new()
 }
 
+fn needs_full_backdrop(
+    layout: &WorkbenchLayout,
+    viewport_empty: bool,
+    no_active_scene_camera: bool,
+) -> bool {
+    let scene_backed_perspective = layout.active_perspective_scene_visible_when_docked();
+    (!scene_backed_perspective
+        && !viewport::layout_is_empty(layout)
+        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
+        || viewport_empty
+        || no_active_scene_camera
+}
+
 fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
@@ -4104,11 +4117,12 @@ fn render_layout(
     //     around the rect so the dock-leaf gaps (tab-strip header
     //     above the panel, padding below) match theme instead of
     //     showing uncleared framebuffer pixels as a black hole.
-    // Only Design (chrome but no ViewportPanel) needs a full-window
-    // backdrop to fill the framebuffer — Camera3d is inactive there.
-    // View and Build both keep Camera3d running full-window; egui
-    // chrome opaquely overlays where panels are and the rest stays
-    // transparent so 3D shows through (including dock-leaf gaps).
+    // Only a chrome-only perspective (no ViewportPanel and no full-window
+    // scene contract) needs a full-window backdrop to fill the framebuffer —
+    // Camera3d is inactive there. A scene-backed perspective keeps Camera3d
+    // running full-window; egui chrome opaquely overlays where panels are and
+    // the rest stays transparent so 3D shows through (including dock-leaf
+    // gaps).
     // An active placeholder message means the scene is empty — and so the USD
     // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
     // the backdrop because `Camera3d` paints the full window; with no camera
@@ -4123,10 +4137,7 @@ fn render_layout(
         .get_resource::<viewport::ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
     let no_active_scene_camera = !scene_camera_is_rendering(world);
-    let needs_full_backdrop = (!viewport::layout_is_empty(layout)
-        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
-        || viewport_empty
-        || no_active_scene_camera;
+    let needs_full_backdrop = needs_full_backdrop(layout, viewport_empty, no_active_scene_camera);
     if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
@@ -6786,6 +6797,37 @@ mod tests {
             .unwrap()
             .is_active = true;
         assert!(scene_camera_is_rendering(&world));
+    }
+
+    struct SceneBackedTestPerspective;
+
+    impl Perspective for SceneBackedTestPerspective {
+        fn id(&self) -> PerspectiveId {
+            PerspectiveId("scene_backed_test")
+        }
+
+        fn title(&self) -> String {
+            "Scene-backed test".into()
+        }
+
+        fn scene_visible_when_docked(&self) -> bool {
+            true
+        }
+
+        fn apply(&self, layout: &mut WorkbenchLayout) {
+            layout.set_center(vec![]);
+        }
+    }
+
+    #[test]
+    fn scene_backed_dock_does_not_paint_opaque_backdrop() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(SceneBackedTestPerspective);
+        layout.right_inspector.push(PanelId("command_deck"));
+
+        assert!(!needs_full_backdrop(&layout, false, false));
+        assert!(needs_full_backdrop(&layout, true, false));
+        assert!(needs_full_backdrop(&layout, false, true));
     }
 
     #[test]
