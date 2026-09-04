@@ -829,8 +829,18 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // Document generation is not visual readiness. Invalidate every
             // preview lease before the canonical stage applies this generation;
             // the viewport marks it ready only after the USD queue and async
-            // mesh phase have both settled.
-            viewport.invalidate_projection(doc);
+            // mesh phase have both settled. Restore any transient explode
+            // transforms first so the existing-transform projection path
+            // cannot carry a presentation offset into the new generation.
+            let restores = viewport.invalidate_projection(doc);
+            drop(viewport);
+            for (entity, transform) in restores {
+                if let Ok(mut entity) = world.get_entity_mut(entity) {
+                    if let Some(mut current) = entity.get_mut::<bevy::prelude::Transform>() {
+                        *current = transform;
+                    }
+                }
+            }
         }
 
         // Author-once: the scene's live stage is keyed by the cached

@@ -15,18 +15,20 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
-use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
+use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
-use lunco_core::{Avatar, CelestialBody, GlobalEntityId, LocalAvatar, TheLocalAvatar};
+use lunco_core::exposure::{EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureWriter};
+use lunco_core::{
+    Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
+};
 use lunco_cosim::{SimComponent, SimStatus};
 use lunco_mobility::WheelRaycast;
 use lunco_modelica::ModelicaModel;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::read::UsdReadObject;
-use lunco_usd_bevy::{scene_root_ancestor, CanonicalStages, SdfPath, UsdStageAsset};
+use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdStageAsset, scene_root_ancestor};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
@@ -661,6 +663,51 @@ mod exposure_schedule_tests {
 }
 
 #[cfg(test)]
+mod control_root_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_invalidates_the_outgoing_control_root() {
+        let outgoing = Entity::from_bits(41);
+        let incoming = Entity::from_bits(42);
+        let mut mount = SceneMountState::default();
+        mount.register_root(outgoing, true);
+
+        assert!(is_active_scene_root(&mount, Some(outgoing)));
+        assert!(!is_active_scene_root(&mount, Some(incoming)));
+
+        mount.begin_replacement();
+        assert!(!is_active_scene_root(&mount, Some(outgoing)));
+
+        mount.register_root(incoming, true);
+        assert!(!is_active_scene_root(&mount, Some(outgoing)));
+        assert!(is_active_scene_root(&mount, Some(incoming)));
+    }
+
+    #[test]
+    fn duplicate_composed_control_root_is_not_published_twice() {
+        let stage_id = Handle::<UsdStageAsset>::default().id();
+        let mut seen = HashSet::new();
+
+        assert!(accept_control_root_identity(
+            &mut seen,
+            stage_id,
+            "/LanderTest/Lander"
+        ));
+        assert!(!accept_control_root_identity(
+            &mut seen,
+            stage_id,
+            "/LanderTest/Lander"
+        ));
+        assert!(accept_control_root_identity(
+            &mut seen,
+            stage_id,
+            "/LanderTest/BackupLander"
+        ));
+    }
+}
+
+#[cfg(test)]
 mod exposure_tests {
     use super::*;
 
@@ -801,6 +848,25 @@ mod exposure_tests {
             "/World/Close"
         );
     }
+
+    #[test]
+    fn scene_teardown_hides_scene_surfaces_but_retains_camera_status() {
+        let mut exposures = EngineExposures::default();
+        exposures.writer("camera-status").visible(true);
+        exposures.writer("lander-control-0").visible(true);
+        exposures.writer("driven-vessel").visible(true);
+        let mut refresh = ExposureRefresh::default();
+        refresh.first_update = false;
+        refresh.clear_dirty();
+
+        clear_scene_exposures_impl(&mut exposures, &mut refresh);
+
+        assert!(exposures.surfaces["camera-status"].visible);
+        assert!(!exposures.surfaces["lander-control-0"].visible);
+        assert!(!exposures.surfaces["driven-vessel"].visible);
+        assert!(refresh.first_update);
+        assert!(refresh.any_dirty());
+    }
 }
 
 /// Cheap reactive invalidation in front of the expensive vessel resolver.
@@ -832,6 +898,7 @@ pub(crate) fn mark_exposure_dirty(
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
     stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    scene_mount: Res<SceneMountState>,
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
 ) {
@@ -847,6 +914,7 @@ pub(crate) fn mark_exposure_dirty(
     let schema_changed = selected.is_changed();
     let celestial_changed = !q_bodies.is_empty() || orbital_pin.is_some_and(|pin| pin.is_changed());
     let authored_changed = stage_revision.is_some_and(|revision| revision.is_changed());
+    let scene_mount_changed = scene_mount.is_changed();
 
     let overlay_changed = overlays
         .terrain
@@ -871,7 +939,7 @@ pub(crate) fn mark_exposure_dirty(
     if schema_changed || authored_changed {
         refresh.schema_dirty = true;
     }
-    if authored_changed {
+    if authored_changed || scene_mount_changed {
         refresh.control_dirty = true;
     }
     if celestial_changed {
@@ -880,6 +948,39 @@ pub(crate) fn mark_exposure_dirty(
     if overlay_changed {
         refresh.overlay_dirty = true;
     }
+}
+
+/// Withdraw scene-derived surfaces synchronously at the replacement boundary.
+///
+/// Bevy defers scene entity despawns, while the retained UI consumes the last
+/// exposure snapshot. Hiding these namespaces here prevents an outgoing HUD from
+/// remaining visible until the next bounded publication; the next active scene
+/// repopulates them through the normal first-update path. Camera status is an
+/// application-owned retained fact and intentionally survives scene replacement.
+pub(crate) fn clear_scene_exposures(
+    mut exposures: ResMut<EngineExposures>,
+    mut refresh: ResMut<ExposureRefresh>,
+) {
+    clear_scene_exposures_impl(&mut exposures, &mut refresh);
+}
+
+fn clear_scene_exposures_impl(exposures: &mut EngineExposures, refresh: &mut ExposureRefresh) {
+    let namespaces = exposures
+        .surfaces
+        .keys()
+        .filter(|namespace| namespace.as_str() != "camera-status")
+        .cloned()
+        .collect::<Vec<_>>();
+    for namespace in namespaces {
+        exposures.writer(&namespace).visible(false);
+    }
+
+    refresh.driven_vessel_dirty = true;
+    refresh.control_dirty = true;
+    refresh.schema_dirty = true;
+    refresh.celestial_dirty = true;
+    refresh.overlay_dirty = true;
+    refresh.first_update = true;
 }
 
 /// Run the exposure publisher on its existing bounded cadence while preserving
@@ -913,6 +1014,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     exposures: ResMut<'w, EngineExposures>,
     signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
+    scene_mount: Res<'w, SceneMountState>,
     local_avatar: Res<'w, TheLocalAvatar>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
@@ -1109,6 +1211,7 @@ pub(crate) fn publish_exposure(
         let revision = stage_revision.as_deref().map(|revision| revision.0);
         control_roots.refresh(
             revision,
+            &runtime.scene_mount,
             &queries.usd_paths,
             &queries.parents,
             &queries.scene_roots,
@@ -1118,6 +1221,7 @@ pub(crate) fn publish_exposure(
         );
         publish_control_exposures(
             &mut runtime.exposures,
+            &runtime.scene_mount,
             &queries.name,
             &queries.callsign,
             &queries.catalog_id,
@@ -1332,6 +1436,7 @@ fn publish_lunica_schema_exposure(
 #[derive(Default)]
 pub(crate) struct ControlRootCache {
     revision: Option<u64>,
+    active_root: Option<Entity>,
     initialized: bool,
     roots: Vec<(Option<Entity>, i32)>,
 }
@@ -1340,6 +1445,7 @@ impl ControlRootCache {
     fn refresh(
         &mut self,
         revision: Option<u64>,
+        scene_mount: &SceneMountState,
         q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
         q_parents: &Query<&ChildOf>,
         q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
@@ -1347,10 +1453,12 @@ impl ControlRootCache {
         stages: &Assets<UsdStageAsset>,
         canonical: &CanonicalStages,
     ) {
-        if self.initialized && self.revision == revision {
+        let active_root = scene_mount.active_root();
+        if self.initialized && self.revision == revision && self.active_root == active_root {
             return;
         }
         self.roots = authored_control_roots(
+            scene_mount,
             q_paths,
             q_parents,
             q_scene_roots,
@@ -1360,6 +1468,7 @@ impl ControlRootCache {
         );
         self.roots.sort_by_key(|(_, column)| *column);
         self.revision = revision;
+        self.active_root = active_root;
         self.initialized = true;
     }
 }
@@ -1371,6 +1480,7 @@ impl ControlRootCache {
 /// selection from accidentally publishing a lander-specific HUD.
 fn publish_control_exposures(
     exposures: &mut EngineExposures,
+    scene_mount: &SceneMountState,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -1405,6 +1515,7 @@ fn publish_control_exposures(
         "lander-control-0",
         first_root,
         &first_telemetry,
+        scene_mount,
         q_name,
         q_callsign,
         q_catalog_id,
@@ -1433,6 +1544,7 @@ fn publish_control_exposures(
         "lander-control-1",
         second_root,
         &second_telemetry,
+        scene_mount,
         q_name,
         q_callsign,
         q_catalog_id,
@@ -1459,6 +1571,7 @@ fn publish_control_exposures(
 /// pair of cards without teaching the engine what a particular film calls its
 /// vehicles.
 fn authored_control_roots(
+    scene_mount: &SceneMountState,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
     q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
@@ -1467,8 +1580,9 @@ fn authored_control_roots(
     canonical: &CanonicalStages,
 ) -> Vec<(Option<Entity>, i32)> {
     let mut roots = Vec::new();
+    let mut seen = HashSet::new();
     for (entity, prim_path) in q_paths.iter() {
-        if !is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities) {
+        if !is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities) {
             continue;
         }
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -1482,6 +1596,13 @@ fn authored_control_roots(
         if reader.boolean(&path, "lunco:ui:controlHud") != Some(true) {
             continue;
         }
+        if !accept_control_root_identity(&mut seen, prim_path.stage_handle.id(), &prim_path.path) {
+            warn!(
+                "[control-hud] duplicate ECS projection for authored root {}; keeping one active projection",
+                prim_path.path
+            );
+            continue;
+        }
         let column = reader
             .integer(&path, "lunco:ui:controlHudColumn")
             .unwrap_or(0);
@@ -1490,20 +1611,33 @@ fn authored_control_roots(
     roots
 }
 
-/// Return true only for an entity owned by the mounted live scene.
+/// Return true only for an entity owned by the active scene mount.
 ///
 /// Preview prims intentionally retain ordinary USD components so they render,
-/// but their root carries `UsdPreviewOnly` rather than `UsdSceneRoot`. Walking
-/// ownership here prevents a preview document from becoming a second runtime
-/// vehicle, guidance node, or landing target in operator-facing exposures.
-fn is_live_scene_entity(
+/// but their root carries `UsdPreviewOnly` rather than `UsdSceneRoot`. The
+/// mount state additionally invalidates outgoing roots before deferred despawn
+/// and excludes additive document roots from operator-facing exposures.
+fn is_active_scene_entity(
     entity: Entity,
+    scene_mount: &SceneMountState,
     q_parents: &Query<&ChildOf>,
     q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
     q_entities: &Query<Entity>,
 ) -> bool {
     scene_root_ancestor(entity, q_scene_roots, q_parents, q_entities)
-        .is_ok_and(|root| root.is_some())
+        .is_ok_and(|root| is_active_scene_root(scene_mount, root))
+}
+
+fn is_active_scene_root(scene_mount: &SceneMountState, root: Option<Entity>) -> bool {
+    root.is_some_and(|root| scene_mount.active_root() == Some(root))
+}
+
+fn accept_control_root_identity(
+    seen: &mut HashSet<(AssetId<UsdStageAsset>, String)>,
+    stage_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> bool {
+    seen.insert((stage_id, path.to_owned()))
 }
 
 /// Resolve the authored target and both entities' absolute positions. This keeps
@@ -1512,6 +1646,7 @@ fn is_live_scene_entity(
 /// channels.
 fn authored_target_positions(
     root: Entity,
+    scene_mount: &SceneMountState,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
@@ -1521,7 +1656,7 @@ fn authored_target_positions(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<(lunco_core::coords::GridPos, lunco_core::coords::GridPos)> {
-    if !is_live_scene_entity(root, q_parents, q_scene_roots, q_entities) {
+    if !is_active_scene_entity(root, scene_mount, q_parents, q_scene_roots, q_entities) {
         return None;
     }
     let (_, root_path) = q_paths.get(root).ok()?;
@@ -1540,8 +1675,8 @@ fn authored_target_positions(
     let mut target_entities = q_paths.iter().filter_map(|(entity, prim_path)| {
         (prim_path.stage_handle.id() == root_path.stage_handle.id()
             && prim_path.path == target_path
-            && is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities))
-            .then_some(entity)
+            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities))
+        .then_some(entity)
     });
     let target_entity = target_entities.next()?;
     if target_entities.next().is_some() {
@@ -1597,6 +1732,7 @@ fn authored_guidance_path(
 
 fn authored_guidance_entity(
     root: Entity,
+    scene_mount: &SceneMountState,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
     q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
@@ -1604,7 +1740,7 @@ fn authored_guidance_entity(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<Entity> {
-    if !is_live_scene_entity(root, q_parents, q_scene_roots, q_entities) {
+    if !is_active_scene_entity(root, scene_mount, q_parents, q_scene_roots, q_entities) {
         return None;
     }
     let (_, root_path) = q_paths.get(root).ok()?;
@@ -1615,8 +1751,8 @@ fn authored_guidance_entity(
     let mut entities = q_paths.iter().filter_map(|(entity, prim_path)| {
         (prim_path.stage_handle.id() == root_path.stage_handle.id()
             && prim_path.path == guidance.as_str()
-            && is_live_scene_entity(entity, q_parents, q_scene_roots, q_entities))
-            .then_some(entity)
+            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities))
+        .then_some(entity)
     });
     let entity = entities.next()?;
     if entities.next().is_some() {
@@ -1745,6 +1881,7 @@ fn publish_selected_control_exposure(
     namespace: &str,
     root: Option<Entity>,
     telemetry: &[PublicTelemetryValue],
+    scene_mount: &SceneMountState,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -1817,6 +1954,7 @@ fn publish_selected_control_exposure(
 
     let guidance_entity = authored_guidance_entity(
         root,
+        scene_mount,
         q_paths,
         q_parents,
         q_scene_roots,
@@ -1913,6 +2051,7 @@ fn publish_selected_control_exposure(
         .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
     let target_positions = authored_target_positions(
         root,
+        scene_mount,
         q_parents,
         q_grids,
         q_spatial,

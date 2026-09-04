@@ -2,21 +2,21 @@
 //! outbox→clients / clients→inbox ferry. Native only.
 
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lightyear::netcode::server_plugin::NetcodeConfig;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lightyear::netcode::NetcodeServer;
+use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::scenario::{
-    cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
-    ScenarioManifestResource,
+    ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource, cid_for_content,
+    scenario_revision,
 };
 use crate::sync::{
-    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
-    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
+    HandshakeMsg, MAX_SNAPSHOT_ENTRIES, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
+    ReplicationState, SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters,
 };
 use lunco_core::{NetStatus, SessionId, SessionProfiles, SessionRegistry, SimTick, SyncChannel};
 use lunco_doc_bevy::JournalResource;
@@ -63,7 +63,7 @@ impl AssignedSessions {
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{
-    deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env, PROTOCOL_ID,
+    PROTOCOL_ID, deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env,
 };
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
@@ -1460,7 +1460,7 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((mut manifest, cid_paths)) => {
+        Some((manifest, cid_paths)) => {
             info!(
                 "[net] scenario manifest built: {} assets",
                 manifest.assets.len()
@@ -1473,6 +1473,8 @@ fn drive_scenario_manifest(
             // canonical base32 string (what a client puts in the URL), and advertise
             // the endpoint. Stamped here, not in the off-thread build: the build is
             // pure (path → CID) and knows nothing about how this host is reachable.
+            #[cfg(feature = "transport-http")]
+            let mut manifest = manifest;
             #[cfg(feature = "transport-http")]
             if let Some(http) = http_assets.as_ref() {
                 http.publish(&cid_paths);

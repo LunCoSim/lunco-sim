@@ -1588,7 +1588,7 @@ register_commands!(
 // ── Route ribbon (real 3D geometry, not a screen-space overlay) ───────────────
 
 /// Half-width (metres) of the route ribbon — a thin drawn annotation, not a road.
-const ROUTE_RIBBON_HALF_WIDTH_M: f32 = 0.12;
+const ROUTE_RIBBON_HALF_WIDTH_M: f32 = 0.07;
 /// Separation (metres) between the derived route annotation and the composed
 /// terrain surface. This belongs to the annotation renderer, not to the USD
 /// waypoint asset: a waypoint's authored visual dimensions must never determine
@@ -2177,19 +2177,19 @@ fn route_mesh_signature(
 fn route_look(part: PathPart, focused: bool) -> PbrLook {
     let (mut base_color, mut emissive) = match part {
         PathPart::Future => (
-            LinearRgba::new(0.18, 0.72, 0.38, 0.38),
-            LinearRgba::new(0.08, 0.55, 0.24, 1.0),
+            LinearRgba::new(0.12, 0.52, 0.28, 0.24),
+            LinearRgba::new(0.04, 0.28, 0.12, 1.0),
         ),
         PathPart::Remaining => (
-            LinearRgba::new(0.12, 0.45, 0.95, 0.62),
-            LinearRgba::new(0.06, 0.30, 0.85, 1.0),
+            LinearRgba::new(0.10, 0.36, 0.82, 0.45),
+            LinearRgba::new(0.03, 0.18, 0.56, 1.0),
         ),
     };
     if !focused {
-        base_color.alpha *= 0.45;
-        emissive.red *= 0.35;
-        emissive.green *= 0.35;
-        emissive.blue *= 0.35;
+        base_color.alpha *= 0.55;
+        emissive.red *= 0.4;
+        emissive.green *= 0.4;
+        emissive.blue *= 0.4;
     }
     PbrLook {
         base_color,

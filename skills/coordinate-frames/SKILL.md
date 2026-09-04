@@ -87,11 +87,12 @@ collision authority. This path preserves the fixed solver/substep contract.
 For orbital camera views, keep presentation state on the avatar in
 `OrbitViewHistory`, keyed by the stable celestial ephemeris id. Capture a
 user-controlled `OrbitCamera` pose before switching targets or leaving orbit,
-and restore it only for that same body. When no saved pose exists, derive the
-arrival direction from the camera's current radial region after resolving the
-target's inertial BigSpace grid. Do not use a fixed world-axis/Sun-facing
-arrival, a scene-wide pose cache, or a second transform writer. Clear this
-transient history with active-Twin teardown and avatar demotion.
+and restore it only for that same body, including a later surface-to-orbit
+scroll entry. When no saved pose exists, derive the arrival direction from the
+camera's current radial region after resolving the target's inertial BigSpace
+grid. Do not use a fixed world-axis/Sun-facing arrival, a scene-wide pose
+cache, or a second transform writer. Clear this transient history with
+active-Twin teardown and avatar demotion.
 
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep
@@ -122,7 +123,10 @@ generic billboard renderer consume its propagated `GlobalTransform`. The
 renderer uses the shared BigSpace world-pose machinery for the camera/subject
 range check; route projection does not add another distance or coordinate
 conversion owner. The terrain-grid/BigSpace hierarchy and the existing
-billboard path already own that conversion.
+billboard path already own that conversion. The shared overlay wraps labels to a
+bounded width, clamps their backdrop inside the active viewport, and gives
+nearer labels first choice of non-overlapping camera-facing slots. A label with
+no safe slot is omitted for that frame rather than covering another marker.
 Editor-created waypoints use the canonical USD billboard authoring helper;
 runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
@@ -141,6 +145,11 @@ phase so it cannot observe a previous-frame terrain transform. Do not repair a
 stale projection with an offset or another per-frame transform writer. The
 semantic-to-light projection is change-gated by `SunState.revision` and the
 changed BigSpace ancestor chains, so stable frames do not rebuild f64 poses.
+
+The render backend samples the resulting cascades with Bevy's hardware 2x2
+comparison filter in standard and high profiles. Keep that choice separate from
+the semantic sun angle and the authored cascade/range/bias policy; do not introduce
+a Gaussian/PCSS blur or tune physical light state to hide a filtering artifact.
 
 ## Do not patch symptoms
 
@@ -163,6 +172,8 @@ Add the smallest real regression at the owning boundary:
   active-Twin teardown;
 - the selected camera projects through the persistent `WorldGrid` into the sole
   `OriginAnchor`, while duplicate or missing world-shell entities fail closed.
+- a standard render camera receives the hardware 2x2 shadow filter exactly once;
+  fast mode remains unlit and does not attach it.
 
 Run focused checks first:
 

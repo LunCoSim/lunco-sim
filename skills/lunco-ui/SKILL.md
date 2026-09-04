@@ -54,17 +54,24 @@ Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
 `lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER` (`egui::Order::Middle`);
 their scrims use the shared `TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`).
 Workbench menus and window controls are egui `Foreground` surfaces and therefore
-remain above both tutorial layers visually and for input. Keep this one shared
-layer contract; do not rely on system execution order or give a tutorial surface
-a `Foreground`/`Tooltip` order that can cover application controls. The tutorial
+remain above both tutorial layers visually and for input. The workbench measures
+the live menu row and right-side control group; on compact widths it keeps File
+and View direct and places registered domain menus plus Edit, Settings, Help, and
+Time under one keyboard-reachable `More` entry. The direct and overflow surfaces
+call the same menu renderers, so command semantics and callback state have one
+owner. Keep this one shared layer contract; do not rely on system execution order
+or give a tutorial surface a `Foreground`/`Tooltip` order that can cover
+application controls. The tutorial
 draw systems are chained within their shared layer, so their relative paint order
 is deterministic as well.
 
-Tutorial catalogs must let egui size the menu to its content, bounded by the
-current viewport, and must let short lists shrink instead of reserving an empty
-scroll region. Completion state uses the shared vector `UiIcon::Check` and
-`UiIcon::Pending` with accessible status text; do not render status words or
-font-dependent glyphs as a second status system.
+Tutorial catalogs must use the shared
+`lunco_workbench::menu_popup_max_width` helper with the egui content viewport,
+fix that width before laying out wrapped rows, and let short lists shrink
+vertically instead of reserving an empty scroll region. Completion state uses
+the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
+text; do not render status words or font-dependent glyphs as a second status
+system.
 
 For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
@@ -165,6 +172,14 @@ name, or create a second status store. Add operator channels with
 telemetry browser read the same SignalRegistry samples. The card must expose
 unavailable, compiling, ready, active, paused, handoff, and failure states;
 absence of an actuator sample is not permission to hide the authored surface.
+The runtime exposure producer must additionally scope card roots to the active
+`SceneMountState` root. Preview, additive, and outgoing scene entities are not
+operator HUD sources, and a repeated ECS projection of one composed `(stage,
+prim path)` must not fill a second manifest slot; report the duplicate at the
+projection owner and retain one active identity. Scene-derived exposure
+namespaces are hidden synchronously on `SceneTeardown` so deferred despawns
+cannot leave the outgoing card visible; the next active scene repopulates them,
+while retained application facts such as `camera-status` remain available.
 
 The Modelica diagram's `Show nets` checkbox is the Connections legend's single
 workbench/egui presentation control, backed by the per-tab

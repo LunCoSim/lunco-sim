@@ -1171,8 +1171,8 @@ pub struct WorkbenchLayout {
     /// App-wide Time menu contributions. Domain plugins push a closure via
     /// [`WorkbenchLayout::register_time_menu`] at Startup so
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
-    /// live under ONE discoverable menu instead of on the toolbar and in
-    /// floating overlays. The toolbar keeps pause/resume and nothing else.
+    /// live under ONE discoverable menu. The toolbar keeps pause/resume and
+    /// nothing else.
     pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
 
     /// Dynamic top-level menus contributed by domain plugins.
@@ -3695,6 +3695,310 @@ fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
     }
 }
 
+/// Render the document-editing commands used by both the direct Edit menu and
+/// the compact title-bar overflow menu.
+fn render_edit_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+    let has_active = world
+        .resource::<WorkspaceResource>()
+        .active_document
+        .is_some();
+    // Ask the domain probes whether the active document's undo/redo stacks are
+    // actually non-empty; first probe to recognise the document wins (same
+    // contract as the EditorIntent resolvers). No probe answering falls back
+    // to plain "a document is active" so a domain that registered no probe
+    // keeps working entries.
+    let (can_undo, can_redo) = layout
+        .undo_probes
+        .iter()
+        .find_map(|probe| probe(&UndoProbeCtx::new(world)))
+        .unwrap_or((has_active, has_active));
+    let undo_hint = if has_active {
+        "Nothing to undo"
+    } else {
+        "No document open"
+    };
+    let redo_hint = if has_active {
+        "Nothing to redo"
+    } else {
+        "No document open"
+    };
+    if menu_item(ui, can_undo, "Undo", "Ctrl+Z", undo_hint).clicked() {
+        world.trigger(lunco_doc_bevy::EditorIntent::Undo);
+        ui.close();
+    }
+    if menu_item(ui, can_redo, "Redo", "Ctrl+Shift+Z", redo_hint).clicked() {
+        world.trigger(lunco_doc_bevy::EditorIntent::Redo);
+        ui.close();
+    }
+
+    // Domain plugins (e.g. the Modelica code editor) contribute Cut/Copy/
+    // Paste/Select-All here via `register_edit_menu`. The capability-limited
+    // MenuCtx keeps the command path shared with the direct menu.
+    let callbacks = std::mem::take(&mut layout.edit_menu);
+    if !callbacks.is_empty() {
+        ui.separator();
+        for cb in &callbacks {
+            run_menu_callback(ui, world, cb.as_ref());
+        }
+    }
+    layout.edit_menu = callbacks;
+}
+
+/// Render Settings in either its direct top-level menu or the compact
+/// overflow menu. Settings submenu sizing remains owned by the existing
+/// viewport-bounded helper.
+fn render_settings_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+    ui.label(egui::RichText::new("Theme").weak().small());
+    let mut theme = world.resource_mut::<lunco_theme::Theme>();
+    let mode = theme.mode;
+
+    let label = match mode {
+        lunco_theme::ThemeMode::Dark => "Dark",
+        lunco_theme::ThemeMode::Light => "Light",
+    };
+
+    if ui.button(label).clicked() {
+        theme.toggle_mode();
+    }
+    ui.separator();
+
+    // Feature areas stay discoverable without forcing the root Settings menu
+    // to contain every row or fill the viewport.
+    let submenus = std::mem::take(&mut layout.settings_submenus);
+    for (label, callbacks) in &submenus {
+        ui.menu_button(label, |ui| {
+            let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
+            let max_height = ui.spacing().interact_size.y * 24.0;
+            egui::ScrollArea::vertical()
+                .max_width(max_width)
+                .max_height(max_height)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    for (i, callback) in callbacks.iter().enumerate() {
+                        if i > 0 {
+                            ui.separator();
+                        }
+                        run_menu_callback(ui, world, callback.as_ref());
+                    }
+                });
+        });
+    }
+    layout.settings_submenus = submenus;
+}
+
+/// Render Help in either its direct top-level menu or the compact overflow
+/// menu.
+fn render_help_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+    if let Some(identity) = world.get_resource::<BuildIdentity>() {
+        ui.label(format!(
+            "{} · {}",
+            running_app_name(),
+            identity.version_label()
+        ));
+        if let Some(source_url) = identity.source_url() {
+            ui.hyperlink_to("View source commit on GitHub", source_url);
+        } else {
+            ui.label(
+                egui::RichText::new("Source commit unavailable")
+                    .weak()
+                    .italics(),
+            );
+        }
+    }
+    let callbacks = std::mem::take(&mut layout.help_menu);
+    if !callbacks.is_empty() {
+        ui.separator();
+        for cb in &callbacks {
+            run_menu_callback(ui, world, cb.as_ref());
+        }
+    }
+    layout.help_menu = callbacks;
+}
+
+/// Render Time in either its direct top-level menu or the compact overflow
+/// menu. Every rate still uses the single TimeTransport command authority.
+fn render_time_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+    ui.label(egui::RichText::new("Simulation rate").weak().small());
+    let (paused, rate) = world
+        .get_resource::<lunco_time::TimeTransport>()
+        .map(|t| (matches!(t.mode, lunco_time::TransportMode::Paused), t.rate))
+        .unwrap_or((false, 1.0));
+
+    // Every listed rate uses the same causal fixed-step path. Higher rates
+    // drain more fixed iterations per render frame while the fixed timestep
+    // and solver fidelity stay unchanged.
+    ui.label(egui::RichText::new("Physics realtime").weak().small());
+    ui.horizontal(|ui| {
+        for &m in lunco_time::REALTIME_RATE_OPTIONS {
+            let on = !paused && (rate - m).abs() < f64::EPSILON;
+            if ui
+                .selectable_label(on, lunco_time::realtime_rate_label(m))
+                .on_hover_text("Run the simulation (physics included) at this rate")
+                .clicked()
+            {
+                world.trigger(lunco_time::SetTimeTransport {
+                    playing: Some(true),
+                    rate: Some(m),
+                });
+            }
+        }
+    });
+    if !rate.is_finite() || rate > lunco_time::MAX_REALTIME_RATE {
+        // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads a
+        // per-frame copy that only the Modelica canvas ever publishes, so
+        // everywhere else it silently returns `Theme::dark()`.
+        let warn = world
+            .get_resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.warning)
+            .unwrap_or(egui::Color32::YELLOW);
+        ui.label(egui::RichText::new(format!("Unsupported live rate: {rate:.0}x")).color(warn))
+            .on_hover_text("Live transport is bounded to 64x; higher rates are rejected.");
+    }
+
+    let callbacks = std::mem::take(&mut layout.time_menu);
+    if !callbacks.is_empty() {
+        ui.separator();
+        for cb in &callbacks {
+            run_menu_callback(ui, world, cb.as_ref());
+        }
+    }
+    layout.time_menu = callbacks;
+}
+
+/// Render registered custom menus without creating a second callback path.
+fn render_custom_menus(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    layout: &mut WorkbenchLayout,
+    mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
+) {
+    let custom_menus = std::mem::take(&mut layout.custom_menus);
+    for (name, cb) in &custom_menus {
+        let response = ui.menu_button(*name, |ui| {
+            run_menu_callback(ui, world, cb.as_ref());
+        });
+        if let Some(anchors) = anchors.as_deref_mut() {
+            anchors.push(((*name).to_owned(), response.response.rect));
+        }
+    }
+    layout.custom_menus = custom_menus;
+}
+
+/// The title-bar policy is based on measured widget widths and the same
+/// available width that egui gives the menu row. File and View remain direct
+/// on compact windows; the registered domain menus plus secondary application
+/// menus move together under More so no command is duplicated or lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopMenuMode {
+    Direct,
+    Overflow,
+}
+
+fn measured_menu_button_width(ui: &egui::Ui, label: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(label.to_owned(), font, ui.visuals().text_color())
+        .size()
+        .x
+        + 2.0 * ui.spacing().button_padding.x
+}
+
+fn measured_menu_row_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a str>) -> f32 {
+    let labels: Vec<&str> = labels.into_iter().collect();
+    let buttons = labels
+        .iter()
+        .map(|label| measured_menu_button_width(ui, label))
+        .sum::<f32>();
+    buttons + ui.spacing().item_spacing.x * labels.len().saturating_sub(1) as f32
+}
+
+fn top_menu_mode(
+    available_width: f32,
+    direct_menu_width: f32,
+    right_controls_width: f32,
+) -> TopMenuMode {
+    if available_width >= direct_menu_width + right_controls_width {
+        TopMenuMode::Direct
+    } else {
+        TopMenuMode::Overflow
+    }
+}
+
+fn measured_titlebar_right_width(
+    ui: &egui::Ui,
+    layout: &WorkbenchLayout,
+    titlebar_control_size: egui::Vec2,
+) -> f32 {
+    let tabs = perspective_switcher_tabs(layout);
+    let tab_width = measured_menu_row_width(ui, tabs.iter().map(|(_, title, _)| title.as_str()));
+    let transport_width = titlebar_control_size.x;
+    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+    let window_controls_width = titlebar_control_size.x * 3.0;
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    let window_controls_width = 0.0;
+    #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+    let window_control_count = 3;
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    let window_control_count = 0;
+    let buttons = tabs.len() + 1 + window_control_count;
+    let gaps = buttons.saturating_sub(1) as f32 * ui.spacing().item_spacing.x;
+    tab_width + transport_width + window_controls_width + gaps + ui.spacing().item_spacing.x * 2.0
+}
+
+fn truncate_title_to_width(ui: &egui::Ui, title: &str, max_width: f32) -> String {
+    let font = egui::FontId::proportional(12.0);
+    let color = ui.visuals().text_color();
+    if max_width <= 0.0 {
+        return String::new();
+    }
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), color)
+            .size()
+            .x
+    };
+    if width(title) <= max_width {
+        return title.to_owned();
+    }
+    // The listening endpoint is the operational part of the title. Preserve
+    // it ahead of the decorative application name when a compact gap cannot
+    // fit the complete window title.
+    if let Some(index) = title.find("Listening on") {
+        let listening = &title[index..];
+        if width(listening) <= max_width {
+            return listening.to_owned();
+        }
+    }
+    let ellipsis = "…";
+    let ellipsis_width = width(ellipsis);
+    if ellipsis_width > max_width {
+        return String::new();
+    }
+    let mut chars: Vec<char> = title.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let mut candidate: String = chars.iter().collect();
+        candidate.push_str(ellipsis);
+        if width(&candidate) <= max_width {
+            return candidate;
+        }
+    }
+    String::new()
+}
+
+fn needs_full_backdrop(
+    layout: &WorkbenchLayout,
+    viewport_empty: bool,
+    no_active_scene_camera: bool,
+) -> bool {
+    let scene_backed_perspective = layout.active_perspective_scene_visible_when_docked();
+    (!scene_backed_perspective
+        && !viewport::layout_is_empty(layout)
+        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
+        || viewport_empty
+        || no_active_scene_camera
+}
+
 fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
@@ -3813,11 +4117,12 @@ fn render_layout(
     //     around the rect so the dock-leaf gaps (tab-strip header
     //     above the panel, padding below) match theme instead of
     //     showing uncleared framebuffer pixels as a black hole.
-    // Only Design (chrome but no ViewportPanel) needs a full-window
-    // backdrop to fill the framebuffer — Camera3d is inactive there.
-    // View and Build both keep Camera3d running full-window; egui
-    // chrome opaquely overlays where panels are and the rest stays
-    // transparent so 3D shows through (including dock-leaf gaps).
+    // Only a chrome-only perspective (no ViewportPanel and no full-window
+    // scene contract) needs a full-window backdrop to fill the framebuffer —
+    // Camera3d is inactive there. A scene-backed perspective keeps Camera3d
+    // running full-window; egui chrome opaquely overlays where panels are and
+    // the rest stays transparent so 3D shows through (including dock-leaf
+    // gaps).
     // An active placeholder message means the scene is empty — and so the USD
     // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
     // the backdrop because `Camera3d` paints the full window; with no camera
@@ -3832,10 +4137,7 @@ fn render_layout(
         .get_resource::<viewport::ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
     let no_active_scene_camera = !scene_camera_is_rendering(world);
-    let needs_full_backdrop = (!viewport::layout_is_empty(layout)
-        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
-        || viewport_empty
-        || no_active_scene_camera;
+    let needs_full_backdrop = needs_full_backdrop(layout, viewport_empty, no_active_scene_camera);
     if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
@@ -3907,25 +4209,17 @@ fn render_layout(
             world.trigger(window_command::MaximizeWindow { maximized: None });
         }
 
-        // Window title — painted centered behind the menu/control rows
-        // (purely visual, doesn't intercept clicks). Read straight off
-        // the primary Bevy window so the binary stays the source of
-        // truth for what the bar advertises (e.g. listening port).
+        // Window title — read straight off the primary Bevy window so the
+        // binary stays the source of truth for what the bar advertises (e.g.
+        // listening port). It is painted after the left and right groups have
+        // been laid out, inside the actual gap between them, so it cannot
+        // overlap controls on a compact window.
         let title = world
             .query_filtered::<&bevy::window::Window, bevy::prelude::With<bevy::window::PrimaryWindow>>()
             .single(world)
             .ok()
             .map(|w| w.title.clone())
             .unwrap_or_default();
-        if !title.is_empty() {
-            ui.painter().text(
-                ui.max_rect().center(),
-                egui::Align2::CENTER_CENTER,
-                &title,
-                egui::FontId::proportional(12.0),
-                theme.tokens.text_subdued,
-            );
-        }
 
         // `ui.horizontal` defaults to top-aligned cross-axis; with the
         // menu bar bumped to 30px the buttons would stick to the top
@@ -3953,6 +4247,24 @@ fn render_layout(
             // float over our content because of `fullsize_content_view`.
             #[cfg(target_os = "macos")]
             ui.add_space(78.0);
+            let mut direct_menu_labels = vec![
+                "File".to_owned(),
+                "Edit".to_owned(),
+                "View".to_owned(),
+            ];
+            direct_menu_labels.extend(layout.custom_menus.iter().map(|(name, _)| (*name).to_owned()));
+            direct_menu_labels.extend([
+                "Settings".to_owned(),
+                "Help".to_owned(),
+                "Time".to_owned(),
+            ]);
+            let direct_menu_width =
+                measured_menu_row_width(ui, direct_menu_labels.iter().map(String::as_str));
+            let menu_mode = top_menu_mode(
+                ui.available_width(),
+                direct_menu_width,
+                measured_titlebar_right_width(ui, layout, titlebar_control_size),
+            );
             let r_file = ui.menu_button("File", |ui| {
                 // Active doc gates Save / Save As / Close — there's
                 // nothing to save when no document is focused.
@@ -4188,58 +4500,29 @@ fn render_layout(
                 }
             });
             anchor_rects.push(("menu.file".to_owned(), r_file.response.rect));
-            let r_edit = ui.menu_button("Edit", |ui| {
-                let has_active = world
-                    .resource::<WorkspaceResource>()
-                    .active_document
-                    .is_some();
-                // Ask the domain probes whether the active document's
-                // undo/redo stacks are actually non-empty; first probe to
-                // recognise the document wins (same contract as the
-                // `EditorIntent` resolvers). No probe answering falls
-                // back to plain "a document is active" so a domain that
-                // registered no probe keeps working entries.
-                let (can_undo, can_redo) = layout
-                    .undo_probes
-                    .iter()
-                    .find_map(|probe| probe(&UndoProbeCtx::new(world)))
-                    .unwrap_or((has_active, has_active));
-                let undo_hint = if has_active {
-                    "Nothing to undo"
-                } else {
-                    "No document open"
-                };
-                let redo_hint = if has_active {
-                    "Nothing to redo"
-                } else {
-                    "No document open"
-                };
-                if menu_item(ui, can_undo, "Undo", "Ctrl+Z", undo_hint).clicked() {
-                    world.trigger(lunco_doc_bevy::EditorIntent::Undo);
-                    ui.close();
-                }
-                if menu_item(ui, can_redo, "Redo", "Ctrl+Shift+Z", redo_hint)
-                    .clicked()
-                {
-                    world.trigger(lunco_doc_bevy::EditorIntent::Redo);
-                    ui.close();
-                }
-
-                // Domain plugins (e.g. the Modelica code editor)
-                // contribute Cut/Copy/Paste/Select-All here via
-                // `register_edit_menu`. Same extraction pattern as the
-                // Settings menu so callbacks receive the capability-limited
-                // `MenuCtx`.
-                let callbacks = std::mem::take(&mut layout.edit_menu);
-                if !callbacks.is_empty() {
-                    ui.separator();
-                    for cb in &callbacks {
-                        run_menu_callback(ui, world, cb.as_ref());
-                    }
-                }
-                layout.edit_menu = callbacks;
-            });
-            anchor_rects.push(("menu.edit".to_owned(), r_edit.response.rect));
+            if matches!(menu_mode, TopMenuMode::Direct) {
+                let r_edit = ui.menu_button("Edit", |ui| {
+                    render_edit_menu(ui, world, layout);
+                });
+                anchor_rects.push(("menu.edit".to_owned(), r_edit.response.rect));
+            } else {
+                let r_more = ui.menu_button("More", |ui| {
+                    ui.menu_button("Edit", |ui| {
+                        render_edit_menu(ui, world, layout);
+                    });
+                    render_custom_menus(ui, world, layout, None);
+                    ui.menu_button("Settings", |ui| {
+                        render_settings_menu(ui, world, layout);
+                    });
+                    ui.menu_button("Help", |ui| {
+                        render_help_menu(ui, world, layout);
+                    });
+                    ui.menu_button("Time", |ui| {
+                        render_time_menu(ui, world, layout);
+                    });
+                });
+                anchor_rects.push(("menu.more".to_owned(), r_more.response.rect));
+            }
             let r_view = ui.menu_button("View", |ui| {
                 if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
@@ -4419,82 +4702,18 @@ fn render_layout(
             });
             anchor_rects.push(("menu.view".to_owned(), r_view.response.rect));
 
-            // Custom top-level menus
-            let custom_menus = std::mem::take(&mut layout.custom_menus);
-
-            for (name, cb) in &custom_menus {
-                let r_custom = ui.menu_button(*name, |ui| {
-                    run_menu_callback(ui, world, cb.as_ref());
-                });
-
-                anchor_rects.push(((*name).to_owned(), r_custom.response.rect));
-            }
-            layout.custom_menus = custom_menus;
+            if matches!(menu_mode, TopMenuMode::Direct) {
+            // Custom top-level menus are rendered through the same helper in
+            // direct and compact layouts, so registered commands keep one
+            // owner and one callback path.
+            render_custom_menus(ui, world, layout, Some(&mut anchor_rects));
 
             let r_settings = ui.menu_button("Settings", |ui| {
-                ui.label(egui::RichText::new("Theme").weak().small());
-                let mut theme = world.resource_mut::<lunco_theme::Theme>();
-                let mode = theme.mode;
-
-                let label = match mode {
-                    lunco_theme::ThemeMode::Dark => "Dark",
-                    lunco_theme::ThemeMode::Light => "Light",
-                };
-
-                if ui.button(label).clicked() {
-                    theme.toggle_mode();
-                }
-                ui.separator();
-
-                // Feature areas stay discoverable without forcing the root
-                // Settings menu to contain every row or fill the viewport.
-                let submenus = std::mem::take(&mut layout.settings_submenus);
-                for (label, callbacks) in &submenus {
-                    ui.menu_button(label, |ui| {
-                        let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
-                        let max_height = ui.spacing().interact_size.y * 24.0;
-                        egui::ScrollArea::vertical()
-                            .max_width(max_width)
-                            .max_height(max_height)
-                            .auto_shrink([true, true])
-                            .show(ui, |ui| {
-                                for (i, callback) in callbacks.iter().enumerate() {
-                                    if i > 0 {
-                                        ui.separator();
-                                    }
-                                    run_menu_callback(ui, world, callback.as_ref());
-                                }
-                            });
-                    });
-                }
-                layout.settings_submenus = submenus;
+                render_settings_menu(ui, world, layout);
             });
             anchor_rects.push(("menu.settings".to_owned(), r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
-                if let Some(identity) = world.get_resource::<BuildIdentity>() {
-                    ui.label(format!(
-                        "{} · {}",
-                        running_app_name(),
-                        identity.version_label()
-                    ));
-                    if let Some(source_url) = identity.source_url() {
-                        ui.hyperlink_to("View source commit on GitHub", source_url);
-                    } else {
-                        ui.label(
-                            egui::RichText::new("Source commit unavailable")
-                                .weak()
-                                .italics(),
-                        );
-                    }
-                }
-                let callbacks = std::mem::take(&mut layout.help_menu);
-                if !callbacks.is_empty() {
-                    ui.separator();
-                    for cb in &callbacks {
-                        run_menu_callback(ui, world, cb.as_ref());
-                    }
-                }
-                layout.help_menu = callbacks;
+                render_help_menu(ui, world, layout);
             });
             anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
 
@@ -4508,64 +4727,13 @@ fn render_layout(
             // for mid-drive.
             //
             // Domain plugins contribute rows via
-            // `WorkbenchLayout::register_time_menu` (the celestial sky clock and
-            // optional overlays), so nothing about the sky is hardcoded here.
+            // `WorkbenchLayout::register_time_menu` (the celestial sky clock),
+            // so nothing about the sky is hardcoded here.
             let r_time = ui.menu_button("Time", |ui| {
-                ui.label(egui::RichText::new("Simulation rate").weak().small());
-                let (paused, rate) = world
-                    .get_resource::<lunco_time::TimeTransport>()
-                    .map(|t| {
-                        (
-                            matches!(t.mode, lunco_time::TransportMode::Paused),
-                            t.rate,
-                        )
-                    })
-                    .unwrap_or((false, 1.0));
-
-                // Every listed rate uses the same causal fixed-step path. Higher
-                // rates drain more fixed iterations per render frame while the
-                // fixed timestep and solver fidelity stay unchanged.
-                ui.label(egui::RichText::new("Physics realtime").weak().small());
-                ui.horizontal(|ui| {
-                    for &m in lunco_time::REALTIME_RATE_OPTIONS {
-                        let on = !paused && (rate - m).abs() < f64::EPSILON;
-                        if ui
-                            .selectable_label(on, lunco_time::realtime_rate_label(m))
-                            .on_hover_text("Run the simulation (physics included) at this rate")
-                            .clicked()
-                        {
-                            world.trigger(lunco_time::SetTimeTransport {
-                                playing: Some(true),
-                                rate: Some(m),
-                            });
-                        }
-                    }
-                });
-                if !rate.is_finite() || rate > lunco_time::MAX_REALTIME_RATE {
-                    // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads
-                    // a per-frame copy that only the Modelica canvas ever publishes,
-                    // so everywhere else it silently returns `Theme::dark()`.
-                    let warn = world
-                        .get_resource::<lunco_theme::Theme>()
-                        .map(|t| t.tokens.warning)
-                        .unwrap_or(egui::Color32::YELLOW);
-                    ui.label(
-                        egui::RichText::new(format!("Unsupported live rate: {rate:.0}x"))
-                            .color(warn),
-                    )
-                    .on_hover_text("Live transport is bounded to 64x; higher rates are rejected.");
-                }
-
-                let callbacks = std::mem::take(&mut layout.time_menu);
-                if !callbacks.is_empty() {
-                    ui.separator();
-                    for cb in &callbacks {
-                        run_menu_callback(ui, world, cb.as_ref());
-                    }
-                }
-                layout.time_menu = callbacks;
+                render_time_menu(ui, world, layout);
             });
             anchor_rects.push(("menu.time".to_owned(), r_time.response.rect));
+            }
 
             // Pause/Resume simulation via the single transport authority
             // (`TimeTransport.mode`, doc 19). The spine maps `Paused` onto
@@ -4609,9 +4777,10 @@ fn render_layout(
                         .get_resource::<window_command::WindowMaximized>()
                         .map(|s| s.0)
                         .unwrap_or(false);
-                    if icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size)
-                        .clicked()
-                    {
+                    let close_response =
+                        icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size);
+                    anchor_rects.push(("window.close".to_owned(), close_response.rect));
+                    if close_response.clicked() {
                         world.trigger(window_command::CloseWindow {});
                     }
                     let max_icon = if is_max {
@@ -4620,17 +4789,20 @@ fn render_layout(
                         UiIcon::Maximize
                     };
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
-                    if icon_button_sized(ui, max_icon, max_hover, titlebar_control_size).clicked() {
+                    let maximize_response =
+                        icon_button_sized(ui, max_icon, max_hover, titlebar_control_size);
+                    anchor_rects.push(("window.maximize".to_owned(), maximize_response.rect));
+                    if maximize_response.clicked() {
                         world.trigger(window_command::MaximizeWindow { maximized: None });
                     }
-                    if icon_button_sized(
+                    let minimize_response = icon_button_sized(
                         ui,
                         UiIcon::Minimize,
                         "Minimize",
                         titlebar_control_size,
-                    )
-                    .clicked()
-                    {
+                    );
+                    anchor_rects.push(("window.minimize".to_owned(), minimize_response.rect));
+                    if minimize_response.clicked() {
                         world.trigger(window_command::MinimizeWindow {});
                     }
                     ui.separator();
@@ -4667,6 +4839,46 @@ fn render_layout(
                     }
                 }
             });
+
+            if !title.is_empty() {
+                let right_group_start = anchor_rects
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.starts_with("menu.perspective.") || key.starts_with("window.")
+                    })
+                    .map(|(_, rect)| rect.left())
+                    .min_by(f32::total_cmp)
+                    .unwrap_or(ui.min_rect().right());
+                let left_group_end = anchor_rects
+                    .iter()
+                    .filter(|(key, _)| {
+                        key != "menu.bar"
+                            && key != "menu.network"
+                            && !key.starts_with("window.")
+                            && !key.starts_with("menu.perspective.")
+                    })
+                    .map(|(_, rect)| rect.right())
+                    .max_by(f32::total_cmp)
+                    .unwrap_or(ui.min_rect().left());
+                let title_gap = egui::Rect::from_min_max(
+                    egui::pos2(left_group_end, ui.min_rect().top()),
+                    egui::pos2(right_group_start, ui.min_rect().bottom()),
+                );
+                let shown = truncate_title_to_width(
+                    ui,
+                    &title,
+                    (title_gap.width() - ui.spacing().item_spacing.x * 2.0).max(0.0),
+                );
+                if !shown.is_empty() {
+                    ui.painter().text(
+                        title_gap.center(),
+                        egui::Align2::CENTER_CENTER,
+                        shown,
+                        egui::FontId::proportional(12.0),
+                        theme.tokens.text_subdued,
+                    );
+                }
+            }
 
             // Flush collected button rects into `HelpAnchors` now
             // that the menu_button closures have returned and no
@@ -5583,6 +5795,16 @@ const STATUS_POPUP_MIN_WIDTH: f32 = 420.0;
 const STATUS_POPUP_MAX_WIDTH: f32 = 960.0;
 const SETTINGS_SUBMENU_MAX_WIDTH: f32 = 640.0;
 
+/// Bound a menu's requested width to the usable egui content viewport.
+///
+/// Menu callbacks use the result with `Ui::set_width`, which keeps the popup
+/// from growing back to an intrinsic long-label width after the callback has
+/// established its content policy.
+pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32 {
+    let available = (content_width - STATUS_POPUP_VIEWPORT_MARGIN).max(1.0);
+    available.min(requested_max_width.max(1.0))
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
     Discrete(u64),
@@ -5609,9 +5831,7 @@ fn status_popup_width(content_width: f32) -> f32 {
 }
 
 fn settings_submenu_max_width(content_width: f32) -> f32 {
-    (content_width - STATUS_POPUP_VIEWPORT_MARGIN)
-        .max(0.0)
-        .min(SETTINGS_SUBMENU_MAX_WIDTH)
+    menu_popup_max_width(content_width, SETTINGS_SUBMENU_MAX_WIDTH)
 }
 
 /// Render the always-visible networking chip in the status bar.
@@ -6579,6 +6799,37 @@ mod tests {
         assert!(scene_camera_is_rendering(&world));
     }
 
+    struct SceneBackedTestPerspective;
+
+    impl Perspective for SceneBackedTestPerspective {
+        fn id(&self) -> PerspectiveId {
+            PerspectiveId("scene_backed_test")
+        }
+
+        fn title(&self) -> String {
+            "Scene-backed test".into()
+        }
+
+        fn scene_visible_when_docked(&self) -> bool {
+            true
+        }
+
+        fn apply(&self, layout: &mut WorkbenchLayout) {
+            layout.set_center(vec![]);
+        }
+    }
+
+    #[test]
+    fn scene_backed_dock_does_not_paint_opaque_backdrop() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(SceneBackedTestPerspective);
+        layout.right_inspector.push(PanelId("command_deck"));
+
+        assert!(!needs_full_backdrop(&layout, false, false));
+        assert!(needs_full_backdrop(&layout, true, false));
+        assert!(needs_full_backdrop(&layout, false, true));
+    }
+
     #[test]
     fn status_popup_width_is_compact_but_uses_available_viewport() {
         assert_eq!(status_popup_width(200.0), 176.0);
@@ -6599,6 +6850,19 @@ mod tests {
             settings_submenu_max_width(4000.0),
             SETTINGS_SUBMENU_MAX_WIDTH
         );
+    }
+
+    #[test]
+    fn menu_popup_width_never_exceeds_the_content_viewport() {
+        assert_eq!(menu_popup_max_width(200.0, 420.0), 176.0);
+        assert_eq!(menu_popup_max_width(1024.0, 420.0), 420.0);
+        assert_eq!(menu_popup_max_width(4000.0, 420.0), 420.0);
+    }
+
+    #[test]
+    fn top_menu_overflow_starts_before_right_controls_can_collide() {
+        assert_eq!(top_menu_mode(800.0, 500.0, 300.0), TopMenuMode::Direct);
+        assert_eq!(top_menu_mode(799.0, 500.0, 300.0), TopMenuMode::Overflow);
     }
 
     #[test]

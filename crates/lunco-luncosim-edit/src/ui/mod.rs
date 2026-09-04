@@ -1058,6 +1058,9 @@ impl Perspective for ViewPerspective {
     fn restores_cached_layout(&self) -> bool {
         false
     }
+    fn scene_visible_when_docked(&self) -> bool {
+        true
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(None);
@@ -1194,6 +1197,11 @@ impl Perspective for TerrainPerspective {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_perspective_keeps_scene_visible_behind_transient_panels() {
+        assert!(ViewPerspective.scene_visible_when_docked());
+    }
 
     #[test]
     fn build_perspective_seeds_the_canonical_graph_instance() {

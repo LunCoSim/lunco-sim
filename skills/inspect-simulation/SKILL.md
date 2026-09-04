@@ -60,9 +60,12 @@ geometry stream state. A settled visual terrain requires `wanted == resident`
 and `pending == 0`; the status-bar text is presentation history and is not a
 readiness signal. Streamed Lit terrain also waits for its USD material source
 projection and any required off-thread derived surface/normal product before
-exposing the initial tile set; observe the live `terrain-derived` status entry
-during startup rather than treating a historical terrain event as proof that
-materials are settled.
+exposing the initial tile set. During startup, a status entry may intentionally
+remain live at `resident == wanted` while `pending > 0`: that is render-material
+publication, not a completed tile bar. Observe the live `terrain-derived` status
+entry and the typed query rather than treating a historical terrain event as
+proof that materials are settled. Static USD DEM terrain keeps its `UsdShade`
+appearance intent on the terrain owner while the generated mesh is assembled.
 
 For an interactive USD edit, query `InspectUsdViewport` before describing or
 changing the visible item, then correlate its explicit view/preview handle with

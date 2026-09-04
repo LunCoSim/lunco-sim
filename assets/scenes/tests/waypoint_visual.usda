@@ -38,7 +38,7 @@ def Xform "WaypointVisual" (
         bool physics:rigidBodyEnabled = false
     }
 
-    def Xform "Waypoint" (
+    def Xform "Waypoint1" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {

@@ -46,6 +46,13 @@ renderer; it never reuses a waypoint sphere's radius or local transform. The com
 ordered route remains visible while the same state transition advances the active-leg
 highlight, preserving USD as the sole owner of scene facts.
 
+The route's presentation is deliberately subordinate to the vessel: the derived
+triangle strip is narrow, surface-separated, unlit, and uses muted green for the
+complete route with a brighter blue only for the active authored leg. Waypoint
+labels are a separate generic screen-space overlay. They wrap to a bounded width,
+stay inside the viewport, and select non-overlapping camera-facing slots; route
+geometry never becomes a second label or camera-dependent route owner.
+
 ## Motion trails are bounded physics history
 
 A vehicle trail answers a different question from a route ribbon: where the vehicle

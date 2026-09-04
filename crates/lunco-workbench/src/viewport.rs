@@ -781,14 +781,15 @@ pub(crate) fn apply_workbench_viewport(
 fn resolve_scene_viewport_layout(
     layout: Option<&crate::WorkbenchLayout>,
 ) -> (bool, Option<(UVec2, UVec2)>) {
-    let (layout_empty, layout_has_viewport) = match layout {
-        None => (true, false),
+    let (layout_empty, layout_has_viewport, scene_visible_when_docked) = match layout {
+        None => (true, false, false),
         Some(l) => (
             layout_is_empty(l),
             layout_contains_panel(l, VIEWPORT_PANEL_ID),
+            l.active_perspective_scene_visible_when_docked(),
         ),
     };
-    if layout_empty {
+    if layout_empty || scene_visible_when_docked {
         return (true, None);
     }
     if !layout_has_viewport {
@@ -1584,6 +1585,38 @@ mod tests {
         let (visible, rect) = resolve_scene_viewport_layout(Some(&layout));
 
         assert!(!visible);
+        assert_eq!(rect, None);
+    }
+
+    struct SceneBackedPerspective;
+
+    impl crate::Perspective for SceneBackedPerspective {
+        fn id(&self) -> crate::PerspectiveId {
+            crate::PerspectiveId("scene_backed")
+        }
+
+        fn title(&self) -> String {
+            "Scene backed".into()
+        }
+
+        fn scene_visible_when_docked(&self) -> bool {
+            true
+        }
+
+        fn apply(&self, layout: &mut crate::WorkbenchLayout) {
+            layout.set_center(vec![]);
+        }
+    }
+
+    #[test]
+    fn scene_backed_perspective_keeps_scene_with_transient_panel() {
+        let mut layout = crate::WorkbenchLayout::default();
+        layout.register_perspective(SceneBackedPerspective);
+        layout.right_inspector.push(PanelId("command_deck"));
+
+        let (visible, rect) = resolve_scene_viewport_layout(Some(&layout));
+
+        assert!(visible);
         assert_eq!(rect, None);
     }
 }

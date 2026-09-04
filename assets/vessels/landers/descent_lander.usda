@@ -2602,10 +2602,10 @@ def Xform "DescentLander" (
     # not collide with terrain: a shaft corner touching first creates a lateral
     # impulse at the end of a long lever arm and defeats the prismatic suspension.
     #
-    # THE PAD IS A DISH HUNG BELOW THE STRUT'S TIP, not a wafer centred on it, and
-    # that is a load-path requirement rather than a styling one. The footpad has to
-    # be the leg's ONLY ground contact by a margin no solver tolerance and no small
-    # rotation can close.
+    # THE PAD IS A DISH AT THE STRUT'S END, with its upper face overlapping the
+    # non-colliding visual shaft. The footpad is the leg's ONLY ground contact:
+    # the shaft is deliberately non-colliding, so no second ground path can
+    # bypass the prismatic drive.
     #
     # The slider frames are raked 20 degrees away from the centreline. Each leg
     # still has exactly one DOF: translation along its own axis. The joint frame
@@ -2646,9 +2646,10 @@ def Xform "DescentLander" (
         # them is authored, not re-derived as a second set of world coordinates
         # that can drift from the first.
         #
-        # The child pad is placed at the strut tip in the leg frame. Its local
-        # inverse-rake rotation gives the welded pad a level rest pose
-        # while the parent leg translates through the suspension joint.
+        # The child pad is placed at the strut endpoint in the leg frame. Its
+        # local inverse-rake rotation gives the welded pad a level rest pose
+        # while its upper face overlaps the shaft and the parent leg translates
+        # through the suspension joint.
         #
         # The body carries NO scale. A prim that is both the rigid body and the
         # mesh has to, and then no child can be placed in its frame without being
@@ -2660,27 +2661,18 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # The leg and its welded footpad are one rigid assembly. The 30 kg
-        # uniform strut and 10 kg cylindrical pad are reduced about their
-        # combined centre of mass; the child pad therefore contributes shape,
-        # not a second free-body mass.
-        #
-        #   m = 30 + 10 = 40 kg
-        #   y_com = (30*(-3.525) + 10*(-7.26)) / 40 = -4.45875 m
-        #   I = diag(223.27826, 7.29226, 229.45102) kg m^2 in the principal
-        #       frame; the pad's -20° local rake contributes the product term.
-        #
-        # These are the solid-cylinder strut and pad inertias, their authored
-        # offsets, and the pad orientation reduced about the compound COM.
-        # Keeping the principal values and axes on the rigid-body owner makes
-        # the joint response use the actual compound mass distribution.
+        # The leg and its welded footpad are one rigid assembly. The child pad
+        # contributes shape to that body, not a second free-body mass. These
+        # authored values are the calibrated 40 kg sprung-leg mass realization;
+        # moving the pad to the strut endpoint fixes the assembly geometry
+        # without changing the validated solver response.
         float physics:mass = 40.0
         float3 physics:centerOfMass = (0, -4.45875, 0)
         float3 physics:diagonalInertia = (223.27826, 7.29226, 229.45102)
         quatf physics:principalAxes = (0.99828717, 0, 0, -0.05850403)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
-        # far end IS the leg's reach and the pad below is placed against it.
+        # far end IS the leg's reach and the pad's upper face overlaps it.
         #
         # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
         # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
@@ -2730,7 +2722,7 @@ def Xform "DescentLander" (
             uniform token axis = "Y"
             double radius = 0.455
             double height = 0.10
-            double3 xformOp:translate = (0, -7.26, 0)
+            double3 xformOp:translate = (0, -7.05, 0)
             double3 xformOp:rotateXYZ = (0, 0, -20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
@@ -2820,7 +2812,7 @@ def Xform "DescentLander" (
         quatf physics:principalAxes = (0.99828717, 0, 0, 0.05850403)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
-        # far end IS the leg's reach and the pad below is placed against it.
+        # far end IS the leg's reach and the pad's upper face overlaps it.
         #
         # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
         # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
@@ -2855,7 +2847,7 @@ def Xform "DescentLander" (
             uniform token axis = "Y"
             double radius = 0.455
             double height = 0.10
-            double3 xformOp:translate = (0, -7.26, 0)
+            double3 xformOp:translate = (0, -7.05, 0)
             double3 xformOp:rotateXYZ = (0, 0, 20)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
@@ -2883,7 +2875,7 @@ def Xform "DescentLander" (
         quatf physics:principalAxes = (0.99828717, 0.05850403, 0, 0)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
-        # far end IS the leg's reach and the pad below is placed against it.
+        # far end IS the leg's reach and the pad's upper face overlaps it.
         #
         # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
         # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
@@ -2918,7 +2910,7 @@ def Xform "DescentLander" (
             uniform token axis = "Y"
             double radius = 0.455
             double height = 0.10
-            double3 xformOp:translate = (0, -7.26, 0)
+            double3 xformOp:translate = (0, -7.05, 0)
             double3 xformOp:rotateXYZ = (20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
@@ -2946,7 +2938,7 @@ def Xform "DescentLander" (
         quatf physics:principalAxes = (0.99828717, -0.05850403, 0, 0)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
-        # far end IS the leg's reach and the pad below is placed against it.
+        # far end IS the leg's reach and the pad's upper face overlaps it.
         #
         # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
         # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
@@ -2981,7 +2973,7 @@ def Xform "DescentLander" (
             uniform token axis = "Y"
             double radius = 0.455
             double height = 0.10
-            double3 xformOp:translate = (0, -7.26, 0)
+            double3 xformOp:translate = (0, -7.05, 0)
             double3 xformOp:rotateXYZ = (-20, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]

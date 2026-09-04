@@ -17,12 +17,18 @@
 # `primvars:doNotCastShadows` flag excludes this annotation from shadow maps.
 def Xform "WaypointMarker" (
     doc = "Reusable mission waypoint marker with a non-solid arrival trigger for rover routes."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWaypointAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWaypointAPI", "LunCoBillboardAPI"]
     kind = "component"
 )
 {
     uniform bool lunco:spawnable = true
     bool lunco:waypoint = true
+    # Every reusable waypoint opts into the shared label path. Runtime-created
+    # markers attach the same data-only contract after spawning this asset.
+    bool lunco:billboard = true
+    string lunco:billboard:text = "Waypoint {index}\n{lat:.5}, {lon:.5}\n{height:.1} m"
+    float lunco:billboard:offsetY = 4.0
+    float lunco:billboard:fadeEnd = 1200.0
     custom string lunco:interaction:left = "pass_through"
     custom string lunco:interaction:right = "context"
 

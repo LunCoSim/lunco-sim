@@ -454,7 +454,13 @@ a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
 includes selected meshes and the root fallback until `ShaderLookReady` confirms
 the shader layout and declared image dependencies; in-place image updates do not
 toggle that latch, and a cached edge-stitch material variant preserves it when
-its own shader and image dependencies are already ready; **procedural
+its own shader and image dependencies are already ready; **the status mirror
+remains live while `pending > 0` even when `resident == wanted`, and presents
+that render-publication phase as an indeterminate preparation state rather than
+a completed tile bar**; **procedural USD DEM surfaces** keep their standard
+`UsdShade`/`PbrLook` intent on the terrain Xform before the asynchronous DEM mesh
+is assembled, so the render-free terrain crate never invents a material and a
+static surface cannot arrive black solely because geometry was late; **procedural
 over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
