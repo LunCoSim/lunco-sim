@@ -167,7 +167,7 @@ transient session state. The correct split for the shipped surfaces is:
 |---|---|---|
 | `camera-status` visibility | `runtime_surfaces.json` + active Twin `[settings]` | Yes; `ui.camera_status`, default on |
 | `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
-| lander control cards | authored USD `lunco:ui:controlHud` metadata | Already scene/Twin-authored opt-in |
+| lander control cards | authored USD `lunco:ui:controlHud` metadata, scoped to the active `SceneMountState` root | Already scene/Twin-authored opt-in |
 | `lunica-schema` | selected authored USD schema root | No; selection-derived |
 | `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in the Camera menu | Not migrated; it is an application view control |
 | terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
@@ -195,6 +195,19 @@ operator channels use `LunCoTelemetryAPI` on the guidance component, so the
 telemetry browser and compact card consume the same SignalRegistry samples.
 Missing, compiling, paused, and failed states remain visible on the authored
 surface instead of being hidden until an actuator sample exists.
+
+The control-root projector is also lifecycle-scoped. It accepts only prims below
+the current primary `SceneMountState::active_root`; preview, additive, and
+outgoing roots cannot keep publishing a card while a replacement scene is being
+teardown. The cache invalidates when that active root changes, and repeated ECS
+projections of the same composed `(stage, prim path)` are reduced to one
+operator identity with a diagnostic. This keeps the two authored manifest slots
+from becoming two copies of one active lander during scene reload or projection
+churn. At the same replacement boundary, scene-derived exposure namespaces are
+withdrawn synchronously; the retained UI cannot display the outgoing card while
+deferred entity teardown is still pending. The next active root repopulates those
+namespaces through the normal first publication, while the application-owned
+`camera-status` fact remains retained.
 
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the
