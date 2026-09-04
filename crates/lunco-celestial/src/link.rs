@@ -1011,6 +1011,24 @@ pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports:
             }
         }
     },
+    metadata: Some(|_world, _entity, name, direction| {
+        let unit = if name.ends_with("_m") {
+            Some("m")
+        } else if name.ends_with("_s") {
+            Some("s")
+        } else {
+            None
+        };
+        lunco_core::ports::PortMetadata::scalar(
+            direction,
+            unit,
+            None,
+            None,
+            "celestial link",
+            "ephemeris",
+            false,
+        )
+    }),
     read_output: |world, entity, name| {
         let state = world.get::<LinkState>(entity)?;
         let rest = name.strip_prefix("link_")?;

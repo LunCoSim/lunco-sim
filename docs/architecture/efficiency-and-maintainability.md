@@ -266,6 +266,14 @@ avian bodies behind the `SimComponent` backend — that's the dominant port cost
 The strings were already removed (0.3's `CompiledWiring`); the remaining cost is
 the per-tick backend fold + group scan.
 
+The same registry also owns the generic inspection projection:
+`entity_port_infos` decorates one backend list with its owner-supplied metadata
+for the native Ports panel and `ReadPorts`. Consumers do not duplicate unit,
+range, source, or authority rules from port names. The panel samples this
+projection at a bounded 10 Hz cadence because some physics outputs do not carry
+a shared change marker; command emission still uses the existing typed
+`SetPorts`/`ReleasePort` observers.
+
 ### The model: FMI valueReference (resolve once, exchange by handle)
 
 FMI never exchanges by variable *name* on the hot path — it resolves names to

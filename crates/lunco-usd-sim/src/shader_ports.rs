@@ -86,7 +86,7 @@
 //! `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`.
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
+use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
@@ -153,6 +153,17 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             });
         }
     },
+    metadata: Some(|_world, _entity, _name, direction| {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "shader parameter",
+            "material owner",
+            true,
+        )
+    }),
     read_output: |_, _, _| None,
     read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
     write_input: |world, entity, name, value| {

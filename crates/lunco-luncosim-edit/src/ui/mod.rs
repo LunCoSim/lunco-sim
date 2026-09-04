@@ -37,6 +37,8 @@ pub mod inspector;
 /// Joint State panel — live joint θ / ω / target / τ table for the selected
 /// vessel (revolute joints + raycast wheels + steering), deep-review §2.7.
 pub mod joint_state;
+/// Universal runtime port inspection and manual control surface.
+pub mod ports;
 /// Generic right-click menus for USD-authored transparent markers.
 pub mod scene_context;
 pub(crate) mod selection_context;
@@ -573,6 +575,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_panel(inspector::Inspector)
             .register_panel(inspector::EnvironmentPanel)
             .register_panel(entity_list::EntityList)
+            .register_panel(ports::PortPanel::default())
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
@@ -761,6 +764,13 @@ impl Plugin for SceneEditUiPlugin {
             entity_list::populate_entity_tree_view,
             entity_list::scene_topology_changed,
         );
+
+        // The universal port table is a live diagnostic/control surface. Its
+        // producer samples the shared registry at 10 Hz because some Avian
+        // outputs are native solver components without one common change marker;
+        // the panel itself remains a pure view and emits SetPorts/ReleasePort.
+        app.init_resource::<ports::PortView>();
+        app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
         // WP-8: the Inspector reads query-derived sun / camera / joint state
         // (which `PanelCtx` can't gather in paint) from `InspectorView`,
@@ -1094,7 +1104,7 @@ impl Perspective for BuildPerspective {
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_stacked(
-            vec![PanelId("entity_list")],
+            vec![PanelId("entity_list"), PanelId("port_inspector")],
             vec![PanelId("telemetry_browser")],
         );
         layout.set_center(vec![VIEWPORT_PANEL_ID]);

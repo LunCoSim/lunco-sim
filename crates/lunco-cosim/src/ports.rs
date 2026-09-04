@@ -23,7 +23,9 @@
 use bevy::prelude::*;
 
 use lunco_core::architecture::{InputPorts, OutputPorts, Port};
-use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
+use lunco_core::ports::{
+    push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+};
 
 use crate::{DeclaredOutputPorts, SimComponent};
 
@@ -104,6 +106,73 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
             });
         }
     }
+}
+
+fn avian_unit(name: &str) -> Option<&'static str> {
+    if name.starts_with("position_")
+        || name.starts_with("ray_hit_position_")
+        || name == "displacement"
+        || name == "ray_distance"
+    {
+        Some("m")
+    } else if name.starts_with("velocity_") || name == "velocity" {
+        Some("m/s")
+    } else if name.starts_with("angvel_") {
+        Some("rad/s")
+    } else if name == "angle" {
+        Some("rad")
+    } else if name.starts_with("force_") || name == "force" {
+        Some("N")
+    } else if name.starts_with("torque_") || name == "torque" {
+        Some("N·m")
+    } else if name == "ray_sample_time" {
+        Some("s")
+    } else {
+        None
+    }
+}
+
+fn avian_metadata(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    direction: PortDirection,
+) -> PortMetadata {
+    const SOURCES: [&str; 8] = [
+        "Avian rigid body",
+        "Avian kinematic body",
+        "Avian force actuator",
+        "Avian torque actuator",
+        "Avian contact solver",
+        "Avian revolute joint",
+        "Avian prismatic joint",
+        "Avian ray query",
+    ];
+    for (group_index, group) in AVIAN.iter().enumerate() {
+        if !(group.present)(world, entity) {
+            continue;
+        }
+        if let Some(port) = group
+            .ports
+            .iter()
+            .find(|port| port.name == name && port.dir == direction)
+        {
+            return PortMetadata::scalar(
+                direction,
+                avian_unit(name),
+                None,
+                None,
+                SOURCES[group_index],
+                if port.write.is_some() {
+                    "control owner"
+                } else {
+                    "physics solver"
+                },
+                port.write.is_some(),
+            );
+        }
+    }
+    PortMetadata::unknown(direction)
 }
 
 /// Encode an avian slot: `(group index << 16) | port index` into [`AVIAN`]. The
@@ -211,6 +280,19 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             push_map(out, &c.inputs, PortDirection::In);
         }
     },
+    metadata: Some(|world, entity, _name, direction| {
+        let source = world
+            .get::<SimComponent>(entity)
+            .map(|component| component.model_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Modelica component".into());
+        let authority = if matches!(direction, PortDirection::Out) {
+            "solver"
+        } else {
+            "controller / wire"
+        };
+        PortMetadata::scalar(direction, None, None, None, source, authority, true)
+    }),
     read_output: |w, e, n| {
         w.get::<SimComponent>(e)
             .and_then(|c| c.outputs.get(n).copied())
@@ -243,6 +325,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
 /// single component access per tick.
 const AVIAN_BACKEND: PortBackend = PortBackend {
     list: avian_list,
+    metadata: Some(avian_metadata),
     read_output: avian_read_output,
     read_input: avian_read_input,
     write_input: avian_write_input,
@@ -267,6 +350,17 @@ const PORT_BACKEND: PortBackend = PortBackend {
             });
         }
     },
+    metadata: Some(|_world, _entity, _name, direction| {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "hardware port",
+            "controller / plant",
+            true,
+        )
+    }),
     read_output: |w, e, n| {
         if n != PORT_NAME {
             return None;
@@ -319,6 +413,17 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             }
         }
     },
+    metadata: Some(|_world, _entity, _name, direction| {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "runtime producer",
+            "producer",
+            false,
+        )
+    }),
     read_output: |world, entity, name| {
         world
             .get::<OutputPorts>(entity)
@@ -363,6 +468,17 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
             });
         }
     },
+    metadata: Some(|_world, _entity, _name, direction| {
+        PortMetadata::scalar(
+            direction,
+            None,
+            Some(0.0),
+            Some(1.0),
+            "session registry",
+            "possession",
+            false,
+        )
+    }),
     read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
     read_input: |_, _, _| None,
     write_input: |_, _, _, _| false,

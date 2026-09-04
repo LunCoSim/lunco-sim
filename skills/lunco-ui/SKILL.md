@@ -32,6 +32,13 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+Universal runtime inspections should read an authoritative view model produced
+outside egui. For ports, use `PortRegistry::entity_port_infos` so values,
+units, ranges, source, authority, and writability come from backend owners;
+sample at a bounded cadence when the data has no shared change marker. Writable
+rows emit the existing typed command and validate against the metadata contract;
+the panel must not infer policy from names or mutate port storage directly.
+
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
 late panel registration adds the renderer without changing the current

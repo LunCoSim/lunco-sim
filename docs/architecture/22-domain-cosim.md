@@ -22,6 +22,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`SimPort`** — metadata for a connectable interface point
 - **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
   participant reads/writes through; the cosim engine registers the built-in backends.
+  `entity_port_infos` adds the same live values with owner-supplied type, unit,
+  bounds, source, authority, and writability for `ReadPorts` and the native
+  Ports panel.
 - **`InputPorts` / `OutputPorts`** — an imperative producer's authored command
   inputs and runtime outputs. `InputPorts` accepts writes; `OutputPorts` is
   read-only and exposes values written by an authored program such as a
@@ -37,8 +40,8 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 ## The port surface (one telemetry + actuation API)
 
 Every participant's state is exposed as **named scalar ports** through the shared
-**`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`GetPort`/
-`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
+**`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`ReadPorts`/
+`GetPort`/`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
 and sensors are exposed declaratively via the `AVIAN` spec table (an `AvianGroup`
 per kind), not a mirror component. The available ports:
 

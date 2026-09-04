@@ -89,12 +89,20 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, twin, MSL, and open docs. |
 | `GetShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
+| `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
 
 `ListOpenDocuments`, `ListRecentFiles`, and `ListTwin` are owned by
 `lunco-workspace`, so they are available in windowed, headless, and offscreen
 hosts whenever the API and Workspace plugins are enabled. Modelica registers
 only Modelica-specific queries; a USD document does not depend on the Modelica
 UI to appear in `ListOpenDocuments`.
+
+`ReadPorts` is the read-only projection of the shared `lunco-core::ports::PortRegistry`.
+Each returned port has `metadata.type` (currently `scalar`), optional `unit`,
+optional inclusive `range` bounds, the owning `source`, the current control
+`authority`, and `writable`. Consumers must use `writable` and the declared
+bounds before sending `SetPorts`; the command path remains authoritative and
+rejects undeclared inputs rather than creating them.
 
 ---
 
