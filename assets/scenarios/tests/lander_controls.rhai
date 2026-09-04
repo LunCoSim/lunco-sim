@@ -28,7 +28,7 @@ fn input_port(target, name) {
     let record = query("ReadPorts", #{ api_id: target });
     if record == () || record.ports == () { return (); }
     for port in record.ports {
-        if port.name == name && port.direction == "In" {
+        if port.name == name && port.direction == "in" {
             return port.value;
         }
     }
@@ -39,7 +39,7 @@ fn output_port(target, name) {
     let record = query("ReadPorts", #{ api_id: target });
     if record == () || record.ports == () { return (); }
     for port in record.ports {
-        if port.name == name && port.direction == "Out" {
+        if port.name == name && port.direction == "out" {
             return port.value;
         }
     }

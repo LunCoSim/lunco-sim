@@ -38,12 +38,12 @@ fn on_tick(me) {
     drive(this.rover, 1.0, 0.0);
     if this.elapsed < 8.0 { return; }
 
-    let w0 = port_value(this.rover, "drive_w0", "Out");
-    let w1 = port_value(this.rover, "drive_w1", "Out");
-    let w2 = port_value(this.rover, "drive_w2", "Out");
-    let w3 = port_value(this.rover, "drive_w3", "Out");
-    let w4 = port_value(this.rover, "drive_w4", "Out");
-    let w5 = port_value(this.rover, "drive_w5", "Out");
+    let w0 = port_value(this.rover, "drive_w0", "out");
+    let w1 = port_value(this.rover, "drive_w1", "out");
+    let w2 = port_value(this.rover, "drive_w2", "out");
+    let w3 = port_value(this.rover, "drive_w3", "out");
+    let w4 = port_value(this.rover, "drive_w4", "out");
+    let w5 = port_value(this.rover, "drive_w5", "out");
     let travel = vlen(vsub(world_pos(this.rover), this.start));
     brake(this.rover);
     let checks = [

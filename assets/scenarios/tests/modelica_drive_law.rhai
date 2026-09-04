@@ -38,8 +38,8 @@ fn on_tick(me) {
     drive(this.rover, 1.0, 0.0);
     if this.elapsed < 8.0 { return; }
 
-    let left = port_value(this.rover, "drive_left", "Out");
-    let right = port_value(this.rover, "drive_right", "Out");
+    let left = port_value(this.rover, "drive_left", "out");
+    let right = port_value(this.rover, "drive_right", "out");
     let travel = vlen(vsub(world_pos(this.rover), this.start));
     brake(this.rover);
     let checks = [

@@ -47,10 +47,10 @@ fn on_tick(me) {
     if this.elapsed < 8.0 { return; }
     brake(this.raycast);
     brake(this.physical);
-    let rc_left = port_value(this.raycast, "drive_left", "Out");
-    let rc_right = port_value(this.raycast, "drive_right", "Out");
-    let ph_left = port_value(this.physical, "drive_left", "Out");
-    let ph_right = port_value(this.physical, "drive_right", "Out");
+    let rc_left = port_value(this.raycast, "drive_left", "out");
+    let rc_right = port_value(this.raycast, "drive_right", "out");
+    let ph_left = port_value(this.physical, "drive_left", "out");
+    let ph_right = port_value(this.physical, "drive_right", "out");
     let rc_delta = vlen(vsub(world_pos(this.raycast), this.raycast_start));
     let ph_delta = vlen(vsub(world_pos(this.physical), this.physical_start));
     let checks = [
