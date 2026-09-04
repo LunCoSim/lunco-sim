@@ -146,6 +146,11 @@ stale projection with an offset or another per-frame transform writer. The
 semantic-to-light projection is change-gated by `SunState.revision` and the
 changed BigSpace ancestor chains, so stable frames do not rebuild f64 poses.
 
+The render backend samples the resulting cascades with Bevy's hardware 2x2
+comparison filter in standard and high profiles. Keep that choice separate from
+the semantic sun angle and the authored cascade/range/bias policy; do not introduce
+a Gaussian/PCSS blur or tune physical light state to hide a filtering artifact.
+
 ## Do not patch symptoms
 
 Do not add a per-frame position correction, a fallback frame, a guessed parent,
@@ -167,6 +172,8 @@ Add the smallest real regression at the owning boundary:
   active-Twin teardown;
 - the selected camera projects through the persistent `WorldGrid` into the sole
   `OriginAnchor`, while duplicate or missing world-shell entities fail closed.
+- a standard render camera receives the hardware 2x2 shadow filter exactly once;
+  fast mode remains unlit and does not attach it.
 
 Run focused checks first:
 

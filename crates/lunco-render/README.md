@@ -17,6 +17,9 @@ pipeline into the slim web / Modelica binaries.
   split + shadow-map atlas + depth/normal biases). Shared by the sandbox,
   celestial, and USD render paths; callers construct it from the authoritative
   Graphics profile and may then apply authored scene overrides.
+- The render backend samples those cascades with a crisp hardware 2x2 comparison
+  filter; the physical sun angle remains an authored USD/horizon-shadow concern,
+  not a renderer-wide blur setting.
 - **`RenderingQualitySettings`** — the persisted Graphics section and its
   `RenderingQuality::{Low, Balanced, High}` presets. `High` is the highest
   shipped renderer budget: it covers shadow maps and casters, the horizon-shadow
