@@ -189,12 +189,12 @@ fn on_tick(me) {
         }
     } else if this.phase == "lights_on" {
         if leg >= 0.5 {
-            this.lights_on = port_value(this.rover, "headlight_left_intensity", "Out");
-            this.lights_on_right = port_value(this.rover, "headlight_right_intensity", "Out");
-            this.power_on = port_value(this.rover, "headlight_left_power_w", "Out");
-            this.power_on_right = port_value(this.rover, "headlight_right_power_w", "Out");
-            this.render_on = port_value(this.light, "light_intensity", "In");
-            this.render_on_right = port_value(this.light_right, "light_intensity", "In");
+            this.lights_on = port_value(this.rover, "headlight_left_intensity", "out");
+            this.lights_on_right = port_value(this.rover, "headlight_right_intensity", "out");
+            this.power_on = port_value(this.rover, "headlight_left_power_w", "out");
+            this.power_on_right = port_value(this.rover, "headlight_right_power_w", "out");
+            this.render_on = port_value(this.light, "light_intensity", "in");
+            this.render_on_right = port_value(this.light_right, "light_intensity", "in");
             if this.lights_on == () || this.lights_on_right == () || this.power_on == () ||
                this.power_on_right == () || this.render_on == () || this.render_on_right == () {
                 fail_fast("headlight on-state did not expose Modelica and scene-property ports",
@@ -214,12 +214,12 @@ fn on_tick(me) {
         }
     } else if this.phase == "lights_off" {
         if leg >= 0.5 {
-            this.lights_off = port_value(this.rover, "headlight_left_intensity", "Out");
-            this.lights_off_right = port_value(this.rover, "headlight_right_intensity", "Out");
-            this.power_off = port_value(this.rover, "headlight_left_power_w", "Out");
-            this.power_off_right = port_value(this.rover, "headlight_right_power_w", "Out");
-            this.render_off = port_value(this.light, "light_intensity", "In");
-            this.render_off_right = port_value(this.light_right, "light_intensity", "In");
+            this.lights_off = port_value(this.rover, "headlight_left_intensity", "out");
+            this.lights_off_right = port_value(this.rover, "headlight_right_intensity", "out");
+            this.power_off = port_value(this.rover, "headlight_left_power_w", "out");
+            this.power_off_right = port_value(this.rover, "headlight_right_power_w", "out");
+            this.render_off = port_value(this.light, "light_intensity", "in");
+            this.render_off_right = port_value(this.light_right, "light_intensity", "in");
             this.phase = "done";
             verdict(#{
                 dist: this.dist_straight,
