@@ -638,6 +638,38 @@ This is an owner-level use of BigSpace's maintained optimization, not an app
 propagation fork or a second cache. Focused crate tests, the production build,
 and a clean Apollo runtime are required before claiming a frame-time change.
 
+#### 2026-09-05 application-level BigSpace propagation admission
+
+After synchronizing the performance worktree with main at `6f90e5aff`, the
+application now gates BigSpace's `LocalFloatingOrigins`,
+`PropagateHighPrecision`, and `PropagateLowPrecision` sets on conservative ECS
+invalidation predicates. The predicates cover floating-origin cell changes,
+hierarchy changes, spatial component changes, grid topology changes,
+component additions/removals, and newly initialized stationary entities. The
+BigSpace dependency remains the sole owner of propagation and its per-entity
+rules; normal large-transform recentering remains unchanged. This removes the
+dependency's clean-frame worker-scope/fan-out setup without changing authored
+quality, physics, or transform semantics.
+
+The focused `cargo check -j4 -p lunco-luncosim`, no-Tracy production build, and
+Tracy-feature production build passed on the isolated source. Clean windowed
+production runs also reached `ready=true`, `world_hold=false`,
+`faulted=false`, and `pending_count=0`: sandbox on API port 4591 and Summer
+Space School on API port 4592 both accepted typed `Exit` and released their
+ports. Their settled diagnostic samples remain below the objective, roughly
+60–100 FPS for sandbox and 47–179 FPS for Summer, with frame times of about
+9–17 ms and 7.5–24 ms respectively. The 200 FPS stable-FPS criterion remains
+open.
+
+The exact-source Tracy capture
+`scripts/perf/captures/apollo-high-local-gate-20260905.tracy` contains 79
+frames over 8.26 s and 401,787 zones; it is valid capture evidence but the
+current CSV export did not produce a usable per-zone report. The existing
+handover Tracy attribution still identifies BigSpace propagation fan-out as a
+prior CPU owner, with render preparation, PBR preparation, and presentation
+work remaining in the frame budget. A clean no-Tracy A/B remains the product
+performance evidence; profiler overhead is diagnostic only.
+
 #### 2026-08-30 connectivity projection scheduler gating
 
 The generic link kernel already owns a sim-time cadence, but its regular Bevy
