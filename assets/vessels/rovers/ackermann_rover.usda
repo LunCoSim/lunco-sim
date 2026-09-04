@@ -472,12 +472,18 @@ def Xform "AckermannRover" (
             over "Suspension_FL/Wheel_FL" (
                 prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
             ) {
-                rel physics:filteredPairs = </AckermannRover/Chassis>
+                rel physics:filteredPairs = [
+                    </AckermannRover/Chassis>,
+                    </AckermannRover/SteeringKnuckle_FL>
+                ]
             }
             over "Suspension_FR/Wheel_FR" (
                 prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
             ) {
-                rel physics:filteredPairs = </AckermannRover/Chassis>
+                rel physics:filteredPairs = [
+                    </AckermannRover/Chassis>,
+                    </AckermannRover/SteeringKnuckle_FR>
+                ]
             }
             over "Suspension_RL/Wheel_RL" (
                 prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
