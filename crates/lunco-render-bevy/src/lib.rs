@@ -167,7 +167,7 @@ impl Plugin for LuncoRenderPlugin {
     }
 }
 
-/// Apply the renderer's lunar shadow filter to every 3D camera, including
+/// Apply the renderer's crisp lunar shadow filter to every 3D camera, including
 /// cameras created after startup by an asynchronously loaded USD scene.
 fn ensure_lunar_shadow_filtering(
     add: On<Add, Camera3d>,
@@ -182,7 +182,7 @@ fn ensure_lunar_shadow_filtering(
     if cameras.get(entity).is_ok() {
         commands
             .entity(entity)
-            .try_insert(bevy::light::ShadowFilteringMethod::Gaussian);
+            .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
     }
 }
 
@@ -431,6 +431,23 @@ fn apply_shadow_flag(commands: &mut Commands, e: Entity, look: &PbrLook) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::light::ShadowFilteringMethod;
+
+    #[test]
+    fn standard_camera_uses_hardware_shadow_filtering() {
+        let mut app = App::new();
+        app.init_resource::<RenderProfile>()
+            .add_observer(ensure_lunar_shadow_filtering);
+
+        let camera = app.world_mut().spawn(Camera3d::default()).id();
+        app.update();
+
+        assert_eq!(
+            app.world().entity(camera).get::<ShadowFilteringMethod>(),
+            Some(&ShadowFilteringMethod::Hardware2x2),
+            "standard lunar shadows must retain a crisp 2x2 comparison filter"
+        );
+    }
 
     /// The property the whole cache exists for: N entities with the same look must
     /// share ONE material. If this regresses, batching dies and the draw-call count

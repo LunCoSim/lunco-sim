@@ -113,6 +113,16 @@ would let a look reflect like diamond and refract like glass, and would need to 
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom + Bevy `ClusterConfig` | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question**; the render binder uses Bevy's single-cluster topology when no clusterable object exists and follows light lifecycle events |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
+### Shadow filtering ownership
+
+`lunco-render-bevy` owns the backend choice for sampling the cascaded shadow maps.
+Every non-fast `Camera3d`, including one projected asynchronously from USD, receives
+Bevy's `Hardware2x2` comparison filter. This keeps the authored lunar sun's contact
+shadows crisp; the physical `UsdLuxDistantLight.inputs:angle` remains owned by USD
+and the horizon-shadow path. Do not replace this with a wider Gaussian/PCSS filter
+or change authored light range, cascades, bias, or caster policy to compensate for
+soft edges. Fast mode deliberately does not attach the standard PBR shadow filter.
+
 `ProceduralSkybox` is a render-free scene intent that may accompany `ShaderLook`.
 The USD projection reads the authored `lunco:surface:skybox` flag once on its
 `Xform` owner, stamps this intent, and projects no `UsdGeomGprim` for that
