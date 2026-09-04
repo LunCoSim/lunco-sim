@@ -2835,6 +2835,10 @@ impl Plugin for SandboxCorePlugin {
             // invalidation/presentation loop below.
             .add_systems(Startup, runtime_exposures::publish_initial_camera_exposure)
             .add_observer(runtime_exposures::on_camera_selection_status_changed)
+            .add_systems(
+                lunco_core::SceneTeardown,
+                runtime_exposures::clear_scene_exposures,
+            )
             // Dirty detection must run every frame: possession and release are
             // edge changes that can be gone before the bounded publisher tick.
             // Only the snapshot rebuild is cadence-limited.
