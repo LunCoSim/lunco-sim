@@ -1280,6 +1280,17 @@ impl Default for WorkbenchLayout {
 }
 
 impl WorkbenchLayout {
+    /// Whether a singleton panel currently has a tab in the live dock.
+    ///
+    /// View-model producers use this as their authoritative visibility gate:
+    /// a closed panel must not keep rebuilding an expensive projection merely
+    /// because its renderer is still registered.
+    pub fn is_panel_docked(&self, id: PanelId) -> bool {
+        self.dock
+            .iter_all_tabs()
+            .any(|(_, tab)| matches!(tab, TabId::Singleton(panel_id) if *panel_id == id))
+    }
+
     /// Register a panel and make its renderer available to the workbench.
     ///
     /// Before the first perspective is active, [`Panel::default_slot`] seeds
@@ -7039,17 +7050,11 @@ mod tests {
         // Simulate the viewport-only perspective: the panel remains registered
         // globally, but its tab is not part of this perspective's dock.
         layout.set_side_browser(None);
-        assert!(!layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
+        assert!(!layout.is_panel_docked(PanelId("focus_fixture")));
 
         focus_panel_now(&mut layout, "focus_fixture");
 
-        assert!(layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
+        assert!(layout.is_panel_docked(PanelId("focus_fixture")));
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
     }
 

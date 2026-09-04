@@ -77,6 +77,12 @@ explicit `ClusterConfig` remains authoritative. This is a renderer-owned
 topology/readiness decision; it is not an Apollo scene or name heuristic and
 it does not add an alternate lighting path.
 
+Panel view-models also gate on the Workbench's live dock state. A registered
+panel that is not docked has no visible consumer, so its producer must not
+rebuild a projection in the background. `WorkbenchLayout::is_panel_docked`
+is the shared visibility boundary for that decision; opening the panel makes
+its normal producer cadence eligible again.
+
 The empty scene-root mount path is resolved against the same live composed
 stage, through the USD boundary's shared `defaultPrim` resolver. Visual and
 celestial projection therefore read the identical concrete root even when

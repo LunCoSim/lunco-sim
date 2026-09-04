@@ -9,7 +9,10 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::ports::{PortDirection, PortInfo, PortMetadata, PortRegistry};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchLayout};
+
+/// Stable id of the universal port inspection panel.
+pub const PORT_PANEL_ID: PanelId = PanelId("port_inspector");
 
 /// A port row shown by [`PortPanel`].
 #[derive(Clone)]
@@ -50,7 +53,15 @@ pub struct PortView {
 /// without a common marker component, so a bounded 10 Hz sample is the honest
 /// shared gate for this diagnostic/control surface; it avoids an O(n) rebuild on
 /// every render frame while keeping live values responsive.
-pub fn port_view_due(mut first: Local<bool>, time: Res<Time>, view: Res<PortView>) -> bool {
+pub fn port_view_due(
+    mut first: Local<bool>,
+    time: Res<Time>,
+    view: Res<PortView>,
+    layout: Option<Res<WorkbenchLayout>>,
+) -> bool {
+    if !layout.is_some_and(|layout| layout.is_panel_docked(PORT_PANEL_ID)) {
+        return false;
+    }
     let now = time.elapsed_secs_f64();
     let due = !*first || now - view.sampled_at >= 0.1;
     *first = true;
@@ -133,7 +144,7 @@ pub struct PortPanel {
 
 impl Panel for PortPanel {
     fn id(&self) -> PanelId {
-        PanelId("port_inspector")
+        PORT_PANEL_ID
     }
 
     fn title(&self) -> String {
