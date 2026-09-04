@@ -51,7 +51,10 @@ def Xform "SixWheelRover" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )
     {
-        double3 xformOp:translate = (0.0, 0.55, -1.35)
+        # The rover drives along -Z. Keep the operator eye at solar-panel
+        # height behind the chassis so the forward view includes the body and
+        # the path ahead, rather than looking outward from the front bumper.
+        double3 xformOp:translate = (0.0, 0.55, 4.0)
         custom double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
     }
 
