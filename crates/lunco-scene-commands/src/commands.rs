@@ -115,6 +115,17 @@ const RELEASE_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortB
             });
         }
     },
+    metadata: Some(|_world, _entity, _name, direction| {
+        lunco_core::ports::PortMetadata::scalar(
+            direction,
+            None,
+            Some(0.0),
+            Some(1.0),
+            "release actuator",
+            "actuator",
+            true,
+        )
+    }),
     read_output: |w, e, n| {
         if n != "release" {
             return None;

@@ -14,6 +14,13 @@ participant so wires, the HTTP API, the inspector, rhai, and Python all read/wri
 through it without depending "up" into this engine). `lunco-cosim` owns and
 registers the built-in backends (`ports::register_builtin_port_backends`):
 
+`PortRegistry::entity_port_infos` is the inspection projection used by the native
+Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live value
+and adds the scalar type, optional unit and inclusive bounds, source, current
+authority, and manual-writability contract. Consumers do not reconstruct those
+facts from a port name; writes still go through the existing typed `SetPorts`
+command.
+
 | Backend | Ports |
 | --- | --- |
 | **Modelica `SimComponent`** | its declared `input`/`output` variables (`height`, `netForce`, …) |

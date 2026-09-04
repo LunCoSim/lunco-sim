@@ -129,8 +129,36 @@ use crate::schema::ApiErrorCode;
 /// `ReadPorts` — every exposed port on an entity (model I/O, physics velocity,
 /// sensors, joints), by `api_id`. A one-shot read of the same `PortRegistry`
 /// backends the telemetry stream samples — the direct alternative to subscribing.
-/// params: `{ api_id: u64 }` · returns: `{ api_id, ports: [{ name, value, direction }] }`
+/// params: `{ api_id: u64 }` · returns:
+/// `{ api_id, ports: [{ name, value, direction, metadata }] }`
 pub struct ReadPortsProvider;
+
+fn port_info_to_json(port: &lunco_core::ports::PortInfo) -> serde_json::Value {
+    let range = match (port.metadata.min, port.metadata.max) {
+        (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
+        (Some(min), None) => serde_json::json!({ "min": min }),
+        (None, Some(max)) => serde_json::json!({ "max": max }),
+        (None, None) => serde_json::Value::Null,
+    };
+    serde_json::json!({
+        "name": port.name,
+        "value": port.value,
+        "direction": match port.direction {
+            lunco_core::ports::PortDirection::In => "in",
+            lunco_core::ports::PortDirection::Out => "out",
+            lunco_core::ports::PortDirection::InOut => "inout",
+        },
+        "metadata": {
+            "type": port.metadata.value_type,
+            "unit": port.metadata.unit,
+            "range": range,
+            "source": port.metadata.source,
+            "authority": port.metadata.authority,
+            "writable": port.metadata.writable,
+        },
+    })
+}
+
 impl ApiQueryProvider for ReadPortsProvider {
     fn name(&self) -> &'static str {
         "ReadPorts"
@@ -165,16 +193,10 @@ impl ApiQueryProvider for ReadPortsProvider {
                 "ReadPorts: PortRegistry not present (no cosim plugin)".to_string(),
             );
         };
-        let ports = registry.entity_ports(world, entity);
+        let ports = registry.entity_port_infos(world, entity);
         let arr: Vec<_> = ports
             .into_iter()
-            .map(|p| {
-                serde_json::json!({
-                    "name": p.name,
-                    "value": p.value,
-                    "direction": format!("{:?}", p.direction),
-                })
-            })
+            .map(|port| port_info_to_json(&port))
             .collect();
         ApiResponse::ok(serde_json::json!({ "api_id": api_id, "ports": arr }))
     }
@@ -462,5 +484,33 @@ mod tests {
         let mut registry = ApiQueryRegistry::default();
         register_builtin_queries(&mut registry);
         assert!(registry.get("ReadExposures").is_some());
+    }
+
+    #[test]
+    fn read_ports_json_preserves_owner_metadata() {
+        let port = lunco_core::ports::PortInfo {
+            name: "throttle".into(),
+            direction: lunco_core::ports::PortDirection::In,
+            value: 0.5,
+            metadata: lunco_core::ports::PortMetadata::scalar(
+                lunco_core::ports::PortDirection::In,
+                Some("m/s"),
+                Some(-1.0),
+                Some(1.0),
+                "control surface",
+                "operator",
+                true,
+            ),
+        };
+
+        let json = port_info_to_json(&port);
+        assert_eq!(json["direction"], "in");
+        assert_eq!(json["metadata"]["type"], "scalar");
+        assert_eq!(json["metadata"]["unit"], "m/s");
+        assert_eq!(json["metadata"]["range"]["min"], -1.0);
+        assert_eq!(json["metadata"]["range"]["max"], 1.0);
+        assert_eq!(json["metadata"]["source"], "control surface");
+        assert_eq!(json["metadata"]["authority"], "operator");
+        assert_eq!(json["metadata"]["writable"], true);
     }
 }

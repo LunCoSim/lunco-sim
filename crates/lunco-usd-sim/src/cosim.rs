@@ -3333,11 +3333,25 @@ fn port_dir_str(d: lunco_cosim::PortDirection) -> &'static str {
     }
 }
 
-fn port_to_json(p: &lunco_core::ports::PortRef) -> serde_json::Value {
+fn port_to_json(p: &lunco_core::ports::PortInfo) -> serde_json::Value {
+    let range = match (p.metadata.min, p.metadata.max) {
+        (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
+        (Some(min), None) => serde_json::json!({ "min": min }),
+        (None, Some(max)) => serde_json::json!({ "max": max }),
+        (None, None) => serde_json::Value::Null,
+    };
     serde_json::json!({
         "name": p.name,
         "direction": port_dir_str(p.direction),
         "value": p.value,
+        "metadata": {
+            "type": p.metadata.value_type,
+            "unit": p.metadata.unit,
+            "range": range,
+            "source": p.metadata.source,
+            "authority": p.metadata.authority,
+            "writable": p.metadata.writable,
+        },
     })
 }
 
@@ -3368,7 +3382,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
         // Single-entity form.
         if let Some(e) = resolve_param_entity(world, params) {
             let ports: Vec<_> = ports_reg
-                .entity_ports(world, e)
+                .entity_port_infos(world, e)
                 .iter()
                 .map(port_to_json)
                 .collect();
@@ -3382,7 +3396,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
         let entries = reg.entities();
         let mut rows = Vec::new();
         for (api_id, e) in entries {
-            let ports = ports_reg.entity_ports(world, e);
+            let ports = ports_reg.entity_port_infos(world, e);
             if ports.is_empty() {
                 continue;
             }

@@ -60,7 +60,7 @@
 
 use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
-use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
+use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
 
 /// The light ports, in `list` order.
 const LIGHT_PORTS: [&str; 5] = [
@@ -227,6 +227,22 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
             }
         }
     },
+    metadata: Some(|_world, _entity, name, direction| {
+        let unit = match name {
+            "exposure_ev100" => Some("EV100"),
+            "illuminance" => Some("lux"),
+            _ => None,
+        };
+        PortMetadata::scalar(
+            direction,
+            unit,
+            None,
+            None,
+            "USD scene property",
+            "scene author",
+            true,
+        )
+    }),
     read_output: |_, _, _| None,
     read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
     write_input: |world, entity, name, value| {

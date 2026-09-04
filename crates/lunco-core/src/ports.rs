@@ -52,6 +52,98 @@ pub enum PortDirection {
     InOut,
 }
 
+/// Metadata describing the value and control contract of a discovered port.
+///
+/// The runtime currently exposes scalar `f64` values end to end. Keeping that
+/// fact here, beside the registry that owns the port surface, gives native UI
+/// and API consumers one authoritative place for units, validation, and
+/// control ownership instead of making them infer policy from port names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortMetadata {
+    /// Stable value kind shown to generic consumers.
+    pub value_type: &'static str,
+    /// Authored/physical unit, when the owner knows one.
+    pub unit: Option<String>,
+    /// Inclusive lower validation bound, if one exists.
+    pub min: Option<f64>,
+    /// Inclusive upper validation bound, if one exists.
+    pub max: Option<f64>,
+    /// The subsystem that owns the value.
+    pub source: String,
+    /// The authority currently responsible for changing the value.
+    pub authority: String,
+    /// Whether the port owner accepts manual writes through `SetPorts`.
+    pub writable: bool,
+}
+
+impl PortMetadata {
+    /// Build metadata for the scalar port contract.
+    pub fn scalar(
+        direction: PortDirection,
+        unit: Option<&str>,
+        min: Option<f64>,
+        max: Option<f64>,
+        source: impl Into<String>,
+        authority: impl Into<String>,
+        writable: bool,
+    ) -> Self {
+        Self {
+            value_type: "scalar",
+            unit: unit.map(str::to_owned),
+            min,
+            max,
+            source: source.into(),
+            authority: authority.into(),
+            writable: writable && matches!(direction, PortDirection::In | PortDirection::InOut),
+        }
+    }
+
+    /// Metadata for a backend that has not supplied a richer description.
+    pub fn unknown(direction: PortDirection) -> Self {
+        Self::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "unknown backend",
+            "backend owner",
+            false,
+        )
+    }
+
+    /// Validate a value before dispatching it to a writable port.
+    pub fn validate(&self, value: f64) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("value must be finite".into());
+        }
+        if let Some(min) = self.min {
+            if value < min {
+                return Err(format!("value must be ≥ {min}"));
+            }
+        }
+        if let Some(max) = self.max {
+            if value > max {
+                return Err(format!("value must be ≤ {max}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A discovered port with its live value and owner-provided metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortInfo {
+    /// Port name — the key in the owning backend, or the canonical name for a
+    /// single-value backend.
+    pub name: String,
+    /// Causality.
+    pub direction: PortDirection,
+    /// Snapshot of the current value.
+    pub value: f64,
+    /// Owner-provided type, unit, validation, source, and authority.
+    pub metadata: PortMetadata,
+}
+
 /// A discovered port: identity, causality, current value.
 ///
 /// Returned by [`PortRegistry::entity_ports`] for listing/introspection. The
@@ -93,6 +185,10 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
 pub struct PortBackend {
     /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
     pub list: fn(&World, Entity, &mut Vec<PortRef>),
+    /// Describe one port returned by `list`, or `None` for the generic scalar
+    /// fallback. The callback belongs to the backend owner so consumers never
+    /// need a second type/name switch to reconstruct its contract.
+    pub metadata: Option<fn(&World, Entity, &str, PortDirection) -> PortMetadata>,
     /// Read the **output** named `name`, or `None`.
     pub read_output: fn(&World, Entity, &str) -> Option<f64>,
     /// Read the **input** named `name`, or `None`.
@@ -180,6 +276,22 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             push_map(out, &inputs.values, PortDirection::In);
         }
     },
+    metadata: Some(|_world, _entity, name, direction| {
+        let (min, max) = match name {
+            "throttle" | "steer" | "brake" => (Some(-1.0), Some(1.0)),
+            "speed_boost" => (Some(0.0), Some(1.0)),
+            _ => (None, None),
+        };
+        PortMetadata::scalar(
+            direction,
+            None,
+            min,
+            max,
+            "control surface",
+            "control owner",
+            true,
+        )
+    }),
     read_output: |_world, _entity, _name| None,
     read_input: |world, entity, name| {
         world
@@ -219,6 +331,31 @@ impl PortRegistry {
         let mut out = Vec::new();
         for backend in &self.backends {
             (backend.list)(world, entity, &mut out);
+        }
+        out
+    }
+
+    /// Enumerate every exposed port with owner-provided metadata.
+    ///
+    /// This is the native/API inspection surface. The older [`Self::entity_ports`]
+    /// remains the compact value-only surface used by compatibility consumers;
+    /// both are produced from the same backend list callbacks.
+    pub fn entity_port_infos(&self, world: &World, entity: Entity) -> Vec<PortInfo> {
+        let mut out = Vec::new();
+        for backend in &self.backends {
+            let mut ports = Vec::new();
+            (backend.list)(world, entity, &mut ports);
+            out.extend(ports.into_iter().map(|port| {
+                PortInfo {
+                    metadata: backend
+                        .metadata
+                        .map(|describe| describe(world, entity, &port.name, port.direction))
+                        .unwrap_or_else(|| PortMetadata::unknown(port.direction)),
+                    name: port.name,
+                    direction: port.direction,
+                    value: port.value,
+                }
+            }));
         }
         out
     }
@@ -410,5 +547,36 @@ mod tests {
         assert!(ports
             .iter()
             .any(|port| port.name == "arm" && port.direction == super::PortDirection::In));
+    }
+
+    #[test]
+    fn generic_input_metadata_exposes_control_bounds_and_write_contract() {
+        let mut world = World::new();
+        let entity = world
+            .spawn(InputPorts::new(&["throttle", "arm", "speed_boost"]))
+            .id();
+        let registry = PortRegistry::default();
+
+        let infos = registry.entity_port_infos(&world, entity);
+        let throttle = infos.iter().find(|port| port.name == "throttle").unwrap();
+        assert_eq!(throttle.metadata.value_type, "scalar");
+        assert_eq!(throttle.metadata.min, Some(-1.0));
+        assert_eq!(throttle.metadata.max, Some(1.0));
+        assert_eq!(throttle.metadata.source, "control surface");
+        assert!(throttle.metadata.writable);
+        assert!(throttle.metadata.validate(1.0).is_ok());
+        assert!(throttle.metadata.validate(1.01).is_err());
+
+        let speed_boost = infos
+            .iter()
+            .find(|port| port.name == "speed_boost")
+            .unwrap();
+        assert_eq!(speed_boost.metadata.min, Some(0.0));
+        assert_eq!(speed_boost.metadata.max, Some(1.0));
+
+        let arm = infos.iter().find(|port| port.name == "arm").unwrap();
+        assert_eq!(arm.metadata.min, None);
+        assert_eq!(arm.metadata.max, None);
+        assert!(arm.metadata.writable);
     }
 }
