@@ -993,16 +993,17 @@ fn reconcile_preview_projection_state(
         let descendants_ready = root_ready
             && prims
                 .iter()
-                .filter(|(_, path, ..)| path.stage_handle.id() == stage_id)
+                // A preview normally reuses the active Twin's deduplicated
+                // stage asset. Restrict the fence to this preview root before
+                // checking readiness; entities from the live Twin have the
+                // same stage id but are outside this session's ownership.
+                .filter(|(entity, path, ..)| {
+                    path.stage_handle.id() == stage_id
+                        && preview_entity_belongs_to_root(*entity, root, &parents)
+                })
                 .all(
-                    |(entity, _, synced, awaiting, queued, mesh_pending, pending_mesh, failed)| {
-                        preview_entity_belongs_to_root(entity, root, &parents)
-                            && synced
-                            && !awaiting
-                            && !queued
-                            && !mesh_pending
-                            && !pending_mesh
-                            && !failed
+                    |(_, _, synced, awaiting, queued, mesh_pending, pending_mesh, failed)| {
+                        synced && !awaiting && !queued && !mesh_pending && !pending_mesh && !failed
                     },
                 );
         let generation = registry.host(doc).map(|host| host.document().generation());
@@ -3712,6 +3713,93 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn preview_readiness_ignores_live_projection_with_the_same_stage_handle() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<DocumentRegistry<UsdDocument>>();
+        app.init_resource::<UsdViewportState>();
+        app.add_systems(Update, reconcile_preview_projection_state);
+
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .open_file("/tmp/shared_preview_stage.usda", "#usda 1.0\n".to_string())
+            .0;
+        let stage = Handle::<UsdStageAsset>::default();
+        let session = create_preview_session(
+            app.world_mut(),
+            UsdPreviewId(1),
+            doc,
+            LayerId::root(),
+            stage.clone(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            UsdPreviewViewId(1),
+        )
+        .expect("preview session resources are available");
+        let preview_root = session.scene_root();
+        app.world_mut().entity_mut(preview_root).insert((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/World".into(),
+            },
+            UsdVisualSynced,
+        ));
+        app.world_mut().spawn((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/World/Rover".into(),
+            },
+            UsdVisualSynced,
+            ChildOf(preview_root),
+        ));
+
+        // The active Twin intentionally shares the deduplicated stage handle
+        // with its editor preview. Its entities must not participate in the
+        // preview's readiness fence.
+        let live_root = app
+            .world_mut()
+            .spawn((
+                lunco_usd_bevy::UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/World".into(),
+                },
+                UsdVisualSynced,
+            ))
+            .id();
+        app.world_mut().spawn((
+            UsdPrimPath {
+                stage_handle: stage,
+                path: "/World/Rover".into(),
+            },
+            UsdVisualSynced,
+            ChildOf(live_root),
+        ));
+
+        app.world_mut()
+            .resource_mut::<UsdViewportState>()
+            .insert(session);
+        app.update();
+
+        let session = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(UsdPreviewId(1))
+            .expect("preview session remains registered");
+        assert!(session.projection_ready());
+        assert_eq!(
+            session.projected_generation(),
+            app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document remains open")
+                .document()
+                .generation()
+        );
     }
 
     #[test]
