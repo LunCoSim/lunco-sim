@@ -120,6 +120,41 @@ fn preview_close(preview) {
     cmd("CloseUsdPreview", #{ preview: preview })
 }
 
+/// Apply a transient CAD-style explode pose to explicit projected USD parts.
+/// `assembly` and every entry in `parts` are absolute composed prim paths.
+/// The operation is session-scoped and never authors USD.
+fn preview_explode(preview, doc, assembly, parts, action, axis, spacing) {
+    let params = #{
+        preview: preview,
+        doc: doc,
+        assembly: assembly,
+        parts: parts,
+        action: action,
+        // Reflection uses the typed enum variant names on the command bus;
+        // explicit nulls keep reset constructible without a fake spacing.
+        axis: axis,
+        spacing: spacing,
+    };
+    cmd("ExplodeUsdPreview", params)
+}
+
+/// Enable an explode pose. Parts are ordered by canonical USD path before
+/// offsets are computed, making repeated calls deterministic.
+fn preview_explode_enable(preview, doc, assembly, parts, axis, spacing) {
+    preview_explode(preview, doc, assembly, parts, "Enable", axis, spacing)
+}
+
+/// Update the axis/spacing of an existing explode pose without recapturing
+/// the original local transforms.
+fn preview_explode_update(preview, doc, assembly, parts, axis, spacing) {
+    preview_explode(preview, doc, assembly, parts, "Update", axis, spacing)
+}
+
+/// Reset the explicit explode target to its captured, unmodified preview pose.
+fn preview_explode_reset(preview, doc, assembly, parts) {
+    preview_explode(preview, doc, assembly, parts, "Reset", (), ())
+}
+
 /// Describe one explicit USD document, including layers, revisions,
 /// composition dependencies, diagnostics, and journal position.
 fn describe(doc) {

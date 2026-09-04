@@ -156,12 +156,24 @@ the active simulation viewport.
    visual bounds, and `InspectUsdViewport` reports projection, target, distance,
    and orthographic scale for screenshot correlation.
 
+   For multi-part inspection, wait for `projection_ready: true`, then use the
+   same explicit preview/document handles with
+   `ExplodeUsdPreview { preview, doc, assembly, parts, action, axis, spacing }`.
+   `action` is `Enable`, `Update`, or `Reset`; `assembly` must be an authored
+   `kind = "assembly"` path and `parts` must be non-empty exact composed paths
+   below it. Parts are stably ordered by path. Enable captures original local
+   transforms, update reuses that baseline, and reset restores it. The
+   operation is session-scoped presentation state: it never authors USD or
+   changes journal/save/physics state, and reprojection/close clears it.
+
 The built-in wrappers are in
 [`assembly_edit.rhai`](../../assets/scripting/tools/assembly_edit.rhai). The
 preview helpers are `preview_open`, `preview_view_open`,
 `preview_view_focus`, `preview_view_projection`, `preview_view_frame`,
 `preview_view_reset`, `preview_view_pan`, `preview_view_zoom`,
-`preview_view_close`, `preview_focus`, and `preview_close`. Use
+`preview_view_close`, `preview_focus`, `preview_close`,
+`preview_explode_enable`, `preview_explode_update`, and
+`preview_explode_reset`. Use
 `assembly_ui::select_prim(preview, path, extend, toggle)`
 for selection: it focuses the explicit preview and dispatches `SelectUsdPrim`,
 which resolves the path only inside that preview's stage and hierarchy.

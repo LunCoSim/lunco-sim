@@ -492,6 +492,13 @@ target by name, or creates a parallel topology registry. Tests should include
 negative manifests for missing paths or reciprocal relationships when the
 asset contract warrants them.
 
+For an open headful Editor preview, use `assembly_edit::preview_explode_enable`
+with the explicit `preview`, `doc`, `assembly`, and non-empty `parts` paths.
+Use `preview_explode_update` to change axis/spacing and
+`preview_explode_reset` to restore the captured local transforms. These
+wrappers call the typed `ExplodeUsdPreview` command; they require
+`InspectUsdViewport` to report `projection_ready: true` and never author USD.
+
 Use `assembly_ui` for the presentation step after the document and preview
 identities are known. `assembly_ui::panel_templates(preview, doc,
 edit_target)` returns nine existing Editor surfaces/workflows with explicit

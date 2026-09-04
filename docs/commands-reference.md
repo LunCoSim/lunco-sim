@@ -854,6 +854,27 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `preview` | `UsdPreviewId` |  Existing preview session to close. |
 
+#### `ExplodeUsdPreview`
+
+ Apply a transient CAD-style explode pose to explicit parts of one ready USD
+ preview. This changes projected Bevy local transforms only; it does not author
+ USD, journal a change, alter save state, or enter physics/simulation. Parts are
+ sorted by exact composed path, and nested parts are converted through their
+ parent frames. `Enable` captures the original local transforms, `Update`
+ reuses them with new spacing/axis values, and `Reset` restores them.
+
+- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Explicit preview session. |
+| `doc` | `DocumentId` |  Document owned by that preview session. |
+| `assembly` | `String` |  Exact composed `kind = "assembly"` prim path. |
+| `parts` | `Vec < String >` |  Non-empty exact composed prim paths below `assembly`. |
+| `action` | `UsdPreviewExplodeAction` |  `Enable`, `Update`, or `Reset` on the reflected command wire. |
+| `axis` | `Option < UsdPreviewExplodeAxis >` |  `X`, `Y`, or `Z`; required for `Enable` and `Update`. |
+| `spacing` | `Option < f32 >` |  Finite positive spacing in assembly-local metres; required for `Enable` and `Update`; `null` is valid for `Reset`. |
+
 #### `ReviewUsdProposal`
 
  Change review state without applying any USD operation.
