@@ -78,6 +78,14 @@ perspective/orthographic mode, fit-to-bounds, and reset. The typed commands
 agent/Rhai automation. They operate on projected Bevy bounds and camera state;
 they never author USD camera or transform opinions.
 
+`ExplodeUsdPreview` is the shared preview-only assembly inspection command.
+It requires explicit preview/document/assembly/part identities and supports
+`Enable`, `Update`, and `Reset`. It captures original local transforms in the
+session, computes stable hierarchy-aware offsets in the assembly frame, and
+returns structured offset data without changing authored USD, journal state,
+save state, physics, or simulation. Reprojection restores the captured
+baseline; all views over one session see the same transient pose.
+
 Clicking a USD file in any open Twin's Files section resolves that Twin's
 absolute path, opens the file through `OpenFile` and the async document
 registry, then binds the admitted `DocumentId` to `EDITOR_PREVIEW_ID`. This is

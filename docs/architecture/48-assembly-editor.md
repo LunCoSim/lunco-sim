@@ -98,6 +98,22 @@ name convention, or ECS-only grouping state is introduced.
   traversal or invent asset-specific camera poses. `InspectUsdViewport`
   reports the active projection, orbit target, distance, and orthographic
   scale so an agent can correlate a screenshot with the exact view state.
+- `ExplodeUsdPreview` is the transient inspection boundary for a multi-part
+  assembly. It requires the exact preview/document handles, an authored
+  `kind = "assembly"` path, and non-empty exact composed part paths below that
+  assembly. `Enable` captures each part's original local `Transform`, `Update`
+  reuses that baseline with new axis/spacing values, and `Reset` restores it.
+  Part paths are sorted lexicographically for stable order; offsets are
+  expressed in the assembly's local frame and converted through each part's
+  baseline parent frame, so nested parts remain deterministic. The state is
+  owned by the `UsdPreviewSession`, shared by all its views, and never enters
+  `UsdDocument`, `UsdOp`, the journal, save state, physics, or simulation.
+  Missing, ambiguous, stale, non-assembly, non-finite, or unsupported
+  projected targets fail before any transform changes. Document reprojection
+  restores captured baselines and clears the session state; close, reload,
+  and preview replacement discard it with the session. `InspectUsdViewport`
+  exposes the active explode identity and `Ack.data` reports the computed
+  offsets, so a headful capture can be correlated with the exact operation.
 - Native editor view-models are keyed by `UsdPreviewId`. The prim tree,
   connection canvas, parameter/variant/mount views, joint editor, and
   animation editor derive one entry per open session and paint the session

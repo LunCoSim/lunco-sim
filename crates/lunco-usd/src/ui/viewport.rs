@@ -60,10 +60,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
+use lunco_api::executor::{finish_command_result, PendingApiRequest};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets::twin_source::TwinRoots;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentClosed;
 #[cfg(test)]
@@ -73,8 +74,9 @@ use lunco_render::{
     RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_usd_bevy::{
-    PendingUsdMesh, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdStageRevision,
-    UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed, UsdVisualSynced,
+    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageAsset,
+    UsdStageRevision, UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed,
+    UsdVisualSynced,
 };
 use lunco_workbench::{
     CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRects, PanelScrollPolicy,
@@ -144,6 +146,14 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "edit_target": session.edit_target().as_str(),
                     "projected_generation": session.projected_generation(),
                     "projection_ready": session.projection_ready(),
+                    "explode": session.explode.as_ref().map(|explode| {
+                        serde_json::json!({
+                            "assembly": explode.assembly,
+                            "parts": explode.parts.iter().map(|part| &part.path).collect::<Vec<_>>(),
+                            "axis": explode.axis.as_str(),
+                            "spacing": explode.spacing,
+                        })
+                    }),
                     "focused": viewport.focused_preview_id() == Some(session.id()),
                     "views": views,
                 })
@@ -434,6 +444,53 @@ impl UsdPreviewProjection {
     }
 }
 
+/// Operation applied to the transient presentation pose of a USD preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsdPreviewExplodeAction {
+    Enable,
+    Update,
+    Reset,
+}
+
+impl UsdPreviewExplodeAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Enable => "enable",
+            Self::Update => "update",
+            Self::Reset => "reset",
+        }
+    }
+}
+
+/// Principal axis of an explode operation in the selected assembly's local
+/// coordinate frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum UsdPreviewExplodeAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl UsdPreviewExplodeAxis {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+        }
+    }
+
+    fn vector(self) -> Vec3 {
+        match self {
+            Self::X => Vec3::X,
+            Self::Y => Vec3::Y,
+            Self::Z => Vec3::Z,
+        }
+    }
+}
+
 /// Stable identity of one isolated USD preview session.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize,
@@ -466,6 +523,27 @@ pub struct UsdPreviewSession {
     projected_generation: u64,
     projection_ready: bool,
     primary_view: UsdPreviewViewId,
+    explode: Option<UsdPreviewExplodeState>,
+}
+
+/// The complete baseline for one session's transient explode presentation.
+/// Baselines are captured before the first offset is applied and are never
+/// derived from an already-exploded pose.
+#[derive(Clone)]
+struct UsdPreviewExplodeState {
+    assembly: String,
+    parts: Vec<UsdPreviewExplodedPart>,
+    axis: UsdPreviewExplodeAxis,
+    spacing: f32,
+    assembly_to_root: Mat4,
+}
+
+#[derive(Clone)]
+struct UsdPreviewExplodedPart {
+    path: String,
+    entity: Entity,
+    baseline: Transform,
+    parent_to_root: Mat4,
 }
 
 impl UsdPreviewSession {
@@ -767,15 +845,25 @@ impl UsdViewportState {
     /// Invalidate preview presentation before a document generation is
     /// projected. A stale generation must not remain editable while its USD
     /// entities are being rebuilt.
-    pub(crate) fn invalidate_projection(&mut self, doc: DocumentId) {
+    pub(crate) fn invalidate_projection(&mut self, doc: DocumentId) -> Vec<(Entity, Transform)> {
+        let mut restores = Vec::new();
         for session in self
             .sessions
             .values_mut()
             .filter(|session| session.doc == doc)
         {
+            if let Some(explode) = session.explode.take() {
+                restores.extend(
+                    explode
+                        .parts
+                        .into_iter()
+                        .map(|part| (part.entity, part.baseline)),
+                );
+            }
             session.projected_generation = 0;
             session.projection_ready = false;
         }
+        restores
     }
 }
 
@@ -1151,6 +1239,7 @@ fn create_preview_session(
         projected_generation: 0,
         projection_ready: false,
         primary_view,
+        explode: None,
     })
 }
 
@@ -1647,6 +1736,29 @@ pub struct ZoomUsdPreviewView {
     pub factor: f32,
 }
 
+/// Apply a transient, session-scoped explode pose to an explicit USD preview.
+/// This command changes only projected Bevy transforms; it never enters the
+/// USD document, journal, save state, or simulation projection.
+#[Command]
+pub struct ExplodeUsdPreview {
+    pub preview: UsdPreviewId,
+    pub doc: DocumentId,
+    /// Exact composed `kind = "assembly"` prim path.
+    pub assembly: String,
+    /// Exact composed prim paths below `assembly`. Rust sorts these paths for
+    /// stable offsets, so repeated calls do not depend on caller ordering.
+    pub parts: Vec<String>,
+    pub action: UsdPreviewExplodeAction,
+    /// Required for `enable` and `update`; `null` is accepted for `reset`.
+    #[serde(default)]
+    #[reflect(default)]
+    pub axis: Option<UsdPreviewExplodeAxis>,
+    /// Required for `enable` and `update`; `null` is accepted for `reset`.
+    #[serde(default)]
+    #[reflect(default)]
+    pub spacing: Option<f32>,
+}
+
 #[on_command(OpenUsdPreview)]
 fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
     let command = trigger.event();
@@ -2099,6 +2211,519 @@ fn on_zoom_usd_preview_view(trigger: On<ZoomUsdPreviewView>, mut commands: Comma
     });
 }
 
+#[derive(Clone)]
+struct PreviewPrimSnapshot {
+    entity: Entity,
+    path: String,
+    parent: Option<Entity>,
+    local: Transform,
+    kind: Option<String>,
+    synced: bool,
+}
+
+fn preview_entity_reaches_root(
+    entity: Entity,
+    root: Entity,
+    parents: &HashMap<Entity, Entity>,
+) -> bool {
+    let mut current = entity;
+    for _ in 0..64 {
+        if current == root {
+            return true;
+        }
+        let Some(parent) = parents.get(&current) else {
+            return false;
+        };
+        current = *parent;
+    }
+    false
+}
+
+fn preview_local_to_root(
+    entity: Entity,
+    root: Entity,
+    parents: &HashMap<Entity, Entity>,
+    locals: &HashMap<Entity, Transform>,
+) -> Option<Mat4> {
+    let mut chain = Vec::new();
+    let mut current = entity;
+    for _ in 0..64 {
+        chain.push(locals.get(&current)?.to_matrix());
+        if current == root {
+            let mut result = Mat4::IDENTITY;
+            for local in chain.into_iter().rev() {
+                result *= local;
+            }
+            return Some(result);
+        }
+        current = *parents.get(&current)?;
+    }
+    None
+}
+
+fn finite_transform(transform: &Transform) -> bool {
+    transform.translation.is_finite()
+        && transform.rotation.is_finite()
+        && transform.scale.is_finite()
+}
+
+fn finite_matrix(matrix: Mat4) -> bool {
+    matrix.to_cols_array().iter().all(|value| value.is_finite())
+}
+
+fn canonical_explode_parts(parts: &[String]) -> Result<Vec<String>, String> {
+    if parts.is_empty() {
+        return Err("USD preview explode requires at least one part path".to_string());
+    }
+    let mut canonical = parts.to_vec();
+    if canonical.iter().any(|path| {
+        path.trim() != path || path.is_empty() || !path.starts_with('/') || path.ends_with('/')
+    }) {
+        return Err("USD preview explode part paths must be absolute prim paths".to_string());
+    }
+    canonical.sort();
+    if canonical.windows(2).any(|paths| paths[0] == paths[1]) {
+        return Err("USD preview explode part paths must be unique".to_string());
+    }
+    for path in &canonical {
+        SdfPath::new(path)
+            .map_err(|error| format!("invalid explode part path `{path}`: {error}"))?;
+    }
+    Ok(canonical)
+}
+
+fn collect_preview_explode_targets(
+    world: &mut World,
+    command: &ExplodeUsdPreview,
+) -> Result<
+    (
+        Entity,
+        Entity,
+        String,
+        Vec<PreviewPrimSnapshot>,
+        HashMap<Entity, Transform>,
+        HashMap<Entity, Entity>,
+    ),
+    String,
+> {
+    let (root, stage_id, ready) = {
+        let viewport = world
+            .get_resource::<UsdViewportState>()
+            .ok_or_else(|| "USD preview viewport state is unavailable".to_string())?;
+        let session = viewport
+            .session(command.preview)
+            .ok_or_else(|| format!("USD preview {} is not open", command.preview.0))?;
+        if session.doc() != command.doc {
+            return Err(format!(
+                "USD preview {} belongs to document {}, not document {}",
+                command.preview.0,
+                session.doc(),
+                command.doc
+            ));
+        }
+        (
+            session.scene_root(),
+            session.stage_handle().id(),
+            session.projection_ready(),
+        )
+    };
+    if !ready {
+        return Err(format!(
+            "USD preview {} has no ready composed projection",
+            command.preview.0
+        ));
+    }
+
+    if command.assembly.trim() != command.assembly
+        || command.assembly.is_empty()
+        || !command.assembly.starts_with('/')
+        || command.assembly.ends_with('/')
+    {
+        return Err("USD preview explode assembly must be an absolute prim path".to_string());
+    }
+    SdfPath::new(&command.assembly).map_err(|error| {
+        format!(
+            "invalid explode assembly path `{}`: {error}",
+            command.assembly
+        )
+    })?;
+    let part_paths = canonical_explode_parts(&command.parts)?;
+
+    let mut query = world.query::<(
+        Entity,
+        &UsdPrimPath,
+        &Transform,
+        Option<&ChildOf>,
+        Option<&lunco_core::UsdPrimKind>,
+        Has<UsdVisualSynced>,
+    )>();
+    let mut snapshots = HashMap::new();
+    let mut parents = HashMap::new();
+    for (entity, prim, local, parent, kind, synced) in query.iter(world) {
+        if prim.stage_handle.id() != stage_id {
+            continue;
+        }
+        if !finite_transform(local) {
+            return Err(format!(
+                "USD preview explode target `{}` has a non-finite transform",
+                prim.path
+            ));
+        }
+        if let Some(parent) = parent {
+            parents.insert(entity, parent.parent());
+        }
+        snapshots.insert(
+            entity,
+            PreviewPrimSnapshot {
+                entity,
+                path: prim.path.clone(),
+                parent: parent.map(ChildOf::parent),
+                local: local.clone(),
+                kind: kind.map(|kind| kind.0.clone()),
+                synced,
+            },
+        );
+    }
+
+    let Some(root_snapshot) = snapshots.get(&root) else {
+        return Err(format!(
+            "USD preview {} has no projected scene root",
+            command.preview.0
+        ));
+    };
+    if !root_snapshot.synced || !preview_entity_reaches_root(root, root, &parents) {
+        return Err(format!(
+            "USD preview {} scene root is stale",
+            command.preview.0
+        ));
+    }
+
+    let mut by_path: HashMap<String, Vec<PreviewPrimSnapshot>> = HashMap::new();
+    for snapshot in snapshots.values() {
+        if snapshot.synced && preview_entity_reaches_root(snapshot.entity, root, &parents) {
+            by_path
+                .entry(snapshot.path.clone())
+                .or_default()
+                .push(snapshot.clone());
+        }
+    }
+
+    let assembly = match by_path.get(&command.assembly) {
+        Some(matches) if matches.len() == 1 => &matches[0],
+        Some(matches) => {
+            return Err(format!(
+                "USD preview explode assembly `{}` is ambiguous ({} projected entities)",
+                command.assembly,
+                matches.len()
+            ));
+        }
+        None => {
+            return Err(format!(
+                "USD preview explode assembly `{}` is stale or missing",
+                command.assembly
+            ));
+        }
+    };
+    if !assembly
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("assembly"))
+    {
+        return Err(format!(
+            "USD preview explode target `{}` is not an authored assembly",
+            command.assembly
+        ));
+    }
+
+    let mut targets = Vec::with_capacity(part_paths.len());
+    for path in &part_paths {
+        let sdf_path = SdfPath::new(path).expect("part paths were validated");
+        if !lunco_usd_bevy::is_descendant_or_self(&sdf_path, &command.assembly)
+            || path == &command.assembly
+        {
+            return Err(format!(
+                "USD preview explode part `{path}` is not below assembly `{}`",
+                command.assembly
+            ));
+        }
+        let matches = by_path.get(path).map(Vec::as_slice).unwrap_or_default();
+        let Some(target) = matches.first() else {
+            return Err(format!(
+                "USD preview explode part `{path}` is stale or missing"
+            ));
+        };
+        if matches.len() != 1 {
+            return Err(format!(
+                "USD preview explode part `{path}` is ambiguous ({} projected entities)",
+                matches.len()
+            ));
+        }
+        if target.parent.is_none() {
+            return Err(format!(
+                "USD preview explode part `{path}` has no projected parent frame"
+            ));
+        }
+        targets.push(target.clone());
+    }
+
+    let mut locals = HashMap::with_capacity(snapshots.len());
+    for snapshot in snapshots.values() {
+        locals.insert(snapshot.entity, snapshot.local.clone());
+    }
+    if preview_local_to_root(root, root, &parents, &locals).is_none() {
+        return Err(format!(
+            "USD preview {} has an invalid projected hierarchy",
+            command.preview.0
+        ));
+    }
+    Ok((
+        root,
+        assembly.entity,
+        assembly.path.clone(),
+        targets,
+        locals,
+        parents,
+    ))
+}
+
+fn execute_explode_usd_preview(
+    world: &mut World,
+    command: ExplodeUsdPreview,
+) -> Result<Ack, String> {
+    let (root, assembly_entity, assembly_path, targets, locals, parents) =
+        collect_preview_explode_targets(world, &command)?;
+    let part_paths: Vec<_> = targets.iter().map(|target| target.path.clone()).collect();
+    let existing = world
+        .resource::<UsdViewportState>()
+        .session(command.preview)
+        .and_then(|session| session.explode.as_ref())
+        .cloned();
+    if let Some(existing) = &existing {
+        if existing.assembly != assembly_path
+            || existing
+                .parts
+                .iter()
+                .map(|part| part.path.as_str())
+                .ne(part_paths.iter().map(String::as_str))
+        {
+            return Err(format!(
+                "USD preview {} already has an explode target; reset it before changing assembly or parts",
+                command.preview.0
+            ));
+        }
+        if existing.parts.iter().any(|part| {
+            targets
+                .iter()
+                .find(|target| target.path == part.path)
+                .map_or(true, |target| target.entity != part.entity)
+        }) {
+            return Err(format!(
+                "USD preview {} explode state is stale after reprojection",
+                command.preview.0
+            ));
+        }
+    }
+
+    let (axis, spacing) = match command.action {
+        UsdPreviewExplodeAction::Reset => (None, None),
+        UsdPreviewExplodeAction::Enable | UsdPreviewExplodeAction::Update => {
+            let axis = command
+                .axis
+                .ok_or_else(|| "USD preview explode enable/update requires an axis".to_string())?;
+            let spacing = command.spacing.ok_or_else(|| {
+                "USD preview explode enable/update requires positive spacing".to_string()
+            })?;
+            if !spacing.is_finite() || spacing <= 0.0 {
+                return Err("USD preview explode spacing must be finite and positive".to_string());
+            }
+            (Some(axis), Some(spacing))
+        }
+    };
+
+    if command.action == UsdPreviewExplodeAction::Update && existing.is_none() {
+        return Err(format!(
+            "USD preview {} has no explode state to update",
+            command.preview.0
+        ));
+    }
+
+    if command.action == UsdPreviewExplodeAction::Reset {
+        let changed = if let Some(existing) = existing {
+            for part in &existing.parts {
+                let Some(mut entity) = world.get_entity_mut(part.entity).ok() else {
+                    return Err(format!(
+                        "USD preview {} explode part `{}` disappeared before reset",
+                        command.preview.0, part.path
+                    ));
+                };
+                let Some(mut transform) = entity.get_mut::<Transform>() else {
+                    return Err(format!(
+                        "USD preview explode part `{}` has no transform",
+                        part.path
+                    ));
+                };
+                *transform = part.baseline.clone();
+            }
+            true
+        } else {
+            false
+        };
+        if let Some(session) = world
+            .resource_mut::<UsdViewportState>()
+            .session_mut(command.preview)
+        {
+            session.explode = None;
+        }
+        return Ok(Ack::with_data(
+            OpId::new(),
+            serde_json::json!({
+                "preview": command.preview.0,
+                "doc": command.doc,
+                "action": command.action.as_str(),
+                "assembly": assembly_path,
+                "parts": part_paths,
+                "changed": changed,
+                "preview_only": true,
+                "authored": false,
+            }),
+        ));
+    }
+
+    let (baseline_parts, assembly_to_root) = if let Some(existing) = existing {
+        (existing.parts, existing.assembly_to_root)
+    } else {
+        let assembly_to_root = preview_local_to_root(assembly_entity, root, &parents, &locals)
+            .ok_or_else(|| "USD preview explode assembly has an invalid hierarchy".to_string())?;
+        if !finite_matrix(assembly_to_root) {
+            return Err("USD preview explode assembly frame is non-finite".to_string());
+        }
+        (
+            targets
+                .iter()
+                .map(|target| {
+                    let parent = target.parent.expect("target parent validated");
+                    let parent_to_root = preview_local_to_root(parent, root, &parents, &locals)
+                        .ok_or_else(|| {
+                            format!(
+                                "USD preview explode part `{}` has an invalid parent hierarchy",
+                                target.path
+                            )
+                        })?;
+                    if !finite_matrix(parent_to_root) {
+                        return Err(format!(
+                            "USD preview explode part `{}` has a non-finite parent frame",
+                            target.path
+                        ));
+                    }
+                    Ok(UsdPreviewExplodedPart {
+                        path: target.path.clone(),
+                        entity: target.entity,
+                        baseline: target.local.clone(),
+                        parent_to_root,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            assembly_to_root,
+        )
+    };
+
+    let axis = axis.expect("enable/update axis validated");
+    let spacing = spacing.expect("enable/update spacing validated");
+    let mut applied = Vec::with_capacity(baseline_parts.len());
+    let mut offsets = Vec::with_capacity(baseline_parts.len());
+    for (index, part) in baseline_parts.iter().enumerate() {
+        let assembly_delta = axis.vector() * spacing * (index as f32 + 1.0);
+        let root_delta = assembly_to_root.transform_vector3(assembly_delta);
+        let local_delta = part.parent_to_root.inverse().transform_vector3(root_delta);
+        if !root_delta.is_finite() || !local_delta.is_finite() {
+            return Err(format!(
+                "USD preview explode part `{}` produced a non-finite offset",
+                part.path
+            ));
+        }
+        let mut transform = part.baseline.clone();
+        transform.translation += local_delta;
+        if !finite_transform(&transform) {
+            return Err(format!(
+                "USD preview explode part `{}` produced a non-finite transform",
+                part.path
+            ));
+        }
+        applied.push((part.entity, transform));
+        offsets.push(serde_json::json!({
+            "path": part.path,
+            "assembly_delta": assembly_delta.to_array(),
+            "parent_local_delta": local_delta.to_array(),
+            "order": index + 1,
+        }));
+    }
+    for (entity, transform) in applied {
+        let Some(mut entity) = world.get_entity_mut(entity).ok() else {
+            return Err(format!(
+                "USD preview {} explode target disappeared before apply",
+                command.preview.0
+            ));
+        };
+        let Some(mut current) = entity.get_mut::<Transform>() else {
+            return Err("USD preview explode target has no transform".to_string());
+        };
+        *current = transform;
+    }
+
+    let state = UsdPreviewExplodeState {
+        assembly: assembly_path.clone(),
+        parts: baseline_parts,
+        axis,
+        spacing,
+        assembly_to_root,
+    };
+    if let Some(session) = world
+        .resource_mut::<UsdViewportState>()
+        .session_mut(command.preview)
+    {
+        session.explode = Some(state);
+    }
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "preview": command.preview.0,
+            "doc": command.doc,
+            "action": command.action.as_str(),
+            "assembly": assembly_path,
+            "parts": part_paths,
+            "axis": axis.as_str(),
+            "spacing": spacing,
+            "offsets": offsets,
+            "preview_only": true,
+            "authored": false,
+        }),
+    ))
+}
+
+#[on_command(ExplodeUsdPreview)]
+fn on_explode_usd_preview(
+    trigger: On<ExplodeUsdPreview>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let outcome = execute_explode_usd_preview(world, command);
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
 register_commands!(
     on_open_usd_preview,
     on_open_usd_preview_view,
@@ -2111,6 +2736,7 @@ register_commands!(
     on_reset_usd_preview_view,
     on_pan_usd_preview_view,
     on_zoom_usd_preview_view,
+    on_explode_usd_preview,
 );
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2266,6 +2892,7 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         session.stage_handle = handle;
         session.projected_generation = 0;
         session.projection_ready = false;
+        session.explode = None;
     }
 }
 
@@ -2749,6 +3376,297 @@ mod tests {
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
             .contains(doc));
+    }
+
+    fn explode_fixture() -> (App, UsdPreviewId, DocumentId, Entity, Entity) {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        let preview = UsdPreviewId(77);
+        let doc = DocumentId::new(9);
+        let stage = Handle::<UsdStageAsset>::default();
+        let session = create_preview_session(
+            app.world_mut(),
+            preview,
+            doc,
+            LayerId::root(),
+            stage.clone(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            UsdPreviewViewId(1),
+        )
+        .expect("fixture session resources are available");
+        let root = session.scene_root();
+        app.world_mut().entity_mut(root).insert((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/Scene".into(),
+            },
+            UsdVisualSynced,
+        ));
+        let assembly = app
+            .world_mut()
+            .spawn((
+                Name::new("Assembly"),
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Scene/Assembly".into(),
+                },
+                Transform::from_xyz(5.0, 0.0, 0.0),
+                UsdVisualSynced,
+                lunco_core::UsdPrimKind("assembly".into()),
+                ChildOf(root),
+            ))
+            .id();
+        let part_a = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Scene/Assembly/PartA".into(),
+                },
+                Transform::from_xyz(1.0, 0.0, 0.0),
+                UsdVisualSynced,
+                ChildOf(assembly),
+            ))
+            .id();
+        let group = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Scene/Assembly/Group".into(),
+                },
+                Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                UsdVisualSynced,
+                ChildOf(assembly),
+            ))
+            .id();
+        let part_b = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/Scene/Assembly/Group/PartB".into(),
+                },
+                Transform::from_xyz(0.0, 0.0, 3.0),
+                UsdVisualSynced,
+                ChildOf(group),
+            ))
+            .id();
+        let mut state = UsdViewportState::default();
+        state.insert(session);
+        state.session_mut(preview).unwrap().projected_generation = 1;
+        state.session_mut(preview).unwrap().projection_ready = true;
+        app.insert_resource(state);
+        (app, preview, doc, part_a, part_b)
+    }
+
+    fn explode_command(
+        preview: UsdPreviewId,
+        doc: DocumentId,
+        assembly: &str,
+        parts: &[&str],
+        action: UsdPreviewExplodeAction,
+        axis: Option<UsdPreviewExplodeAxis>,
+        spacing: Option<f32>,
+    ) -> ExplodeUsdPreview {
+        ExplodeUsdPreview {
+            preview,
+            doc,
+            assembly: assembly.into(),
+            parts: parts.iter().map(|part| (*part).into()).collect(),
+            action,
+            axis,
+            spacing,
+        }
+    }
+
+    #[test]
+    fn explode_enable_update_reset_is_hierarchical_and_idempotent() {
+        let (mut app, preview, doc, part_a, part_b) = explode_fixture();
+        let assembly = "/Scene/Assembly";
+        let parts = ["/Scene/Assembly/Group/PartB", "/Scene/Assembly/PartA"];
+        let baseline_a = app.world().get::<Transform>(part_a).unwrap().clone();
+        let baseline_b = app.world().get::<Transform>(part_b).unwrap().clone();
+
+        let enabled = execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                assembly,
+                &parts,
+                UsdPreviewExplodeAction::Enable,
+                Some(UsdPreviewExplodeAxis::X),
+                Some(2.0),
+            ),
+        )
+        .expect("valid assembly explode enables");
+        assert_eq!(
+            enabled.data.as_ref().unwrap()["parts"],
+            serde_json::json!(["/Scene/Assembly/Group/PartB", "/Scene/Assembly/PartA"])
+        );
+        assert_eq!(
+            app.world().get::<Transform>(part_a).unwrap().translation,
+            baseline_a.translation + Vec3::new(4.0, 0.0, 0.0)
+        );
+        assert!(
+            (app.world().get::<Transform>(part_b).unwrap().translation
+                - (baseline_b.translation + Vec3::new(0.0, -2.0, 0.0)))
+            .length()
+                < 1.0e-5
+        );
+
+        execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                assembly,
+                &parts,
+                UsdPreviewExplodeAction::Enable,
+                Some(UsdPreviewExplodeAxis::Y),
+                Some(1.0),
+            ),
+        )
+        .expect("repeated enable reuses the original baseline");
+        assert_eq!(
+            app.world().get::<Transform>(part_a).unwrap().translation,
+            baseline_a.translation + Vec3::Y * 2.0
+        );
+        assert!(
+            (app.world().get::<Transform>(part_b).unwrap().translation
+                - (baseline_b.translation + Vec3::X))
+                .length()
+                < 1.0e-5
+        );
+
+        execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                assembly,
+                &parts,
+                UsdPreviewExplodeAction::Reset,
+                None,
+                None,
+            ),
+        )
+        .expect("valid assembly explode resets");
+        assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &baseline_a);
+        assert_eq!(app.world().get::<Transform>(part_b).unwrap(), &baseline_b);
+        assert!(app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .unwrap()
+            .explode
+            .is_none());
+    }
+
+    #[test]
+    fn explode_rejects_non_assembly_and_stale_targets_without_mutation() {
+        let (mut app, preview, doc, part_a, _) = explode_fixture();
+        let before = app.world().get::<Transform>(part_a).unwrap().clone();
+        let error = execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                "/Scene/Assembly/PartA",
+                &["/Scene/Assembly/Group/PartB"],
+                UsdPreviewExplodeAction::Enable,
+                Some(UsdPreviewExplodeAxis::X),
+                Some(1.0),
+            ),
+        )
+        .expect_err("a component is not an assembly target");
+        assert!(error.contains("not an authored assembly"));
+        assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &before);
+
+        let error = execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                "/Scene/Assembly",
+                &["/Scene/Assembly/Missing"],
+                UsdPreviewExplodeAction::Enable,
+                Some(UsdPreviewExplodeAxis::X),
+                Some(1.0),
+            ),
+        )
+        .expect_err("a missing part is stale");
+        assert!(error.contains("stale or missing"));
+        assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &before);
+    }
+
+    #[test]
+    fn reprojection_invalidates_explode_and_returns_captured_baselines() {
+        let (mut app, preview, doc, part_a, part_b) = explode_fixture();
+        let baseline_a = app.world().get::<Transform>(part_a).unwrap().clone();
+        let baseline_b = app.world().get::<Transform>(part_b).unwrap().clone();
+        execute_explode_usd_preview(
+            app.world_mut(),
+            explode_command(
+                preview,
+                doc,
+                "/Scene/Assembly",
+                &["/Scene/Assembly/PartA", "/Scene/Assembly/Group/PartB"],
+                UsdPreviewExplodeAction::Enable,
+                Some(UsdPreviewExplodeAxis::Z),
+                Some(3.0),
+            ),
+        )
+        .expect("valid assembly explode enables");
+
+        let restores = app
+            .world_mut()
+            .resource_mut::<UsdViewportState>()
+            .invalidate_projection(doc);
+        assert_eq!(restores.len(), 2);
+        for (entity, transform) in restores {
+            *app.world_mut()
+                .get_mut::<Transform>(entity)
+                .expect("projected explode target remains during reprojection") = transform;
+        }
+
+        assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &baseline_a);
+        assert_eq!(app.world().get::<Transform>(part_b).unwrap(), &baseline_b);
+        let session = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .expect("preview session remains open while reprojection starts");
+        assert!(session.explode.is_none());
+        assert!(!session.projection_ready());
+        assert_eq!(session.projected_generation(), 0);
+    }
+
+    #[test]
+    fn explode_command_is_discoverable_with_explicit_lifecycle_fields() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdViewportPlugin);
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let registry = registry.read();
+        let schema = lunco_api::discovery::discover_commands(&registry, None);
+        let command = schema
+            .iter()
+            .find(|command| command.name == "ExplodeUsdPreview")
+            .expect("explode command is registered by the viewport plugin");
+        assert!(!command.defaulted);
+        for field in [
+            "preview", "doc", "assembly", "parts", "action", "axis", "spacing",
+        ] {
+            assert!(
+                command
+                    .fields
+                    .iter()
+                    .any(|candidate| candidate.name == field),
+                "explode schema must expose `{field}`"
+            );
+        }
     }
 
     #[test]
