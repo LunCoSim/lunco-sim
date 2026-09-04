@@ -87,11 +87,12 @@ collision authority. This path preserves the fixed solver/substep contract.
 For orbital camera views, keep presentation state on the avatar in
 `OrbitViewHistory`, keyed by the stable celestial ephemeris id. Capture a
 user-controlled `OrbitCamera` pose before switching targets or leaving orbit,
-and restore it only for that same body. When no saved pose exists, derive the
-arrival direction from the camera's current radial region after resolving the
-target's inertial BigSpace grid. Do not use a fixed world-axis/Sun-facing
-arrival, a scene-wide pose cache, or a second transform writer. Clear this
-transient history with active-Twin teardown and avatar demotion.
+and restore it only for that same body, including a later surface-to-orbit
+scroll entry. When no saved pose exists, derive the arrival direction from the
+camera's current radial region after resolving the target's inertial BigSpace
+grid. Do not use a fixed world-axis/Sun-facing arrival, a scene-wide pose
+cache, or a second transform writer. Clear this transient history with
+active-Twin teardown and avatar demotion.
 
 For transform gizmos, use `transform-gizmo-bevy` only as a render-space
 frontend on an unparented proxy. Capture through `SimulationPoseQuery`, keep

@@ -70,11 +70,12 @@ when the camera changes mode.
 
 An avatar keeps transient `OrbitViewHistory` keyed by stable celestial
 ephemeris id. A user-controlled orbital pose is captured before a target
-switch or orbit exit and restored only when returning to that same body. A
-body without history is initialized from the camera's current radial region
-in the resolved inertial grid; no fixed or Sun-facing arrival is authored or
-computed. Active-Twin teardown and avatar demotion retire this presentation
-state with the owning avatar.
+switch or orbit exit and restored only when returning to that same body,
+including a later surface-to-orbit scroll entry. A body without history is
+initialized from the camera's current radial region in the resolved inertial
+grid; no fixed or Sun-facing arrival is authored or computed. Active-Twin
+teardown and avatar demotion retire this presentation state with the owning
+avatar.
 
 Orbital presentation visibility only manages unanchored local roots, whose
 geometry has no celestial position. A site-anchored scene remains in its

@@ -87,8 +87,10 @@ propagation.
 
 `OrbitCamera` is an avatar-owned presentation mode. `OrbitViewHistory` stores
 the last user-controlled pose per stable celestial ephemeris id, so switching
-between Moon, Earth, or another body restores that body's own yaw, pitch,
-distance, damping, and vertical offset. The history is transient and is
+between Moon, Earth, or another body—and re-entering orbit from that body's
+surface—restores that body's own yaw, pitch, distance, damping, and vertical
+offset. The first surface-to-orbit entry has no saved pose and derives its arm
+from the live radial position for continuity. The history is transient and is
 cleared when the active Twin closes or when the avatar is demoted; it is not a
 scene-wide celestial fact and is never persisted as USD.
 
