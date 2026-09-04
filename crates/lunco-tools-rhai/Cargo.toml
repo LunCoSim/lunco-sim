@@ -11,6 +11,9 @@ license.workspace = true
 
 [dependencies]
 lunco-tools = { path = "../lunco-tools" }
+# Use the same bounded Rhai parser policy as the production scripting engine
+# when deriving discovery metadata from source-defined tools.
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 rhai = { workspace = true }
 
 [lints]
