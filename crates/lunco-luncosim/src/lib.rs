@@ -4216,7 +4216,11 @@ mod modelica_status_tests {
         let bus = app
             .world()
             .resource::<lunco_workbench::status_bus::StatusBus>();
-        assert_eq!(bus.history().count(), 2);
+        // Returning to the same ready snapshot after a compile transition
+        // must remain one stable lifecycle event. StatusBus coalesces
+        // consecutive identical discrete snapshots by contract.
+        assert_eq!(bus.history().count(), 1);
+        assert_eq!(bus.history_total(), 1);
         assert!(bus
             .active_progress()
             .all(|event| { event.source != lunco_workbench::status_bus::MODELICA_SOURCE }));

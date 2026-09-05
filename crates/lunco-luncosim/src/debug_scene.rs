@@ -695,6 +695,42 @@ fn log_participant_readiness_blockers(world: &mut World) {
     }
 }
 
+/// Explain a scene-materialization timeout with the live projection state.
+/// The scene gate spans the USD load, visual projection, simulation projection,
+/// terrain build, and Modelica source lifecycle; reporting only the final
+/// boolean would hide which owner failed to publish its completion marker.
+fn log_scene_readiness_blockers(world: &mut World) {
+    let load_in_flight = world
+        .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+        .is_some();
+    let ground_pending = world
+        .get_resource::<lunco_usd::GroundColliderPending>()
+        .is_some_and(|pending| pending.0);
+    let mut prims = world.query::<(
+        &lunco_usd_bevy::UsdPrimPath,
+        Has<lunco_usd_bevy::UsdVisualSynced>,
+        Has<lunco_usd_sim::UsdSimProcessed>,
+    )>();
+    let mut prim_count = 0usize;
+    let mut visual_count = 0usize;
+    let mut unprocessed = Vec::new();
+    for (path, visual_synced, sim_processed) in prims.iter(world) {
+        prim_count += 1;
+        visual_count += usize::from(visual_synced);
+        if !sim_processed && unprocessed.len() < 32 {
+            unprocessed.push(format!("{} (visual_synced={visual_synced})", path.path));
+        }
+    }
+    let terrain_requests = world
+        .query_filtered::<(), With<lunco_terrain_surface::DemTerrainRequest>>()
+        .iter(world)
+        .count();
+    warn!(
+        "[test] scene blocker load_in_flight={} prims={} visual_synced={} unprocessed_sample={:?} ground_pending={} terrain_requests={}",
+        load_in_flight, prim_count, visual_count, unprocessed, ground_pending, terrain_requests,
+    );
+}
+
 pub fn run() -> u8 {
     if std::env::args().any(|argument| argument == "--list") {
         return list_scene_tests();
@@ -705,10 +741,9 @@ pub fn run() -> u8 {
     //
     // A harness must not write the developer's real settings. `is_test_binary()`
     // cannot see this one — a `[[bin]]` lands next to the real app, not in
-    // `deps/` — so it says so out loud. This is not defensive tidiness: the
-    // `CelestialCadenceSettings::EXACT` inserted below used to persist, and every
-    // later run of the *luncosim* then loaded tolerance 0° and solved the whole
-    // celestial tree every frame.
+    // `deps/` — so it says so out loud. The scene-test cadence override must not
+    // persist into the developer's later *luncosim* runs, where the normal
+    // cadence policy owns the frame cost.
     #[cfg(feature = "ui")]
     lunco_settings::use_ephemeral_settings();
 
@@ -766,12 +801,6 @@ pub fn run() -> u8 {
     // With `--jitter` this resource is re-set before each update; it is still
     // `ManualDuration`, so the wall clock never enters the run either way.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
-    // The other determinism knob: solve the celestial tree EVERY tick, so a
-    // developer's persisted cadence tolerance can never change a verdict. The
-    // production default trades ≤0.01° of celestial angle for ~10 ms/frame;
-    // a test that asserts a sun angle or a shadow must not inherit that trade.
-    app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::EXACT);
-
     app.insert_resource(Verdict {
         result: None,
         want_channel: cli.verdict_channel.clone(),
@@ -919,6 +948,7 @@ pub fn run() -> u8 {
         && !app.world().resource::<lunco_usd::GroundColliderPending>().0
         && modelica_sources_terminal(app.world_mut());
     if !scene_ready {
+        log_scene_readiness_blockers(app.world_mut());
         println!(
             "luncosim test NO-VERDICT  scene={}  — scene materialization did not complete \
              within the {:.1}s readiness timeout",
@@ -964,6 +994,14 @@ pub fn run() -> u8 {
         );
         return 2;
     }
+
+    // The scene and its asynchronous participants are ready now. Install the
+    // deterministic scene-test policy only for the authored simulation: the
+    // production cadence policy must remain active while wall-clock asset IO,
+    // USD projection, and Modelica preparation are being pumped above. EXACT
+    // solves the celestial tree every update, which is correct for verdicts but
+    // needlessly blocks readiness when applied to the zero-time load phase.
+    app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::EXACT);
     if let Some(mut gate) = app
         .world_mut()
         .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
