@@ -190,7 +190,7 @@ fn assembly_ui_templates_use_existing_surfaces_and_workflows() {
 fn assembly_tool_libraries_are_discoverable() {
     use lunco_tools::Tool;
 
-    for name in ["assembly_audit", "assembly_edit", "assembly_ui"] {
+    for name in ["assembly_audit", "assembly_builder", "assembly_edit", "assembly_ui"] {
         let (_, source) = lunco_assets::scripting::tool_libraries()
             .into_iter()
             .find(|(tool_name, _)| *tool_name == name)

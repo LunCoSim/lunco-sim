@@ -42,6 +42,16 @@ def Xform "AssemblyPhysicsBuilderTest" (
         }
     }
 
+    # Existing referenced part: the semantic builder must define one local
+    # over before adding body/mass opinions without copying this hierarchy.
+    def Xform "ExistingPanel" (
+        prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+    )
+    {
+        double3 xformOp:translate = (-1.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "assembly-physics-builder"

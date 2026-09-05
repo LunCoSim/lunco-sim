@@ -321,7 +321,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
   `value` are validated against that operation at the command boundary.
 - **Script-first authoring:** the dynamically reloadable `assembly_builder`
-  tool provides semantic placement, geometry, and alignment plans above the
+  tool provides semantic placement, geometry, retrofit-body, and alignment plans above the
   namespaced `assembly_edit` tool, which owns
   explicit-document USD editing (`add_prim`, `transform`, `attribute`,
   `schema`, `variant`, `relationship`, `connection`, `batch`,
@@ -395,7 +395,7 @@ A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, geometry, and alignment plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, geometry, retrofit bodies, and alignment plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
