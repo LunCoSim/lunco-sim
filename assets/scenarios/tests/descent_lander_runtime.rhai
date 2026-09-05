@@ -243,7 +243,9 @@ fn finish(me) {
     let rover_ok = me.course_complete && me.deployed;
     let pose_ok = t_bounded(world_pos(me.lander), 1000.0, "lander pose");
     let goal_ok = false;
-    if me.rover >= 0 && me.goal >= 0 { goal_ok = distance(me.rover, me.goal) < 6.0; }
+    if me.rover >= 0 && me.goal >= 0 {
+        goal_ok = arrived(me.rover, world_pos(me.goal), 6.0);
+    }
     let cutoff_latched = high(me.gnc, "landing_engine_cutoff_latched");
     let handoff_latched = high(me.gnc, "landing_handoff_latched");
     let transition_reason = "engine_cutoff=" + me.engine_cutoff +

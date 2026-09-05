@@ -40,13 +40,15 @@ fn on_event(me, evt) {
     } else if evt.name == "course_complete" && !this.done {
         let rover = find("/LanderTest/SkidRover");
         let goal = find("/LanderTest/RoverTarget3");
-        let arrived = false;
-        if rover >= 0 && goal >= 0 { arrived = distance(rover, goal) < 6.0; }
+        let reached_goal = false;
+        if rover >= 0 && goal >= 0 {
+            reached_goal = arrived(rover, world_pos(goal), 6.0);
+        }
         let used_controls = false;
         if this.deployed && this.possess_count > 0 { used_controls = this.port_writes > 0; }
         this.done = true;
         if !used_controls { verdict(false, "autopilot did not drive after rover deployment"); return; }
-        if !arrived { verdict(false, "mission completed away from the final waypoint"); return; }
+        if !reached_goal { verdict(false, "mission completed away from the final waypoint"); return; }
         if !this.engine_cutoff || !this.flight_handoff || !this.touchdown {
             verdict(false, "landing transition event chain was incomplete");
             return;

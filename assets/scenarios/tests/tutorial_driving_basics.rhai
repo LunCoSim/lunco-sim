@@ -28,11 +28,14 @@ fn on_event(me, evt) {
     } else if evt.name == "MISSION_COMPLETE" && !this.done {
         let rover = find("/DrivingBasics/Rover");
         let flag = find("/DrivingBasics/Flag");
-        let arrived = rover >= 0 && flag >= 0 && distance(rover, flag) < 6.0;
+        let reached_flag = false;
+        if rover >= 0 && flag >= 0 {
+            reached_flag = arrived(rover, world_pos(flag), 6.0);
+        }
         let used_controls = this.possess_count > 0 && this.port_writes > 0;
         this.done = true;
         if !used_controls { verdict(false, "autopilot did not use PossessVessel and SetPorts"); }
-        else if !arrived { verdict(false, "mission completed away from the finish flag"); }
+        else if !reached_flag { verdict(false, "mission completed away from the finish flag"); }
         else { verdict(true, ""); }
     }
 }
@@ -44,8 +47,8 @@ fn on_tick(me) {
         this.done = true;
         let rover = find("/DrivingBasics/Rover");
         let flag = find("/DrivingBasics/Flag");
-        let d = if rover >= 0 && flag >= 0 { distance(rover, flag) } else { -1.0 };
         verdict(false, "lesson did not complete within 90 simulated seconds (possess=" +
-            this.possess_count + ", set_ports=" + this.port_writes + ", distance=" + d + ")");
+            this.possess_count + ", set_ports=" + this.port_writes + ", rover=" +
+            world_pos(rover) + ", flag=" + world_pos(flag) + ")");
     }
 }

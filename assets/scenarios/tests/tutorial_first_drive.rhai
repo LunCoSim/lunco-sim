@@ -36,7 +36,10 @@ fn on_event(me, evt) {
     } else if evt.name == "MISSION_COMPLETE" {
         let rover = find("/FirstDrive/Rover");
         let flag = find("/FirstDrive/Flag");
-        let at_flag = rover >= 0 && flag >= 0 && distance(rover, flag) < 6.0;
+        let at_flag = false;
+        if rover >= 0 && flag >= 0 {
+            at_flag = arrived(rover, world_pos(flag), 6.0);
+        }
         let controls_used = this.possess_count > 0 && this.port_writes > 0;
         let sun_forward = world_forward(this.sun);
         let light_is_downward = this.sun >= 0 && sun_forward != () && sun_forward[1] < -0.25;

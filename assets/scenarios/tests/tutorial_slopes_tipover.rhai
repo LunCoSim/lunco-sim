@@ -30,13 +30,15 @@ fn on_event(me, evt) {
     } else if evt.name == "MISSION_COMPLETE" && !this.done {
         let rover = find("/SlopeTest/Rover");
         let marker = find("/SlopeTest/Marker");
-        let arrived = false;
-        if rover >= 0 && marker >= 0 { arrived = distance(rover, marker) < 6.0; }
+        let reached_marker = false;
+        if rover >= 0 && marker >= 0 {
+            reached_marker = arrived(rover, world_pos(marker), 6.0);
+        }
         let used_controls = this.possess_count > 0 && this.port_writes > 0;
         this.done = true;
         if !this.edge_seen { verdict(false, "the autopilot skipped the tilt objective"); return; }
         if !used_controls { verdict(false, "autopilot did not use PossessVessel and SetPorts"); return; }
-        if !arrived { verdict(false, "mission completed away from the top marker"); return; }
+        if !reached_marker { verdict(false, "mission completed away from the top marker"); return; }
         verdict(true, "");
     }
 }
