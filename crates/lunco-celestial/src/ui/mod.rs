@@ -1,12 +1,5 @@
 //! Celestial UI panels — time control and celestial body browser.
 
-mod moon_map;
-
-pub use moon_map::{
-    geodetic_to_map_uv, normalize_longitude, populate_moon_map_view, MoonMapLocation, MoonMapPanel,
-    MoonMapUiPlugin, MoonMapView, MOON_MAP_PANEL_ID,
-};
-
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{
@@ -209,14 +202,13 @@ fn jd_to_utc_string(jd: f64) -> String {
     lunco_time::tdb_jd_to_utc_string(jd)
 }
 
-/// Plugin that registers celestial UI panels, including the active lunar map.
+/// Plugin that registers celestial UI panels.
 pub struct CelestialUiPlugin;
 
 impl Plugin for CelestialUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CelestialBodiesView>();
         app.add_systems(Update, populate_celestial_bodies_view);
-        app.add_plugins(MoonMapUiPlugin);
         app.register_panel(CelestialTimePanel);
         app.register_panel(CelestialBodiesPanel);
     }

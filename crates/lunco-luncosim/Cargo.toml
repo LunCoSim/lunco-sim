@@ -248,7 +248,6 @@ ui = [
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
     "lunco-modelica/ui",
-    "lunco-celestial/ui",
     # egui presence/tutorial overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.
     "lunco-networking?/ui",
