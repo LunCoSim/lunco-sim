@@ -6,6 +6,8 @@
 const ROOT = "/AssemblyPhysicsBuilderTest";
 const HOST = ROOT + "/Host";
 const BODY = ROOT + "/Panel";
+const EXISTING = ROOT + "/ExistingPanel";
+const EXISTING_COLLIDER = EXISTING + "/PanelSurface";
 
 fn query_ok(record) {
     record != () && record.ok != false
@@ -69,6 +71,30 @@ fn on_tick(me) {
         [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0],
         0.0, 90.0, false,
     );
+    let existing_plan = assembly_builder::existing_rigid_body_plan(
+        this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0, 0.0],
+        [0.75, 0.5, 0.25], [EXISTING_COLLIDER],
+    );
+    let invalid_existing = assembly_builder::existing_rigid_body_plan(
+        this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0],
+        [0.75, 0.5, 0.25], [EXISTING_COLLIDER],
+    );
+    let invalid_collider = assembly_builder::existing_rigid_body_plan(
+        this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0, 0.0],
+        [0.75, 0.5, 0.25], [ROOT + "/Host"],
+    );
+    let existing_hinge = assembly_builder::existing_hinged_body_plan(
+        this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0, 0.0],
+        [0.75, 0.5, 0.25], [EXISTING_COLLIDER], ROOT, "ExistingPanelHinge",
+        HOST, "Y", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], 0.0, 90.0, false,
+    );
+    let invalid_hinge_parent = assembly_builder::existing_hinged_body_plan(
+        this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0, 0.0],
+        [0.75, 0.5, 0.25], [EXISTING_COLLIDER], ROOT + "/Host", "BadHinge",
+        HOST, "Y", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], 0.0, 90.0, false,
+    );
     let invalid_joint = assembly_builder::hinge_plan(
         "@root@", ROOT, "InvalidHinge", HOST, BODY, "Diagonal",
         [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
@@ -78,10 +104,24 @@ fn on_tick(me) {
     let invalid_placement = assembly_builder::place_plan(
         "@root@", BODY, [1.0, 2.0], (), (),
     );
-    if !body_plan.ok || !joint_plan.ok || invalid_joint.ok || invalid_placement.ok {
+    if !body_plan.ok || !joint_plan.ok || !existing_plan.ok || !existing_hinge.ok
+        || invalid_joint.ok || invalid_placement.ok
+        || invalid_existing.ok || invalid_collider.ok || invalid_hinge_parent.ok {
         fail(this, "semantic assembly tools did not enforce their explicit input contract");
         return;
     }
+
+    let existing_proposal = assembly_edit::propose(
+        this.doc, "Assembly", "Validate referenced body and hinge plan",
+        existing_hinge.ops, document.generation,
+    );
+    let review = assembly_edit::review_session(this.doc);
+    if existing_proposal.ok == false || review.proposals.len() != 1
+        || review.proposals[0].diagnostics.len() != 0 {
+        fail(this, "referenced body and hinge plan failed proposal validation");
+        return;
+    }
+    assembly_edit::review_proposal(review.proposals[0].id, #{ Reject: () });
 
     finish(this, [
         t_true(body_plan.kind == "movable_cube" && body_plan.path == BODY
@@ -110,5 +150,28 @@ fn on_tick(me) {
             "hinge plan carries the axis and ordered limits"),
         t_true(invalid_joint.error.contains("axis") && invalid_placement.error.contains("three components"),
             "invalid semantic inputs fail before document mutation"),
+        t_true(existing_plan.kind == "existing_rigid_body"
+            && existing_plan.path == EXISTING
+            && existing_plan.colliders == [EXISTING_COLLIDER]
+            && existing_plan.ops.len() == 5,
+            "existing referenced-style part gets one explicit body/mass plan"),
+        t_true(existing_plan.ops[0].AddPrim != ()
+            && existing_plan.ops[0].AddPrim.type_name == "Xform"
+            && existing_plan.ops[1].SetApiSchemas.schemas.contains("PhysicsRigidBodyAPI")
+            && existing_plan.ops[2].SetAttribute.name == "physics:mass"
+            && existing_plan.ops[4].SetAttribute.name == "physics:diagonalInertia",
+            "existing body promotion defines one local over without copying geometry"),
+        t_true(invalid_existing.error.contains("three-component")
+            && invalid_collider.error.contains("descendant"),
+            "existing-body plans reject malformed mass data and non-descendant colliders"),
+        t_true(existing_hinge.kind == "existing_hinged_body"
+            && existing_hinge.path == EXISTING
+            && existing_hinge.joint == ROOT + "/ExistingPanelHinge"
+            && existing_hinge.ops.len() == 16
+            && existing_hinge.ops[5].AddPrim != ()
+            && existing_hinge.ops[5].AddPrim.type_name == "PhysicsRevoluteJoint",
+            "existing hinged parts combine body and joint plans without duplicate geometry"),
+        t_true(invalid_hinge_parent.error.contains("sibling"),
+            "existing hinged plans reject a joint outside the body parent"),
     ]);
 }

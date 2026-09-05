@@ -373,14 +373,17 @@ Semantic construction belongs one layer above these low-level planners in the
 hot-reloadable `assembly_builder` Rhai tool library. `place_plan` emits the
 standard local transform operations; `cube_plan` and `movable_cube_plan`
 compose ordinary `UsdGeom`/`UsdPhysics` shape, collider, body, mass, and
-placement facts; `hinge_plan` delegates to the framed revolute planner; and
+placement facts; `existing_rigid_body_plan` defines one local over for an exact
+referenced Xform, then adds its body/mass opinion without copying its geometry;
+`hinge_plan` delegates to the framed revolute planner; and
 `align_centers_plan`/`align_cube_edges_plan` compute placements only from
-explicit queried paths and authored extents. The alignment helpers reject
-different parents, unsupported local rotations, missing shapes, invalid axes,
-and invalid edge signs instead of guessing. These are dynamic Rhai policy
-tools, so a domain author can add or replace a construction policy without
-rebuilding Rust; they still return the existing typed plans and cannot bypass
-review, generation checks, journalling, or USD composition.
+explicit queried paths and authored extents. The alignment and retrofit
+helpers reject different parents, unsupported local rotations, missing shapes,
+non-descendant colliders, invalid axes, and invalid edge signs instead of
+guessing. These are dynamic Rhai policy tools, so a domain author can add or
+replace a construction policy without rebuilding Rust; they still return the
+existing typed plans and cannot bypass review, generation checks, journalling,
+or USD composition.
 
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional

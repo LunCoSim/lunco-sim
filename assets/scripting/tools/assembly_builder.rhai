@@ -191,6 +191,148 @@ fn movable_cube_plan(edit_target, parent, name, mass, center_of_mass,
     #{ ok: true, kind: "movable_cube", path: body.path, shape: shape.path, ops: ops }
 }
 
+/// Promote one existing composed Xform into an explicitly massed movable
+/// body. This is the retrofit counterpart to `movable_cube_plan`: referenced
+/// Griffin parts already own their visual/collision children, so the builder
+/// must add the body opinion without replacing or duplicating that geometry.
+/// Every collider path is explicit and must already exist below the body;
+/// body/joint validators still own the final schema and relationship checks.
+/// The first operation defines a local Xform over the composed target. It does
+/// not copy the referenced children; it creates the authored prim spec required
+/// for persistent schema and mass opinions to land in @root@.
+fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
+    diagonal_inertia, collider_paths) {
+    if doc == () || edit_target == () || path == () {
+        return plan_error("existing_rigid_body_plan requires a document, edit target, and exact body path");
+    }
+    if mass == () || mass <= 0.0 {
+        return plan_error("existing_rigid_body_plan requires positive mass");
+    }
+    let com = assembly_edit::tuple3_literal(center_of_mass);
+    let inertia = assembly_edit::tuple3_literal(diagonal_inertia);
+    if com == () || inertia == () {
+        return plan_error("existing_rigid_body_plan requires three-component centre of mass and inertia");
+    }
+    if collider_paths == () || collider_paths.len() == 0 {
+        return plan_error("existing_rigid_body_plan requires explicit collider paths");
+    }
+
+    let body = query("QueryUsdPrim", #{
+        doc: doc,
+        path: path,
+        children: false,
+    });
+    if !query_ok(body) {
+        return plan_error(path + ": existing body prim is unavailable");
+    }
+    if body.type_name != "Xform" {
+        return plan_error(path + ": existing movable body must be an Xform");
+    }
+
+    let checked = [];
+    for collider_path in collider_paths {
+        if collider_path == () || !collider_path.starts_with(path + "/") {
+            return plan_error(collider_path + ": collider must be an exact descendant of the body");
+        }
+        if checked.contains(collider_path) {
+            return plan_error(collider_path + ": collider path is listed more than once");
+        }
+        let collider = query("QueryUsdPrim", #{
+            doc: doc,
+            path: collider_path,
+            attrs: ["physics:collisionEnabled"],
+        });
+        if !query_ok(collider) {
+            return plan_error(collider_path + ": explicit collider prim is unavailable");
+        }
+        if collider.type_name == "Xform" || collider.type_name == "Scope" {
+            return plan_error(collider_path + ": collider path must name a geometric prim");
+        }
+        checked.push(collider_path);
+    }
+
+    #{
+        ok: true,
+        kind: "existing_rigid_body",
+        path: path,
+        colliders: checked,
+        ops: [
+            #{ AddPrim: #{
+                edit_target: edit_target,
+                parent_path: parent_path(path),
+                name: path.split("/")[path.split("/").len() - 1],
+                type_name: "Xform",
+                reference: (),
+            }},
+            #{ SetApiSchemas: #{
+                edit_target: edit_target,
+                path: path,
+                schemas: ["PhysicsRigidBodyAPI", "PhysicsMassAPI"],
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:mass",
+                type_name: "float",
+                value: mass.to_string(),
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:centerOfMass",
+                type_name: "point3f",
+                value: com,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:diagonalInertia",
+                type_name: "float3",
+                value: inertia,
+            }},
+        ],
+    }
+}
+
+/// Build one existing referenced part and its required revolute attachment as
+/// a single reviewed plan. The body path, joint parent, both bodies, frames,
+/// axis, limits, and collider paths remain explicit; the helper only prevents
+/// callers from accidentally promoting a part and forgetting its joint.
+fn existing_hinged_body_plan(doc, edit_target, body_path, mass,
+    center_of_mass, diagonal_inertia, collider_paths, joint_parent,
+    joint_name, body0, axis, local_pos0, local_pos1, local_rot0, local_rot1,
+    lower_limit, upper_limit, collision_enabled) {
+    if joint_parent == () || joint_name == () || body0 == () {
+        return plan_error("existing_hinged_body_plan requires an explicit joint parent, name, and body0");
+    }
+    if joint_parent != parent_path(body_path) {
+        return plan_error("existing_hinged_body_plan requires the joint to be a sibling of the body");
+    }
+    if body0 == body_path {
+        return plan_error("existing_hinged_body_plan requires distinct body0 and body1 paths");
+    }
+
+    let body = existing_rigid_body_plan(doc, edit_target, body_path, mass,
+        center_of_mass, diagonal_inertia, collider_paths);
+    if !body.ok { return body; }
+    let joint = hinge_plan(edit_target, joint_parent, joint_name, body0,
+        body_path, axis, local_pos0, local_pos1, local_rot0, local_rot1,
+        lower_limit, upper_limit, collision_enabled);
+    if !joint.ok { return joint; }
+
+    let ops = [];
+    for op in body.ops { ops.push(op); }
+    for op in joint.ops { ops.push(op); }
+    #{
+        ok: true,
+        kind: "existing_hinged_body",
+        path: body_path,
+        joint: joint.path,
+        colliders: body.colliders,
+        ops: ops,
+    }
+}
+
 /// Build a fully explicit revolute hinge through the existing standard-USD
 /// planner. The wrapper gives assembly policies one semantic library while
 /// keeping the low-level physics contract in the shared assembly editor tool.

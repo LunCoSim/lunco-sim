@@ -45,8 +45,9 @@ for review; they do not infer bodies from hierarchy or drive a mechanism with
 Euler poses.
 
 For higher-level construction, use the dynamically reloadable
-`assembly_builder` Rhai library. Its `movable_cube_plan` and `hinge_plan`
-compose the same explicit standard USD facts, while its placement and cube
+`assembly_builder` Rhai library. Its `movable_cube_plan`,
+`existing_rigid_body_plan`, and `hinge_plan` compose the same explicit standard
+USD facts for new or referenced parts, while its placement and cube
 edge-alignment plans reject ambiguous parent/frame assumptions before the
 proposal reaches the USD owner. Keep the generated plan in one reviewed
 change set; a successful Rhai plan is not permission to omit the explicit

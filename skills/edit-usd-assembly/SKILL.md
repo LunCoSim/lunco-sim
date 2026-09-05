@@ -364,11 +364,13 @@ Use the smallest existing typed intent that expresses the change:
 - For construction from parts, use the hot-reloadable
   `assembly_builder` library. `place_plan` emits a local transform plan;
   `cube_plan` and `movable_cube_plan` compose standard geometry, collider,
-  body, mass, and placement facts; `hinge_plan` delegates to the framed
-  revolute planner; and `align_centers_plan`/`align_cube_edges_plan` derive
-  placements from explicit queried paths and reject unsupported parent/frame
-  assumptions. These helpers return the same typed `.ops` consumed by
-  `propose`/`batch`; they do not write USDA or bypass the document owner.
+  body, mass, and placement facts; `existing_rigid_body_plan` promotes an
+  exact referenced Xform by defining one local over while retaining its authored
+  geometry; `hinge_plan` delegates to the framed revolute planner; and
+  `align_centers_plan`/`align_cube_edges_plan` derive placements from explicit
+  queried paths and reject unsupported parent/frame assumptions. These helpers
+  return the same typed `.ops` consumed by `propose`/`batch`; they do not write
+  USDA or bypass the document owner.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.
