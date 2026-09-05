@@ -69,7 +69,8 @@ camera. Full-window surfaces occupy the window. Docked surfaces use the
 workbench's authoritative `PanelRects` rectangle and existing scene-pick
 ownership; they do not duplicate dock widths, reconstruct egui hit regions, or
 spawn a second UI camera. The manifest owns the outer rectangle and CSS owns
-the contents. `interactive: true` does not make the outer rectangle clickable:
+the contents; the runtime bounds the retained root to that rectangle and clips
+overflow. `interactive: true` does not make the outer rectangle clickable:
 only visible HUI controls with an authored `on_press` action register their
 computed Bevy UI rectangles with the shared scene-pick gate. This keeps a
 full-window HUD transparent to camera and scene input outside its buttons.

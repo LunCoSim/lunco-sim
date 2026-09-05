@@ -94,7 +94,7 @@
       "placement": {
         "mode": "window",
         "anchor": "bottom_left",
-        "offset": [16.0, -16.0],
+        "offset": [16.0, -32.0],
         "width": 224.0,
         "height": 184.0
       }
@@ -134,7 +134,7 @@
       "placement": {
         "mode": "window",
         "anchor": "bottom_right",
-        "offset": [-16.0, -16.0],
+        "offset": [-16.0, -32.0],
         "width": 224.0,
         "height": 184.0
       }

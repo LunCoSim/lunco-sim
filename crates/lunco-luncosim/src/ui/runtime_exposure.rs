@@ -1300,12 +1300,7 @@ pub(crate) fn apply_runtime_ui_placement_after_style(
             continue;
         };
         let rect = placement.rect;
-        let already_applied = node.position_type == PositionType::Absolute
-            && node.left == Val::Px(rect.min.x)
-            && node.top == Val::Px(rect.min.y)
-            && node.width == Val::Px(rect.width())
-            && node.height == Val::Px(rect.height());
-        if !already_applied {
+        if !placement_is_applied(&node, rect) {
             apply_placement(&mut node, rect);
         }
     }
@@ -1540,11 +1535,38 @@ fn resolve_placement(
 }
 
 fn apply_placement(node: &mut Node, rect: egui::Rect) {
+    let width = rect.width();
+    let height = rect.height();
     node.position_type = PositionType::Absolute;
     node.left = Val::Px(rect.min.x);
     node.top = Val::Px(rect.min.y);
-    node.width = Val::Px(rect.width());
-    node.height = Val::Px(rect.height());
+    node.width = Val::Px(width);
+    node.height = Val::Px(height);
+    // HUI and Flair can replace the root node's ideal size while building a
+    // template. The manifest rectangle is the outer-surface contract, so its
+    // bounds must also override the root's intrinsic min-content size. Clip at
+    // this boundary; child controls remain responsible for fitting their
+    // authored profile inside the surface.
+    node.min_width = Val::Px(width);
+    node.max_width = Val::Px(width);
+    node.min_height = Val::Px(height);
+    node.max_height = Val::Px(height);
+    node.overflow = Overflow::hidden();
+}
+
+fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
+    let width = Val::Px(rect.width());
+    let height = Val::Px(rect.height());
+    node.position_type == PositionType::Absolute
+        && node.left == Val::Px(rect.min.x)
+        && node.top == Val::Px(rect.min.y)
+        && node.width == width
+        && node.height == height
+        && node.min_width == width
+        && node.max_width == width
+        && node.min_height == height
+        && node.max_height == height
+        && node.overflow == Overflow::hidden()
 }
 
 #[cfg(test)]
@@ -1997,6 +2019,19 @@ mod tests {
         assert!(resolved.rect.min.y >= 0.0);
         assert!(resolved.rect.max.x <= 320.0);
         assert!(resolved.rect.max.y <= 180.0);
+    }
+
+    #[test]
+    fn applied_placement_makes_manifest_bounds_authoritative() {
+        let rect = egui::Rect::from_min_size(egui::pos2(12.0, 24.0), egui::vec2(224.0, 184.0));
+        let mut node = Node::default();
+
+        apply_placement(&mut node, rect);
+
+        assert!(placement_is_applied(&node, rect));
+        assert_eq!(node.min_width, Val::Px(224.0));
+        assert_eq!(node.max_height, Val::Px(184.0));
+        assert_eq!(node.overflow, Overflow::hidden());
     }
 
     #[test]
