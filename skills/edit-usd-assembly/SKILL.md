@@ -202,7 +202,11 @@ the returned exact path and document/edit target to the existing typed helper.
 
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
-Give it an explicit manifest and inspect its structured reports for topology,
+Pass the exact document id as the first argument to every stage-reading helper,
+then the explicit manifest. Use `()` only for a mounted live-scene audit, never
+to select the focused preview. `QueryUsdPrim` rejects closed, unmapped, and stale
+document projections; wait for the document projection before auditing it.
+Inspect its structured reports for topology,
 mount reciprocity, joint frames, rigid-body/joint coverage, and
 mass/inertia/collider coverage before proposing an edit. Its `explode_plan`
 only returns preview deltas; it does not write USD or bypass the journal. Do

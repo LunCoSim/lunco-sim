@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "DocumentAudit"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "DocumentAudit"
+{
+    double3 xformOp:translate = (10, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def DistantLight "Light" { float intensity = 1 }
+    def Cube "Part"
+    {
+        double size = 1
+        double3 xformOp:translate = (1, 2, 3)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PhysicsRevoluteJoint "Hinge"
+    {
+        bool physics:jointEnabled = false
+        token physics:axis = "X"
+    }
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-document-audit"
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/assembly_document_audit.rhai@
+        }
+    }
+}
