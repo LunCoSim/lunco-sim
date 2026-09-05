@@ -3,7 +3,7 @@
 //! Provides a suite of in-scene editing tools for the LunCoSim luncosim:
 //!
 //! - **Spawn System** — click-to-place rovers, props, and terrain
-//! - **Selection** — Shift+click entities to select them with transform gizmo
+//! - **Selection** — semantic left-click intents select entities with transform gizmos
 //! - **Transform Gizmo** — translate/rotate selected entities
 //! - **Inspector Panel** — view entity parameters (in `ui/` module)
 //! - **Undo** — Ctrl+Z / Ctrl+Shift+Z → `UndoDocument` / `RedoDocument` on the active
@@ -59,7 +59,7 @@ pub mod ui;
 
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
-use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
+use lunco_scene_commands::{SelectedEntities, catalog, commands, shader_doc};
 
 /// Master plugin for all luncosim editing tools.
 #[cfg(feature = "ui")]
@@ -93,6 +93,10 @@ impl Plugin for SceneEditPlugin {
         );
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(selection::InspectSelectionProvider);
         // Configure the standard gizmo for live-scene operations at startup.
         // The camera reconciliation enables the authored USD scale modes only
         // while an isolated preview owns the gizmo.
@@ -209,7 +213,7 @@ impl Plugin for SceneEditPlugin {
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(gizmo::despawn_gizmo_proxies),
         );
-        app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
+        app.add_systems(Update, gizmo::drive_gizmo_drag);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
         app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);

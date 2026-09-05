@@ -32,8 +32,8 @@ use serde::{Deserialize, Serialize};
 
 use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{
-    on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
-    SessionProfiles, Spacecraft,
+    Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole, SessionProfiles, Spacecraft,
+    on_command, register_commands,
 };
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
@@ -50,12 +50,12 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
 )>;
-use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
+use lunco_celestial::{LeaveSurface, LocalGravityField, TeleportToSurface, geo::LocalTangentFrame};
 use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
-use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
+use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_preview_only_entity};
 
 pub mod commands;
 pub use commands::*;
@@ -3787,6 +3787,36 @@ fn find_control_owner_from_hit(
     None
 }
 
+/// Return whether a picked entity belongs to an editor-owned selection root.
+///
+/// This is the cross-observer boundary for a plain left click: the editor
+/// selection observer owns the gesture for these entities, while avatar
+/// possession remains available for analytic spacecraft hits and unmarked
+/// control surfaces. The marker walk mirrors the editor's semantic selection
+/// ownership without importing the editor crate.
+fn has_editor_selection_owner(
+    mut entity: Entity,
+    q_selection_roots: &Query<
+        (),
+        Or<(
+            With<lunco_core::SelectableRoot>,
+            With<lunco_core::MobilityRoot>,
+        )>,
+    >,
+    q_parents: &Query<&ChildOf>,
+) -> bool {
+    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
+        if q_selection_roots.get(entity).is_ok() {
+            return true;
+        }
+        let Ok(parent) = q_parents.get(entity) else {
+            break;
+        };
+        entity = parent.parent();
+    }
+    false
+}
+
 /// The possession boundary is a writable command surface owned by a domain
 /// entity, not a presentation marker. The local avatar has an `InputPorts`
 /// surface too, but that surface drives its free-flight embodiment and must
@@ -3889,6 +3919,13 @@ pub fn avatar_raycast_possession(
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
+    q_selection_roots: Query<
+        (),
+        Or<(
+            With<lunco_core::SelectableRoot>,
+            With<lunco_core::MobilityRoot>,
+        )>,
+    >,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -3897,11 +3934,11 @@ pub fn avatar_raycast_possession(
     if click.button != PointerButton::Primary {
         return;
     }
-    // Shift+click is reserved for entity selection / gizmo multi-select in
+    // Shift+click is editor selection and Ctrl+click is editor removal in
     // lunco-luncosim-edit (`on_scene_click_select`, the other global
-    // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
-    // a Shift+click never does. This modifier split is what keeps the two
-    // observers from both acting on a single click.
+    // `Pointer<Click>` observer). Plain clicks on an editor-owned scene entity
+    // are also claimed by that observer; this boundary keeps possession from
+    // acting on the same gesture. Unmarked control surfaces retain possession.
     if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
         return;
     }
@@ -3920,6 +3957,9 @@ pub fn avatar_raycast_possession(
     // this guard every waypoint placement would ALSO possess/follow whatever
     // the ray hit, yanking the camera onto the terrain.
     if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        return;
+    }
+    if has_editor_selection_owner(click.entity, &q_selection_roots, &q_parents) {
         return;
     }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
@@ -5884,7 +5924,7 @@ fn sync_profile(
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0 .0;
+    let session = local.0.0;
     if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;
@@ -6113,6 +6153,36 @@ mod tests {
             ),
             Some(rover)
         );
+    }
+
+    #[test]
+    fn editor_selection_boundary_shadows_plain_possession_on_nested_hit() {
+        let mut world = World::new();
+        let rover = world
+            .spawn((
+                lunco_core::SelectableRoot,
+                lunco_core::InputPorts::new(&["drive"]),
+            ))
+            .id();
+        let mesh = world.spawn(ChildOf(rover)).id();
+
+        let mut state: SystemState<(
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::SelectableRoot>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
+            Query<&ChildOf>,
+        )> = SystemState::new(&mut world);
+        let (q_selection_roots, q_parents) = state.get(&world).unwrap();
+
+        assert!(has_editor_selection_owner(
+            mesh,
+            &q_selection_roots,
+            &q_parents
+        ));
     }
 
     #[test]
@@ -6493,12 +6563,16 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), return_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(restored
-            .translation
-            .abs_diff_eq(return_transform.translation, 1e-6));
-        assert!(restored
-            .rotation
-            .abs_diff_eq(return_transform.rotation, 1e-6));
+        assert!(
+            restored
+                .translation
+                .abs_diff_eq(return_transform.translation, 1e-6)
+        );
+        assert!(
+            restored
+                .rotation
+                .abs_diff_eq(return_transform.rotation, 1e-6)
+        );
         assert!(!world.resource::<lunco_celestial::OrbitalViewPin>().active);
         assert!(world.get::<OrbitCamera>(avatar).is_none());
         assert_eq!(
@@ -6593,10 +6667,12 @@ mod tests {
         let second_snapshot = app.world().get::<OrbitViewReturn>(avatar).unwrap();
         assert_eq!(second_snapshot.parent_grid, first_snapshot.parent_grid);
         assert_eq!(second_snapshot.cell, first_snapshot.cell);
-        assert!(second_snapshot
-            .transform
-            .translation
-            .abs_diff_eq(first_snapshot.transform.translation, 1e-6));
+        assert!(
+            second_snapshot
+                .transform
+                .translation
+                .abs_diff_eq(first_snapshot.transform.translation, 1e-6)
+        );
         assert_eq!(
             app.world().get::<OrbitCamera>(avatar).unwrap().target,
             earth
@@ -6612,12 +6688,16 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(restored
-            .translation
-            .abs_diff_eq(original_transform.translation, 1e-6));
-        assert!(restored
-            .rotation
-            .abs_diff_eq(original_transform.rotation, 1e-6));
+        assert!(
+            restored
+                .translation
+                .abs_diff_eq(original_transform.translation, 1e-6)
+        );
+        assert!(
+            restored
+                .rotation
+                .abs_diff_eq(original_transform.rotation, 1e-6)
+        );
         assert_eq!(
             world.get::<SurfaceCamera>(avatar).unwrap().heading,
             original_surface.heading
@@ -6951,12 +7031,16 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored_transform = world.get::<Transform>(avatar).unwrap();
-        assert!(restored_transform
-            .translation
-            .abs_diff_eq(original_transform.translation, 1e-6));
-        assert!(restored_transform
-            .rotation
-            .abs_diff_eq(original_transform.rotation, 1e-6));
+        assert!(
+            restored_transform
+                .translation
+                .abs_diff_eq(original_transform.translation, 1e-6)
+        );
+        assert!(
+            restored_transform
+                .rotation
+                .abs_diff_eq(original_transform.rotation, 1e-6)
+        );
         let restored_spring = world.get::<SpringArmCamera>(avatar).unwrap();
         assert_eq!(restored_spring.target, original_spring.target);
         assert_eq!(restored_spring.distance, original_spring.distance);
@@ -7069,9 +7153,11 @@ mod tests {
             body
         );
         let avatar_transform = app.world().get::<Transform>(avatar).unwrap();
-        assert!(avatar_transform
-            .translation
-            .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5));
+        assert!(
+            avatar_transform
+                .translation
+                .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5)
+        );
     }
 
     #[test]

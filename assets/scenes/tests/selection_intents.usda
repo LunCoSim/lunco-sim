@@ -1,0 +1,68 @@
+#usda 1.0
+(
+    defaultPrim = "SelectionIntentTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production acceptance fixture for the editor's public selection intents.
+# The two static rigid bodies are independently selectable and remain in place
+# while the authored scenario drives SelectEntity through the public command bus.
+def Xform "SelectionIntentTest" (
+    kind = "assembly"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Camera "SelectionCamera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        double3 lunco:cameraLookAt = (0.0, 1.0, -8.0)
+        double3 xformOp:translate = (0.0, 1.0, 4.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 35.0
+        float2 clippingRange = (0.1, 1000.0)
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "SelectionCamera",
+        }
+    }
+
+    def Cube "ReplaceTarget" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 2.0
+        double3 xformOp:translate = (-2.0, 1.0, -8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        color3f[] primvars:displayColor = [(0.85, 0.2, 0.15)]
+    }
+
+    def Cube "ExtendTarget" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 2.0
+        double3 xformOp:translate = (2.0, 1.0, -8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        color3f[] primvars:displayColor = [(0.15, 0.35, 0.9)]
+    }
+
+}

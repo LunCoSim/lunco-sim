@@ -15,8 +15,8 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_scene_commands::SelectedEntities;
-use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
+use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;
@@ -49,7 +49,7 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
         ui.label("No entity selected.");
-        ui.label(egui::RichText::new("Shift+click an object to select.").weak());
+        ui.label(egui::RichText::new("Left-click an object to select.").weak());
         return;
     };
 

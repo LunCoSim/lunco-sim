@@ -77,6 +77,8 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 | `SetPorts` | `{target, writes:[[name,val]]}` | Set a persistent input intent (e.g. drive a spawned rover); use `ReleasePort` or `ReleaseControl` to release it — see [`author-scenario`](../author-scenario/SKILL.md) for behaviour. |
 
 Discover the live set with `DiscoverSchema`; discover spawnables with `list_bundled`.
+For editor selection readback, use `query("InspectSelection")`; it returns
+stable API ids in selection order and the current primary id.
 
 ## Recipe
 

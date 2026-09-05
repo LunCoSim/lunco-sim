@@ -13,9 +13,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::ports::PortRegistry;
 use lunco_core::OpId;
-use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_core::ports::PortRegistry;
+use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
 use lunco_doc::Document;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
@@ -23,7 +23,7 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
-use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
 use lunco_scene_commands::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
@@ -822,8 +822,8 @@ pub struct InspectorView {
 /// a quiescent scene. All reads are bounded single-entity lookups or small
 /// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
-    use bevy::camera::visibility::RenderLayers;
     use bevy::camera::Exposure;
+    use bevy::camera::visibility::RenderLayers;
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use bevy::post_process::bloom::Bloom;
 
@@ -1547,7 +1547,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // Get current selection
     let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
         ui.label("No entity selected.");
-        ui.label("Press Shift+Left-click on an object to select it.");
+        ui.label("Left-click an object to select it; Shift extends and Ctrl removes.");
         return;
     };
 

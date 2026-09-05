@@ -637,11 +637,15 @@ impl Plugin for SceneEditUiPlugin {
                     mouse: vec![
                         HelpMouse {
                             interaction: "Left-Click",
-                            description: "Select object · confirm placement",
+                            description: "Replace selection · confirm placement",
                         },
                         HelpMouse {
                             interaction: "Shift+Left-Click",
-                            description: "Select + transform gizmo (drag to move)",
+                            description: "Extend selection",
+                        },
+                        HelpMouse {
+                            interaction: "Ctrl+Left-Click",
+                            description: "Remove only the clicked entity",
                         },
                         HelpMouse {
                             interaction: "Right-Drag",
@@ -730,8 +734,16 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Select a part to inspect / edit",
                         },
                         HelpMouse {
+                            interaction: "Left-Click",
+                            description: "Replace selection",
+                        },
+                        HelpMouse {
                             interaction: "Shift+Left-Click",
-                            description: "Select + transform gizmo (drag to move)",
+                            description: "Extend selection",
+                        },
+                        HelpMouse {
+                            interaction: "Ctrl+Left-Click",
+                            description: "Remove only the clicked entity",
                         },
                         HelpMouse {
                             interaction: "Right-Drag",

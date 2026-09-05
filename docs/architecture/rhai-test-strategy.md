@@ -63,14 +63,13 @@ and a legacy waypoint JSON-shape check. It also removed a known-failing MSL
 diagnostic and a duplicate external-bundle presence check; the passing
 Modelica source-root admission example remains the maintained MSL contract. The two
 selection/drag integration files were also removed because they simulated
-state without invoking the production systems and asserted the retired
-Shift-select/`DragModeActive` contract. Current schema, parser, lifecycle,
-physics, editor-selection, and source-preservation contracts remain covered at
-their owners. Editor selection is intentionally not translated into a headless
-Rhai scene: `SceneEditPlugin` is UI-gated and exposes no production headless
-selection observer. Its owning Rust test now exercises the real shared
-selection observer and verifies toggle/highlight state without entering the
-separate active-gizmo drag mode.
+state without invoking the production systems. Current schema, parser,
+lifecycle, physics, editor-selection, and source-preservation contracts remain
+covered at their owners. Editor selection is intentionally not translated into
+a headless Rhai scene: `SceneEditPlugin` is UI-gated and exposes no production
+headless selection observer. Its owning Rust tests exercise the shared
+selection observer, replace/extend/remove semantics, and highlight state
+without entering the separate active-gizmo drag mode.
 
 ## Test tiers
 

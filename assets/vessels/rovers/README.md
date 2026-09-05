@@ -4,7 +4,7 @@ This directory contains the USD definitions for all surface rovers in LunCoSim. 
 
 **One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every vehicle wheel composes; the vehicle wheel instance also applies the standard wheel/attachment APIs and authors its `physxVehicleWheelAttachment:index`, explicit drive/steer connections, and variants. The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
 
-**Live tuning.** All wheel params carry schema-level slider hints: select a rover, Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
+**Live tuning.** All wheel params carry schema-level slider hints: select a rover, Alt+Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
 
 ---
 
