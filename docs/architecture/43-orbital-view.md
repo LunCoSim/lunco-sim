@@ -83,6 +83,24 @@ BigSpace `pose_in_grid` machinery to read the current tracked/reference frame
 relationship, so the presentation path does not perform another orbital
 propagation.
 
+## Active lunar map
+
+`lunco-celestial::ui::MoonMapUiPlugin` owns the `Lunar Map` panel and its
+`MoonMapView` view-model. The producer reads the active `LocalAvatar` through
+`SurfacePoseQuery`, the canonical crossing from the live BigSpace hierarchy to
+body-fixed geodetic coordinates. It publishes a marker only when that pose
+resolves to the Moon (`ephemeris_id::MOON`); missing, ambiguous, or non-lunar
+state is shown as an explicit empty state.
+
+The panel's presentation contract is a neutral equirectangular projection:
+longitude is IAU-east and wraps to `[-180°, 180°)`, latitude is clamped to
+`[-90°, 90°]`, and the map canvas does not load a terrain or albedo texture.
+This keeps map projection policy in one UI owner while leaving coordinate
+authority in `lunco-celestial`. The view-model is cleared at `SceneTeardown`
+and `TwinClosed`, so a replacement scene or Twin cannot inherit a stale
+marker. The producer is gated by panel dock visibility and the panel reads only
+the resource snapshot.
+
 ## Orbital camera poses
 
 `OrbitCamera` is an avatar-owned presentation mode. `OrbitViewHistory` stores
