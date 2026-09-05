@@ -30,10 +30,14 @@ referenced-part mounting, existing-mount frame realignment, and body/joint
 plans. The
 mission-level `griffin_flip_builder.rhai` library composes those helpers into
 paired Griffin ramp, validated four-wheel FLIP layout, and complete
-lander/adapter/rover manifest recipes. Use these plans with the existing
-proposal/journal boundary; keep wheel and suspension defaults in the mobility
-components and supply mission study values explicitly. The complete mission
-recipe rejects a missing or miswired fixed adapter before authoring, and a
+lander/adapter/rover manifest recipes. For a new reference assembly, use
+`griffin_mission_assembly_plan` for the maintained lander and four-wheel rover
+instances, wait for their composed children, then use
+`griffin_mission_adapter_plan` for the explicit fixed adapter. Use these plans
+with the existing proposal/journal boundary; keep wheel and suspension
+defaults in the mobility components and supply mission study values
+explicitly. The complete mission path rejects wrong assets, duplicate wheel
+identities, unsafe placement, and occupied identities before authoring, and a
 completed body/joint identity must be updated explicitly rather than rebuilt.
 
 For a rover assembled from one reusable reference, use

@@ -43,6 +43,10 @@ both authored frame anchors and quaternions, the cardinal joint axis, ordered
 degree limits, and the collision policy. These helpers return typed operations
 for review; they do not infer bodies from hierarchy or drive a mechanism with
 Euler poses.
+Use `assembly_edit::fixed_joint_plan` for a rigid adapter: it requires the
+same explicit two body paths, two local anchors, two local quaternions, and
+collision policy, and returns a standard `PhysicsFixedJoint` plan without
+mutating the document.
 
 For higher-level construction, use the dynamically reloadable
 `assembly_builder` Rhai library. Its `movable_cube_plan`,
@@ -94,12 +98,13 @@ variant targets fail in Rhai before review.
 Mission-level recipes may compose these generic helpers through the dynamic
 `griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two
 explicit Griffin ramp identities and `flip_four_wheel_layout_plan` for the
-four authored FLIP wheel stations. Use `griffin_mission_plan` when the edit is
-intended to construct the complete Griffin/FLIP assembly: it validates the
-root, lander, FLIP, and fixed adapter relationship before combining those
-plans. These functions return reviewed typed operations and reject missing,
-duplicated, swapped, or dimensionally inconsistent identities; they do not
-supply undocumented flight values.
+four authored FLIP wheel stations. `griffin_mission_assembly_plan` builds
+maintained lander and four-wheel rover references with explicit placements;
+after the composed children are visible, `griffin_mission_adapter_plan`
+authors the fixed adapter. `griffin_mission_plan` remains the validation path
+for an already-authored mission topology. These functions return reviewed
+typed operations and reject missing, duplicated, swapped, or dimensionally
+inconsistent identities; they do not supply undocumented flight values.
 
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`

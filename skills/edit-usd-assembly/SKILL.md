@@ -242,12 +242,17 @@ change while retaining the same authoritative attach validator.
 
 For the current Griffin/FLIP study package, the dynamic
 `griffin_flip_builder` library composes the same generic surface into paired
-ramp and four-wheel layout recipes. Use `griffin_mission_plan` when building
-the whole mission assembly: it checks the explicit root, lander, FLIP, and
-fixed adapter relationship before combining those plans. Treat its mass,
-inertia, dimensions, and frame values as caller-supplied study inputs;
-inspect the exact composed prims and proposal diagnostics before committing an
-authored edit.
+ramp and four-wheel layout recipes. Use
+`griffin_mission_assembly_plan` to build the maintained lander and four-wheel
+rover references with explicit placement, then wait for their composed
+children and use `griffin_mission_adapter_plan` for the fixed payload
+adapter. `griffin_mission_plan` validates an already-authored mission before
+adding ramp and wheel layout edits. Treat mass, inertia, dimensions, and frame
+values as caller-supplied study inputs; inspect exact composed prims and
+proposal diagnostics before committing an authored edit. The
+`griffin_flip_production_builder` scene test keeps the complete observable
+construction and negative cases in Rhai; its USDA contains only the empty
+mission frame.
 
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
@@ -387,6 +392,10 @@ Use the smallest existing typed intent that expresses the change:
   cardinal axis, ordered degree limits, and collision policy. Append the
   returned `.ops` to one reviewed proposal; these helpers do not author
   transforms, shapes, or hidden defaults.
+- Use `assembly_edit::fixed_joint_plan` for a rigid adapter. It requires two
+  distinct absolute body paths, both local anchors and quaternions, and an
+  explicit collision policy, returning the standard `PhysicsFixedJoint`
+  operations for the same reviewed proposal boundary.
 - For construction from parts, use the hot-reloadable
   `assembly_builder` library. `place_plan` emits a local transform plan;
   `cube_plan` and `movable_cube_plan` compose standard geometry, collider,

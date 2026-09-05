@@ -296,3 +296,194 @@ fn griffin_mission_plan(doc, edit_target, manifest) {
         ops: ops,
     }
 }
+
+fn vector_distance(a, b) {
+    if a == () || b == () || a.len() != 3 || b.len() != 3 { return (); }
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    let dz = a[2] - b[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn mission_parent_path(path) {
+    let parts = path.split("/");
+    if parts.len() <= 2 { return "/"; }
+    let parent = "";
+    for i in 1..(parts.len() - 1) {
+        if parent == "" {
+            parent = "/" + parts[i];
+        } else {
+            parent += "/" + parts[i];
+        }
+    }
+    parent
+}
+
+/// Build the first materialized Griffin/FLIP mission assembly from maintained
+/// vessel references. This is intentionally a two-body construction plan:
+/// the reference arcs remain the visual/physics asset owners, while this
+/// mission recipe owns only instance identity and placement. The adapter joint
+/// is deliberately a second-phase plan: first-use reference loading is
+/// asynchronous, so a relationship to two newly introduced bodies must not be
+/// projected before both reference closures are materialized.
+///
+/// The recipe rejects the old synthetic/incorrect asset identities, coincident
+/// body roots, duplicate wheel paths, and occupied output identities before it
+/// returns any operation. The generic USD owner still validates the ordered
+/// reference, relationship, transform, journal, and projection operations.
+fn griffin_mission_assembly_plan(doc, edit_target, manifest) {
+    if doc == () || edit_target == () || manifest == ()
+        || manifest.root_path == () || manifest.lander_path == ()
+        || manifest.flip_path == () || manifest.adapter_path == ()
+        || manifest.lander_asset == () || manifest.flip_asset == ()
+        || manifest.lander_translation == () || manifest.lander_rotation == ()
+        || manifest.flip_translation == () || manifest.flip_rotation == ()
+        || manifest.adapter_local_pos0 == () || manifest.adapter_local_pos1 == ()
+        || manifest.adapter_local_rot0 == () || manifest.adapter_local_rot1 == ()
+        || manifest.wheel_paths == () || manifest.minimum_separation == () {
+        return plan_error("griffin_mission_assembly_plan requires explicit vessel, adapter, placement, and wheel manifest fields");
+    }
+    if !manifest.root_path.starts_with("/") || manifest.root_path.ends_with("/")
+        || !manifest.lander_path.starts_with(manifest.root_path + "/")
+        || !manifest.flip_path.starts_with(manifest.root_path + "/")
+        || !manifest.adapter_path.starts_with(manifest.root_path + "/") {
+        return plan_error("Griffin mission assembly paths must be absolute descendants of the declared root");
+    }
+    if mission_parent_path(manifest.lander_path) != manifest.root_path
+        || mission_parent_path(manifest.flip_path) != manifest.root_path
+        || mission_parent_path(manifest.adapter_path) != manifest.root_path
+        || manifest.lander_path == manifest.flip_path
+        || manifest.lander_path == manifest.adapter_path
+        || manifest.flip_path == manifest.adapter_path {
+        return plan_error("Griffin mission lander, FLIP, and adapter must be distinct direct children of the root");
+    }
+    if manifest.lander_asset != "lunco://vessels/landers/descent_lander.usda"
+        || manifest.flip_asset != "lunco://vessels/rovers/skid_rover.usda" {
+        return plan_error("Griffin mission assembly requires the maintained descent_lander and four-wheel skid_rover asset contracts");
+    }
+    if manifest.wheel_paths.len() != 4 {
+        return plan_error("Griffin mission assembly requires exactly four FLIP wheel paths");
+    }
+    if manifest.minimum_separation < 0.001 {
+        return plan_error("Griffin mission assembly minimum separation must be positive");
+    }
+    let separation = vector_distance(manifest.lander_translation, manifest.flip_translation);
+    if separation == () || separation < manifest.minimum_separation {
+        return plan_error("Griffin mission lander and FLIP roots violate the explicit minimum separation");
+    }
+
+    let root = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.root_path,
+        children: true,
+    });
+    if !query_ok(root) || root.type_name != "Xform" {
+        return plan_error(manifest.root_path + ": Griffin mission assembly root is unavailable or is not an Xform");
+    }
+    for path in [manifest.lander_path, manifest.flip_path, manifest.adapter_path] {
+        let existing = query("QueryUsdPrim", #{
+            doc: doc,
+            path: path,
+            children: false,
+        });
+        if query_ok(existing) {
+            return plan_error(path + ": Griffin mission output identity is already occupied");
+        }
+    }
+
+    let lander_name_parts = manifest.lander_path.split("/");
+    let flip_name_parts = manifest.flip_path.split("/");
+    let adapter_name_parts = manifest.adapter_path.split("/");
+    let lander_name = lander_name_parts[lander_name_parts.len() - 1];
+    let flip_name = flip_name_parts[flip_name_parts.len() - 1];
+    let adapter_name = adapter_name_parts[adapter_name_parts.len() - 1];
+    let lander = assembly_builder::referenced_instance_plan(
+        doc, edit_target, manifest.root_path, lander_name, "Xform",
+        manifest.lander_asset, manifest.lander_translation,
+        manifest.lander_rotation, (), (), (),
+    );
+    if !lander.ok { return lander; }
+    let flip = assembly_builder::flip_rover_instance_plan(
+        doc, edit_target, manifest.root_path, flip_name, manifest.flip_asset,
+        manifest.flip_translation, manifest.flip_rotation, manifest.wheel_paths,
+    );
+    if !flip.ok { return flip; }
+    let ops = [];
+    for op in lander.ops { ops.push(op); }
+    for op in flip.ops { ops.push(op); }
+    #{
+        ok: true,
+        kind: "griffin_mission_assembly",
+        root: manifest.root_path,
+        lander: manifest.lander_path,
+        flip: manifest.flip_path,
+        adapter: manifest.adapter_path,
+        adapter_name: adapter_name,
+        lander_asset: manifest.lander_asset,
+        flip_asset: manifest.flip_asset,
+        wheel_paths: manifest.wheel_paths,
+        separation: separation,
+        ops: ops,
+    }
+}
+
+/// Build the adapter after the lander and FLIP reference closures are
+/// observable on the composed stage. Keeping this plan separate from the
+/// first-use reference plan is a lifecycle requirement, not an authoring
+/// workaround: the USD owner cannot validate a body relationship against an
+/// asset whose closure is still pending.
+fn griffin_mission_adapter_plan(doc, edit_target, manifest) {
+    if doc == () || edit_target == () || manifest == ()
+        || manifest.root_path == () || manifest.lander_path == ()
+        || manifest.flip_path == () || manifest.adapter_path == ()
+        || manifest.adapter_local_pos0 == () || manifest.adapter_local_pos1 == ()
+        || manifest.adapter_local_rot0 == () || manifest.adapter_local_rot1 == () {
+        return plan_error("griffin_mission_adapter_plan requires explicit composed bodies and joint frames");
+    }
+    if mission_parent_path(manifest.adapter_path) != manifest.root_path
+        || manifest.adapter_path == manifest.lander_path
+        || manifest.adapter_path == manifest.flip_path {
+        return plan_error("Griffin mission adapter must be a distinct direct child of the mission root");
+    }
+    let lander = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.lander_path,
+        children: true,
+    });
+    let flip = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.flip_path,
+        children: true,
+    });
+    if !query_ok(lander) || lander.type_name != "Xform"
+        || lander.children == () || lander.children.len() == 0
+        || !query_ok(flip) || flip.type_name != "Xform"
+        || flip.children == () || flip.children.len() == 0 {
+        return plan_error("Griffin mission adapter requires materialized lander and FLIP reference bodies");
+    }
+    let existing = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.adapter_path,
+        children: false,
+    });
+    if query_ok(existing) {
+        return plan_error(manifest.adapter_path + ": Griffin mission adapter identity is already occupied");
+    }
+    let parts = manifest.adapter_path.split("/");
+    let name = parts[parts.len() - 1];
+    let joint = assembly_edit::fixed_joint_plan(
+        edit_target, manifest.root_path, name,
+        manifest.lander_path, manifest.flip_path,
+        manifest.adapter_local_pos0, manifest.adapter_local_pos1,
+        manifest.adapter_local_rot0, manifest.adapter_local_rot1, false,
+    );
+    if !joint.ok { return joint; }
+    #{
+        ok: true,
+        kind: "griffin_mission_adapter",
+        path: manifest.adapter_path,
+        body0: manifest.lander_path,
+        body1: manifest.flip_path,
+        ops: joint.ops,
+    }
+}

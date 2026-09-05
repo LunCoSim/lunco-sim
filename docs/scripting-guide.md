@@ -464,8 +464,10 @@ namespaced `assembly_edit::program_input_connection`,
 helpers. For a new moving part, `assembly_edit::rigid_body_plan` returns the
 explicit body schema, mass, centre-of-mass, and diagonal-inertia operations;
 `assembly_edit::revolute_joint_plan` returns a fully framed, bounded joint
-with explicit body relationships, axis, degree limits, and collision policy.
-Append each plan's `.ops` to one reviewed `propose`/`batch` change set, then
+with explicit body relationships, axis, degree limits, and collision policy;
+`assembly_edit::fixed_joint_plan` returns the equivalent two-frame plan for a
+standard fixed joint. Append each plan's `.ops` to one reviewed
+`propose`/`batch` change set, then
 add the part's shape, collision API, and transform explicitly. Use
 `undo`/`redo` on the same explicit document. `keyframe` and `remove_keyframe`
 author or remove one USD time sample
@@ -566,10 +568,16 @@ hinge plans, while `flip_four_wheel_layout_plan` validates the four exact wheel
 stations, authored vehicle indexes, and wheel dimensions before emitting
 placement intents. The caller supplies study values and paths explicitly; the
 recipe does not turn assumptions into flight facts. `griffin_mission_plan`
-composes those two plans only after checking the explicit root, lander, FLIP,
-and fixed payload-adapter relationship, so an incomplete cargo assembly fails
-before a proposal is authored. It returns one combined typed plan for the
-normal review/generation boundary.
+composes those two plans only after checking an already-authored root, lander,
+FLIP, and fixed payload-adapter relationship. For a build from maintained
+references, `griffin_mission_assembly_plan` creates the lander and four-wheel
+rover instances with explicit placements; after their composed children are
+queryable, `griffin_mission_adapter_plan` creates the explicit fixed adapter.
+The `griffin_flip_production_builder` scene test exercises the complete
+reference/placement/joint lifecycle, including negative manifests and the
+reviewed commit, in Rhai. Its USDA fixture is only an empty mission frame, so
+the observable test does not embed a scene-specific Rust asset or hand-write
+the production assembly topology.
 
 Structural authoring uses the same typed operation surface: `add_prim`,
 `remove_prim`, `move_prim`, `payload`, and `active` expose the existing
