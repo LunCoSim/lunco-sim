@@ -13,7 +13,7 @@ use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
-    PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
+    PerspectiveId, VIEWPORT_PANEL_ID, ViewportPanel, WorkbenchAppExt, WorkbenchLayout,
 };
 
 pub mod asset_visibility;
@@ -637,11 +637,15 @@ impl Plugin for SceneEditUiPlugin {
                     mouse: vec![
                         HelpMouse {
                             interaction: "Left-Click",
-                            description: "Select object · confirm placement",
+                            description: "Replace selection · confirm placement",
                         },
                         HelpMouse {
                             interaction: "Shift+Left-Click",
-                            description: "Select + transform gizmo (drag to move)",
+                            description: "Extend selection",
+                        },
+                        HelpMouse {
+                            interaction: "Ctrl+Left-Click",
+                            description: "Remove only the clicked entity",
                         },
                         HelpMouse {
                             interaction: "Right-Drag",
@@ -730,8 +734,16 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Select a part to inspect / edit",
                         },
                         HelpMouse {
+                            interaction: "Left-Click",
+                            description: "Replace selection",
+                        },
+                        HelpMouse {
                             interaction: "Shift+Left-Click",
-                            description: "Select + transform gizmo (drag to move)",
+                            description: "Extend selection",
+                        },
+                        HelpMouse {
+                            interaction: "Ctrl+Left-Click",
+                            description: "Remove only the clicked entity",
                         },
                         HelpMouse {
                             interaction: "Right-Drag",

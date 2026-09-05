@@ -119,6 +119,11 @@ selected, a parse error is reported and startup does not silently switch to
 stale embedded policy.
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
+The editor registers `InspectSelection` as a read-only query provider. It
+reports selected entity IDs, the primary selection, and stale-entry count, so
+GUI acceptance checks read the same selection resource used by the viewport
+and inspector instead of maintaining a second state.
+
 ### Events / pub-sub
 
 `emit()` reuses the **`TelemetryEvent`** bus (observer-dispatched; YAMCS

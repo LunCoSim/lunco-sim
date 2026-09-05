@@ -9,7 +9,7 @@ fn ui_label() { "NURBS points" }
 fn ui_hint() { "Click a NURBS prim to select it; use set_point(path, index, p) from Rhai" }
 
 fn on_click(id) {
-    cmd("SelectEntity", #{ entity_id: id, extend: false, toggle: false });
+    cmd("SelectEntity", #{ entity_id: id, extend: false, toggle: false, remove_only: false });
 }
 
 fn point_literal(point) {

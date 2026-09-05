@@ -9,5 +9,5 @@ fn ui_label() { "Transform" }
 fn ui_hint() { "Click an object to select it for transform editing" }
 
 fn on_click(id) {
-    cmd("SelectEntity", #{ entity_id: id, extend: false, toggle: false });
+    cmd("SelectEntity", #{ entity_id: id, extend: false, toggle: false, remove_only: false });
 }

@@ -26,8 +26,8 @@ use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
-    camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
-    UsdStageAsset,
+    CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset,
+    camera_switch::camera_display_labels,
 };
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -362,8 +362,7 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     if let Some(entity) = to_select {
         ctx.trigger(crate::selection::SelectEntityTarget {
             target: entity,
-            extend: false,
-            toggle: false,
+            intent: crate::selection::SelectionIntent::Replace,
         });
     }
 }

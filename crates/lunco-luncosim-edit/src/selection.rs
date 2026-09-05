@@ -1,20 +1,20 @@
-//! Entity selection via Shift+Left-click.
+//! Entity selection via semantic mouse intents.
 //!
-//! Uses Shift+Left-click to avoid conflict with regular left-click camera possession.
-//! Selects the entity closest to the camera under the cursor and immediately
-//! attaches a transform gizmo for manipulation.
+//! A plain left click replaces the selection, Shift+left click extends it, and
+//! Ctrl+left click removes only the clicked entity. The viewport, API, and
+//! editor panels all route through the same selection mutation owner.
 
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
-use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
+use bevy::math::primitives::Cuboid;
 
 use crate::SpawnState;
 use lunco_controller::ControllerLink;
-use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
+use lunco_core::{Avatar, Command, LocalAvatar, on_command, register_commands};
 use lunco_scene_commands::SelectedEntities;
 use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
@@ -23,14 +23,103 @@ use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 #[derive(Component)]
 pub struct Selected;
 
+/// Read-only public view of the live editor selection.
+///
+/// The selection itself remains owned by `SelectedEntities`; this provider only
+/// translates the established Entity-keyed state back to stable API ids for
+/// authored scenarios and external clients.
+pub(crate) struct InspectSelectionProvider;
+
+impl lunco_api::queries::ApiQueryProvider for InspectSelectionProvider {
+    fn name(&self) -> &'static str {
+        "InspectSelection"
+    }
+
+    fn execute(
+        &self,
+        world: &World,
+        _params: &serde_json::Value,
+    ) -> lunco_api::schema::ApiResponse {
+        let Some(selected) = world.get_resource::<SelectedEntities>() else {
+            return lunco_api::schema::ApiResponse::error(
+                lunco_api::schema::ApiErrorCode::InternalError,
+                "InspectSelection: SelectedEntities resource is not present",
+            );
+        };
+        let Some(registry) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
+            return lunco_api::schema::ApiResponse::error(
+                lunco_api::schema::ApiErrorCode::InternalError,
+                "InspectSelection: ApiEntityRegistry resource is not present",
+            );
+        };
+
+        let selected_ids: Vec<u64> = selected
+            .entities
+            .iter()
+            .filter_map(|entity| registry.api_id_for(*entity).map(|id| id.get()))
+            .collect();
+        lunco_api::schema::ApiResponse::ok(serde_json::json!({
+            "selected": selected_ids,
+            "primary": selected_ids.last().copied(),
+            "stale_count": selected.entities.len() - selected_ids.len(),
+        }))
+    }
+}
+
+/// The semantic operation represented by one editor selection gesture.
+///
+/// Modifier decoding belongs at the pointer boundary; selection mutation then
+/// consumes this enum so every input surface shares one contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionIntent {
+    Replace,
+    Extend,
+    Toggle,
+    Remove,
+}
+
+/// Decode the viewport modifier chord. Ctrl wins when both modifiers are held,
+/// making Ctrl+Shift a deterministic remove operation rather than an accidental
+/// extend-and-remove combination.
+pub(crate) fn selection_intent(shift_held: bool, ctrl_held: bool) -> SelectionIntent {
+    if ctrl_held {
+        SelectionIntent::Remove
+    } else if shift_held {
+        SelectionIntent::Extend
+    } else {
+        SelectionIntent::Replace
+    }
+}
+
+fn command_selection_intent(extend: bool, toggle: bool, remove_only: bool) -> SelectionIntent {
+    if remove_only {
+        SelectionIntent::Remove
+    } else if toggle {
+        SelectionIntent::Toggle
+    } else if extend {
+        SelectionIntent::Extend
+    } else {
+        SelectionIntent::Replace
+    }
+}
+
+fn usd_selection_intent(extend: bool, toggle: bool) -> SelectionIntent {
+    if toggle {
+        SelectionIntent::Toggle
+    } else if extend {
+        SelectionIntent::Extend
+    } else {
+        SelectionIntent::Replace
+    }
+}
+
 /// Entity-keyed selection intent emitted by editor panels that already hold
 /// the concrete entity. This preserves the shared selection mutation without
 /// exposing a mutable `World` to UI code.
 #[derive(Event, Clone, Copy)]
 pub(crate) struct SelectEntityTarget {
     pub(crate) target: Entity,
-    pub(crate) extend: bool,
-    pub(crate) toggle: bool,
+    pub(crate) intent: SelectionIntent,
 }
 
 pub(crate) fn on_select_entity_target(
@@ -46,15 +135,14 @@ pub(crate) fn on_select_entity_target(
         &mut selected,
         q_old.iter(),
         request.target,
-        request.extend,
-        request.toggle,
+        request.intent,
     );
     inspector_target.part = None;
     commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
 }
 
 /// Select an entity by API id — the headless/scriptable equivalent of a
-/// Shift+Left-click in the viewport. Drives the same [`SelectedEntities`]
+/// viewport selection gesture. Drives the same [`SelectedEntities`]
 /// resource and [`Selected`] highlight the mouse path uses, so the Inspector
 /// immediately shows that entity's components (Transform, Physics, Shader
 /// Parameters, …). Pass `entity_id == 0` to clear the selection.
@@ -71,6 +159,9 @@ pub struct SelectEntity {
     pub extend: bool,
     /// If true, toggles the selection state of the entity (like Cmd/Ctrl-click)
     pub toggle: bool,
+    /// If true, removes this entity without adding it when it is not selected
+    /// (the Ctrl+Left-click viewport intent).
+    pub remove_only: bool,
 }
 
 /// Select a composed USD prim in one explicit open and focused preview.
@@ -100,22 +191,22 @@ pub struct SelectUsdPrim {
 /// the object) and maintains [`SelectedEntities`].
 ///
 /// It deliberately does **not** touch [`lunco_core::DragModeActive`]: selecting
-/// only highlights and never blocks camera possession (plain-click). Possession
-/// is suppressed only while a gizmo handle is *actively dragged*, driven from
-/// `GizmoTarget::is_active()` in `gizmo::sync_gizmo_dragging_marker`.
+/// only highlights. Plain clicks on editor-owned roots are claimed by the
+/// selection observer; possession is suppressed only for that boundary or
+/// while a gizmo handle is actively dragged.
 ///
-/// - `!extend && !toggle` → replace the selection with `target`.
-/// - `toggle` and `target` already selected → remove it.
-/// - otherwise → add `target`.
+/// - [`SelectionIntent::Replace`] → replace the selection with `target`.
+/// - [`SelectionIntent::Extend`] → add `target` while retaining the old set.
+/// - [`SelectionIntent::Toggle`] → add or remove `target`.
+/// - [`SelectionIntent::Remove`] → remove `target`, never add it.
 pub(crate) fn apply_selection(
     commands: &mut Commands,
     selected: &mut SelectedEntities,
     old_selected: impl IntoIterator<Item = Entity>,
     target: Entity,
-    extend: bool,
-    toggle: bool,
+    intent: SelectionIntent,
 ) {
-    if !extend && !toggle {
+    if intent == SelectionIntent::Replace {
         for e in old_selected {
             if e != target {
                 commands
@@ -127,18 +218,28 @@ pub(crate) fn apply_selection(
         selected.entities.clear();
     }
 
-    if toggle && selected.entities.contains(&target) {
-        commands
-            .entity(target)
-            .remove::<Selected>()
-            .remove::<crate::gizmo::GizmoSelected>();
-        selected.entities.retain(|e| *e != target);
-    } else {
-        commands
-            .entity(target)
-            .try_insert((Selected, crate::gizmo::GizmoSelected));
-        if !selected.entities.contains(&target) {
-            selected.entities.push(target);
+    match intent {
+        SelectionIntent::Remove => {
+            commands
+                .entity(target)
+                .remove::<Selected>()
+                .remove::<crate::gizmo::GizmoSelected>();
+            selected.entities.retain(|e| *e != target);
+        }
+        SelectionIntent::Toggle if selected.entities.contains(&target) => {
+            commands
+                .entity(target)
+                .remove::<Selected>()
+                .remove::<crate::gizmo::GizmoSelected>();
+            selected.entities.retain(|e| *e != target);
+        }
+        SelectionIntent::Replace | SelectionIntent::Extend | SelectionIntent::Toggle => {
+            commands
+                .entity(target)
+                .try_insert((Selected, crate::gizmo::GizmoSelected));
+            if !selected.entities.contains(&target) {
+                selected.entities.push(target);
+            }
         }
     }
 }
@@ -190,8 +291,8 @@ pub(crate) fn clear_selection(
 /// Makes the controlled vessel the existing Inspector/command focus.
 ///
 /// Possession is the user's active vehicle context, so leaving the Inspector on
-/// a previously Shift-selected object is surprising. This deliberately calls
-/// focus state remains the sole source used by the Inspector, Explorer, and
+/// a previously selected object is surprising. This deliberately keeps focus
+/// state as the sole source used by the Inspector, Explorer, and
 /// Command Deck. It intentionally does not activate the separate editor gizmo.
 /// Releasing control leaves the last vessel focused, just as it leaves the
 /// camera at its current view.
@@ -244,7 +345,9 @@ pub fn on_select_entity(
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
-        if !cmd.extend && !cmd.toggle {
+        if command_selection_intent(cmd.extend, cmd.toggle, cmd.remove_only)
+            == SelectionIntent::Replace
+        {
             clear_selection(&mut commands, &mut selected, q_old.iter());
             inspector_target.part = None;
         }
@@ -256,8 +359,7 @@ pub fn on_select_entity(
         &mut selected,
         q_old.iter(),
         target,
-        cmd.extend,
-        cmd.toggle,
+        command_selection_intent(cmd.extend, cmd.toggle, cmd.remove_only),
     );
     inspector_target.part = None;
     info!(
@@ -307,7 +409,7 @@ pub fn on_select_usd_prim(
             "SELECT_USD_PRIM: preview {} has no composed prim at `{}`",
             cmd.preview.0, cmd.path
         );
-        if !cmd.extend && !cmd.toggle {
+        if usd_selection_intent(cmd.extend, cmd.toggle) == SelectionIntent::Replace {
             clear_selection(&mut commands, &mut selected, q_old.iter());
             inspector_target.part = None;
         }
@@ -319,8 +421,7 @@ pub fn on_select_usd_prim(
         &mut selected,
         q_old.iter(),
         target,
-        cmd.extend,
-        cmd.toggle,
+        usd_selection_intent(cmd.extend, cmd.toggle),
     );
     inspector_target.part = None;
     info!(
@@ -442,14 +543,15 @@ fn find_prim_part(
 /// rejects every chrome click with no hand-rolled gate, no `ScenePointer`, no
 /// manual ray-cast, and no cross-schedule staleness.
 ///
-/// - **Shift+click** toggles the entity under the cursor in the multi-selection
-///   and attaches a `GizmoTarget`. This is the *only* path that selects — a plain
-///   (un-modified) click is owned by the avatar's possess/follow/focus observer
-///   (`avatar_raycast_possession`). Selecting only highlights; possession stays
-///   available (a gizmo handle drag, not mere selection, blocks possession).
+/// - **Left-click** replaces the selection and attaches a `GizmoTarget`.
+/// - **Shift+left-click** extends the selection without toggling an existing
+///   member off.
+/// - **Ctrl+left-click** removes only the clicked entity and never adds it.
+///   The avatar possession observer stands down for the same editor-owned hit,
+///   so the two global click observers cannot both act on one gesture.
 /// - **Alt+Shift+click on a sub-part** of the already-selected primary DRILLS the
-///   Inspector to that part (plain Shift+click stays the selection toggle, so
-///   deselecting a compound object still works).
+///   Inspector to that part. Ctrl takes precedence, so Ctrl+Alt+Shift remains
+///   removal rather than an Inspector drill.
 ///
 /// Deselect is explicit (Escape/Backspace via [`handle_deselect_keys`], the
 /// Explorer, or selecting another entity) — a click on empty space or a panel
@@ -497,18 +599,15 @@ pub fn on_scene_click_select(
         return;
     }
 
-    // Selection is **Shift+click** only. A plain (un-modified) left-click is
-    // reserved for the avatar's possess/follow/focus path
-    // (`avatar_raycast_possession`, the other global `Pointer<Click>` observer):
-    // partitioning by the Shift modifier is what keeps the two observers from
-    // both acting on one click. Without this gate a plain click on a rover would
-    // BOTH possess it AND select-with-gizmo it — the gizmo makes the body
-    // kinematic and `DragModeActive` blocks possession, which is what broke
-    // joint-rover possession and made Shift-select appear to "not work".
-    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    if !shift_held {
+    // Chrome and empty-space clicks carry no world hit. Keep the selection
+    // unchanged; explicit Cancel/Escape owns deselection.
+    if click.hit.position.is_none() {
         return;
     }
+
+    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl_held = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let intent = selection_intent(shift_held, ctrl_held);
 
     // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer
     // would otherwise fire at every ancestor and select the wrong (top) one. We
@@ -525,29 +624,27 @@ pub fn on_scene_click_select(
     let entity = find_selectable(hit_entity, &q_selectable, &q_mobility, &q_parents);
 
     // DRILL: **Alt+Shift+click** on a sub-part of the ALREADY-selected primary
-    // aims the Inspector at that part. Its own modifier, NOT plain Shift+click:
-    // Shift+click is the multi-selection toggle, and for any compound object
-    // (a rover — the picked mesh is always a descendant, never the root) a
-    // shift-drill would SHADOW deselect entirely. Resolved to the nearest
-    // PRIM-BACKED ancestor of the picked leaf (a wheel's `*_visual` mesh
-    // drills to the wheel PRIM, whose `lunco:wheel:*` params the USD section
-    // can then edit); the raw hit is kept only when nothing below the root
-    // carries a prim path.
+    // aims the Inspector at that part. Resolved to the nearest PRIM-BACKED
+    // ancestor of the picked leaf (a wheel's `*_visual` mesh drills to the
+    // wheel PRIM, whose `lunco:wheel:*` params the USD section can edit); the
+    // raw hit is kept only when nothing below the root carries a prim path.
     let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    if alt_held && prev_selected == Some(entity) && hit_entity != entity {
+    if matches!(intent, SelectionIntent::Extend)
+        && alt_held
+        && prev_selected == Some(entity)
+        && hit_entity != entity
+    {
         inspector_target.part =
             Some(find_prim_part(hit_entity, entity, &q_prims, &q_parents).unwrap_or(hit_entity));
         return;
     }
 
-    // Shift+click toggles this entity in the multi-selection (extend + toggle)
-    // through the same internal selection event used by the Explorer. The
+    // Route through the same internal selection event used by the Explorer. The
     // event observer owns mutation and the shared script event, so this path
     // cannot drift from other selection surfaces.
     commands.trigger(SelectEntityTarget {
         target: entity,
-        extend: true,
-        toggle: true,
+        intent,
     });
 }
 
@@ -655,11 +752,7 @@ pub fn compute_selection_aabb(
         }
     }
 
-    if has_aabb {
-        Some((min, max))
-    } else {
-        None
-    }
+    if has_aabb { Some((min, max)) } else { None }
 }
 
 /// Draws body-frame bounds for objects explicitly selected for gizmo editing.
@@ -732,6 +825,95 @@ mod tests {
 
     const MINIMAL_USD: &str =
         "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\" {}\n";
+
+    #[test]
+    fn viewport_modifier_chord_maps_to_replace_extend_and_remove() {
+        assert_eq!(selection_intent(false, false), SelectionIntent::Replace);
+        assert_eq!(selection_intent(true, false), SelectionIntent::Extend);
+        assert_eq!(selection_intent(false, true), SelectionIntent::Remove);
+        assert_eq!(selection_intent(true, true), SelectionIntent::Remove);
+    }
+
+    #[test]
+    fn extend_adds_and_remove_only_never_adds() {
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>()
+            .init_resource::<crate::InspectorTarget>()
+            .add_observer(on_select_entity_target);
+
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+        let unselected = app.world_mut().spawn_empty().id();
+
+        for (target, intent) in [
+            (first, SelectionIntent::Replace),
+            (second, SelectionIntent::Extend),
+            (first, SelectionIntent::Remove),
+            (unselected, SelectionIntent::Remove),
+        ] {
+            app.world_mut()
+                .trigger(SelectEntityTarget { target, intent });
+            app.world_mut().flush();
+        }
+
+        assert_eq!(
+            app.world().resource::<SelectedEntities>().entities,
+            vec![second]
+        );
+        assert!(app.world().get::<Selected>(first).is_none());
+        assert!(app.world().get::<Selected>(second).is_some());
+        assert!(app.world().get::<Selected>(unselected).is_none());
+    }
+
+    #[test]
+    fn public_select_entity_command_exposes_remove_only_semantics() {
+        let mut app = App::new();
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .init_resource::<SelectedEntities>()
+            .init_resource::<crate::InspectorTarget>()
+            .add_observer(on_select_entity);
+
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(first, lunco_core::GlobalEntityId::from_raw(41));
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(second, lunco_core::GlobalEntityId::from_raw(42));
+
+        for command in [
+            SelectEntity {
+                entity_id: 41,
+                ..default()
+            },
+            SelectEntity {
+                entity_id: 42,
+                extend: true,
+                ..default()
+            },
+            SelectEntity {
+                entity_id: 41,
+                remove_only: true,
+                ..default()
+            },
+            SelectEntity {
+                entity_id: 41,
+                remove_only: true,
+                ..default()
+            },
+        ] {
+            app.world_mut().trigger(command);
+            app.world_mut().flush();
+        }
+
+        assert_eq!(
+            app.world().resource::<SelectedEntities>().entities,
+            vec![second]
+        );
+        assert!(app.world().get::<Selected>(first).is_none());
+        assert!(app.world().get::<Selected>(second).is_some());
+    }
 
     #[test]
     fn usd_prim_resolution_requires_the_requested_preview_scope() {
@@ -927,8 +1109,7 @@ mod tests {
 
         app.world_mut().trigger(SelectEntityTarget {
             target: first,
-            extend: true,
-            toggle: true,
+            intent: SelectionIntent::Toggle,
         });
         app.world_mut().flush();
         assert_eq!(
@@ -936,10 +1117,11 @@ mod tests {
             vec![first]
         );
         assert!(app.world().get::<Selected>(first).is_some());
-        assert!(app
-            .world()
-            .get::<crate::gizmo::GizmoSelected>(first)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<crate::gizmo::GizmoSelected>(first)
+                .is_some()
+        );
 
         app.world_mut()
             .resource_mut::<crate::InspectorTarget>()
@@ -947,8 +1129,7 @@ mod tests {
 
         app.world_mut().trigger(SelectEntityTarget {
             target: second,
-            extend: true,
-            toggle: true,
+            intent: SelectionIntent::Toggle,
         });
         app.world_mut().flush();
         assert_eq!(
@@ -956,16 +1137,16 @@ mod tests {
             vec![first, second]
         );
         assert!(app.world().get::<Selected>(second).is_some());
-        assert!(app
-            .world()
-            .resource::<crate::InspectorTarget>()
-            .part
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<crate::InspectorTarget>()
+                .part
+                .is_none()
+        );
 
         app.world_mut().trigger(SelectEntityTarget {
             target: first,
-            extend: true,
-            toggle: true,
+            intent: SelectionIntent::Toggle,
         });
         app.world_mut().flush();
         assert_eq!(
@@ -973,10 +1154,11 @@ mod tests {
             vec![second]
         );
         assert!(app.world().get::<Selected>(first).is_none());
-        assert!(app
-            .world()
-            .get::<crate::gizmo::GizmoSelected>(first)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<crate::gizmo::GizmoSelected>(first)
+                .is_none()
+        );
         assert!(!app.world().resource::<lunco_core::DragModeActive>().active);
     }
 

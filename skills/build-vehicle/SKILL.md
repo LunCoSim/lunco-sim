@@ -166,7 +166,7 @@ see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco
 To reach one wheel: select the rover, then **Alt+Shift+click** the wheel — that
 drills the Inspector to that subpart's own PRIM
 (`crates/lunco-luncosim-edit/src/selection.rs`). Plain **Shift+click is the
-multi-select toggle** and explicitly *clears* the drill target; it does not drill.
+multi-select extend** and retains the existing selection; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
 Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
@@ -399,8 +399,8 @@ design.
   they must not alter drivetrain admission or articulation classification. A
   generic mechanism owns its own hinges and is composed as a root overlay onto
   the vehicle body; do not re-author its hinge in the rover file.
-- ❌ Expecting plain Shift+click to drill into a wheel — it is the multi-select
-  toggle and clears the drill target. Alt+Shift+click drills.
+- ❌ Expecting plain Shift+click to drill into a wheel — it extends the
+  multi-selection. Alt+Shift+click drills.
 - ❌ Adding a second name for a quantity that already exists — one authoritative
   motor/gearbox reduction, one reader, one place to change it.
 - ❌ Overriding a shader `inputs:` to repaint a rover — author

@@ -173,7 +173,7 @@ impl Panel for CommandDeck {
         // ── Selection + possession status ────────────────────────────────
         let Some(vessel) = view.selected else {
             ui.label(
-                egui::RichText::new("Select a vessel (Shift+click in the 3D view)")
+                egui::RichText::new("Select a vessel (left-click in the 3D view)")
                     .italics()
                     .weak(),
             );

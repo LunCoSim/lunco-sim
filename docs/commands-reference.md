@@ -134,7 +134,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SelectEntity`
 
  Select an entity by API id — the headless/scriptable equivalent of a
- Shift+Left-click in the viewport. Drives the same [`SelectedEntities`]
+ viewport selection gesture. Drives the same [`SelectedEntities`]
  resource and [`Selected`] highlight the mouse path uses, so the Inspector
  immediately shows that entity's components (Transform, Physics, Shader
  Parameters, …). Pass `entity_id == 0` to clear the selection.
@@ -150,6 +150,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. `0` clears the selection. |
 | `extend` | `bool` |  If true, maintains the previous selection and adds this entity to it (like Shift-click) |
 | `toggle` | `bool` |  If true, toggles the selection state of the entity (like Cmd/Ctrl-click) |
+| `remove_only` | `bool` |  If true, removes this entity without adding it (like Ctrl+Left-click) |
 
 #### `SelectUsdPrim`
 

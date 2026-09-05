@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
-use lunco_usd::runtime_persistence::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
+use lunco_usd::runtime_persistence::{RUNTIME_PERSISTENCE_SETTING, runtime_persistence_for_twin};
 use lunco_usd_bevy::camera_switch::camera_display_labels;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
@@ -1102,16 +1102,18 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         }
     }
 
-    // Route selection through the same `crate::selection::apply_selection` the
-    // viewport-click and `SelectEntity` API use — keyed by `Entity` (sub-parts
-    // share api_ids, so id round-trips select the wrong instance). Shift = extend
-    // + toggle (multi-select), plain click = replace. The Inspector reads the
-    // updated `SelectedEntities` later in this same egui pass.
+    // Route selection through the same selection owner the viewport click and
+    // `SelectEntity` API use — keyed by `Entity` (sub-parts share api_ids, so id
+    // round-trips select the wrong instance). Explorer Shift-click retains its
+    // established toggle behavior; viewport Shift-click uses Extend.
     if let Some((entity, shift_held)) = to_select {
         ctx.trigger(crate::selection::SelectEntityTarget {
             target: entity,
-            extend: shift_held,
-            toggle: shift_held,
+            intent: if shift_held {
+                crate::selection::SelectionIntent::Toggle
+            } else {
+                crate::selection::SelectionIntent::Replace
+            },
         });
     }
 

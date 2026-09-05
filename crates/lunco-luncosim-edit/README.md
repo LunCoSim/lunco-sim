@@ -5,7 +5,7 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 ## Features
 
 - **Spawn System** — click-to-place rovers, props, and terrain with ghost preview
-- **Entity Selection** — Shift+Left-click selects entities and shows transform gizmo immediately
+- **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
 - **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — EGUI sliders for transform, mass, damping, and wheel parameters
 - **Undo** — Ctrl+Z to revert spawns and transform changes
@@ -25,6 +25,10 @@ prim tree is the document's authored hierarchy. Build owns the mounted Twin's
 general composition tools; a USD compound rigid-body root is one selectable
 assembly element there, while its internal parts are edited in Editor.
 
+The live selection is also readable through the public `InspectSelection` query:
+it returns stable API ids in selection order and the current primary id. This is
+the readback used by headful/API acceptance after issuing `SelectEntity`.
+
 ## Gizmo System
 
 The transform gizmo respects `lunco_celestial::OrbitalViewPin.active` only for
@@ -42,7 +46,9 @@ explicit owner: live entities carry an exact f64 pose in `ActivePhysicsFrame`,
 while USD preview entities carry their parent-local composed pose:
 
 ```
-Shift+Left-click → Select editable entity → Spawn render proxy
+Left-click → Replace selection → Spawn render proxy
+Shift+Left-click → Extend selection
+Ctrl+Left-click → Remove only the clicked entity
 Drag gizmo handle → Capture the owner pose → proxy proposes render pose
                      → live: render → active-frame f64 → parent-local storage
                      → USD: render → parent-local Bevy transform
@@ -138,8 +144,10 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 
 | Action | Result |
 |--------|--------|
-| Shift+Left-click on entity | Select entity, show gizmo |
-| Shift+Left-click on empty | Deselect |
+| Left-click on entity | Replace selection, show gizmo |
+| Shift+Left-click on entity | Extend selection |
+| Ctrl+Left-click on entity | Remove only the clicked entity |
+| Left-click on empty | Keep selection unchanged |
 | Escape | Deselect / cancel spawn |
 | Delete | Delete selected entity |
 | Drag gizmo handles | Move/rotate entity |
@@ -152,7 +160,7 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 | `lib.rs` | Plugin, resources (`SelectedEntity`, `SpawnState`) |
 | `catalog.rs` | `SpawnCatalog`, `SpawnableEntry`, `SpawnCategory` |
 | `spawn.rs` | Ghost preview, click-to-place system |
-| `selection.rs` | Shift+click selection, `GizmoTarget` management |
+| `selection.rs` | Semantic click selection, `GizmoTarget` management |
 | `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
 | `inspector.rs` | EGUI parameter panel |
 | `entity_list.rs` | Clickable list of scene entities |

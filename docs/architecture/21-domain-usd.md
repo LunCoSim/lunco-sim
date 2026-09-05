@@ -543,8 +543,8 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   interaction transfer runs in `PostUpdate`, a Last-stage final-pose snapshot
   runs before release cleanup consumes the transaction. The default
   `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
-  `gizmo_picking_backend` kept); `drive_gizmo_drag_no_shift` remains gated to
-  plain, non-Shift presses and egui pointer capture.
+  `gizmo_picking_backend` kept); `drive_gizmo_drag` remains gated to focused
+  handles, unclaimed egui pointer capture, and no selection modifier.
 - **Undo**: Reverting a `UsdOp` in the document system automatically updates the 3D world.
 
 | Scheme | Purpose | Resolves to |

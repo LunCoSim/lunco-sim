@@ -28,7 +28,7 @@ use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
 use lunco_usd::document::LayerId;
 use lunco_usd::ui::viewport::{
-    UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+    USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID, UsdPreviewId, UsdViewportState,
 };
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
@@ -530,10 +530,9 @@ pub fn sync_gizmo_dragging_marker(
             commands.entity(e).try_remove::<lunco_core::GizmoDragging>();
         }
     }
-    // Single writer of `DragModeActive`: possession (plain-click) is blocked ONLY
-    // while a gizmo handle is actively dragged — not merely because something is
-    // selected. So Shift-selecting an object just highlights it; you can still
-    // plain-click to possess a rover.
+    // Single writer of `DragModeActive`: possession is blocked only while a
+    // gizmo handle is actively dragged, not merely because something is
+    // selected. Selection modifiers are handled by the click observer.
     drag_mode.active = any_active;
 }
 
@@ -987,16 +986,15 @@ pub fn restore_gizmo_dynamic(
 /// App-owned replacement for transform-gizmo-bevy's default `mouse_interaction`
 /// driver (disabled via Cargo features). The crate's version wrote
 /// `GizmoDragStarted`/`GizmoDragging` on EVERY left press/hold — so the
-/// **Shift+left-click** used to *select* an object also armed a drag, and once
-/// the gizmo renders ON the object (its handles under the cursor) that grab
-/// fired immediately. Gating on `!Shift` keeps Shift+click for selection only;
-/// a **plain** left-drag on a handle still moves the object (the gizmo only
-/// engages when `hovered`, i.e. the cursor is actually over a handle). Matches
-/// the app's shift=select / plain=possess partition (see `on_scene_click_select`).
+/// **left-click** selection used to arm a drag as soon as the gizmo rendered ON
+/// the object (its handles under the cursor). Requiring a focused, hovered
+/// handle keeps replace/extend/remove selection gestures separate; a left-drag
+/// on a handle still moves the object (the gizmo only engages when `hovered`,
+/// i.e. the cursor is actually over a handle).
 /// The raw egui focus flag is global because it protects the live scene; the
 /// focused USD preview is admitted separately only when the scene-pick gate
 /// assigns the pointer to its offscreen surface.
-pub fn drive_gizmo_drag_no_shift(
+pub fn drive_gizmo_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
@@ -1025,7 +1023,12 @@ pub fn drive_gizmo_drag_no_shift(
     let live_owns_pointer = !egui_focus.wants_pointer && !preview_pointer;
 
     if (!live_owns_pointer && !preview_owns_pointer)
-        || keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        || keys.any_pressed([
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+        ])
         || !q_targets.iter().any(|target| target.is_focused())
     {
         // Selection and gizmo interaction are two edges: the first click
@@ -1380,9 +1383,11 @@ mod tests {
             ..Transform::IDENTITY
         };
 
-        assert!(preview_global_to_local_transform(&proxy, None)
-            .and_then(|local| local_transform_pose(&local))
-            .is_none());
+        assert!(
+            preview_global_to_local_transform(&proxy, None)
+                .and_then(|local| local_transform_pose(&local))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1450,18 +1455,20 @@ mod tests {
             Some(&RigidBody::Dynamic)
         );
         assert!(app.world().get::<GizmoDragState>(vessel).is_none());
-        assert!(app
-            .world()
-            .get::<lunco_physics::KinematicDrive>(vessel)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_physics::KinematicDrive>(vessel)
+                .is_none()
+        );
         assert_eq!(
             app.world().get::<LinearVelocity>(vessel).unwrap().0,
             DVec3::ZERO
         );
-        assert!(app
-            .world()
-            .get::<CustomPositionIntegration>(vessel)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<CustomPositionIntegration>(vessel)
+                .is_none()
+        );
     }
 
     /// Dragging a prop that was never a rigid body must not MAKE it one.
@@ -1538,10 +1545,11 @@ mod tests {
              log 'has no mass or inertia' forever"
         );
         assert!(app.world().get::<GizmoDragState>(prop).is_none());
-        assert!(app
-            .world()
-            .get::<lunco_physics::KinematicDrive>(prop)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_physics::KinematicDrive>(prop)
+                .is_none()
+        );
         assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
     }
 }
