@@ -412,10 +412,12 @@ authoritative validator.
 
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
-Griffin ramp plan and a validated FLIP four-wheel layout plan. Adding or
-changing a mission recipe therefore does not add a Rust command; the recipe
-still supplies exact paths and study inputs and submits only through the
-existing proposal/attach/journal owners.
+Griffin ramp plan and a validated FLIP four-wheel layout plan. Its
+`griffin_mission_plan` adds the assembly-level gate: it requires an explicit
+root, lander, FLIP, and fixed adapter relationship before returning the
+combined ramp-and-wheel plan. Adding or changing a mission recipe therefore
+does not add a Rust command; the recipe still supplies exact paths and study
+inputs and submits only through the existing proposal/attach/journal owners.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly

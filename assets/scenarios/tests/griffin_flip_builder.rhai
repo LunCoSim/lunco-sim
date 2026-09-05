@@ -5,6 +5,7 @@
 const ROOT = "/GriffinFlipBuilderTest";
 const LANDER = ROOT + "/Lander";
 const FLIP = ROOT + "/FLIP";
+const ADAPTER = ROOT + "/FLIPPayloadAdapterJoint";
 
 fn query_ok(record) {
     record != () && record.ok != false
@@ -60,6 +61,21 @@ fn wheel_station(path, wheel, index, translation) {
     }
 }
 
+fn mission_manifest(ramps, stations) {
+    #{
+        root_path: ROOT,
+        lander_path: LANDER,
+        flip_path: FLIP,
+        adapter_joint_path: ADAPTER,
+        ramp_axis: "Z",
+        lower_limit: -50.0,
+        upper_limit: 50.0,
+        collision_enabled: false,
+        ramps: ramps,
+        stations: stations,
+    }
+}
+
 fn on_start(me) {
     this.doc = -1;
     this.phase = 0;
@@ -91,12 +107,26 @@ fn on_tick(me) {
             ramp_spec("starboard", LANDER + "/EgressRampStarboard", "RampHingeStarboard",
                 [-2.3, 1.76, 0.0], [-0.1455, -0.1221, 0.0]),
         ];
+        let stations = [
+            wheel_station(FLIP + "/Suspension_FL", FLIP + "/Suspension_FL/Wheel_FL", 0, [-0.95, -0.55, -1.05]),
+            wheel_station(FLIP + "/Suspension_FR", FLIP + "/Suspension_FR/Wheel_FR", 1, [0.95, -0.55, -1.05]),
+            wheel_station(FLIP + "/Suspension_RL", FLIP + "/Suspension_RL/Wheel_RL", 2, [-0.95, -0.55, 1.05]),
+            wheel_station(FLIP + "/Suspension_RR", FLIP + "/Suspension_RR/Wheel_RR", 3, [0.95, -0.55, 1.05]),
+        ];
         let invalid_ramps = [
             ramp_spec("port", LANDER + "/EgressRampPort", "RampHingePortBad",
                 [2.3, 1.76, 0.0], [0.1455, -0.1221, 0.0]),
             ramp_spec("port", LANDER + "/EgressRampStarboard", "RampHingeStarboardBad",
                 [-2.3, 1.76, 0.0], [-0.1455, -0.1221, 0.0]),
         ];
+        let mission = griffin_flip_builder::griffin_mission_plan(
+            this.doc, "@root@", mission_manifest(ramps, stations),
+        );
+        let missing_adapter_manifest = mission_manifest(ramps, stations);
+        missing_adapter_manifest.adapter_joint_path = ROOT + "/MissingAdapter";
+        let missing_adapter = griffin_flip_builder::griffin_mission_plan(
+            this.doc, "@root@", missing_adapter_manifest,
+        );
         let ramp_plan = griffin_flip_builder::griffin_ramp_pair_plan(
             this.doc, "@root@", LANDER, LANDER, "Z", -50.0, 50.0, false, ramps,
         );
@@ -104,9 +134,14 @@ fn on_tick(me) {
             this.doc, "@root@", LANDER, LANDER, "Z", -50.0, 50.0, false,
             invalid_ramps,
         );
-        if !ramp_plan.ok || ramp_plan.parts.len() != 2
+        if !mission.ok || mission.kind != "griffin_mission"
+            || mission.ramps.len() != 2 || mission.stations.len() != 4
+            || mission.ops.len() != 36 || mission.adapter.body0 != LANDER
+            || mission.adapter.body1 != FLIP
+            || missing_adapter.ok
+            || !ramp_plan.ok || ramp_plan.parts.len() != 2
             || ramp_plan.ops.len() != 32 || invalid_ramp_plan.ok {
-            fail(this, "Griffin paired-ramp recipe did not build or reject its explicit contract");
+            fail(this, "Griffin mission/ramp recipes did not build or reject their explicit contracts");
             return;
         }
         let proposal = assembly_edit::propose(

@@ -242,9 +242,12 @@ change while retaining the same authoritative attach validator.
 
 For the current Griffin/FLIP study package, the dynamic
 `griffin_flip_builder` library composes the same generic surface into paired
-ramp and four-wheel layout recipes. Treat its mass, inertia, dimensions, and
-frame values as caller-supplied study inputs; inspect the exact composed prims
-and proposal diagnostics before committing an authored edit.
+ramp and four-wheel layout recipes. Use `griffin_mission_plan` when building
+the whole mission assembly: it checks the explicit root, lander, FLIP, and
+fixed adapter relationship before combining those plans. Treat its mass,
+inertia, dimensions, and frame values as caller-supplied study inputs;
+inspect the exact composed prims and proposal diagnostics before committing an
+authored edit.
 
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).

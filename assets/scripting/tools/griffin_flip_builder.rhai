@@ -54,6 +54,9 @@ fn griffin_ramp_pair_plan(doc, edit_target, lander_path, joint_parent, axis,
         if sides.contains(ramp.side) {
             return plan_error("Griffin ramp sides must be unique");
         }
+        if !ramp.body_path.starts_with(lander_path + "/") {
+            return plan_error("Griffin ramp bodies must be explicit descendants of the lander");
+        }
         if ramp.body_path == lander_path || bodies.contains(ramp.body_path) {
             return plan_error("Griffin ramp body paths must be distinct from the lander and each other");
         }
@@ -179,6 +182,107 @@ fn flip_four_wheel_layout_plan(doc, edit_target, root_path, stations) {
         kind: "flip_four_wheel_layout",
         root: root_path,
         stations: layout,
+        ops: ops,
+    }
+}
+
+fn relationship_target(record, name) {
+    if !query_ok(record) || record.relationships == ()
+        || record.relationships[name] == () || record.relationships[name].len() != 1 {
+        return ();
+    }
+    record.relationships[name][0]
+}
+
+/// Build one reviewed Griffin/FLIP construction plan from an explicit
+/// assembly manifest. The manifest supplies all project-specific values and
+/// paths; this recipe only composes the reusable ramp and wheel planners and
+/// verifies that the existing payload adapter connects the intended bodies.
+///
+/// The returned operations are still pure typed plans. Callers can inspect
+/// and propose them as one change set, while the adapter contract is checked
+/// before any operation reaches USD.
+fn griffin_mission_plan(doc, edit_target, manifest) {
+    if doc == () || edit_target == () || manifest == ()
+        || manifest.root_path == () || manifest.lander_path == ()
+        || manifest.flip_path == () || manifest.adapter_joint_path == ()
+        || manifest.ramps == () || manifest.stations == ()
+        || manifest.ramp_axis == () || manifest.lower_limit == ()
+        || manifest.upper_limit == () || manifest.collision_enabled == () {
+        return plan_error("griffin_mission_plan requires root, lander, FLIP, adapter, ramp, and wheel manifest fields");
+    }
+
+    let root = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.root_path,
+        children: true,
+    });
+    let lander = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.lander_path,
+        children: false,
+    });
+    let flip = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.flip_path,
+        children: false,
+    });
+    if !query_ok(root) || root.type_name != "Xform"
+        || !query_ok(lander) || lander.type_name != "Xform"
+        || !query_ok(flip) || flip.type_name != "Xform" {
+        return plan_error("Griffin mission manifest must name existing Xform root, lander, and FLIP prims");
+    }
+    if root.children == () || !root.children.contains(manifest.lander_path)
+        || !root.children.contains(manifest.flip_path) {
+        return plan_error("Griffin mission lander and FLIP must be direct children of the declared root");
+    }
+
+    let adapter = query("QueryUsdPrim", #{
+        doc: doc,
+        path: manifest.adapter_joint_path,
+        attrs: [
+            "physics:localPos0", "physics:localPos1",
+            "physics:localRot0", "physics:localRot1",
+        ],
+        rels: ["physics:body0", "physics:body1"],
+    });
+    let body0 = relationship_target(adapter, "physics:body0");
+    let body1 = relationship_target(adapter, "physics:body1");
+    if !query_ok(adapter) || adapter.type_name != "PhysicsFixedJoint"
+        || body0 != manifest.lander_path || body1 != manifest.flip_path
+        || adapter.attrs == () || adapter.attrs["physics:localPos0"] == ()
+        || adapter.attrs["physics:localPos1"] == () {
+        return plan_error("Griffin mission adapter must be an explicit fixed joint between the declared lander and FLIP");
+    }
+
+    let ramp_plan = griffin_ramp_pair_plan(
+        doc, edit_target, manifest.lander_path, manifest.lander_path,
+        manifest.ramp_axis, manifest.lower_limit, manifest.upper_limit,
+        manifest.collision_enabled, manifest.ramps,
+    );
+    if !ramp_plan.ok { return ramp_plan; }
+    let wheel_plan = flip_four_wheel_layout_plan(
+        doc, edit_target, manifest.flip_path, manifest.stations,
+    );
+    if !wheel_plan.ok { return wheel_plan; }
+
+    let ops = [];
+    for op in ramp_plan.ops { ops.push(op); }
+    for op in wheel_plan.ops { ops.push(op); }
+    #{
+        ok: true,
+        kind: "griffin_mission",
+        root: manifest.root_path,
+        lander: manifest.lander_path,
+        flip: manifest.flip_path,
+        adapter: #{
+            path: manifest.adapter_joint_path,
+            body0: body0,
+            body1: body1,
+            type_name: adapter.type_name,
+        },
+        ramps: ramp_plan.parts,
+        stations: wheel_plan.stations,
         ops: ops,
     }
 }
