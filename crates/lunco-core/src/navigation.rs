@@ -8,7 +8,7 @@
 
 use bevy::math::{DVec3, Vec3};
 
-use crate::{coords::GridPos, SteeringGeometry};
+use crate::{SteeringGeometry, coords::GridPos};
 
 /// Stateful direction selected for one navigation leg.
 ///
@@ -76,11 +76,20 @@ pub fn nav_setpoint(
     }
 
     let offset = target - pos;
-    let distance = offset.length();
-    if !distance.is_finite() {
+    let to_xz = DVec3::new(offset.x, 0.0, offset.z);
+    let to_len = to_xz.length();
+    let fwd_xz = DVec3::new(fwd.x as f64, 0.0, fwd.z as f64);
+    let fwd_len = fwd_xz.length();
+    if !to_len.is_finite() || !fwd_len.is_finite() || !offset.y.is_finite() {
         return None;
     }
-    if distance < radius as f64 {
+
+    // Surface-vehicle guidance is a yaw-plane contract.  The authored target
+    // may be at terrain height while the authoritative body pose is at its
+    // support/contact height, so using `offset.length()` here would keep a
+    // rover outside its horizontal arrival radius forever and make it drive
+    // through the target before the state machine can advance the leg.
+    if to_len < radius as f64 {
         *state = NavigationState::Uninitialized;
         return Some(NavigationCommand {
             throttle: 0.0,
@@ -89,18 +98,10 @@ pub fn nav_setpoint(
             arrived: true,
         });
     }
-
-    let to_xz = DVec3::new(offset.x, 0.0, offset.z);
-    let to_len = to_xz.length();
-    let fwd_xz = DVec3::new(fwd.x as f64, 0.0, fwd.z as f64);
-    let fwd_len = fwd_xz.length();
-    if !to_len.is_finite()
-        || !fwd_len.is_finite()
-        || to_len <= f64::EPSILON
-        || fwd_len <= f64::EPSILON
-    {
+    if to_len <= f64::EPSILON || fwd_len <= f64::EPSILON {
         return None;
     }
+
     let to = (to_xz / to_len).as_vec3();
     let fwd = (fwd_xz / fwd_len).as_vec3();
     let cross_yaw = fwd.z * to.x - fwd.x * to.z;
@@ -142,7 +143,7 @@ pub fn nav_setpoint(
     let throttle = speed
         * travel_sign
         * (0.25 + 0.75 * alignment).clamp(0.25, 1.0)
-        * approach_factor(distance, radius);
+        * approach_factor(to_len, radius);
     Some(NavigationCommand {
         throttle,
         steer: steering_command(cross_yaw, travel_sign, to_len, steering_geometry),

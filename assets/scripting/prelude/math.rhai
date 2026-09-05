@@ -20,11 +20,16 @@ fn distance(a, b) {
     vlen(vsub(pa, pb))
 }
 
-/// True once `entity` is within `radius` metres of world point `target` ([x,y,z]).
+/// True if a surface vehicle's horizontal chassis position is within `radius`
+/// metres of world point `target` ([x,y,z]). Navigation uses the same yaw-plane
+/// contract: authored targets sit on the terrain surface while the authoritative
+/// body pose sits at its support height. A full 3-D norm would make a task's
+/// arrival predicate disagree with `nav_to` for every rover.
 fn arrived(entity, target, radius) {
     let p = world_pos(entity);
     if p == () { return false; }
-    vlen(vsub(p, target)) <= radius
+    let delta = vsub(p, target);
+    vlen([delta[0], 0.0, delta[2]]) <= radius
 }
 
 // ── Orientation, all derived from world_rotation(id) → [x,y,z,w] ────────────

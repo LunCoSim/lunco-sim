@@ -35,7 +35,7 @@
 use avian3d::dynamics::joints::EntityConstraint;
 use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
-    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
+    xpbd::{XpbdConstraint, joints::PrismaticJointSolverData},
 };
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, ContactGraph, CustomPositionIntegration, JointDisabled,
@@ -57,7 +57,10 @@ pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
-pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet};
+pub use support::{
+    PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
+    PhysicsSupportSet,
+};
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
 ///
@@ -1326,15 +1329,17 @@ mod tests {
         assert!((snapshot.dynamic - 0.8).abs() < 1e-6);
         assert!((snapshot.static_coefficient - 1.0).abs() < 1e-6);
 
-        assert!(set_contact_friction(
-            &mut world,
-            entity,
-            ContactFrictionParameters {
-                dynamic: -0.1,
-                static_coefficient: 1.0,
-            },
-        )
-        .is_err());
+        assert!(
+            set_contact_friction(
+                &mut world,
+                entity,
+                ContactFrictionParameters {
+                    dynamic: -0.1,
+                    static_coefficient: 1.0,
+                },
+            )
+            .is_err()
+        );
         assert_eq!(contact_friction_snapshot(&world, entity), Some(snapshot));
     }
 
@@ -1372,15 +1377,17 @@ mod tests {
                 angular: 4.0,
             })
         );
-        assert!(set_joint_damping(
-            &mut world,
-            joint,
-            JointDampingParameters {
-                linear: -0.1,
-                angular: 1.0,
-            },
-        )
-        .is_err());
+        assert!(
+            set_joint_damping(
+                &mut world,
+                joint,
+                JointDampingParameters {
+                    linear: -0.1,
+                    angular: 1.0,
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]

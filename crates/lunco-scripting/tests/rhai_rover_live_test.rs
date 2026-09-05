@@ -347,6 +347,35 @@ fn rhai_task_arrives_brakes_and_emits() {
 }
 
 #[test]
+fn rhai_arrival_uses_ground_distance_for_surface_targets() {
+    // The rover pose is at y=0 while this authored surface target is elevated
+    // in the fixture. Horizontal distance is 3.9 m (inside the 4 m radius),
+    // while the old full 3-D norm is 5.59 m. The task must therefore advance
+    // without inventing a drive command.
+    let source = r#"
+        fn task(me) {
+            seq([
+                wait_until(|m| arrived(m, [0.0, 4.0, -3.9], 4.0)),
+                once(|m| emit("GROUND_ARRIVAL", true))
+            ])
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app);
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|n| n == "GROUND_ARRIVAL"),
+        "surface arrival should ignore authored target height; got {events:?}"
+    );
+    assert!(
+        app.world().resource::<DriveLog>().0.is_empty(),
+        "arrival-only task must not issue a drive command"
+    );
+}
+
+#[test]
 fn run_scenario_command_attaches_and_runs() {
     // The real scenario-loading path: fire RunScenario through the SAME
     // ApiCommandEvent dispatch the HTTP API / MCP use. It must attach a

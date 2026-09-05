@@ -25,6 +25,32 @@ pub enum PhysicsSupportSet {
     Consume,
 }
 
+/// A live edge in the physics assembly graph.
+///
+/// Physics producers publish this before the native joint is admitted to the
+/// solver. Spatial consumers therefore see the complete articulated assembly
+/// during startup placement as well as during normal simulation. The link is
+/// removed with its owning joint entity; it is not a second constraint.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicsJointLink {
+    /// The first body in the authored or synthesized joint.
+    pub body0: Entity,
+    /// The second body in the authored or synthesized joint.
+    pub body1: Entity,
+}
+
+/// Marks an authored physics joint whose native constraint has not crossed the
+/// admission boundary yet.
+///
+/// This remains present while USD is resolving the endpoints and while Avian is
+/// parking the typed constraint. It is removed only when the native joint is
+/// installed together with its collision policy. Terrain placement must wait
+/// for that complete topology phase: moving only the root while an authored
+/// child body is still waiting to resolve leaves a real joint violation for the
+/// solver to repair on its first step.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhysicsJointPending;
+
 /// Contact geometry that contributes to a body's terrain-support footprint.
 ///
 /// Offsets are expressed in the owning body's local physics frame. The

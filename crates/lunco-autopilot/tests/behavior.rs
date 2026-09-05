@@ -5,8 +5,8 @@
 
 use bevy::math::{DQuat, DVec3, Vec3};
 use lunco_autopilot::{
-    nav_setpoint, AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState,
-    TargetStates,
+    AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState, TargetStates,
+    nav_setpoint,
 };
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{NavigationState, SteeringGeometry};
@@ -101,6 +101,32 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
         !arrived && throttle > 0.0,
         "far + aligned → driving forward"
     );
+}
+
+#[test]
+fn nav_setpoint_arrival_uses_ground_distance_not_body_height() {
+    // Rover targets are authored on the surface while the body pose is above
+    // that surface.  Arrival must therefore use the same horizontal plane as
+    // steering; full 3-D distance would keep a rover driving past the marker.
+    let (_throttle, _steer, brake, arrived) = nav_setpoint_once(
+        GridPos(DVec3::new(0.0, 1.0, 0.0)),
+        Vec3::NEG_Z,
+        GridPos(DVec3::new(0.0, 0.0, 1.5)),
+        0.6,
+        2.0,
+        SteeringGeometry::Differential,
+    );
+    assert!(arrived && brake > 0.5, "ground-plane arrival must brake");
+
+    let (throttle, _steer, brake, arrived) = nav_setpoint_once(
+        GridPos(DVec3::new(0.0, 1.0, 0.0)),
+        Vec3::NEG_Z,
+        GridPos(DVec3::new(0.0, 100.0, -8.0)),
+        0.6,
+        2.0,
+        SteeringGeometry::Differential,
+    );
+    assert!(!arrived && throttle > 0.0 && brake == 0.0);
 }
 
 #[test]

@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
@@ -21,8 +21,10 @@ use crate::{AttrUiHint, MaterialPurpose, StageRecipe, StageView, UsdRead};
 pub struct UsdPrimProjectionPlan {
     /// The composed prim path.
     pub path: String,
-    /// The local transform after the shared stage convention conversion.
-    pub transform: Transform,
+    /// The authored local transform after the shared stage convention
+    /// conversion. `None` means the prim omitted `xformOpOrder`; callers must
+    /// preserve an existing ECS spawn pose for that USD identity case.
+    pub transform: Option<Transform>,
     /// Whether the prim is an authored placeable unit.
     pub selectable: bool,
     /// The composed catalog identity, when authored.
@@ -99,10 +101,10 @@ impl UsdStageProjectionPlan {
             let path_string = path.to_string();
             let active = reader.is_active(&path);
             let transform = if active {
-                crate::read_transform_from_usd(&reader, &path)
+                crate::local_transform_at(&reader, &path, 0.0)
                     .map_err(|error| anyhow!("{path_string}: {error}"))?
             } else {
-                Transform::IDENTITY
+                None
             };
             let attribute_names = reader.attr_names(&path);
             let attributes = attribute_names
@@ -241,14 +243,16 @@ impl UsdStageProjectionPlan {
     /// Validate all prepared transforms before they become ECS state.
     pub(crate) fn validate(&self) -> Result<()> {
         for prim in &self.prims {
-            let t = prim.transform.translation;
-            let s = prim.transform.scale;
-            let q = prim.transform.rotation;
-            if !t.is_finite() || !s.is_finite() || !q.is_finite() {
-                anyhow::bail!(
-                    "{}: composed transform contains a non-finite value",
-                    prim.path
-                );
+            if let Some(transform) = prim.transform {
+                let t = transform.translation;
+                let s = transform.scale;
+                let q = transform.rotation;
+                if !t.is_finite() || !s.is_finite() || !q.is_finite() {
+                    anyhow::bail!(
+                        "{}: composed transform contains a non-finite value",
+                        prim.path
+                    );
+                }
             }
         }
         Ok(())
@@ -470,7 +474,7 @@ impl UsdRead for UsdStageProjectionPlan {
         _time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError> {
         self.prim(prim)
-            .map(|prim| Some(prim.transform))
+            .map(|prim| prim.transform)
             .ok_or_else(|| crate::TransformReadError {
                 prim: prim.to_string(),
             })
@@ -596,6 +600,44 @@ def Xform \"World\"\n\
             Some([6.0, 2.0, 3.0])
         );
         assert_eq!(plan.children(&world), vec![child]);
+    }
+
+    #[test]
+    fn prepared_reader_preserves_unauthored_transform_as_usd_identity() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def Xform "Authored"
+    {
+        double3 xformOp:translate = (1, 2, 3)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "Unauthored"
+    {
+    }
+}
+"#,
+        );
+        let plan = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
+        let authored = SdfPath::new("/World/Authored").unwrap();
+        let unauthored = SdfPath::new("/World/Unauthored").unwrap();
+
+        assert!(
+            plan.local_transform_at(&authored, 0.0)
+                .expect("authored prim exists")
+                .is_some()
+        );
+        assert_eq!(
+            plan.local_transform_at(&unauthored, 0.0)
+                .expect("unauthored prim exists"),
+            None,
+            "an omitted xformOpOrder must remain distinguishable from authored identity"
+        );
     }
 
     #[test]

@@ -81,6 +81,7 @@ fn behavior_navigation_uses_physics_rotation_not_render_transform() {
             avian3d::prelude::RigidBody::Dynamic,
             avian3d::prelude::Position(bevy::math::DVec3::ZERO),
             avian3d::prelude::Rotation(physics_rotation),
+            lunco_core::SteeringGeometry::Differential,
             PhysicsPoseSeeded,
         ))
         .id();
@@ -144,6 +145,7 @@ fn behavior_navigation_uses_physics_position_not_render_hierarchy() {
             avian3d::prelude::RigidBody::Dynamic,
             avian3d::prelude::Position(bevy::math::DVec3::new(100.0, 0.0, 0.0)),
             avian3d::prelude::Rotation(DQuat::IDENTITY),
+            lunco_core::SteeringGeometry::Differential,
             PhysicsPoseSeeded,
         ))
         .id();

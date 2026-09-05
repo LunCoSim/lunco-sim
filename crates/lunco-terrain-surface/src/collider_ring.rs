@@ -33,11 +33,11 @@ use avian3d::prelude::{
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{on_command, register_commands, Command};
-use lunco_terrain_core::{quantize, HeightSource};
+use lunco_core::{Command, on_command, register_commands};
+use lunco_terrain_core::{HeightSource, quantize};
 use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;
@@ -1410,12 +1410,16 @@ pub struct JointGraph<'w, 's> {
     prismatic: Query<'w, 's, &'static avian3d::prelude::PrismaticJoint>,
     spherical: Query<'w, 's, &'static avian3d::prelude::SphericalJoint>,
     distance: Query<'w, 's, &'static avian3d::prelude::DistanceJoint>,
+    links: Query<'w, 's, &'static lunco_physics::PhysicsJointLink>,
+    pending: Query<'w, 's, (), With<lunco_physics::PhysicsJointPending>>,
 }
 
 impl JointGraph<'_, '_> {
-    /// Adjacency over the joint edges, restricted to entities `keep` admits
-    /// (pass a Dynamic-bodies filter so a joint to a static anchor can't glue
-    /// two assemblies together through the ground).
+    /// Adjacency over the joint edges, restricted to movable entities. A
+    /// kinematic loading body is still part of the articulated assembly and
+    /// must move with its dynamic root before admission promotes it; static
+    /// anchors are excluded so a mount cannot glue separate assemblies through
+    /// the ground.
     fn adjacency(&self, keep: impl Fn(Entity) -> bool) -> HashMap<Entity, Vec<Entity>> {
         let mut adj: HashMap<Entity, Vec<Entity>> = HashMap::new();
         let mut link = |a: Entity, b: Entity| {
@@ -1429,7 +1433,16 @@ impl JointGraph<'_, '_> {
         self.prismatic.iter().for_each(|j| link(j.body1, j.body2));
         self.spherical.iter().for_each(|j| link(j.body1, j.body2));
         self.distance.iter().for_each(|j| link(j.body1, j.body2));
+        self.links.iter().for_each(|j| link(j.body0, j.body1));
         adj
+    }
+
+    /// Whether USD has a joint whose endpoints have not reached the live
+    /// entity graph yet. Initial placement must wait for this phase: moving a
+    /// root before its authored child body exists in `PhysicsJointLink` leaves
+    /// the child behind and makes admission perform a metre-scale correction.
+    fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
     }
 }
 
@@ -1594,6 +1607,14 @@ pub fn settle_grounded_assemblies(
     if q_needs.is_empty() {
         return;
     }
+    // Joint entities are projected asynchronously from USD. Do not consume a
+    // one-shot placement request while any authored joint is still waiting for
+    // its body endpoints: the root would move without the not-yet-linked
+    // child, and the later admission seat would recreate the startup impulse
+    // this transaction exists to avoid.
+    if joints.has_pending() {
+        return;
+    }
     // The marker is an initial-placement request, not an estimate.  The DEM
     // height oracle and its collider ring become usable in different frames;
     // consuming it while the terrain-ready hold is active samples the
@@ -1711,7 +1732,7 @@ pub fn settle_grounded_assemblies(
     let adj = joints.adjacency(|e| {
         dynamics
             .get(e)
-            .is_ok_and(|rb| matches!(rb, RigidBody::Dynamic))
+            .is_ok_and(|rb| matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic))
     });
 
     let mut done: HashSet<Entity> = HashSet::new();

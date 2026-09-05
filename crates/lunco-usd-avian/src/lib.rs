@@ -54,11 +54,11 @@ use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
-pub use lunco_usd_bevy::{effective_purpose, Purpose};
+pub use lunco_usd_bevy::{Purpose, effective_purpose};
 use lunco_usd_bevy::{
-    instance_key, is_preview_only, local_transform_at, read_primitive_axis, read_shape_dims,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated,
-    UsdInstanceProjection, UsdPreviewOnly, UsdRead, UsdSceneRoot, UsdVisualSynced,
+    ShapeDims, TransformReadError, UsdAnimated, UsdInstanceProjection, UsdPreviewOnly, UsdRead,
+    UsdSceneRoot, UsdVisualSynced, instance_key, is_preview_only, local_transform_at,
+    read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -105,12 +105,12 @@ pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> b
 }
 
 pub mod lint;
-pub use lint::{physics_facts, USD_LINT_DOMAIN};
+pub use lint::{USD_LINT_DOMAIN, physics_facts};
 
 pub mod filtered_pairs;
 pub use filtered_pairs::{
-    enable_shared_tire_contact_hooks, FilteredPairs, PendingFilteredPairs, SharedTireContact,
-    UsdCollisionFilter,
+    FilteredPairs, PendingFilteredPairs, SharedTireContact, UsdCollisionFilter,
+    enable_shared_tire_contact_hooks,
 };
 
 pub mod collision_groups;
@@ -1421,6 +1421,8 @@ fn process_usd_avian_prims(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut group_tables: ResMut<CollisionGroupTables>,
     mut commands: Commands,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, instance_projection)) = query.get(entity) else {
@@ -1474,7 +1476,15 @@ fn process_usd_avian_prims(
     // table is resolved once per stage and cached; recomputing it per prim would
     // be quadratic in prim count on a scene that authors any group at all.
     let groups = group_tables.get_or_read(id, &reader).clone();
-    extract_avian_prim(&reader, entity, &sdf_path, &groups, &mut commands);
+    extract_avian_prim(
+        &reader,
+        entity,
+        &sdf_path,
+        &groups,
+        &mut commands,
+        faults.as_deref_mut(),
+        holds.as_deref_mut(),
+    );
 }
 
 /// Set the world's gravity from a composed `UsdPhysicsScene` prim.
@@ -1582,13 +1592,89 @@ fn apply_physics_scene_gravity(
 /// Map a single composed USD prim to its Avian physics components through the
 /// shared reader boundary. Split out of the observer so the read body can be
 /// driven directly by tests.
+fn is_physics_joint_type(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    sdf_path: &SdfPath,
+) -> bool {
+    matches!(
+        reader.type_name(sdf_path).as_deref(),
+        Some(
+            ptok::T_PHYSICS_JOINT
+                | ptok::T_PHYSICS_FIXED_JOINT
+                | ptok::T_PHYSICS_REVOLUTE_JOINT
+                | ptok::T_PHYSICS_PRISMATIC_JOINT
+                | ptok::T_PHYSICS_SPHERICAL_JOINT
+                | ptok::T_PHYSICS_DISTANCE_JOINT
+        )
+    )
+}
+
+/// Project a standard USD joint from the shared composed-prim boundary.
+///
+/// Both the loaded-stage observer and the visual-admission path call this
+/// function. The latter is required for runtime-spawned assets whose USD handle
+/// can arrive before the stage. This keeps valid joints and malformed-joint
+/// faults independent of loading order.
+fn project_pending_joint(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    entity: Entity,
+    sdf_path: &SdfPath,
+    commands: &mut Commands,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+) -> bool {
+    if !is_physics_joint_type(reader, sdf_path) {
+        return false;
+    }
+    // Wheel joints belong to raycast-wheel realization. Lint-only fixtures are
+    // available to the linter but are never runtime constraints or faults.
+    if reader.boolean(sdf_path, "lunco:lintOnly") == Some(true)
+        || joint_targets_simulated_wheel(reader, sdf_path)
+    {
+        return true;
+    }
+    if let Some(joint) = read_joint_spec(reader, sdf_path) {
+        commands
+            .entity(entity)
+            .try_insert((joint, lunco_physics::PhysicsJointPending));
+    } else if reader.boolean(sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
+        let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
+        error!("USD physics joint {} rejected: {detail}", sdf_path);
+        if let Some(faults) = faults {
+            faults.raise(
+                "usd-physics-joint-invalid",
+                Some(entity),
+                sdf_path.to_string(),
+                detail,
+            );
+        }
+        if let Some(holds) = holds {
+            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        }
+    }
+    true
+}
+
 fn extract_avian_prim(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     groups: &CollisionGroupTable,
     commands: &mut Commands,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
 ) {
+    // Joint projection is owned by the same composed-prim boundary as every
+    // other Avian projection. The legacy `Add<UsdPrimPath>` observer can run
+    // before its stage is available; relying on it alone lets terrain consume
+    // a support request before the joint topology exists. A joint is a
+    // constraint declaration, not a body/collider, so finish this prim here
+    // and leave native admission to the shared pending-joint path.
+    if project_pending_joint(reader, entity, sdf_path, commands, faults, holds) {
+        commands.entity(entity).try_insert(UsdAvianProcessed);
+        return;
+    }
+
     // `UsdPhysicsScene` — simulation-wide settings, of which this engine consumes
     // gravity. It is a SETTINGS prim, not a body: it has no transform and no
     // collider, so it is handled here and the body/collider reads below are
@@ -2590,8 +2676,8 @@ fn on_add_usd_prim(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
-    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, instance_projection)) = query.get(entity) else {
@@ -2613,17 +2699,6 @@ fn on_add_usd_prim(
         return;
     };
     let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, instance_projection);
-    let is_physics_joint = reader.type_name(&sdf_path).is_some_and(|type_name| {
-        matches!(
-            type_name.as_str(),
-            ptok::T_PHYSICS_JOINT
-                | ptok::T_PHYSICS_FIXED_JOINT
-                | ptok::T_PHYSICS_REVOLUTE_JOINT
-                | ptok::T_PHYSICS_PRISMATIC_JOINT
-                | ptok::T_PHYSICS_SPHERICAL_JOINT
-                | ptok::T_PHYSICS_DISTANCE_JOINT
-        )
-    });
     if reader
         .real_f32(&sdf_path, "physxVehicleWheel:radius")
         .is_some()
@@ -2641,28 +2716,14 @@ fn on_add_usd_prim(
     if reader.boolean(&sdf_path, "lunco:lintOnly") == Some(true) {
         return;
     }
-    if let Some(joint) = read_joint_spec(&reader, &sdf_path) {
-        commands.entity(entity).try_insert(joint);
-    } else if is_physics_joint && reader.boolean(&sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
-        // A recognized standard joint that cannot be projected is an authored
-        // scene error. Silently omitting it leaves the mechanism unconstrained,
-        // which is a physically different assembly and can make a vehicle look
-        // valid until the first dynamic step. Keep the failure at the USD/Avian
-        // boundary and let the shared fault/hold gate stop integration.
-        let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
-        error!("USD physics joint {} rejected: {detail}", sdf_path);
-        if let Some(mut faults) = faults {
-            faults.raise(
-                "usd-physics-joint-invalid",
-                Some(entity),
-                sdf_path.to_string(),
-                detail,
-            );
-        }
-        if let Some(mut holds) = holds {
-            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-        }
-    }
+    project_pending_joint(
+        &reader,
+        entity,
+        &sdf_path,
+        &mut commands,
+        faults.as_deref_mut(),
+        holds.as_deref_mut(),
+    );
 
     // Note: Physics mapping (RigidBody, Mass, Collider, Damping) is handled by
     // the sim plugin's process_usd_sim_prims system to ensure consistent ordering
@@ -2849,7 +2910,9 @@ fn seat_joint_bodies(
         let worst = delta.length().max(angle);
         let detail = format!(
             "[usd-avian] joint {label} starts violated by {:.3} m / {:.3} rad — seating body1 {:?} onto the authored joint frame",
-            delta.length(), angle, body1,
+            delta.length(),
+            angle,
+            body1,
         );
         if worst > JOINT_SEAT_ERROR_THRESHOLD {
             error!("{detail}");
@@ -3198,7 +3261,10 @@ fn build_usd_physics_joints(
                     "[usd-avian] joint {} is terminally unresolved: {detail}",
                     joint_prim_path.path
                 );
-                commands.entity(joint_entity).remove::<PendingUsdJoint>();
+                commands
+                    .entity(joint_entity)
+                    .remove::<PendingUsdJoint>()
+                    .remove::<lunco_physics::PhysicsJointPending>();
                 resolve_ticks.remove(&joint_entity);
                 continue;
             }
@@ -3287,7 +3353,10 @@ fn build_usd_physics_joints(
                     if let Some(holds) = holds.as_deref_mut() {
                         holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                     }
-                    commands.entity(joint_entity).remove::<PendingUsdJoint>();
+                    commands
+                        .entity(joint_entity)
+                        .remove::<PendingUsdJoint>()
+                        .remove::<lunco_physics::PhysicsJointPending>();
                     resolve_ticks.remove(&joint_entity);
                     continue;
                 }
@@ -3543,6 +3612,8 @@ pub fn attach_joint<J: Component + Clone>(
             seat,
         },
         PendingJointAdmission { body0, body1 },
+        lunco_physics::PhysicsJointLink { body0, body1 },
+        lunco_physics::PhysicsJointPending,
     ));
 }
 
@@ -3744,7 +3815,8 @@ pub fn admit_pending_joints<J: Component + Clone>(
             .entity(entity)
             .try_insert((p.joint.clone(), JointCollisionDisabled))
             .try_remove::<PendingJoint<J>>()
-            .try_remove::<PendingJointAdmission>();
+            .try_remove::<PendingJointAdmission>()
+            .try_remove::<lunco_physics::PhysicsJointPending>();
     }
 }
 
@@ -4334,7 +4406,7 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
@@ -4440,11 +4512,11 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
-    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
+    use super::{CollisionGroupTable, extract_avian_prim, read_physics_material};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -4495,6 +4567,8 @@ def Xform "World"
                 path,
                 &CollisionGroupTable::default(),
                 &mut commands,
+                None,
+                None,
             );
         }
         queue.apply(&mut world);
@@ -4671,6 +4745,8 @@ def Xform "World"
                     &SdfPath::new("/World/Ground").unwrap(),
                     &CollisionGroupTable::default(),
                     &mut commands,
+                    None,
+                    None,
                 );
             }
             queue.apply(&mut world);
@@ -4697,7 +4773,7 @@ mod joint_reader_tests {
     use super::{read_joint_spec, read_joint_spec_for_lint};
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{StageView, compose_file_to_stage};
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -5559,6 +5635,8 @@ def Xform "Mission"
                 &sdf,
                 &CollisionGroupTable::default(),
                 &mut commands,
+                None,
+                None,
             );
         }
         world.flush();
@@ -5726,12 +5804,16 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(collect_child_colliders_from_usd(&view, &lander)
-            .expect("valid transforms")
-            .is_empty());
-        assert!(build_collider_from_usd(&view, &lander)
-            .expect("valid transform")
-            .is_some());
+        assert!(
+            collect_child_colliders_from_usd(&view, &lander)
+                .expect("valid transforms")
+                .is_empty()
+        );
+        assert!(
+            build_collider_from_usd(&view, &lander)
+                .expect("valid transform")
+                .is_some()
+        );
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
             has_collider,
@@ -5821,8 +5903,8 @@ def Cube "Part" (
             2,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe {
             root_id: "child.usda".to_string(),
@@ -5842,8 +5924,8 @@ def Cube "Part" (
             2,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]
