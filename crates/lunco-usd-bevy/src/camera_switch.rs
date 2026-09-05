@@ -39,7 +39,7 @@ use crate::UsdPrimPath;
 
 /// Stable camera selection across re-projection. ECS entities are disposable;
 /// an authored camera is identified by the composed stage plus its USD path.
-#[derive(Resource, Default)]
+#[derive(Resource, Clone, PartialEq, Eq, Default)]
 pub struct ViewportCameraSelection {
     requested: Option<RequestedCamera>,
     owner: CameraSelectionOwner,
@@ -1511,6 +1511,8 @@ pub(crate) fn camera_contract_inputs_changed(
     mut required: Local<Option<bool>>,
     mut last_revision: Local<Option<u64>>,
     mut last_presentation: Local<Option<StandalonePresentationState>>,
+    mut last_active_root: Local<Option<Entity>>,
+    mut last_selection: Local<Option<ViewportCameraSelection>>,
 ) -> bool {
     let first_validation = required.is_none();
     let required_changed = required
@@ -1526,6 +1528,17 @@ pub(crate) fn camera_contract_inputs_changed(
     let presentation_changed = last_presentation
         .replace((*presentation).clone())
         .is_some_and(|previous| previous != *presentation);
+    // Resource change ticks are not semantic change signals here: the
+    // standalone presentation owner borrows SceneMountState and camera
+    // selection mutably while reconciling generated presentation state. Track
+    // the values that affect this validator so those harmless borrows cannot
+    // reopen the structural scan every frame.
+    let active_root = mount.active_root();
+    let mount_changed = *last_active_root != active_root;
+    *last_active_root = active_root;
+    let selection_changed = last_selection
+        .replace((*selection).clone())
+        .is_some_and(|previous| previous != *selection);
 
     // Drain every removal reader before evaluating the result. A short-circuit
     // here would leave an event unread and re-open the structural pass later.
@@ -1537,10 +1550,10 @@ pub(crate) fn camera_contract_inputs_changed(
 
     first_validation
         || required_changed
-        || mount.is_changed()
+        || mount_changed
         || revision_changed
         || presentation_changed
-        || selection.is_changed()
+        || selection_changed
         || !queries.scene_roots.is_empty()
         || !queries.pending_added.is_empty()
         || !queries.cameras.is_empty()
@@ -1894,6 +1907,18 @@ mod tests {
         let _ = revision.0;
     }
 
+    fn touch_scene_mount(mut mount: ResMut<lunco_core::SceneMountState>) {
+        // A producer may borrow mount state mutably while inspecting or
+        // reconciling scene ownership without changing the active root.
+        let _ = &mut *mount;
+    }
+
+    fn touch_camera_selection(mut selection: ResMut<ViewportCameraSelection>) {
+        // A presentation owner may need mutable access to clear a generated
+        // camera, but an unchanged selection is not a contract input change.
+        let _ = &mut *selection;
+    }
+
     fn standalone_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -2085,6 +2110,8 @@ mod tests {
                 Update,
                 (
                     touch_stage_revision,
+                    touch_scene_mount,
+                    touch_camera_selection,
                     count_camera_contract_gate_runs.run_if(camera_contract_inputs_changed),
                 )
                     .chain(),
