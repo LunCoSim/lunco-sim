@@ -23,6 +23,14 @@ references library components and authors only its own decisions — poses,
 indices, scale, paint. Components own their defaults; **variants choose
 components, they never restate them**.
 
+For script-authored assembly edits, the dynamically reloadable
+`assets/scripting/tools/assembly_builder.rhai` library provides semantic
+placement, alignment, referenced-part mounting, and body/joint plans. The
+mission-level `griffin_flip_builder.rhai` library composes those helpers into
+paired Griffin ramp and validated four-wheel FLIP layout recipes. Use these
+plans with the existing proposal/journal boundary; keep wheel and suspension
+defaults in the mobility components and supply mission study values explicitly.
+
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
 (per-wheel port wiring + `driveLaw` variant), `six_wheel_independent.usda`
