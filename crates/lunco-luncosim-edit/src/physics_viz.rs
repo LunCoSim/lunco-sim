@@ -31,10 +31,10 @@
 //! already depends on avian3d and hosts the transform-gizmo
 //! integration, so it's the natural home.
 
+use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};
 use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::prelude::{ComputedMass, LinearVelocity, RigidBody};
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
 
 /// Per-entity opt-in for physics-state visualization arrows.
 ///
@@ -71,61 +71,6 @@ impl PhysicsArrows {
     }
 }
 
-/// Global "show arrows on every dynamic body" toggle. When `enabled`,
-/// the [`auto_mark_dynamic_bodies`] system inserts (or updates) a
-/// [`PhysicsArrows`] component on every [`RigidBody`] in the scene.
-/// Lets the user flip viz on for the whole world without picking
-/// each entity — same shape Unity's Physics Debugger uses.
-///
-/// Per-entity components win over the global flag in the sense that
-/// a manually-placed `PhysicsArrows::velocity_only()` keeps its own
-/// flags while the global is off; turning the global back on
-/// overwrites with the global's flags. Good enough for MVP; a "lock"
-/// flag per entity is a small follow-up if it becomes annoying.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct GlobalPhysicsArrows {
-    /// When `true`, every `RigidBody` gets a `PhysicsArrows` synced
-    /// to the flags below.
-    pub enabled: bool,
-    /// Show velocity arrows on auto-marked bodies.
-    pub velocity: bool,
-    /// Show force arrows on auto-marked bodies.
-    pub force: bool,
-}
-
-/// Typed command to flip the global physics-arrows toggle from the
-/// API / scripts / UI buttons.
-///
-/// Empty / default fields mean "don't change that flag" — but
-/// `#[Command(default)]` produces a struct of all-false, so callers
-/// who want "only velocity" pass `{"velocity": true}` and the rest
-/// stays as supplied (or defaults to false). Idempotent.
-#[Command(default)]
-pub struct TogglePhysicsArrows {
-    /// Master enable.
-    pub enabled: bool,
-    /// Velocity arrows on every dynamic body when `enabled`.
-    pub velocity: bool,
-    /// Force arrows on every dynamic body when `enabled`. Ignored
-    /// for bodies without a `ConstantForce`.
-    pub force: bool,
-}
-
-#[on_command(TogglePhysicsArrows)]
-fn on_toggle_physics_arrows(
-    trigger: On<TogglePhysicsArrows>,
-    mut settings: ResMut<GlobalPhysicsArrows>,
-) {
-    let cmd = trigger.event();
-    *settings = GlobalPhysicsArrows {
-        enabled: cmd.enabled,
-        velocity: cmd.velocity,
-        force: cmd.force,
-    };
-}
-
-register_commands!(on_toggle_physics_arrows,);
-
 /// One-shot Startup system: bias the default gizmo group so arrows
 /// render on top of opaque meshes. Without this, the crosshair / arrow
 /// drawn at a body's COM is buried inside the body's mesh and invisible.
@@ -142,16 +87,17 @@ pub fn configure_gizmo_overlay(mut store: ResMut<bevy::gizmos::config::GizmoConf
 /// but bails early when settings are stable AND no new bodies need
 /// marking — frame-discipline gate per `AGENTS.md` §7.1.
 pub fn auto_mark_dynamic_bodies(
-    settings: Res<GlobalPhysicsArrows>,
+    settings: Res<DiagnosticVisualStore>,
     mut commands: Commands,
     q_unmarked: Query<Entity, (With<RigidBody>, Without<PhysicsArrows>)>,
     q_marked: Query<Entity, With<PhysicsArrows>>,
 ) {
+    let enabled = settings.builtin_enabled(DiagnosticVisualKind::PhysicsArrows);
     if settings.is_changed() {
-        if settings.enabled {
+        if enabled {
             let arrows = PhysicsArrows {
-                velocity: settings.velocity,
-                force: settings.force,
+                velocity: true,
+                force: true,
             };
             for e in q_unmarked.iter() {
                 commands.entity(e).try_insert(arrows);
@@ -169,12 +115,12 @@ pub fn auto_mark_dynamic_bodies(
     // Settings unchanged — only catch newly-spawned bodies (e.g.
     // sync_usd_visuals just spawned a wheel) so they pick up the
     // global flag.
-    if !settings.enabled {
+    if !enabled {
         return;
     }
     let arrows = PhysicsArrows {
-        velocity: settings.velocity,
-        force: settings.force,
+        velocity: true,
+        force: true,
     };
     for e in q_unmarked.iter() {
         commands.entity(e).try_insert(arrows);
@@ -209,6 +155,7 @@ const MARKER_COLOR: Color = Color::srgb(1.0, 1.0, 0.3);
 /// diagnostics use their realization-specific solved force fields.
 pub fn draw_physics_arrows(
     mut gizmos: Gizmos,
+    settings: Res<DiagnosticVisualStore>,
     q: Query<(
         &PhysicsArrows,
         &GlobalTransform,
@@ -217,6 +164,9 @@ pub fn draw_physics_arrows(
         Option<&ComputedMass>,
     )>,
 ) {
+    if !settings.builtin_enabled(DiagnosticVisualKind::PhysicsArrows) {
+        return;
+    }
     for (flags, gtf, vel, integration, mass) in q.iter() {
         // Render arrows from a point ABOVE the body's COM so they're
         // visibly outside the mesh. Without this offset, arrows

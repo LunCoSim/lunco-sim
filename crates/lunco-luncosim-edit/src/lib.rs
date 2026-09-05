@@ -31,6 +31,8 @@
 // crate directly; this crate contains only gizmo/picking/egui concerns.
 
 #[cfg(feature = "ui")]
+pub mod diagnostic_visuals;
+#[cfg(feature = "ui")]
 pub mod gizmo;
 #[cfg(feature = "ui")]
 pub mod joint_viz;
@@ -59,7 +61,7 @@ pub mod ui;
 
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
-use lunco_scene_commands::{SelectedEntities, catalog, commands, shader_doc};
+use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 #[cfg(feature = "ui")]
@@ -83,6 +85,7 @@ impl Plugin for SceneEditPlugin {
             .init_resource::<gizmo::GizmoDragSession>()
             .init_resource::<gizmo::GizmoVisibilityState>()
             .init_resource::<terrain_tools::TerrainToolState>()
+            .init_resource::<diagnostic_visuals::DiagnosticVisualStore>()
             // Shader source is a journaled domain: edits record to the Twin
             // journal + hot-reload. The recorder attaches when the journal appears.
             .init_resource::<shader_doc::ShaderRegistry>();
@@ -97,6 +100,9 @@ impl Plugin for SceneEditPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(selection::InspectSelectionProvider);
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(diagnostic_visuals::DiagnosticVisualsQueryProvider);
         // Configure the standard gizmo for live-scene operations at startup.
         // The camera reconciliation enables the authored USD scale modes only
         // while an isolated preview owns the gizmo.
@@ -224,9 +230,27 @@ impl Plugin for SceneEditPlugin {
         // history, shared with the Inspector, the journal and every peer.
         app.add_systems(Update, commands::handle_undo_input);
 
+        // Temporary camera/collider diagnostics share one lease store and the
+        // existing immediate-mode Gizmos path. The store is invalidated at
+        // the scene teardown boundary before outgoing entities despawn.
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            diagnostic_visuals::reset_diagnostic_visuals,
+        );
+        app.add_systems(
+            PostUpdate,
+            (
+                diagnostic_visuals::revoke_invalid_leases,
+                diagnostic_visuals::draw_diagnostic_visuals,
+            )
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(lunco_core::SceneViewportSet::Reconcile)
+                .before(bevy::camera::CameraUpdateSystems),
+        );
+
         // Physics-state arrows (velocity, force) for entities that
         // opt in via `PhysicsArrows`. Cheap when no entity opts in.
-        app.init_resource::<physics_viz::GlobalPhysicsArrows>();
         app.register_type::<physics_viz::PhysicsArrows>();
         app.add_systems(Startup, physics_viz::configure_gizmo_overlay);
         app.add_systems(
@@ -236,22 +260,18 @@ impl Plugin for SceneEditPlugin {
                 physics_viz::draw_physics_arrows,
             ),
         );
-        physics_viz::register_all_commands(app);
 
-        // Joint + wheel-force visualization gizmos (toggled via
-        // `ToggleJointViz` command — reachable from UI / API / Rhai).
-        app.init_resource::<joint_viz::JointVizSettings>();
+        // Joint + wheel-force visualization gizmos use the shared diagnostic
+        // lease store.
         app.add_systems(
             Update,
             (joint_viz::draw_joint_viz, joint_viz::draw_wheel_force_viz),
         );
-        joint_viz::register_all_commands(app);
 
         // Selected-body dynamics gizmo: CoM + inertia ellipsoid + force
-        // arrows, and body-frame triads (`TogglePhysicsGizmo` command /
-        // workbench Settings menu). Draws only for the current selection;
+        // arrows, and body-frame triads via the shared lease store. Draws only
+        // for the current selection;
         // off by default, so idle cost is two early-returns.
-        app.init_resource::<physics_gizmo::PhysicsGizmoSettings>();
         app.add_systems(
             Update,
             (
@@ -259,7 +279,7 @@ impl Plugin for SceneEditPlugin {
                 physics_gizmo::draw_frame_gizmo,
             ),
         );
-        physics_gizmo::register_all_commands(app);
+        diagnostic_visuals::register_all_commands(app);
 
         // NOTE: waypoints have no gizmo, and no plugin. A waypoint is a USD prim
         // referencing `vessels/markers/waypoint.usda` — the USD scene renders it, the
