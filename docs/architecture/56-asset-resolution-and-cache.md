@@ -192,9 +192,13 @@ what is declared, what is on disk, and what a user has asked for.
 open must not open a connection. `DatasetRegistry::request(key)` is the only
 call in the engine that authorises traffic. For an interactive Twin, a missing
 declared dataset is presented at Twin open in a consent window with an explicit
-selection; the same request remains available in Settings ▸ Downloadable data
-and the Twin inspector. This is a rule about trust, not bandwidth: a simulator
-that phones home when you open a file has to be *explained* rather than *read*.
+selection; the same request remains available in Settings ▸ Downloadable data,
+the Twin inspector, and the Files section's Twin assets rows. Those rows are a
+read-only projection of the registry: Download, Retry, and Cancel emit the
+typed dataset commands, while progress, processing, integrity failure, and
+installed state continue to come from `DatasetRegistry`. This is a rule about
+trust, not bandwidth: a simulator that phones home when you open a file has to
+be *explained* rather than *read*.
 
 That rule is also why fetching lives in this crate and nowhere else. A domain
 crate owning its own downloader inevitably grows a "just fetch it at startup"

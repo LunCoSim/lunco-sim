@@ -42,6 +42,206 @@ fn display_name_with_ext(entry: &super::UnsavedDocEntry) -> String {
     }
 }
 
+/// The small read model the Files section needs from the asset-owned dataset
+/// registry. Keeping this projection local means the browser never learns
+/// manifest paths, cache roots, or download transport details.
+#[derive(Clone)]
+struct TwinDatasetRow {
+    id: String,
+    name: String,
+    key: String,
+    state: lunco_assets::datasets::DatasetState,
+}
+
+/// Project only the active Twin's declared datasets after its manifest scan
+/// has completed. `None` means the scope has not reached the scan boundary;
+/// an empty vector is a valid scanned manifest with no declarations.
+fn twin_dataset_rows(
+    registry: Option<&lunco_assets::datasets::DatasetRegistry>,
+    twin_root: &std::path::Path,
+) -> Option<Vec<TwinDatasetRow>> {
+    let registry = registry?;
+    let scanned = registry.scanned_scopes().iter().any(|scope| {
+        matches!(
+            scope,
+            lunco_assets::datasets::DatasetScope::Twin { root, .. } if root == twin_root
+        )
+    });
+    if !scanned {
+        return None;
+    }
+
+    Some(
+        registry
+            .entries()
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.scope,
+                    lunco_assets::datasets::DatasetScope::Twin { root, .. } if root == twin_root
+                )
+            })
+            .map(|entry| TwinDatasetRow {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                key: entry.key.clone(),
+                state: entry.state.clone(),
+            })
+            .collect(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatasetRowAction {
+    Request,
+    Cancel,
+}
+
+/// Map the visible state to the one explicit user action the registry owns.
+fn dataset_row_action(state: &lunco_assets::datasets::DatasetState) -> Option<DatasetRowAction> {
+    match state {
+        lunco_assets::datasets::DatasetState::Missing
+        | lunco_assets::datasets::DatasetState::Cancelled
+        | lunco_assets::datasets::DatasetState::Failed(_) => Some(DatasetRowAction::Request),
+        lunco_assets::datasets::DatasetState::Downloading { .. }
+        | lunco_assets::datasets::DatasetState::Processing { .. } => Some(DatasetRowAction::Cancel),
+        lunco_assets::datasets::DatasetState::Cancelling
+        | lunco_assets::datasets::DatasetState::Installed => None,
+    }
+}
+
+/// Render the active Twin's manifest-owned asset rows. The buttons emit the
+/// existing typed dataset commands; only `DatasetRegistry` can authorize and
+/// run the actual download.
+fn render_twin_assets(
+    ui: &mut egui::Ui,
+    ctx: &mut BrowserCtx<'_, '_>,
+    query: &super::BrowserQuery,
+    twin_root: &std::path::Path,
+) {
+    let Some(mut rows) = twin_dataset_rows(
+        ctx.resource::<lunco_assets::datasets::DatasetRegistry>(),
+        twin_root,
+    ) else {
+        return;
+    };
+    rows.retain(|row| !query.is_active() || query.matches(&row.name) || query.matches(&row.key));
+    if query.is_active() && rows.is_empty() {
+        return;
+    }
+
+    let error_color = ctx
+        .resource::<lunco_theme::Theme>()
+        .map(|theme| theme.tokens.error)
+        .unwrap_or(egui::Color32::LIGHT_RED);
+    let success_color = ctx
+        .resource::<lunco_theme::Theme>()
+        .map(|theme| theme.tokens.success)
+        .unwrap_or(egui::Color32::LIGHT_GREEN);
+
+    ui.separator();
+    egui::CollapsingHeader::new("Twin assets")
+        .id_salt((
+            "twin_browser_assets",
+            twin_root.to_string_lossy().into_owned(),
+        ))
+        .default_open(true)
+        .show(ui, |ui| {
+            if rows.is_empty() {
+                ui.label(
+                    egui::RichText::new("No assets declared in Assets.toml.")
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+            for row in &rows {
+                let mut clicked_action = None;
+                ui.horizontal(|ui| {
+                    let name_width = (ui.available_width() * 0.45).max(80.0);
+                    ui.add_sized(
+                        [name_width, ui.spacing().interact_size.y],
+                        egui::Label::new(&row.name).truncate(),
+                    )
+                    .on_hover_text(format!("{}\n{}", row.key, row.id));
+                    match &row.state {
+                        lunco_assets::datasets::DatasetState::Missing => {
+                            ui.label(egui::RichText::new("Missing").color(error_color));
+                        }
+                        lunco_assets::datasets::DatasetState::Cancelled => {
+                            ui.label(egui::RichText::new("Cancelled").color(error_color));
+                        }
+                        lunco_assets::datasets::DatasetState::Failed(detail) => {
+                            ui.colored_label(error_color, "Failed")
+                                .on_hover_text(detail);
+                        }
+                        lunco_assets::datasets::DatasetState::Downloading {
+                            bytes_done,
+                            bytes_total,
+                        } => {
+                            if *bytes_total > 0 {
+                                ui.add(
+                                    egui::ProgressBar::new(
+                                        (*bytes_done as f32 / *bytes_total as f32).clamp(0.0, 1.0),
+                                    )
+                                    .desired_width(100.0)
+                                    .text(format!("{bytes_done}/{bytes_total} B")),
+                                );
+                            } else {
+                                ui.spinner();
+                                ui.label("Downloading");
+                            }
+                        }
+                        lunco_assets::datasets::DatasetState::Processing { kind } => {
+                            ui.spinner();
+                            ui.label(format!("Processing ({kind})"));
+                        }
+                        lunco_assets::datasets::DatasetState::Cancelling => {
+                            ui.spinner();
+                            ui.label("Cancelling");
+                        }
+                        lunco_assets::datasets::DatasetState::Installed => {
+                            ui.label(egui::RichText::new("Ready").color(success_color));
+                        }
+                    }
+                    if let Some(action) = dataset_row_action(&row.state) {
+                        let label = match action {
+                            DatasetRowAction::Request => {
+                                if matches!(
+                                    row.state,
+                                    lunco_assets::datasets::DatasetState::Failed(_)
+                                ) {
+                                    "Retry"
+                                } else {
+                                    "Download"
+                                }
+                            }
+                            DatasetRowAction::Cancel => "Cancel",
+                        };
+                        if ui.button(label).clicked() {
+                            clicked_action = Some(action);
+                        }
+                    }
+                });
+
+                if let Some(action) = clicked_action {
+                    match action {
+                        DatasetRowAction::Request => {
+                            ctx.trigger(lunco_assets::datasets::RequestDataset {
+                                id: row.id.clone(),
+                            });
+                        }
+                        DatasetRowAction::Cancel => {
+                            ctx.trigger(lunco_assets::datasets::CancelDataset {
+                                id: row.id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        });
+}
+
 /// Bucket a flat file list into nested directories by walking each
 /// `relative_path`'s components.
 fn build_tree(files: &[lunco_twin::FileEntry]) -> PathTree<&lunco_twin::FileEntry> {
@@ -297,13 +497,13 @@ impl BrowserSection for FilesSection {
         // Files is the active-Twin lens. Other open Twins remain workspace
         // state, but their files must not be presented as current or routed
         // through the active Twin's path resolver.
-        let ws_state = ctx.resource::<crate::WorkspaceResource>().and_then(|ws| {
+        let active_twin = ctx
+            .resource::<crate::WorkspaceResource>()
+            .and_then(|ws| ws.active_twin);
+        let active_twin_root = ctx.resource::<crate::WorkspaceResource>().and_then(|ws| {
             ws.active_twin
-                .and_then(|id| ws.twin(id).map(|twin| (id, twin)))
+                .and_then(|id| ws.twin(id).map(|twin| twin.root.clone()))
         });
-        let active_twin = ws_state.as_ref().map(|(id, _)| *id);
-        let twins: Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)> =
-            ws_state.into_iter().collect();
 
         // Open-document markers: which on-disk paths have an open editor tab,
         // and which of those are dirty (never-saved this session). A file row
@@ -332,7 +532,7 @@ impl BrowserSection for FilesSection {
             }
         }
 
-        if twins.is_empty() {
+        if active_twin.is_none() {
             let message = if docs.is_empty() {
                 "Open a Twin or folder to browse files."
             } else {
@@ -347,6 +547,21 @@ impl BrowserSection for FilesSection {
         if !docs.is_empty() {
             ui.separator();
         }
+
+        // Twin-declared downloads are shown beside the authored file tree,
+        // but their identity and lifecycle remain owned by lunco-assets.
+        if let Some(active_twin_root) = active_twin_root.as_deref() {
+            render_twin_assets(ui, ctx, &query, active_twin_root);
+        }
+
+        let twins: Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)> = ctx
+            .resource::<crate::WorkspaceResource>()
+            .and_then(|ws| {
+                ws.active_twin
+                    .and_then(|id| ws.twin(id).map(|twin| (id, twin)))
+            })
+            .into_iter()
+            .collect();
 
         // Per-frame queues. Single-click previews source-only files and USD
         // documents; double-click still enters other registered domain
@@ -609,6 +824,44 @@ mod tests {
             Some(&registry),
             true,
         ));
+    }
+
+    #[test]
+    fn missing_failed_and_cancelled_rows_offer_request() {
+        for state in [
+            lunco_assets::datasets::DatasetState::Missing,
+            lunco_assets::datasets::DatasetState::Cancelled,
+            lunco_assets::datasets::DatasetState::Failed("offline".into()),
+        ] {
+            assert_eq!(
+                super::dataset_row_action(&state),
+                Some(super::DatasetRowAction::Request)
+            );
+        }
+    }
+
+    #[test]
+    fn active_download_rows_offer_cancel_and_terminal_rows_are_idle() {
+        for state in [
+            lunco_assets::datasets::DatasetState::Downloading {
+                bytes_done: 4,
+                bytes_total: 8,
+            },
+            lunco_assets::datasets::DatasetState::Processing {
+                kind: "unpack".into(),
+            },
+        ] {
+            assert_eq!(
+                super::dataset_row_action(&state),
+                Some(super::DatasetRowAction::Cancel)
+            );
+        }
+        for state in [
+            lunco_assets::datasets::DatasetState::Cancelling,
+            lunco_assets::datasets::DatasetState::Installed,
+        ] {
+            assert_eq!(super::dataset_row_action(&state), None);
+        }
     }
 }
 

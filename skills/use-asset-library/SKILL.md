@@ -85,9 +85,12 @@ second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
-downloaded only on request (Settings ▸ Downloadable data, or the
-`lunco-assets` CLI) — the engine never fetches on its own, so an asset that is
-merely declared resolves to nothing until someone asks for it.
+downloaded only on request (Settings ▸ Downloadable data, the Twin Browser
+Files section's Twin assets rows, or the `lunco-assets` CLI) — the engine never
+fetches on its own, so an asset that is merely declared resolves to nothing
+until someone asks for it. The browser rows are only a view of
+`DatasetRegistry`; they must emit its typed request/cancel commands and never
+create a second downloader or parse cache paths.
 
 All requesters use the `download` section of the one settings file owned by
 `lunco-settings`. `DownloadSettings.max_attempts` includes the first request;
