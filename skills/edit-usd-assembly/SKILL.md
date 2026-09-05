@@ -365,6 +365,14 @@ Use the smallest existing typed intent that expresses the change:
   validators. Supply exact paths in the
   reflected `AttachSpec`/`DetachSpec`; never identify a part by a name prefix
   such as `Wheel_`.
+- For an existing socket attachment, use
+  `assembly_builder::mount_frame_realignment_plan` with the exact host, socket,
+  part, and recorded joint paths. It composes nested canonical rigid
+  `translate`/`rotateXYZ` frame chains in the dynamically reloadable Rhai tool,
+  emits one reviewed part-transform plus joint-anchor plan, and preserves
+  topology. It rejects missing or ambiguous mount relationships, unsupported
+  frame operations, non-unit scale, malformed values, and body mismatches
+  before proposal; do not hand-copy the socket pose into the part or joint.
 - `assembly_edit::attach_program(doc, spec)` dispatches the existing typed
   `AttachProgram` contract. Build its `inputs` and `outputs` with the
   namespaced helpers `assembly_edit::program_input_connection`,

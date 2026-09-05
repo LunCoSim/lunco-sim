@@ -414,6 +414,21 @@ invalid axes/edges, and ambiguous paths before proposal. This gives general
 parts the same deterministic snap behavior as Cube alignment without turning
 the Rhai library into a second geometry reader.
 
+Existing mounts have a separate `mount_frame_realignment_plan`. It takes the
+explicit host, advertised socket, mounted part, and recorded joint paths,
+reads the part's exact plug-frame relationship, and composes the nested rigid
+socket/plug frames in Rhai. Its one reviewed plan emits `SetTranslate`,
+`SetRotate`, and the two exact joint-anchor `SetAttribute` operations; it never
+creates or removes topology. The dynamic reader is deliberately fail-closed:
+it accepts canonical `translate`/`rotateXYZ` stacks with unit scale, excludes
+the body root's own transform, and rejects missing or ambiguous relationships,
+unsupported matrix/inverse operations, malformed values, and body mismatches
+before proposal. This keeps the authoring policy hot-reloadable without a Rust
+core rebuild while the typed USD owner still validates targets, generation,
+journalling, and projection. The existing Inspector snap remains the generic
+interactive path; the Rhai plan gives scripts and generated authoring tools
+the same explicit existing-mount operation shape.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
 `parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,
@@ -433,12 +448,14 @@ USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
 The dynamic `assembly_builder` library is the semantic construction layer above
 these primitives. Its placement/alignment plans operate on exact queried paths;
-its socket helpers select authored mount relationships and call the existing
-`AttachComponent` owner for frame math and atomic lowering. A vehicle recipe can
-therefore be updated as Rhai without adding a Rust command or duplicating the
-USD writer, while missing or ambiguous authored relationships still fail at the
-authoritative validator. A completed body/joint identity is likewise rejected
-by a construction recipe until the caller chooses an explicit update plan.
+its new-mount helper selects authored mount relationships and calls the existing
+`AttachComponent` owner for frame math and atomic lowering, while its
+`mount_frame_realignment_plan` is the narrow, existing-topology Rhai policy for
+reusing those explicit frame identities. A vehicle recipe can therefore be
+updated as Rhai without adding a Rust command or duplicating the USD writer,
+while missing or ambiguous authored relationships still fail before proposal.
+A completed body/joint identity is likewise rejected by a construction recipe
+until the caller chooses an explicit update plan.
 
 Referenced construction has one additional sequencing rule. Use
 `assembly_builder::referenced_instance_plan` or

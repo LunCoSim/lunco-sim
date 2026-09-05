@@ -544,6 +544,21 @@ ambiguous sockets before submission. This is how a Griffin or FLIP assembly
 script can build from reusable USD components without reproducing USD syntax
 or frame math in every scenario.
 
+For an already attached part, use
+`assembly_builder::mount_frame_realignment_plan(doc, edit_target, host_path,
+socket_path, part_path, joint_path)`. It follows the explicit host socket,
+part plug frame, occupancy, attachment-joint, and body relationships, composes
+the nested rigid frame chains, and returns one four-operation plan that updates
+the part transform and the exact joint anchors without rebuilding topology.
+The dynamic policy supports canonical `translate`/`rotateXYZ` frame stacks with
+unit scale and rejects missing/ambiguous relationships, unsupported operations,
+malformed values, non-rigid scale, and body mismatches before proposal. Capture
+the inspected generation, then send the returned `.ops` through the normal
+`propose`/`review_session`/`commit_proposal` flow. The
+`assembly_mount_frame_realign` production fixture keeps the complete observable
+test in Rhai, including nested rotation, topology preservation, and negative
+plans; changing this policy does not require a Rust-core rebuild.
+
 The [`griffin_flip_builder`](../assets/scripting/tools/griffin_flip_builder.rhai)
 library shows how a mission package stays Rhai-owned: `griffin_ramp_pair_plan`
 requires both named ramp sides and composes the generic referenced-body and
