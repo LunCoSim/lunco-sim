@@ -56,6 +56,7 @@ egui_dock = { version = "0.20", features = ["serde"] }
 # from `lunco-command-macro`). Brings shell picker/workflow verbs onto the
 # same typed-command bus that domain crates already use.
 lunco-core = { path = "../lunco-core" }
+lunco-hooks = { path = "../lunco-hooks" }
 # The overlay is a view of the controller's authored keymap; it must not keep a
 # second list of keyboard labels that drifts when keybindings.json changes.
 lunco-controller = { path = "../lunco-controller" }

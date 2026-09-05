@@ -1,0 +1,58 @@
+#usda 1.0
+(
+    defaultPrim = "JointAudit"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Disabled joints exercise composed authoring diagnostics, not solver behavior.
+def Xform "JointAudit"
+{
+    def DistantLight "TestLight" { float intensity = 1 }
+    def PhysicsFixedJoint "PayloadAdapter" { bool physics:jointEnabled = false }
+    def PhysicsDistanceJoint "Tether" { bool physics:jointEnabled = false }
+    def PhysicsJoint "Generic" { bool physics:jointEnabled = false }
+    def PhysicsRevoluteJoint "Hinge" { bool physics:jointEnabled = false }
+    def PhysicsPrismaticJoint "Slide" { bool physics:jointEnabled = false }
+    def PhysicsSphericalJoint "Ball" { bool physics:jointEnabled = false }
+    def PhysicsRevoluteJoint "Steering"
+    {
+        bool physics:jointEnabled = false
+        token physics:axis = "Y"
+        rel physics:body0 = </JointAudit/Host>
+        rel physics:body1 = </JointAudit/Part>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0, 1, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+    }
+    def Xform "Host" {}
+    def Xform "Part" { float physics:mass = 1 }
+    def Scope "QuaternionValues"
+    {
+        quatd doubleRotation = (0, 0, 1, 0)
+        quath halfRotation = (0, 0, 0, 1)
+    }
+    def Xform "NotJoint" { token physics:axis = "X" }
+    def PretendJoint "Unknown" { token physics:axis = "X" }
+    def PhysicsRevoluteJoint "BadAxis"
+    {
+        bool physics:jointEnabled = false
+        token physics:axis = "diagonal"
+    }
+    def PhysicsPrismaticJoint "BadLimits"
+    {
+        bool physics:jointEnabled = false
+        float physics:lowerLimit = 2
+        float physics:upperLimit = 1
+    }
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-joint-audit"
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/assembly_joint_audit.rhai@
+        }
+    }
+}

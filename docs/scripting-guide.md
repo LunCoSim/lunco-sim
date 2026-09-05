@@ -479,8 +479,10 @@ library with an explicit composed assembly manifest. `topology_report` checks
 prim existence, type, direct children, and caller-supplied relationship targets;
 `mount_contract_report` checks the host socket, socket occupancy, component
 attachment joint, asset, and joint-kind reciprocity. `joint_frame_report`
-checks explicit joint bodies, cardinal axes, limits, and optional local frame
-opinions. `body_joint_coverage_report` and `collider_mass_report` check that
+checks standard joint types, explicit bodies, schema-specific primary axes,
+limits, and optional local frame opinions. See the
+[joint diagnostic contract](architecture/48-assembly-editor.md#agent-and-automation-surface)
+for axis applicability and defaults. `body_joint_coverage_report` and `collider_mass_report` check that
 actual movable rigid bodies have mass/inertia and explicit joint/collider
 coverage. Raycast wheels remain outside rigid-body/joint coverage because they
 are not jointed bodies.

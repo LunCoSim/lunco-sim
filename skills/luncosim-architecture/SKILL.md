@@ -180,8 +180,9 @@ check, per-frame light scan, or alternate lighting implementation.
 Light shadow intent follows the same standard-schema boundary: read
 `UsdLuxShadowAPI.inputs:shadow:enable` from the composed stage for every light.
 Application possession or graphics settings must not overwrite that authored
-intent; renderer-owned resource budgets may only report or suppress casters at
-their admission boundary.
+intent; renderer-owned resource budgets publish facts and let the authored Rhai
+render policy report unmet limits, never suppressing authored casters at the
+admission boundary.
 
 Scene-root `UsdPrimPath` values may be empty until the stage is parsed. Resolve
 that sentinel through the shared USD `defaultPrim` resolver before any domain

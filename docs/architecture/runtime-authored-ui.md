@@ -350,11 +350,14 @@ except on its authored buttons.
 
 The manifest owns the outer rectangle; CSS owns the internal layout. HUI
 replaces a template root's `Node` while building, so placement is applied after
-HUI and Flair have finished their authoritative style work. The correction is
-change-detected for the initial build, an actual resize, or a style rebuild —
-not a per-frame placement loop. During startup, a zero-sized target is ignored
-until the primary window has valid dimensions; this prevents top-center surfaces
-from appearing at a temporary negative position.
+HUI and Flair have finished their authoritative style work. The runtime pins
+the root's minimum and maximum size to the resolved rectangle and clips child
+overflow at that boundary; authored profiles must fit their contents within
+the registered size. The correction is change-detected for the initial build,
+an actual resize, or a style rebuild — not a per-frame placement loop. During
+startup, a zero-sized target is ignored until the primary window has valid
+dimensions; this prevents top-center surfaces from appearing at a temporary
+negative position.
 
 Use the workbench for the editor shell, docking tree, rich text/code editors,
 large inspectors, and controls that need semantics not provided by this small

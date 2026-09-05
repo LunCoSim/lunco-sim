@@ -25,6 +25,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Know the rules before writing code | [`principles.md`](principles.md) · [`../AGENTS.md`](../AGENTS.md) |
 | Do a task with an agent | [`../skills/README.md`](../skills/README.md) |
 | Check what's specced vs built | [`../specs/README.md`](../specs/README.md) |
+| Explore planned integrations and engineering priorities | [`architecture/engineering-backlog-and-standards.md`](architecture/engineering-backlog-and-standards.md) |
 | Know what's currently broken | [`reviews/`](reviews/) |
 | Track nightly changes | [`releases/`](releases/README.md) |
 

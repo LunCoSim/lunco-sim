@@ -63,7 +63,7 @@ use bevy::render::{
 use bevy_egui::{egui, EguiContexts};
 use lunco_render::{
     estimate_shadow_allocation_bytes, LightGraphicsDefaults, RenderingQualitySettings,
-    ShadowMapSuppressed, ShadowMapSuppressionReason, ShadowRangeAuthorship,
+    ShadowRangeAuthorship,
 };
 use lunco_settings::AppSettingsExt;
 
@@ -91,9 +91,9 @@ pub struct RenderHealth {
     /// Last failure class observed by the callback. This keeps recovery aligned
     /// with the resource that actually failed instead of guessing from totals.
     last_failure_kind: AtomicU8,
-    /// Conservative pre-extraction estimate for the shadow resources admitted
-    /// by the explicit graphics settings. The wgpu callback cannot inspect the
-    /// ECS world, so the policy publishes this here for actionable OOM logs.
+    /// Conservative pre-extraction estimate for the currently enabled shadow
+    /// resources. The wgpu callback cannot inspect the ECS world, so the render
+    /// boundary publishes this here for actionable OOM logs.
     shadow_estimated_bytes: AtomicU64,
     /// The explicit graphics ceiling paired with `shadow_estimated_bytes`.
     shadow_budget_bytes: AtomicU64,
@@ -397,21 +397,19 @@ impl Default for Ladder {
     }
 }
 
-/// Tracks the scene structure for shadow admission. A scene loads
+/// Tracks the scene structure for shadow-resource diagnostics. A scene loads
 /// asynchronously, so the policy is re-applied whenever another light entity
 /// materialises, then remains dormant until the next teardown.
 #[derive(Resource, Default)]
 pub(crate) struct ShadowAdmissionState {
     light_count: Option<usize>,
-    /// Number of currently enabled shadow casters. This changes when an
-    /// explicit caster-limit setting changes, even if the scene contains the
-    /// same total lights.
-    enabled_caster_count: Option<usize>,
+    enabled_directional_casters: Option<usize>,
+    enabled_point_casters: Option<usize>,
+    enabled_spot_casters: Option<usize>,
     directional_map_size: Option<usize>,
     point_map_size: Option<usize>,
     directional_cascade_layers: Option<usize>,
     budget_bytes: Option<u64>,
-    configuration_signature: Option<u64>,
     policy_signature: Option<u64>,
     configured_limit_status_active: bool,
 }
@@ -650,80 +648,6 @@ pub(crate) fn validate_profile_for_capabilities(
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-struct ShadowCasterCandidate {
-    entity: Entity,
-    cascade_layers: usize,
-    /// Canonical identity used for admission ordering. It is independent of
-    /// ECS allocation order; the entity is retained only for the query target
-    /// and cache invalidation.
-    key: String,
-}
-
-fn shadow_caster_key(
-    entity: Entity,
-    global_id: Option<&lunco_core::GlobalEntityId>,
-    provenance: Option<&lunco_core::Provenance>,
-    name: Option<&Name>,
-) -> String {
-    if let Some(id) = global_id {
-        return format!("global:{:016x}", id.get());
-    }
-    if let Some(id) = provenance.and_then(lunco_core::identity::derive_id) {
-        return format!("provenance:{id:016x}");
-    }
-    if let Some(name) = name {
-        return format!("name:{}", name.as_str());
-    }
-    // Anonymous local lights have no semantic identity to order by. This is
-    // only a final tie-break for entities that are otherwise indistinguishable;
-    // authored/content lights reach one of the canonical keys above.
-    format!("anonymous:{:016x}", entity.to_bits())
-}
-
-fn sort_shadow_casters(casters: &mut [ShadowCasterCandidate]) {
-    casters.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.entity.cmp(&b.entity)));
-}
-
-fn shadow_configuration_signature(
-    directionals: &[ShadowCasterCandidate],
-    points: &[ShadowCasterCandidate],
-    spots: &[ShadowCasterCandidate],
-) -> u64 {
-    let mut signature = 0xcbf29ce484222325_u64;
-    for candidate in directionals {
-        signature ^= candidate.entity.to_bits();
-        signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= candidate.cascade_layers as u64;
-        signature = signature.wrapping_mul(0x100000001b3);
-        for byte in candidate.key.as_bytes() {
-            signature ^= u64::from(*byte);
-            signature = signature.wrapping_mul(0x100000001b3);
-        }
-    }
-    for candidate in points {
-        signature ^= candidate.entity.to_bits();
-        signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= 1;
-        signature = signature.wrapping_mul(0x100000001b3);
-        for byte in candidate.key.as_bytes() {
-            signature ^= u64::from(*byte);
-            signature = signature.wrapping_mul(0x100000001b3);
-        }
-    }
-    for candidate in spots {
-        signature ^= candidate.entity.to_bits();
-        signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= 2;
-        signature = signature.wrapping_mul(0x100000001b3);
-        for byte in candidate.key.as_bytes() {
-            signature ^= u64::from(*byte);
-            signature = signature.wrapping_mul(0x100000001b3);
-        }
-    }
-    signature
-}
-
 fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
     let mut signature = profile.directional_shadow_map_size as u64;
     signature = signature
@@ -917,57 +841,6 @@ fn apply_render_quality(
     }
 }
 
-fn restore_suppressed_shadow_maps(
-    commands: &mut Commands,
-    directional_lights: &mut Query<(
-        Entity,
-        &mut bevy::light::DirectionalLight,
-        &mut bevy::light::CascadeShadowConfig,
-        Option<&ShadowMapSuppressed>,
-        Option<&ShadowRangeAuthorship>,
-    )>,
-    point_lights: &mut Query<(
-        Entity,
-        &mut bevy::light::PointLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-    spot_lights: &mut Query<(
-        Entity,
-        &mut bevy::light::SpotLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-) {
-    for (entity, mut light, _, suppressed, _) in directional_lights.iter_mut() {
-        if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled =
-                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-            commands.entity(entity).remove::<ShadowMapSuppressed>();
-        }
-    }
-    for (entity, mut light, suppressed) in point_lights.iter_mut() {
-        if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled =
-                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-            commands.entity(entity).remove::<ShadowMapSuppressed>();
-        }
-    }
-    for (entity, mut light, suppressed) in spot_lights.iter_mut() {
-        if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled =
-                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-            commands.entity(entity).remove::<ShadowMapSuppressed>();
-        }
-    }
-}
-
-fn restored_shadow_map_value(current: bool, suppressed: &ShadowMapSuppressed) -> bool {
-    if current == suppressed.last_applied_enabled {
-        suppressed.restore_enabled
-    } else {
-        current
-    }
-}
-
 /// Render the full `source` chain of a wgpu error.
 ///
 /// `Error::OutOfMemory` carries NO description — only a source — so the previous
@@ -1145,23 +1018,109 @@ fn set_error_handler(
         }));
 }
 
-/// Apply the explicitly configured shadow-caster limits before Bevy's PBR
-/// render preparation allocates its depth textures. The user's map sizes,
-/// cascade count, and byte ceiling remain unchanged. Only casters beyond the
-/// explicitly configured per-class limits are suppressed and reported; the
-/// byte ceiling is validated as a constraint on those settings and never
-/// causes an additional quality downgrade.
+fn shadow_hook_int(value: u64) -> lunco_hooks::HookValue {
+    lunco_hooks::HookValue::Int(value.min(i64::MAX as u64) as i64)
+}
+
+fn publish_shadow_facts(
+    exposures: Option<&mut lunco_core::exposure::EngineExposures>,
+    profile: lunco_render::RenderQualityProfile,
+    light_count: usize,
+    directional_casters: usize,
+    point_casters: usize,
+    spot_casters: usize,
+    directional_cascade_layers: usize,
+    required_bytes: u64,
+    budget_bytes: u64,
+) {
+    let Some(exposures) = exposures else {
+        return;
+    };
+    let mut writer = exposures.writer("render-shadow");
+    writer.visible(true);
+    writer.property("valid", true);
+    writer.property("light_count", light_count as f64);
+    writer.property("directional_casters", directional_casters as f64);
+    writer.property("point_casters", point_casters as f64);
+    writer.property("spot_casters", spot_casters as f64);
+    writer.property(
+        "directional_cascade_layers",
+        directional_cascade_layers as f64,
+    );
+    writer.property(
+        "directional_map_size",
+        profile.directional_shadow_map_size as f64,
+    );
+    writer.property("point_map_size", profile.point_shadow_map_size as f64);
+    writer.property("estimated_bytes", required_bytes as f64);
+    writer.property("budget_bytes", budget_bytes as f64);
+    writer.property(
+        "max_directional_shadow_casters",
+        profile.max_directional_shadow_casters as f64,
+    );
+    writer.property(
+        "max_point_shadow_casters",
+        profile.max_point_shadow_casters as f64,
+    );
+    writer.property(
+        "max_spot_shadow_casters",
+        profile.max_spot_shadow_casters as f64,
+    );
+}
+
+fn shadow_quality_policy_warning(
+    profile: lunco_render::RenderQualityProfile,
+    directional_casters: usize,
+    point_casters: usize,
+    spot_casters: usize,
+    required_bytes: u64,
+    budget_bytes: u64,
+) -> Option<String> {
+    let facts = lunco_hooks::HookValue::map([
+        (
+            "directional_casters",
+            shadow_hook_int(directional_casters as u64),
+        ),
+        ("point_casters", shadow_hook_int(point_casters as u64)),
+        ("spot_casters", shadow_hook_int(spot_casters as u64)),
+        (
+            "max_directional_shadow_casters",
+            shadow_hook_int(profile.max_directional_shadow_casters as u64),
+        ),
+        (
+            "max_point_shadow_casters",
+            shadow_hook_int(profile.max_point_shadow_casters as u64),
+        ),
+        (
+            "max_spot_shadow_casters",
+            shadow_hook_int(profile.max_spot_shadow_casters as u64),
+        ),
+        ("estimated_bytes", shadow_hook_int(required_bytes)),
+        ("budget_bytes", shadow_hook_int(budget_bytes)),
+    ]);
+    match lunco_hooks::invoke(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
+        None | Some(Ok(lunco_hooks::HookValue::Unit)) => None,
+        Some(Ok(lunco_hooks::HookValue::Str(message))) if !message.is_empty() => Some(message),
+        Some(Ok(lunco_hooks::HookValue::Str(_))) => None,
+        Some(Ok(value)) => {
+            warn!("render shadow-quality policy returned unsupported value: {value:?}");
+            None
+        }
+        Some(Err(error)) => {
+            warn!("render shadow-quality policy failed: {error}");
+            None
+        }
+    }
+}
+
+/// Report shadow-resource pressure before Bevy's PBR render preparation
+/// allocates its depth textures. The user's map sizes, cascade count, byte
+/// ceiling, and every authored `shadow_maps_enabled` value remain unchanged.
+/// This system is diagnostic only: an explicit graphics limit that cannot
+/// accommodate the live scene produces one StatusBus warning, never a selected
+/// subset of lights or a renderer-owned shadow omission.
 ///
-/// The selection is deliberately stable: directional casters are considered
-/// first, then point lights, then spot lights, and each class is ordered by the
-/// existing canonical entity identity (`GlobalEntityId`, provenance-derived
-/// identity, or its authored `Name`). Anonymous local lights use an ECS key
-/// only as a final tie-break because they have no semantic identity. There is
-/// no camera-distance heuristic whose result can change merely because the
-/// viewer moved. The shared byte estimate is the admission test for the complete
-/// configured caster set, so the resulting set is guaranteed to fit the published
-/// logical allocation ceiling rather than merely fit three unrelated per-class
-/// caps. The estimate does not account for unrelated GPU allocations or driver
+/// The estimate does not account for unrelated GPU allocations or driver
 /// overhead; adapter limits are validated separately before settings apply.
 fn apply_shadow_caster_policy(
     mut state: ResMut<ShadowAdmissionState>,
@@ -1169,39 +1128,27 @@ fn apply_shadow_caster_policy(
     settings: Res<RenderingQualitySettings>,
     warning: Option<Res<RenderWarning>>,
     status_bus: Option<ResMut<crate::status_bus::StatusBus>>,
+    exposures: Option<ResMut<lunco_core::exposure::EngineExposures>>,
     health: Option<Res<RenderHealthHandle>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_shadow_map: Res<bevy::light::PointLightShadowMap>,
-    mut directionals: Query<(
-        Entity,
-        &mut bevy::light::DirectionalLight,
+    directionals: Query<(
+        &bevy::light::DirectionalLight,
         &bevy::light::CascadeShadowConfig,
-        Option<&ShadowMapSuppressed>,
-        Option<&lunco_core::GlobalEntityId>,
-        Option<&lunco_core::Provenance>,
-        Option<&Name>,
     )>,
-    mut points: Query<(
-        Entity,
-        &mut bevy::light::PointLight,
-        Option<&ShadowMapSuppressed>,
-        Option<&lunco_core::GlobalEntityId>,
-        Option<&lunco_core::Provenance>,
-        Option<&Name>,
-    )>,
-    mut spots: Query<(
-        Entity,
-        &mut bevy::light::SpotLight,
-        Option<&ShadowMapSuppressed>,
-        Option<&lunco_core::GlobalEntityId>,
-        Option<&lunco_core::Provenance>,
-        Option<&Name>,
-    )>,
+    points: Query<&bevy::light::PointLight>,
+    spots: Query<&bevy::light::SpotLight>,
 ) {
+    let mut exposures = exposures;
     let profile = match settings.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
             state.configured_limit_status_active = false;
+            if let Some(mut exposures) = exposures {
+                let mut writer = exposures.writer("render-shadow");
+                writer.visible(false);
+                writer.property("valid", false);
+            }
             if warning.is_none() {
                 commands.insert_resource(RenderWarning {
                     kind: RenderWarningKind::GraphicsSettings,
@@ -1220,397 +1167,115 @@ fn apply_shadow_caster_policy(
             .shadow_budget_bytes
             .store(admission_budget, Ordering::Relaxed);
     }
-    let policy_signature = shadow_policy_signature(profile);
-
-    let admission_changed = state.policy_signature != Some(policy_signature)
-        || state.budget_bytes != Some(admission_budget);
-    if admission_changed {
-        for (entity, mut light, _, suppressed, _, _, _) in directionals.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                if let Some(suppressed) = suppressed {
-                    light.shadow_maps_enabled =
-                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-                }
-                commands.entity(entity).remove::<ShadowMapSuppressed>();
-            }
-        }
-        for (entity, mut light, suppressed, _, _, _) in points.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                if let Some(suppressed) = suppressed {
-                    light.shadow_maps_enabled =
-                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-                }
-                commands.entity(entity).remove::<ShadowMapSuppressed>();
-            }
-        }
-        for (entity, mut light, suppressed, _, _, _) in spots.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                if let Some(suppressed) = suppressed {
-                    light.shadow_maps_enabled =
-                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
-                }
-                commands.entity(entity).remove::<ShadowMapSuppressed>();
-            }
-        }
-    }
-
-    let mut directional_entities: Vec<ShadowCasterCandidate> = directionals
-        .iter_mut()
-        .filter_map(|(entity, light, config, _, global_id, provenance, name)| {
-            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
-                entity,
-                cascade_layers: config.bounds.len().max(1),
-                key: shadow_caster_key(entity, global_id, provenance, name),
-            })
-        })
-        .collect();
-    sort_shadow_casters(&mut directional_entities);
-
-    let mut point_entities: Vec<ShadowCasterCandidate> = points
-        .iter_mut()
-        .filter_map(|(entity, light, _, global_id, provenance, name)| {
-            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
-                entity,
-                cascade_layers: 1,
-                key: shadow_caster_key(entity, global_id, provenance, name),
-            })
-        })
-        .collect();
-    sort_shadow_casters(&mut point_entities);
-
-    let mut spot_entities: Vec<ShadowCasterCandidate> = spots
-        .iter_mut()
-        .filter_map(|(entity, light, _, global_id, provenance, name)| {
-            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
-                entity,
-                cascade_layers: 1,
-                key: shadow_caster_key(entity, global_id, provenance, name),
-            })
-        })
-        .collect();
-    sort_shadow_casters(&mut spot_entities);
+    let policy_signature = shadow_policy_signature(profile)
+        .wrapping_mul(31)
+        .wrapping_add(lunco_hooks::generation());
 
     let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
-    let enabled_caster_count =
-        directional_entities.len() + point_entities.len() + spot_entities.len();
-    let configuration_signature =
-        shadow_configuration_signature(&directional_entities, &point_entities, &spot_entities);
-    if state.light_count == Some(light_count)
-        && state.enabled_caster_count == Some(enabled_caster_count)
-        && state.directional_map_size == Some(directional_shadow_map.size)
-        && state.point_map_size == Some(point_shadow_map.size)
-        && state.directional_cascade_layers
-            == Some(
-                directional_entities
-                    .iter()
-                    .map(|candidate| candidate.cascade_layers)
-                    .sum(),
-            )
-        && state.budget_bytes == Some(admission_budget)
-        && state
-            .configuration_signature
-            .is_some_and(|signature| signature == configuration_signature)
-        && state.policy_signature == Some(policy_signature)
-    {
-        return;
-    }
-
-    if light_count == 0 {
-        if let Some(health) = health.as_ref() {
-            health.0.shadow_estimated_bytes.store(0, Ordering::Relaxed);
-        }
-        state.light_count = Some(0);
-        state.enabled_caster_count = Some(0);
-        state.directional_map_size = Some(directional_shadow_map.size);
-        state.point_map_size = Some(point_shadow_map.size);
-        state.directional_cascade_layers = Some(0);
-        state.budget_bytes = Some(admission_budget);
-        state.configuration_signature = Some(configuration_signature);
-        state.policy_signature = Some(policy_signature);
-        state.configured_limit_status_active = false;
-        return;
-    }
-
-    // Validate the effective configured caster set before mutating any light.
-    // `settings.validate()` proves the ceiling covers the profile's nominal
-    // cascade count, but an authored malformed cascade configuration may still
-    // have more bounds than the profile could ever request. That is an invalid
-    // effective scene, not permission to silently shed another caster or lower
-    // quality. Leave the scene untouched and require an explicit correction.
-    let required_bytes = directional_entities
+    let enabled_directional_casters = directionals
         .iter()
-        .take(profile.max_directional_shadow_casters)
-        .map(|candidate| {
-            estimate_shadow_allocation_bytes(
-                directional_shadow_map.size,
-                point_shadow_map.size,
-                candidate.cascade_layers,
-                1,
-                0,
-                0,
-            )
-        })
-        .chain(
-            point_entities
-                .iter()
-                .take(profile.max_point_shadow_casters)
-                .map(|_| {
-                    estimate_shadow_allocation_bytes(
-                        directional_shadow_map.size,
-                        point_shadow_map.size,
-                        0,
-                        0,
-                        1,
-                        0,
-                    )
-                }),
-        )
-        .chain(
-            spot_entities
-                .iter()
-                .take(profile.max_spot_shadow_casters)
-                .map(|_| {
-                    estimate_shadow_allocation_bytes(
-                        directional_shadow_map.size,
-                        point_shadow_map.size,
-                        0,
-                        0,
-                        0,
-                        1,
-                    )
-                }),
-        )
-        .fold(0_u64, u64::saturating_add);
-    if required_bytes > admission_budget {
-        if let Some(health) = health.as_ref() {
-            health
-                .0
-                .shadow_estimated_bytes
-                .store(required_bytes, Ordering::Relaxed);
-        }
-        if warning.is_none() {
-            commands.insert_resource(RenderWarning {
-                kind: RenderWarningKind::GraphicsSettings,
-                message: format!(
-                    "Configured shadow caster set requires {} bytes, above the explicit byte ceiling of {} bytes; no caster or quality changes were applied.",
-                    required_bytes, admission_budget
-                ),
-            });
-        }
-        state.configured_limit_status_active = false;
-        state.light_count = Some(light_count);
-        state.enabled_caster_count = Some(enabled_caster_count);
-        state.directional_map_size = Some(directional_shadow_map.size);
-        state.point_map_size = Some(point_shadow_map.size);
-        state.directional_cascade_layers = Some(
-            directional_entities
-                .iter()
-                .map(|candidate| candidate.cascade_layers)
-                .sum(),
-        );
-        state.budget_bytes = Some(admission_budget);
-        state.configuration_signature = Some(configuration_signature);
-        state.policy_signature = Some(policy_signature);
-        return;
-    }
-
-    let mut used_bytes = 0_u64;
-    let mut kept_directionals = Vec::new();
-    let mut kept_points = Vec::new();
-    let mut kept_spots = Vec::new();
-
-    for (index, candidate) in directional_entities.iter().enumerate() {
-        let cost = estimate_shadow_allocation_bytes(
-            directional_shadow_map.size,
-            point_shadow_map.size,
-            candidate.cascade_layers,
-            1,
-            0,
-            0,
-        );
-        let keep = index < profile.max_directional_shadow_casters;
-        if keep {
-            used_bytes = used_bytes.saturating_add(cost);
-            kept_directionals.push(candidate.entity);
-            if let Ok((_, _, _, suppressed, _, _, _)) = directionals.get_mut(candidate.entity) {
-                if suppressed
-                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
-                {
-                    commands
-                        .entity(candidate.entity)
-                        .remove::<ShadowMapSuppressed>();
-                }
-            }
-        } else if let Ok((_, mut light, _, suppressed, _, _, _)) =
-            directionals.get_mut(candidate.entity)
-        {
-            if suppressed.is_none() {
-                commands
-                    .entity(candidate.entity)
-                    .try_insert(ShadowMapSuppressed {
-                        restore_enabled: true,
-                        last_applied_enabled: false,
-                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
-                    });
-            }
-            light.shadow_maps_enabled = false;
-        }
-    }
-
-    for (index, candidate) in point_entities.iter().enumerate() {
-        let cost = estimate_shadow_allocation_bytes(
-            directional_shadow_map.size,
-            point_shadow_map.size,
-            0,
-            0,
-            1,
-            0,
-        );
-        let keep = index < profile.max_point_shadow_casters;
-        if keep {
-            used_bytes = used_bytes.saturating_add(cost);
-            kept_points.push(candidate.entity);
-            if let Ok((_, _, suppressed, _, _, _)) = points.get_mut(candidate.entity) {
-                if suppressed
-                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
-                {
-                    commands
-                        .entity(candidate.entity)
-                        .remove::<ShadowMapSuppressed>();
-                }
-            }
-        } else if let Ok((_, mut light, suppressed, _, _, _)) = points.get_mut(candidate.entity) {
-            if suppressed.is_none() {
-                commands
-                    .entity(candidate.entity)
-                    .try_insert(ShadowMapSuppressed {
-                        restore_enabled: true,
-                        last_applied_enabled: false,
-                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
-                    });
-            }
-            light.shadow_maps_enabled = false;
-        }
-    }
-
-    for (index, candidate) in spot_entities.iter().enumerate() {
-        let cost = estimate_shadow_allocation_bytes(
-            directional_shadow_map.size,
-            point_shadow_map.size,
-            0,
-            0,
-            0,
-            1,
-        );
-        let keep = index < profile.max_spot_shadow_casters;
-        if keep {
-            used_bytes = used_bytes.saturating_add(cost);
-            kept_spots.push(candidate.entity);
-            if let Ok((_, _, suppressed, _, _, _)) = spots.get_mut(candidate.entity) {
-                if suppressed
-                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
-                {
-                    commands
-                        .entity(candidate.entity)
-                        .remove::<ShadowMapSuppressed>();
-                }
-            }
-        } else if let Ok((_, mut light, suppressed, _, _, _)) = spots.get_mut(candidate.entity) {
-            if suppressed.is_none() {
-                commands
-                    .entity(candidate.entity)
-                    .try_insert(ShadowMapSuppressed {
-                        restore_enabled: true,
-                        last_applied_enabled: false,
-                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
-                    });
-            }
-            light.shadow_maps_enabled = false;
-        }
-    }
-
-    let directional_layers = directional_entities
+        .filter(|(light, _)| light.shadow_maps_enabled)
+        .count();
+    let enabled_point_casters = points
         .iter()
-        .filter(|candidate| kept_directionals.contains(&candidate.entity))
-        .map(|candidate| candidate.cascade_layers)
+        .filter(|light| light.shadow_maps_enabled)
+        .count();
+    let enabled_spot_casters = spots
+        .iter()
+        .filter(|light| light.shadow_maps_enabled)
+        .count();
+    let directional_cascade_layers = directionals
+        .iter()
+        .filter(|(light, _)| light.shadow_maps_enabled)
+        .map(|(_, config)| config.bounds.len().max(1))
         .sum::<usize>();
+    let required_bytes = estimate_shadow_allocation_bytes(
+        directional_shadow_map.size,
+        point_shadow_map.size,
+        1,
+        directional_cascade_layers,
+        enabled_point_casters,
+        enabled_spot_casters,
+    );
+    publish_shadow_facts(
+        exposures.as_deref_mut(),
+        profile,
+        light_count,
+        enabled_directional_casters,
+        enabled_point_casters,
+        enabled_spot_casters,
+        directional_cascade_layers,
+        required_bytes,
+        admission_budget,
+    );
+
+    let configuration_changed = state.light_count != Some(light_count)
+        || state.enabled_directional_casters != Some(enabled_directional_casters)
+        || state.enabled_point_casters != Some(enabled_point_casters)
+        || state.enabled_spot_casters != Some(enabled_spot_casters)
+        || state.directional_map_size != Some(directional_shadow_map.size)
+        || state.point_map_size != Some(point_shadow_map.size)
+        || state.directional_cascade_layers != Some(directional_cascade_layers)
+        || state.budget_bytes != Some(admission_budget)
+        || state.policy_signature != Some(policy_signature);
+    if !configuration_changed {
+        return;
+    }
+    state.configured_limit_status_active = false;
+
     if let Some(health) = health.as_ref() {
         health
             .0
             .shadow_estimated_bytes
-            .store(used_bytes, Ordering::Relaxed);
+            .store(required_bytes, Ordering::Relaxed);
     }
-    let estimated_mib = used_bytes as f64 / (1024.0 * 1024.0);
-    let limit_shed_count = enabled_caster_count
-        .saturating_sub(kept_directionals.len() + kept_points.len() + kept_spots.len());
+
+    let policy_warning = shadow_quality_policy_warning(
+        profile,
+        enabled_directional_casters,
+        enabled_point_casters,
+        enabled_spot_casters,
+        required_bytes,
+        admission_budget,
+    );
+    if let Some(mut status_bus) = status_bus {
+        if let Some(message) = policy_warning {
+            if !state.configured_limit_status_active {
+                status_bus.push(
+                    crate::status_bus::RENDER_SOURCE,
+                    crate::status_bus::StatusLevel::Warn,
+                    message,
+                );
+            }
+            state.configured_limit_status_active = true;
+        } else {
+            state.configured_limit_status_active = false;
+        }
+    }
+
+    let estimated_mib = required_bytes as f64 / (1024.0 * 1024.0);
     warn!(
-        "shadow allocation: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of configured ceiling {} bytes (directional {}px, point {}px)",
-        kept_directionals.len(),
-        directional_layers,
-        kept_points.len(),
-        kept_spots.len(),
-        used_bytes,
+        "shadow allocation: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of configured ceiling {} bytes (directional {}px, point {}px); authored state preserved",
+        enabled_directional_casters,
+        directional_cascade_layers,
+        enabled_point_casters,
+        enabled_spot_casters,
+        required_bytes,
         estimated_mib,
         admission_budget,
         directional_shadow_map.size,
         point_shadow_map.size,
     );
-    if limit_shed_count > 0 {
-        if !state.configured_limit_status_active {
-            if let Some(mut status_bus) = status_bus {
-                let light_label = if limit_shed_count == 1 {
-                    "light"
-                } else {
-                    "lights"
-                };
-                status_bus.push(
-                    crate::status_bus::RENDER_SOURCE,
-                    crate::status_bus::StatusLevel::Warn,
-                    format!(
-                        "Configured shadow limits active: {limit_shed_count} {light_label} remain illuminated; shadow maps are omitted for them."
-                    ),
-                );
-            }
-            state.configured_limit_status_active = true;
-        }
-    } else {
-        state.configured_limit_status_active = false;
-    }
 
-    // Cache the post-policy state, not the pre-policy observation. Otherwise a
-    // scene with five authored casters (four allowed) would cache `5`; an
-    // explicit re-arm would restore the fifth caster, still look like `5`, and
-    // incorrectly take the early-return path above. Recording the effective
-    // state makes a real re-arm visible without adding another ownership path.
     state.light_count = Some(light_count);
-    state.enabled_caster_count =
-        Some(kept_directionals.len() + kept_points.len() + kept_spots.len());
+    state.enabled_directional_casters = Some(enabled_directional_casters);
+    state.enabled_point_casters = Some(enabled_point_casters);
+    state.enabled_spot_casters = Some(enabled_spot_casters);
     state.directional_map_size = Some(directional_shadow_map.size);
     state.point_map_size = Some(point_shadow_map.size);
-    state.directional_cascade_layers = Some(directional_layers);
+    state.directional_cascade_layers = Some(directional_cascade_layers);
     state.budget_bytes = Some(admission_budget);
     state.policy_signature = Some(policy_signature);
-    state.configuration_signature = Some(shadow_configuration_signature(
-        &kept_directionals
-            .iter()
-            .filter_map(|entity| {
-                directional_entities
-                    .iter()
-                    .find(|candidate| candidate.entity == *entity)
-                    .cloned()
-            })
-            .collect::<Vec<_>>(),
-        &point_entities
-            .iter()
-            .filter(|candidate| kept_points.contains(&candidate.entity))
-            .cloned()
-            .collect::<Vec<_>>(),
-        &spot_entities
-            .iter()
-            .filter(|candidate| kept_spots.contains(&candidate.entity))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
 }
 
 /// Scene teardown is the explicit re-arm boundary for presentation recovery.
@@ -1623,23 +1288,6 @@ pub(crate) fn reset_render_recovery(
     mut budget: ResMut<ShadowAdmissionState>,
     mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
-    mut directional_lights: Query<(
-        Entity,
-        &mut bevy::light::DirectionalLight,
-        &mut bevy::light::CascadeShadowConfig,
-        Option<&ShadowMapSuppressed>,
-        Option<&ShadowRangeAuthorship>,
-    )>,
-    mut point_lights: Query<(
-        Entity,
-        &mut bevy::light::PointLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-    mut spot_lights: Query<(
-        Entity,
-        &mut bevy::light::SpotLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
 ) {
     if health.0.device_lost() {
         return;
@@ -1647,12 +1295,6 @@ pub(crate) fn reset_render_recovery(
     health.0.reset_for_scene();
     ladder.reset_state();
     *budget = ShadowAdmissionState::default();
-    restore_suppressed_shadow_maps(
-        &mut commands,
-        &mut directional_lights,
-        &mut point_lights,
-        &mut spot_lights,
-    );
     // The render schedule is gated by this extracted state, not by camera
     // activation.  Clearing only the ladder would leave a successfully
     // reloaded scene permanently headless after the previous scene gave up.
@@ -1759,6 +1401,35 @@ mod tests {
         RenderingQualitySettings::default().render_failure_give_up_after_secs
     }
 
+    struct TestShadowQualityPolicy;
+
+    impl lunco_hooks::ScriptHook for TestShadowQualityPolicy {
+        fn invoke(
+            &self,
+            _args: &[lunco_hooks::HookValue],
+        ) -> Result<lunco_hooks::HookValue, lunco_hooks::HookError> {
+            Ok(lunco_hooks::HookValue::str("policy warning"))
+        }
+    }
+
+    struct ShadowQualityHookGuard;
+
+    impl Drop for ShadowQualityHookGuard {
+        fn drop(&mut self) {
+            lunco_hooks::unregister(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK);
+        }
+    }
+
+    fn install_test_shadow_quality_policy() -> ShadowQualityHookGuard {
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: lunco_core::session::RENDER_SHADOW_QUALITY_HOOK.into(),
+            backend: "test".into(),
+            deterministic: false,
+            hook: Arc::new(TestShadowQualityPolicy),
+        });
+        ShadowQualityHookGuard
+    }
+
     fn capabilities(
         max_texture_dimension_2d: u32,
         max_texture_array_layers: u32,
@@ -1831,26 +1502,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn suppression_restore_preserves_a_later_explicit_light_change() {
-        let suppressed = ShadowMapSuppressed {
-            restore_enabled: true,
-            last_applied_enabled: false,
-            reason: ShadowMapSuppressionReason::ConfiguredLimit,
-        };
-        assert!(restored_shadow_map_value(false, &suppressed));
-        assert!(
-            restored_shadow_map_value(true, &suppressed),
-            "a later owner that enabled the light must not be overwritten"
-        );
-
-        let explicitly_disabled = ShadowMapSuppressed {
-            restore_enabled: false,
-            ..suppressed
-        };
-        assert!(!restored_shadow_map_value(false, &explicitly_disabled));
-    }
-
     #[derive(Resource, Default)]
     struct SubmittedFrames(u32);
 
@@ -1885,19 +1536,6 @@ mod tests {
             kind: RenderWarningKind::RuntimeFailure,
             message: "test warning".into(),
         });
-        let light = world
-            .spawn((
-                bevy::light::PointLight {
-                    shadow_maps_enabled: false,
-                    ..default()
-                },
-                ShadowMapSuppressed {
-                    restore_enabled: true,
-                    last_applied_enabled: false,
-                    reason: ShadowMapSuppressionReason::ConfiguredLimit,
-                },
-            ))
-            .id();
         let mut reset = Schedule::new(Update);
         reset.add_systems(reset_render_recovery);
         reset.run(&mut world);
@@ -1905,13 +1543,6 @@ mod tests {
         assert!(!health.presentation_stopped.load(Ordering::Relaxed));
         assert!(world.get_resource::<RenderGaveUp>().is_none());
         assert!(world.get_resource::<RenderWarning>().is_none());
-        assert!(
-            world
-                .get::<bevy::light::PointLight>(light)
-                .unwrap()
-                .shadow_maps_enabled
-        );
-        assert!(world.get::<ShadowMapSuppressed>(light).is_none());
     }
 
     #[test]
@@ -2263,7 +1894,8 @@ mod tests {
     }
 
     #[test]
-    fn configured_shadow_caster_limits_do_not_rewrite_quality() {
+    fn configured_shadow_caster_limits_preserve_authored_lights_and_deduplicate_warning() {
+        let _policy = install_test_shadow_quality_policy();
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
@@ -2276,6 +1908,7 @@ mod tests {
         };
         app.insert_resource(settings);
         app.insert_resource(crate::status_bus::StatusBus::default());
+        app.insert_resource(lunco_core::exposure::EngineExposures::default());
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
@@ -2311,21 +1944,20 @@ mod tests {
             .iter(world)
             .filter(|light| light.shadow_maps_enabled)
             .count();
-        assert_eq!(enabled, 1);
+        assert_eq!(enabled, 5);
         let mut point_lights = world.query::<&bevy::light::PointLight>();
         assert!(point_lights
             .iter(world)
             .all(|light| light.intensity == 321.0 && light.range == 37.0));
-        assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) <= 16 * 1024 * 1024);
+        assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) > 16 * 1024 * 1024);
         assert_eq!(
             health.shadow_estimated_bytes.load(Ordering::Relaxed),
-            estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0)
+            estimate_shadow_allocation_bytes(1024, 512, 0, 0, 5, 0)
         );
         assert_eq!(
             health.shadow_budget_bytes.load(Ordering::Relaxed),
             16 * 1024 * 1024
         );
-        assert!(app.world().get_resource::<RenderWarning>().is_none());
         let status_bus = app.world().resource::<crate::status_bus::StatusBus>();
         assert_eq!(
             status_bus
@@ -2334,8 +1966,20 @@ mod tests {
                 .count(),
             1
         );
-        assert!(status_bus.history().any(|event| event.message
-            == "Configured shadow limits active: 4 lights remain illuminated; shadow maps are omitted for them."));
+        assert!(status_bus
+            .history()
+            .any(|event| event.message.contains("policy warning")));
+
+        let exposures = app
+            .world()
+            .resource::<lunco_core::exposure::EngineExposures>();
+        assert_eq!(
+            exposures
+                .surfaces
+                .get("render-shadow")
+                .and_then(|surface| surface.properties.get("point_casters")),
+            Some(&lunco_core::exposure::ExposureValue::Number(5.0))
+        );
 
         app.update();
         assert_eq!(
@@ -2390,6 +2034,7 @@ mod tests {
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
+        app.insert_resource(lunco_core::exposure::EngineExposures::default());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.add_systems(PostUpdate, apply_shadow_caster_policy);
@@ -2423,188 +2068,16 @@ mod tests {
             required > RenderingQualitySettings::default().shadow_budget_bytes,
             "the fixture must exceed the explicit byte ceiling"
         );
-        let warning = app.world().resource::<RenderWarning>();
-        assert!(warning
-            .message
-            .contains("no caster or quality changes were applied"));
-    }
-
-    #[test]
-    fn shadow_caster_admission_orders_by_canonical_identity_not_spawn_order() {
-        let mut app = App::new();
-        let settings = RenderingQualitySettings {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            max_directional_shadow_casters: 0,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 0,
-            shadow_budget_bytes: 16 * 1024 * 1024,
-            ..Default::default()
-        };
-        app.insert_resource(settings);
-        app.init_resource::<ShadowAdmissionState>();
-        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
-        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
-
-        // The first entity has the lower ECS allocation key but the higher
-        // canonical identity. The later-spawned entity must win admission.
-        let spawned_first = app
-            .world_mut()
-            .spawn((
-                bevy::light::PointLight {
-                    shadow_maps_enabled: true,
-                    ..default()
-                },
-                lunco_core::GlobalEntityId::from_raw(20),
-                Name::new("ZetaLamp"),
-            ))
-            .id();
-        let spawned_second = app
-            .world_mut()
-            .spawn((
-                bevy::light::PointLight {
-                    shadow_maps_enabled: true,
-                    ..default()
-                },
-                lunco_core::GlobalEntityId::from_raw(10),
-                Name::new("AlphaLamp"),
-            ))
-            .id();
-
-        app.update();
-
-        assert!(
-            !app.world()
-                .get::<bevy::light::PointLight>(spawned_first)
-                .unwrap()
-                .shadow_maps_enabled
-        );
-        assert!(
-            app.world()
-                .get::<bevy::light::PointLight>(spawned_second)
-                .unwrap()
-                .shadow_maps_enabled
-        );
-    }
-
-    #[test]
-    fn configured_shadow_limit_rechecks_when_a_caster_is_rearmed() {
-        let mut app = App::new();
-        let settings = RenderingQualitySettings {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            max_directional_shadow_casters: 0,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 0,
-            shadow_budget_bytes: 16 * 1024 * 1024,
-            ..Default::default()
-        };
-        app.insert_resource(settings);
-        app.insert_resource(crate::status_bus::StatusBus::default());
-        app.init_resource::<ShadowAdmissionState>();
-        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
-        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
-        for _ in 0..2 {
-            app.world_mut().spawn((bevy::light::PointLight {
-                shadow_maps_enabled: true,
-                ..default()
-            },));
-        }
-
-        app.update();
+        let exposures = app
+            .world()
+            .resource::<lunco_core::exposure::EngineExposures>();
         assert_eq!(
-            app.world()
-                .resource::<crate::status_bus::StatusBus>()
-                .history()
-                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
-                .count(),
-            1
+            exposures
+                .surfaces
+                .get("render-shadow")
+                .and_then(|surface| surface.properties.get("directional_cascade_layers")),
+            Some(&lunco_core::exposure::ExposureValue::Number(128.0))
         );
-        let disabled = {
-            let mut query = app
-                .world_mut()
-                .query::<(Entity, &bevy::light::PointLight)>();
-            query
-                .iter(app.world())
-                .find_map(|(entity, light)| (!light.shadow_maps_enabled).then_some(entity))
-                .expect("budget must shed one caster")
-        };
-        app.world_mut()
-            .get_mut::<bevy::light::PointLight>(disabled)
-            .unwrap()
-            .shadow_maps_enabled = true;
-
-        app.update();
-
-        assert_eq!(
-            app.world()
-                .resource::<crate::status_bus::StatusBus>()
-                .history()
-                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
-                .count(),
-            1,
-            "re-arming a caster must not duplicate the active-limit notice"
-        );
-
-        let enabled = {
-            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
-            query
-                .iter(app.world())
-                .filter(|light| light.shadow_maps_enabled)
-                .count()
-        };
-        assert_eq!(enabled, 1);
-    }
-
-    #[test]
-    fn user_caster_limit_increase_rearms_only_limit_suppressed_casters() {
-        let mut app = App::new();
-        let settings = RenderingQualitySettings {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            max_directional_shadow_casters: 0,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 0,
-            shadow_budget_bytes: 64 * 1024 * 1024,
-            ..Default::default()
-        };
-        app.insert_resource(settings);
-        app.init_resource::<ShadowAdmissionState>();
-        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
-        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
-        for _ in 0..4 {
-            app.world_mut().spawn((bevy::light::PointLight {
-                shadow_maps_enabled: true,
-                ..default()
-            },));
-        }
-
-        app.update();
-        let initially_enabled = {
-            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
-            query
-                .iter(app.world())
-                .filter(|light| light.shadow_maps_enabled)
-                .count()
-        };
-        assert_eq!(initially_enabled, 1);
-
-        app.world_mut()
-            .resource_mut::<RenderingQualitySettings>()
-            .max_point_shadow_casters = 4;
-        app.update();
-
-        let enabled = {
-            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
-            query
-                .iter(app.world())
-                .filter(|light| light.shadow_maps_enabled)
-                .count()
-        };
-        assert_eq!(enabled, 4);
     }
 
     /// The 339-fps null loop. Errors keep coming without a quality fallback,

@@ -8,6 +8,25 @@ full CLI flags, controls, and workflows.
 > `lunco-luncosim` and `lunco-modelica`, so a bare `cargo run` is
 > ambiguous. Always pass `-p <crate>` and/or `--bin <name>`.
 
+## Build from source
+
+Clone the repository and build the production simulator with the repository's
+Rust toolchain:
+
+```bash
+git clone https://github.com/LunCoSim/lunco-sim.git
+cd lunco-sim
+cargo build -p lunco-luncosim --bin luncosim -j 4
+target/debug/luncosim --api 4101
+```
+
+Run from the repository root so the app can find its bundled assets. Choose a
+free API port if 4101 is already in use. For contributor setup and verification
+rules, read the [agent and contributor guide](../../AGENTS.md).
+
+The simulator includes the Modelica workbench. To build the standalone
+Modelica application, use the `lunica` target in the table below.
+
 ## Primary apps
 
 | Binary | Crate | Launch | What it is |

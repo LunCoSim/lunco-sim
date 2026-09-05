@@ -255,7 +255,7 @@ fn mount_contract_report(mounts) {
             if spec.asset != () && socket.attrs["lunco:mount:asset"] != spec.asset {
                 errors.push(spec.socket + ": asset does not match the advertised contract");
             }
-            if !joint.type_name.contains("Joint") {
+            if !standard_joint_type(joint.type_name) {
                 errors.push(spec.joint + ": attachment prim is not a USD joint");
             }
         }
@@ -268,7 +268,19 @@ fn cardinal_axis(axis) {
     axis == "X" || axis == "Y" || axis == "Z"
 }
 
+fn joint_has_axis(type_name) {
+    type_name == "PhysicsRevoluteJoint" || type_name == "PhysicsPrismaticJoint"
+        || type_name == "PhysicsSphericalJoint"
+}
+
+fn standard_joint_type(type_name) {
+    joint_has_axis(type_name) || type_name == "PhysicsJoint"
+        || type_name == "PhysicsFixedJoint" || type_name == "PhysicsDistanceJoint"
+}
+
 /// Check explicit joint bodies, axis and optional frame opinions. Omitted
+/// primary axes on revolute, prismatic and spherical joints mean standard X.
+/// Fixed, distance and generic joints have no single primary axis. Omitted
 /// `physics:localPos*` values are valid when the engine's documented derived
 /// anchor contract is intended; set `require_positions` only for joints whose
 /// asset contract requires authored anchors.
@@ -293,11 +305,20 @@ fn joint_frame_report(joints) {
         if !query_ok(record) {
             errors.push(spec.path + ": joint is missing");
         } else {
-            let axis = record.attrs["physics:axis"];
-            if !record.type_name.contains("Joint") || !cardinal_axis(axis) {
-                errors.push(spec.path + ": joint type or cardinal axis is invalid");
+            let has_axis = joint_has_axis(record.type_name);
+            let axis = if has_axis && record.attrs["physics:axis"] == () {
+                "X"
+            } else { record.attrs["physics:axis"] };
+            entry.axis = if has_axis { axis } else { () };
+            if !standard_joint_type(record.type_name) {
+                errors.push(spec.path + ": type is not a standard USD physics joint");
             }
-            if spec.axis != () && axis != spec.axis {
+            if has_axis && !cardinal_axis(axis) {
+                errors.push(spec.path + ": cardinal axis is invalid");
+            }
+            if spec.axis != () && !has_axis {
+                errors.push(spec.path + ": joint type has no primary axis");
+            } else if spec.axis != () && axis != spec.axis {
                 errors.push(spec.path + ": expected axis " + spec.axis + ", got " + axis);
             }
             if spec.body0 != () && !required_targets(body0, [spec.body0]) {
@@ -361,7 +382,7 @@ fn body_joint_coverage_report(bodies) {
                 let body0 = relationship_targets(joint, "physics:body0");
                 let body1 = relationship_targets(joint, "physics:body1");
                 entry.joints.push(#{ path: joint_spec.path, body0: body0, body1: body1 });
-                if !query_ok(joint) || !joint.type_name.contains("Joint") {
+                if !query_ok(joint) || !standard_joint_type(joint.type_name) {
                     errors.push(joint_spec.path + ": joint is missing");
                     continue;
                 }

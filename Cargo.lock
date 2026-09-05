@@ -8255,6 +8255,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hooks",
  "lunco-render",
  "lunco-settings",
  "lunco-storage",

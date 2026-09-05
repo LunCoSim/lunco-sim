@@ -977,6 +977,11 @@ pub const BOOT_HOOK: &str = "boot.entry";
 /// headless run). The policy never authorises network traffic itself.
 pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
 
+/// Hook id for the renderer's authored shadow-resource warning policy.
+/// Rust publishes the live renderer facts; the Rhai policy decides whether
+/// those facts warrant a user-facing warning and writes its message.
+pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
+
 /// Which entities the **control path is currently down** to: commands issued now
 /// would not reach them.
 ///
