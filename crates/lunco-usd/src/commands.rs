@@ -1851,6 +1851,24 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
     diagnostics.join("; ")
 }
 
+/// Supply the document owner with the existing resolver closure, never a
+/// flattened scene or a second filesystem resolver. The document replaces the
+/// recipe root with its current opinions for each synchronous operation.
+fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
+    let recipe = crate::assembly_api::canonical_stage_for_document(world, doc).map(|stage| {
+        lunco_usd_bevy::StageRecipe {
+            root_id: stage.scene_layer.clone(),
+            bytes: stage.layer_bytes_snapshot(),
+        }
+    });
+    if let Some(host) = world
+        .resource_mut::<DocumentRegistry<UsdDocument>>()
+        .host_mut(doc)
+    {
+        host.document_mut().set_authoring_recipe(recipe);
+    }
+}
+
 #[on_command(CreateUsdProposal)]
 fn on_create_usd_proposal(
     trigger: On<CreateUsdProposal>,
@@ -1864,6 +1882,7 @@ fn on_create_usd_proposal(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        refresh_authoring_recipe(world, command.doc);
         let outcome = match world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(command.doc)
@@ -2015,6 +2034,7 @@ fn on_commit_usd_proposal(
         {
             None => Err(format!("unknown USD proposal {}", proposal_id.0)),
             Some(proposal) => {
+                refresh_authoring_recipe(world, proposal.doc);
                 let current = world
                     .resource::<DocumentRegistry<UsdDocument>>()
                     .host(proposal.doc)
@@ -2226,6 +2246,7 @@ fn on_apply_usd_op(
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
         let paths_for_error = paths.clone();
+        refresh_authoring_recipe(world, doc);
         let result = match validate_live_attribute_types(world, doc, std::slice::from_ref(&op)) {
             Ok(()) => world
                 .resource_mut::<DocumentRegistry<UsdDocument>>()
@@ -2430,6 +2451,7 @@ fn apply_ops_as_change_set_result(
     ops: Vec<UsdOp>,
     parent_gen: Option<u64>,
 ) -> Result<(Ack, usize), String> {
+    refresh_authoring_recipe(world, doc);
     validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();
     let paths: Vec<String> = ops.iter().flat_map(UsdOp::affected_paths).collect();

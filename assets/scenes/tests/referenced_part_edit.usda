@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "ReferencedPartEdit"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "ReferencedPartEdit" (kind = "assembly")
+{
+    def DistantLight "Light" { float intensity = 1 }
+    def Xform "Panel" (prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>) {}
+    def Scope "Scenario" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/referenced_part_edit.rhai@
+    }
+}
