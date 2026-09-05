@@ -71,6 +71,16 @@ fn on_tick(me) {
         [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0],
         0.0, 90.0, false,
     );
+    let fixed_plan = assembly_edit::fixed_joint_plan(
+        "@root@", ROOT, "PanelFixed", HOST, BODY,
+        [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], false,
+    );
+    let invalid_fixed = assembly_edit::fixed_joint_plan(
+        "@root@", ROOT, "PanelFixed", HOST, HOST,
+        [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], false,
+    );
     let existing_plan = assembly_builder::existing_rigid_body_plan(
         this.doc, "@root@", EXISTING, 3.0, [0.0, 0.0, 0.0],
         [0.75, 0.5, 0.25], [EXISTING_COLLIDER],
@@ -104,9 +114,11 @@ fn on_tick(me) {
     let invalid_placement = assembly_builder::place_plan(
         "@root@", BODY, [1.0, 2.0], (), (),
     );
-    if !body_plan.ok || !joint_plan.ok || !existing_plan.ok || !existing_hinge.ok
+    if !body_plan.ok || !joint_plan.ok || !fixed_plan.ok
+        || !existing_plan.ok || !existing_hinge.ok
         || invalid_joint.ok || invalid_placement.ok
-        || invalid_existing.ok || invalid_collider.ok || invalid_hinge_parent.ok {
+        || invalid_existing.ok || invalid_collider.ok || invalid_hinge_parent.ok
+        || invalid_fixed.ok {
         fail(this, "semantic assembly tools did not enforce their explicit input contract");
         return;
     }
@@ -148,8 +160,21 @@ fn on_tick(me) {
             && joint_plan.ops[8].SetAttribute.value == "0.0"
             && joint_plan.ops[9].SetAttribute.value == "90.0",
             "hinge plan carries the axis and ordered limits"),
+        t_true(fixed_plan.ops.len() == 8
+            && fixed_plan.ops[0].AddPrim.type_name == "PhysicsFixedJoint"
+            && fixed_plan.ops[1].SetRelationship.targets[0] == HOST
+            && fixed_plan.ops[2].SetRelationship.targets[0] == BODY,
+            "fixed_joint_plan returns a standard two-body fixed-joint plan"),
+        t_true(fixed_plan.ops[3].SetAttribute.name == "physics:localPos0"
+            && fixed_plan.ops[4].SetAttribute.name == "physics:localPos1"
+            && fixed_plan.ops[5].SetAttribute.name == "physics:localRot0"
+            && fixed_plan.ops[6].SetAttribute.name == "physics:localRot1"
+            && fixed_plan.ops[7].SetAttribute.name == "physics:collisionEnabled",
+            "fixed joint carries both explicit frame quaternions and collision policy"),
         t_true(invalid_joint.error.contains("axis") && invalid_placement.error.contains("three components"),
             "invalid semantic inputs fail before document mutation"),
+        t_true(invalid_fixed.error.contains("distinct"),
+            "fixed-joint plans reject identical body identities before mutation"),
         t_true(existing_plan.kind == "existing_rigid_body"
             && existing_plan.path == EXISTING
             && existing_plan.colliders == [EXISTING_COLLIDER]

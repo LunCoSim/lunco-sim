@@ -670,6 +670,98 @@ fn revolute_joint_plan(edit_target, parent_path, name, body0, body1, axis,
     }
 }
 
+/// Build a fully framed standard USD fixed joint.
+///
+/// A fixed joint is still an authored relationship, not a hierarchy shortcut:
+/// both body paths, both local anchors, both local frame quaternions, and the
+/// collision policy are explicit. The plan is pure and can be reviewed or
+/// grouped with reference/placement operations by a dynamic Rhai recipe.
+fn fixed_joint_plan(edit_target, parent_path, name, body0, body1,
+    local_pos0, local_pos1, local_rot0, local_rot1, collision_enabled) {
+    if edit_target == () || parent_path == () || name == ()
+        || body0 == () || body1 == () {
+        return plan_error("fixed_joint_plan requires edit target, parent, name, and two body paths");
+    }
+    if !parent_path.starts_with("/") || (parent_path.ends_with("/") && parent_path != "/") {
+        return plan_error("fixed_joint_plan parent must be an absolute USD path");
+    }
+    if name == "" || name.contains("/") {
+        return plan_error("fixed_joint_plan name must be one USD identifier");
+    }
+    if !body0.starts_with("/") || !body1.starts_with("/") || body0 == body1 {
+        return plan_error("fixed_joint_plan requires two distinct absolute body paths");
+    }
+    let pos0 = tuple3_literal(local_pos0);
+    let pos1 = tuple3_literal(local_pos1);
+    let rot0 = quat4_literal(local_rot0);
+    let rot1 = quat4_literal(local_rot1);
+    if pos0 == () || pos1 == () || rot0 == () || rot1 == () {
+        return plan_error("fixed_joint_plan requires two positions and two quaternions");
+    }
+
+    let path = if parent_path == "/" { "/" + name } else { parent_path + "/" + name };
+    #{
+        ok: true,
+        path: path,
+        ops: [
+            #{ AddPrim: #{
+                edit_target: edit_target,
+                parent_path: parent_path,
+                name: name,
+                type_name: "PhysicsFixedJoint",
+                reference: (),
+            }},
+            #{ SetRelationship: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:body0",
+                targets: [body0],
+            }},
+            #{ SetRelationship: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:body1",
+                targets: [body1],
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localPos0",
+                type_name: "point3f",
+                value: pos0,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localPos1",
+                type_name: "point3f",
+                value: pos1,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localRot0",
+                type_name: "quatf",
+                value: rot0,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localRot1",
+                type_name: "quatf",
+                value: rot1,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:collisionEnabled",
+                type_name: "bool",
+                value: collision_enabled.to_string(),
+            }},
+        ],
+    }
+}
+
 /// Validate and queue an explicit proposal without mutating the document.
 /// `scope` is one of `SourceAsset`, `Assembly`, or `InstanceOverride`; the
 /// proposal must carry the generation the caller inspected.

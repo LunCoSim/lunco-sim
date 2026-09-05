@@ -364,8 +364,9 @@ or create a second physics owner. `rigid_body_plan` requires mass, centre of
 mass, and diagonal inertia and applies both `PhysicsRigidBodyAPI` and
 `PhysicsMassAPI`. `revolute_joint_plan` requires both body paths, both local
 anchors, both local quaternions, a cardinal axis, ordered degree limits, and
-the explicit collision policy. Shape geometry, transforms, and kinematic
-state remain caller-authored facts. These builders make a complete
+the explicit collision policy. `fixed_joint_plan` applies the same two-frame
+discipline to a standard `PhysicsFixedJoint`. Shape geometry, transforms, and
+kinematic state remain caller-authored facts. These builders make a complete
 reviewable body/joint plan easy to produce without hiding missing topology;
 the existing USD validators and `assembly_audit` reports remain authoritative.
 
@@ -472,11 +473,18 @@ invalid references, and unavailable variant targets fail before proposal.
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
 Griffin ramp plan and a validated FLIP four-wheel layout plan. Its
-`griffin_mission_plan` adds the assembly-level gate: it requires an explicit
-root, lander, FLIP, and fixed adapter relationship before returning the
-combined ramp-and-wheel plan. Adding or changing a mission recipe therefore
-does not add a Rust command; the recipe still supplies exact paths and study
-inputs and submits only through the existing proposal/attach/journal owners.
+`griffin_mission_plan` checks an already-authored mission topology before
+returning the combined ramp-and-wheel plan. For construction from maintained
+assets, `griffin_mission_assembly_plan` authors the lander and four-wheel
+rover references plus explicit root placement, then
+`griffin_mission_adapter_plan` adds the fixed payload adapter only after both
+reference closures are queryable. The production
+`griffin_flip_production_builder` scenario keeps setup, negative cases,
+proposal/review/commit, and the final verdict entirely in Rhai; the static
+fixture contains only the empty mission frame. Adding or changing a mission
+recipe therefore does not add a Rust command; the recipe still supplies exact
+paths and study inputs and submits only through the existing
+proposal/attach/journal owners.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly
