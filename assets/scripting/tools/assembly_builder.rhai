@@ -220,6 +220,7 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
     let body = query("QueryUsdPrim", #{
         doc: doc,
         path: path,
+        attrs: ["physics:mass", "physics:centerOfMass", "physics:diagonalInertia"],
         children: false,
     });
     if !query_ok(body) {
@@ -227,6 +228,11 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
     }
     if body.type_name != "Xform" {
         return plan_error(path + ": existing movable body must be an Xform");
+    }
+    if body.attrs["physics:mass"] != ()
+        && body.attrs["physics:centerOfMass"] != ()
+        && body.attrs["physics:diagonalInertia"] != () {
+        return plan_error(path + ": existing prim already has a complete body contract; use an attribute/transform edit instead of promoting it again");
     }
 
     let checked = [];

@@ -384,11 +384,14 @@ Use the smallest existing typed intent that expresses the change:
   `cube_plan` and `movable_cube_plan` compose standard geometry, collider,
   body, mass, and placement facts; `existing_rigid_body_plan` promotes an
   exact referenced Xform by defining one local over while retaining its authored
-  geometry; `hinge_plan` delegates to the framed revolute planner; and
+  geometry; it rejects a repeat once a complete body contract is already
+  authored; `hinge_plan` delegates to the framed revolute planner; and
   `align_centers_plan`/`align_cube_edges_plan` derive placements from explicit
   queried paths and reject unsupported parent/frame assumptions. These helpers
-  return the same typed `.ops` consumed by `propose`/`batch`; they do not write
-  USDA or bypass the document owner.
+  return the same typed `.ops` consumed by `propose`/`batch`; completed
+  body/joint identities are rejected by the construction recipe and require an
+  explicit update plan; these helpers do not write USDA or bypass the document
+  owner.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.

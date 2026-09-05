@@ -63,6 +63,16 @@ fn griffin_ramp_pair_plan(doc, edit_target, lander_path, joint_parent, axis,
         if joints.contains(ramp.joint_name) {
             return plan_error("Griffin ramp joint names must be unique");
         }
+        let joint_path = joint_parent + "/" + ramp.joint_name;
+        let existing_joint = query("QueryUsdPrim", #{
+            doc: doc,
+            path: joint_path,
+            children: false,
+        });
+        if query_ok(existing_joint) && existing_joint.type_name != "Cube" {
+            return plan_error(joint_path + ": joint path is already occupied by "
+                + existing_joint.type_name + "; update the existing joint or choose a new identity");
+        }
 
         let part = assembly_builder::existing_hinged_body_plan(
             doc, edit_target, ramp.body_path, ramp.mass,

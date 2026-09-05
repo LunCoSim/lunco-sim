@@ -498,7 +498,10 @@ let proposal = assembly_edit::propose(
 use explicit queried prim/shape paths. Center alignment requires one authored
 parent. Cube-edge alignment additionally requires axis-aligned cube extents,
 explicit edge signs, and a non-negative gap. Unsupported or ambiguous input is
-returned as a failed plan before any document mutation. The implementation is
+returned as a failed plan before any document mutation. A completed body
+contract or standard joint identity is not promoted twice; use an explicit
+attribute/transform update plan for an already-authored identity. The
+implementation is
 ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
 registered at runtime without adding a Rust command or a second USD writer.
 

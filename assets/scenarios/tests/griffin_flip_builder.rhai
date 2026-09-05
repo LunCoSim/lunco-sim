@@ -39,7 +39,11 @@ fn ramp_spec(side, body_path, joint_name, local_pos0, local_pos1) {
         side: side,
         body_path: body_path,
         joint_name: joint_name,
-        collider_paths: [body_path + "/Surface", body_path + "/EdgeRail"],
+        collider_paths: [
+            body_path + "/Surface",
+            body_path + "/EdgeRail",
+            body_path + "/EdgeRailInner",
+        ],
         mass: 80.0,
         center_of_mass: [4.0, 0.0, 0.0],
         diagonal_inertia: [35.4, 451.5, 426.8],

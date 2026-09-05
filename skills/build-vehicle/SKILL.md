@@ -31,7 +31,8 @@ paired Griffin ramp, validated four-wheel FLIP layout, and complete
 lander/adapter/rover manifest recipes. Use these plans with the existing
 proposal/journal boundary; keep wheel and suspension defaults in the mobility
 components and supply mission study values explicitly. The complete mission
-recipe rejects a missing or miswired fixed adapter before authoring.
+recipe rejects a missing or miswired fixed adapter before authoring, and a
+completed body/joint identity must be updated explicitly rather than rebuilt.
 
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`

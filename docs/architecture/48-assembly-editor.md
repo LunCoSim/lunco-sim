@@ -375,6 +375,7 @@ standard local transform operations; `cube_plan` and `movable_cube_plan`
 compose ordinary `UsdGeom`/`UsdPhysics` shape, collider, body, mass, and
 placement facts; `existing_rigid_body_plan` defines one local over for an exact
 referenced Xform, then adds its body/mass opinion without copying its geometry;
+it rejects a repeat once the complete body contract is already authored;
 `hinge_plan` delegates to the framed revolute planner; and
 `align_centers_plan`/`align_cube_edges_plan` compute placements only from
 explicit queried paths and authored extents. The alignment and retrofit
@@ -408,7 +409,8 @@ its socket helpers select authored mount relationships and call the existing
 `AttachComponent` owner for frame math and atomic lowering. A vehicle recipe can
 therefore be updated as Rhai without adding a Rust command or duplicating the
 USD writer, while missing or ambiguous authored relationships still fail at the
-authoritative validator.
+authoritative validator. A completed body/joint identity is likewise rejected
+by a construction recipe until the caller chooses an explicit update plan.
 
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
