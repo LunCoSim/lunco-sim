@@ -88,7 +88,10 @@ fn document_snapshot(
     }))
 }
 
-pub(crate) fn canonical_stage_for_document<'a>(
+/// Resolve an explicitly mapped document to its canonical composed stage.
+/// Callers requiring the current document generation must check the projection
+/// cursor on `DocBackedTwinScenes` before consuming this derived stage.
+pub fn canonical_stage_for_document<'a>(
     world: &'a World,
     doc: DocumentId,
 ) -> Option<&'a lunco_usd_bevy::CanonicalStage> {

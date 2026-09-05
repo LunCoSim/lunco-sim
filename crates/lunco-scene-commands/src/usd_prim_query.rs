@@ -1,22 +1,12 @@
 //! `QueryUsdPrim` — read composed USD attributes and explicit relationships off
-//! the live stage.
+//! an explicit Editor document or the mounted live stage.
 //!
-//! ## Why this exists
+//! ## Ownership
 //!
-//! Scripts could reach the *spawned result* of a USD prim (`find(path)` →
-//! entity → `world_pos`/`get`) but never the **authored, composed** values behind
-//! it. `param()` reads only the `lunco:param:<key>` namespace, so an arbitrary
-//! attribute — `radius`, `lunco:wallThickness`, `points`, `uKnots` — was
-//! unreadable from anything except Rust.
-//!
-//! That gap had a cost. HAB-1's components document their relationships to each
-//! other in PROSE ("MUST equal shell_can's radius", "DERIVED from
-//! lunco:wallThickness") and nothing checked them, because nothing outside Rust
-//! *could*. They drifted: an `OuterSurface` picked up a stray
-//! `xformOp:translate = (0, 3.6, 0)` and the habitat's outer shell floated 3.6 m
-//! above its inner shell, visible from across the scene, while a green test
-//! suite sat next to it. Asset invariants need to be checkable by the people
-//! authoring assets, in the scripting language they already use.
+//! An explicit `doc` resolves through the existing document-to-stage mapping
+//! and requires its synchronized generation to match the open document. Without
+//! `doc`, exactly one mounted live stage is required. Preview focus, duplicate
+//! prim paths, and detached cached stages never choose the query target.
 //!
 //! ## Why a query provider and not a rhai binding
 //!
@@ -31,7 +21,9 @@
 //! point; an invariant check wants what the file says. `world_position` is in
 //! the semantic active physics frame, matching [`QueryEntity`](crate::entity_query)
 //! and what `TransformEntity` accepts, and is present only when the prim spawned an
-//! entity.
+//! entity. Document queries instead return the authored placement in canonical
+//! stage coordinates through the shared USD transform reader, marked with
+//! `position_frame: "canonical_stage"`; they do not read a preview physics pose.
 //! Quaternion attributes are arrays in USD component order `[w, x, y, z]`,
 //! at authored precision promoted to f64, without a coordinate-basis change.
 //!
@@ -51,9 +43,12 @@ use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_doc::{Document, DocumentId};
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::{document::UsdDocument, twin_projection::DocBackedTwinScenes};
 use lunco_usd_bevy::read::UsdRead;
 use lunco_usd_bevy::view::StageView;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath};
+use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdSceneRoot};
 use openusd::sdf::{Path as SdfPath, Value};
 
 /// One attribute, converted to JSON by probing the typed readers in turn.
@@ -129,7 +124,7 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-/// `QueryUsdPrim { path, attrs?, rels?, children? }` → composed attributes,
+/// `QueryUsdPrim { doc?, path, attrs?, rels?, children? }` → composed attributes,
 /// requested relationships, optional direct children, and world pose.
 pub struct QueryUsdPrimProvider;
 
@@ -174,9 +169,64 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        // Which stage? Prefer the one the prim actually spawned from — a session
-        // can hold several (a twin plus referenced assets), and picking the wrong
-        // one silently answers about a different prim of the same path.
+        let doc = if params.get("doc").is_some() {
+            let Some(raw) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+                return ApiResponse::error(
+                    ApiErrorCode::DeserializationError,
+                    "QueryUsdPrim: doc must be an explicit numeric document id",
+                );
+            };
+            Some(DocumentId::new(raw))
+        } else {
+            None
+        };
+        let generation = if let Some(doc) = doc {
+            let Some(host) = world
+                .get_resource::<DocumentRegistry<UsdDocument>>()
+                .and_then(|registry| registry.host(doc))
+            else {
+                return ApiResponse::error(
+                    ApiErrorCode::EntityNotFound,
+                    format!("QueryUsdPrim: document {doc} is not open"),
+                );
+            };
+            let generation = host.document().generation();
+            if world
+                .get_resource::<DocBackedTwinScenes>()
+                .and_then(|scenes| scenes.synced_generation(doc))
+                != Some(generation)
+            {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    format!("QueryUsdPrim: document {doc} projection is not current"),
+                );
+            }
+            Some(generation)
+        } else {
+            None
+        };
+
+        // Unscoped queries belong to the live simulation root. Preview stages
+        // and detached cached stages cannot satisfy a live-scene query.
+        let Some(mut live_roots) = QueryState::<&UsdPrimPath, With<UsdSceneRoot>>::try_new(world)
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: live scene ownership is unavailable",
+            );
+        };
+        let mut live_stages = live_roots
+            .iter(world)
+            .map(|p| p.stage_handle.id())
+            .collect::<std::collections::HashSet<_>>();
+        if doc.is_none() && live_stages.len() != 1 {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: exactly one mounted live stage is required; pass doc for an Editor document",
+            );
+        }
+        let live_stage = live_stages.drain().next();
+
         let Some(mut spawned_query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
@@ -186,12 +236,18 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         let spawned: Option<(Entity, bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>)> =
             spawned_query
                 .iter(world)
-                .find(|(_, p)| p.path == path)
+                .find(|(entity, p)| {
+                    doc.is_none()
+                        && p.path == path
+                        && Some(p.stage_handle.id()) == live_stage
+                        && !lunco_usd_bevy::is_preview_only_entity(world, *entity)
+                })
                 .map(|(e, p)| (e, p.stage_handle.id()));
 
         // Read everything under ONE short borrow: `CanonicalStages` is `!Send`
         // and aliases the world, so it must be dropped before we touch entities.
         // (Same shape as `lunco_usd::live_consume`.)
+        let mut authored_position = None;
         let read: Option<(
             String,
             serde_json::Map<String, serde_json::Value>,
@@ -205,18 +261,23 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 );
             };
 
-            // Named stage if the prim spawned; otherwise the first stage that
-            // actually has this prim, so an unspawned prim (a `guide`, a
-            // deactivated variant, a pure-data prim) is still queryable.
-            let found = spawned
-                .and_then(|(_, id)| stages.get(id))
-                .filter(|cs| cs.view().type_name(&prim).is_some())
-                .or_else(|| {
-                    stages
-                        .iter()
-                        .map(|(_, cs)| cs)
-                        .find(|cs| cs.view().type_name(&prim).is_some())
-                });
+            let found = match doc {
+                Some(doc) => lunco_usd::assembly_api::canonical_stage_for_document(world, doc),
+                None => live_stage.and_then(|id| stages.get(id)),
+            }
+            .filter(|stage| stage.view().has_prim(&prim));
+
+            if let Some(stage) = found.filter(|_| doc.is_some()) {
+                authored_position = match lunco_usd_avian::world_transform(&stage.view(), &prim) {
+                    Ok(transform) => Some(transform.translation),
+                    Err(error) => {
+                        return ApiResponse::error(
+                            ApiErrorCode::InternalError,
+                            format!("QueryUsdPrim: invalid authored transform: {error}"),
+                        );
+                    }
+                };
+            }
 
             found.map(|cs| {
                 let view = cs.view();
@@ -252,18 +313,28 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         let Some((type_name, attrs, relationships, children)) = read else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
-                format!("QueryUsdPrim: prim `{path}` not found on any loaded stage"),
+                format!(
+                    "QueryUsdPrim: prim `{path}` not found in the requested document or live stage"
+                ),
             );
         };
 
-        // Pose, only for prims that spawned. Active-physics, same contract as
-        // `QueryEntity` — see this module's frame note.
+        // Document placement is authored; live entity poses use the active
+        // physics frame shared with `QueryEntity`.
         let mut out = serde_json::json!({
             "path": path,
             "type_name": type_name,
             "attrs": attrs,
             "spawned": spawned.is_some(),
         });
+        if let Some(doc) = doc {
+            out["doc"] = serde_json::json!(doc);
+            out["generation"] = serde_json::json!(generation);
+            if let Some(position) = authored_position {
+                out["world_position"] = serde_json::json!([position.x, position.y, position.z]);
+                out["position_frame"] = serde_json::json!("canonical_stage");
+            }
+        }
         if requested_relationships.is_some() {
             out["relationships"] = serde_json::Value::Object(relationships);
         }

@@ -345,7 +345,12 @@ through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
-assembly contracts. It reads explicit composed paths through `QueryUsdPrim` and
+assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly
+selects the mounted live scene. `QueryUsdPrim { doc, path, ... }` resolves the
+document through `DocBackedTwinScenes` and rejects closed, unmapped, or stale
+document projections. Queries without `doc` require one mounted live stage;
+preview copies and detached cached stages cannot satisfy them. Preview focus
+does not select a query's document. It reads explicit composed paths and
 returns structured reports for topology/relationship expectations, reciprocal
 mount metadata, joint bodies/axes/optional authored frames, rigid-body/joint
 coverage, and mass/inertia plus explicit collider coverage. Its
@@ -355,6 +360,13 @@ selection or journal. Callers supply the assembly manifest and expected
 targets, so missing metadata fails visibly instead of being inferred from
 names. Raycast wheels are not listed as rigid bodies: only actual movable
 bodies are checked for joint coverage.
+
+Preview-only visual projection does not attach generic Rhai or builtin programs.
+The `UsdPreviewOnly` scope guards the program attachment owner as well as the
+domain projector; composing a document containing executable program prims must
+not start their behavior in an Editor preview. The `assembly_document_audit`
+fixture deliberately previews its own program-bearing document to exercise
+this boundary alongside independent same-path query results.
 
 Joint diagnostics recognize the standard USD joint types explicitly. Only
 revolute, prismatic and spherical joints have a primary axis; an omitted axis

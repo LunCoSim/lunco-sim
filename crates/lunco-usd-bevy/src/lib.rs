@@ -1729,14 +1729,18 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // A program with a source this engine does not run — a `.mo` solved by
         // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
         // ours; extension picks the engine, exactly as USD picks a file format.
-        attach_programs(
-            reader,
-            &sdf_path,
-            entity,
-            prim_path.stage_handle.id(),
-            asset_server,
-            commands,
-        );
+        // Preview stages are inert presentations, including generic programs
+        // attached by this visual projection rather than the physics projector.
+        if !preview_only {
+            attach_programs(
+                reader,
+                &sdf_path,
+                entity,
+                prim_path.stage_handle.id(),
+                asset_server,
+                commands,
+            );
+        }
 
         // There is deliberately NO "possessable" tag read here. The generic command
         // surface is authored by `Controls` and projected as `InputPorts`; the avatar

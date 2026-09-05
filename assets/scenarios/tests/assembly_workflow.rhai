@@ -159,7 +159,7 @@ fn attached_relationships(me) {
         || !array_has(host.children, JOINT) {
         return false;
     }
-    assembly_audit::mount_contract_report([#{
+    assembly_audit::mount_contract_report((), [#{
         host: HOST,
         socket: me.socket,
         component: COMPONENT,

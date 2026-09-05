@@ -88,15 +88,15 @@ fn wheel_shader_contract_ok(path) {
 
 fn chassis_rocker_seat_ok() {
     let body_path = ROOT + "/Body";
-    let body_extents = assembly_audit::axis_aligned_cube_half_extents(body_path);
+    let body_extents = assembly_audit::axis_aligned_cube_half_extents((), body_path);
     if body_extents == () {
         return false;
     }
     let bearing_extents = [0.16, 0.16, 0.16];
     let pivot_extents = [0.12, 0.12, 0.12];
-    assembly_audit::composed_transform_contract(
+    assembly_audit::composed_transform_contract((),
         body_path, [1.9, 0.5, 1.5], ["xformOp:scale"], EPS
-    ) && assembly_audit::seat_pairs([
+    ) && assembly_audit::seat_pairs((), [
         [
             body_path, body_extents,
             ROOT + "/RockerBearingL", bearing_extents,
@@ -111,7 +111,7 @@ fn chassis_rocker_seat_ok() {
 }
 
 fn assembly_tool_contracts_ok() {
-    let topology = assembly_audit::topology_report([
+    let topology = assembly_audit::topology_report((), [
         #{
             path: ROOT,
             expected_type: "Xform",
@@ -121,7 +121,7 @@ fn assembly_tool_contracts_ok() {
             ],
         },
     ]);
-    let frames = assembly_audit::joint_frame_report([
+    let frames = assembly_audit::joint_frame_report((), [
         #{
             path: ROOT + "/HingeL", axis: "X",
             body0: ROOT, body1: ROOT + "/RockerL",
@@ -139,7 +139,7 @@ fn assembly_tool_contracts_ok() {
             body0: ROOT + "/RockerR", body1: ROOT + "/BogieR",
         },
     ]);
-    let coverage = assembly_audit::body_joint_coverage_report([
+    let coverage = assembly_audit::body_joint_coverage_report((), [
         #{
             path: ROOT, mass: 720.0,
             joints: [
@@ -174,7 +174,7 @@ fn assembly_tool_contracts_ok() {
             ],
         },
     ]);
-    let colliders = assembly_audit::collider_mass_report([
+    let colliders = assembly_audit::collider_mass_report((), [
         #{
             path: ROOT, mass: 720.0,
             colliders: [#{path: ROOT + "/Body"}],
@@ -207,19 +207,19 @@ fn assembly_tool_contracts_ok() {
 }
 
 fn assembly_tool_negative_contracts_ok() {
-    let missing = assembly_audit::topology_report([
+    let missing = assembly_audit::topology_report((), [
         #{path: ROOT + "/MissingAssemblyPart", expected_type: "Xform"},
     ]);
-    let wrong_axis = assembly_audit::joint_frame_report([
+    let wrong_axis = assembly_audit::joint_frame_report((), [
         #{
             path: ROOT + "/HingeL", axis: "Y",
             body0: ROOT, body1: ROOT + "/RockerL",
         },
     ]);
-    let no_joints = assembly_audit::body_joint_coverage_report([
+    let no_joints = assembly_audit::body_joint_coverage_report((), [
         #{path: ROOT + "/RockerL", joints: []},
     ]);
-    let missing_collider = assembly_audit::collider_mass_report([
+    let missing_collider = assembly_audit::collider_mass_report((), [
         #{
             path: ROOT + "/RockerL", mass: 50.0,
             colliders: [#{path: ROOT + "/MissingCollider", enabled: true}],

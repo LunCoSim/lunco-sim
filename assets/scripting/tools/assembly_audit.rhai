@@ -5,6 +5,8 @@
 // supplies the mating envelope that the asset contract requires. That keeps
 // this library reusable without adding a custom USD schema or a Rust-side
 // geometry policy.
+// Every stage-reading helper takes an explicit document id first; () selects
+// the mounted live scene. Stale document projections fail the query.
 
 const EPSILON = 0.001;
 
@@ -24,11 +26,8 @@ fn close_vec(actual, expected, epsilon) {
     true
 }
 
-fn composed_transform_contract(path, expected_scale, expected_order, epsilon) {
-    let record = query("QueryUsdPrim", #{
-        path: path,
-        attrs: ["xformOp:scale", "xformOpOrder"],
-    });
+fn composed_transform_contract(doc, path, expected_scale, expected_order, epsilon) {
+    let record = query_prim(doc, path, ["xformOp:scale", "xformOpOrder"], (), false);
     if record == () || record.ok == false || record.attrs == () {
         return false;
     }
@@ -39,11 +38,8 @@ fn composed_transform_contract(path, expected_scale, expected_order, epsilon) {
 /// Return the half extents of an axis-aligned UsdGeomCube in composed metres.
 /// Only translation plus scale is accepted; rotated geometry needs an explicit
 /// world-space contract instead of a guessed AABB.
-fn axis_aligned_cube_half_extents(path) {
-    let record = query("QueryUsdPrim", #{
-        path: path,
-        attrs: ["size", "xformOp:scale", "xformOpOrder"],
-    });
+fn axis_aligned_cube_half_extents(doc, path) {
+    let record = query_prim(doc, path, ["size", "xformOp:scale", "xformOpOrder"], (), false);
     if record == () || record.ok == false || record.attrs == () {
         return ();
     }
@@ -72,20 +68,18 @@ fn axis_aligned_cube_half_extents(path) {
     ]
 }
 
-fn world_position(path) {
-    let id = find(path);
-    if id < 0 {
-        return ();
-    }
-    world_pos(id)
+fn world_position(doc, path) {
+    let record = query_prim(doc, path, [], (), false);
+    if !query_ok(record) { return (); }
+    record.world_position
 }
 
 /// Test two composed prim centres against supplied world-space half extents.
 /// Extents are [X, Y, Z] metres and the primitive transforms must be
 /// axis-aligned in the shared stage frame.
-fn world_aabb_overlap(path_a, extents_a, path_b, extents_b, epsilon) {
-    let a = world_position(path_a);
-    let b = world_position(path_b);
+fn world_aabb_overlap(doc, path_a, extents_a, path_b, extents_b, epsilon) {
+    let a = world_position(doc, path_a);
+    let b = world_position(doc, path_b);
     if a == () || b == () || extents_a == () || extents_b == ()
         || a.len() != 3 || b.len() != 3 || extents_a.len() != 3 || extents_b.len() != 3 {
         return false;
@@ -101,17 +95,17 @@ fn world_aabb_overlap(path_a, extents_a, path_b, extents_b, epsilon) {
 /// Verify a host-to-mount-to-pivot seating chain in the composed stage.
 /// `mount_extents` and `pivot_extents` are the authored contact envelopes,
 /// not guessed dimensions hidden in the tool.
-fn seat_pair(host_path, host_extents, mount_path, mount_extents, pivot_path, pivot_extents, epsilon) {
-    world_aabb_overlap(host_path, host_extents, mount_path, mount_extents, epsilon)
-        && world_aabb_overlap(mount_path, mount_extents, pivot_path, pivot_extents, epsilon)
+fn seat_pair(doc, host_path, host_extents, mount_path, mount_extents, pivot_path, pivot_extents, epsilon) {
+    world_aabb_overlap(doc, host_path, host_extents, mount_path, mount_extents, epsilon)
+        && world_aabb_overlap(doc, mount_path, mount_extents, pivot_path, pivot_extents, epsilon)
 }
 
 /// Verify every pair in a list of seven-element pair records. Each record is
 /// [host_path, host_extents, mount_path, mount_extents, pivot_path,
 /// pivot_extents, epsilon].
-fn seat_pairs(pairs) {
+fn seat_pairs(doc, pairs) {
     for pair in pairs {
-        if pair.len() != 7 || !seat_pair(
+        if pair.len() != 7 || !seat_pair(doc,
             pair[0], pair[1], pair[2], pair[3], pair[4], pair[5], pair[6]
         ) {
             return false;
@@ -120,8 +114,9 @@ fn seat_pairs(pairs) {
     true
 }
 
-fn query_prim(path, attrs, rels, children) {
+fn query_prim(doc, path, attrs, rels, children) {
     let request = #{ path: path };
+    if doc != () { request.doc = doc; }
     if attrs != () { request.attrs = attrs; }
     if rels != () { request.rels = rels; }
     if children != () { request.children = children; }
@@ -161,7 +156,7 @@ fn required_targets(actual, expected) {
 /// relations?}`; each relation is `{name, targets?}`. This is intentionally a
 /// report rather than a traversal: the caller owns the assembly manifest and
 /// missing metadata is visible instead of being inferred from names.
-fn topology_report(nodes) {
+fn topology_report(doc, nodes) {
     let records = [];
     let errors = [];
     for spec in nodes {
@@ -171,7 +166,7 @@ fn topology_report(nodes) {
                 relation_names.push(relation.name);
             }
         }
-        let record = query_prim(spec.path, [], relation_names, true);
+        let record = query_prim(doc, spec.path, [], relation_names, true);
         if !query_ok(record) {
             errors.push(spec.path + ": composed prim is missing");
             continue;
@@ -210,16 +205,16 @@ fn topology_report(nodes) {
 /// Verify the reciprocal metadata for an explicit mount. This checks the
 /// host socket list, socket occupancy, component attachment joint, asset and
 /// joint kind; it never selects a socket or joint from a name convention.
-fn mount_contract_report(mounts) {
+fn mount_contract_report(doc, mounts) {
     let connections = [];
     let errors = [];
     for spec in mounts {
-        let host = query_prim(spec.host, (), ["lunco:mount:sockets"], false);
-        let socket = query_prim(spec.socket, [
+        let host = query_prim(doc, spec.host, (), ["lunco:mount:sockets"], false);
+        let socket = query_prim(doc, spec.socket, [
             "lunco:mount:socket", "lunco:mount:joint", "lunco:mount:asset"
         ], ["lunco:mount:part"], false);
-        let component = query_prim(spec.component, (), ["lunco:mount:attachmentJoint"], false);
-        let joint = query_prim(spec.joint, (), ["physics:body0", "physics:body1"], false);
+        let component = query_prim(doc, spec.component, (), ["lunco:mount:attachmentJoint"], false);
+        let joint = query_prim(doc, spec.joint, (), ["physics:body0", "physics:body1"], false);
         let host_sockets = relationship_targets(host, "lunco:mount:sockets");
         let socket_part = relationship_targets(socket, "lunco:mount:part");
         let component_joint = relationship_targets(component, "lunco:mount:attachmentJoint");
@@ -284,11 +279,11 @@ fn standard_joint_type(type_name) {
 /// `physics:localPos*` values are valid when the engine's documented derived
 /// anchor contract is intended; set `require_positions` only for joints whose
 /// asset contract requires authored anchors.
-fn joint_frame_report(joints) {
+fn joint_frame_report(doc, joints) {
     let frames = [];
     let errors = [];
     for spec in joints {
-        let record = query_prim(spec.path, [
+        let record = query_prim(doc, spec.path, [
             "physics:axis", "physics:localPos0", "physics:localPos1",
             "physics:localRot0", "physics:localRot1",
             "physics:lowerLimit", "physics:upperLimit"
@@ -352,11 +347,11 @@ fn joint_frame_report(joints) {
 /// listed joint connects the expected body pair. Raycast wheels are not passed
 /// here: they are not rigid bodies and must not be forced into a fake joint
 /// topology.
-fn body_joint_coverage_report(bodies) {
+fn body_joint_coverage_report(doc, bodies) {
     let coverage = [];
     let errors = [];
     for spec in bodies {
-        let body = query_prim(spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
+        let body = query_prim(doc, spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
         let entry = #{ path: spec.path, joints: [], mass: () };
         if !query_ok(body) {
             errors.push(spec.path + ": rigid-body prim is missing");
@@ -378,7 +373,7 @@ fn body_joint_coverage_report(bodies) {
             errors.push(spec.path + ": no joint coverage was declared");
         } else {
             for joint_spec in spec.joints {
-                let joint = query_prim(joint_spec.path, (), ["physics:body0", "physics:body1"], false);
+                let joint = query_prim(doc, joint_spec.path, (), ["physics:body0", "physics:body1"], false);
                 let body0 = relationship_targets(joint, "physics:body0");
                 let body1 = relationship_targets(joint, "physics:body1");
                 entry.joints.push(#{ path: joint_spec.path, body0: body0, body1: body1 });
@@ -402,11 +397,11 @@ fn body_joint_coverage_report(bodies) {
 /// Check authored mass/inertia values and an explicit collider list. A collider
 /// may rely on a schema default, so `enabled` is optional; when supplied it
 /// must match the composed `physics:collisionEnabled` value.
-fn collider_mass_report(bodies) {
+fn collider_mass_report(doc, bodies) {
     let reports = [];
     let errors = [];
     for spec in bodies {
-        let body = query_prim(spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
+        let body = query_prim(doc, spec.path, ["physics:mass", "physics:diagonalInertia"], (), false);
         let entry = #{ path: spec.path, colliders: [], mass: () };
         if !query_ok(body) {
             errors.push(spec.path + ": mass owner is missing");
@@ -428,7 +423,7 @@ fn collider_mass_report(bodies) {
             errors.push(spec.path + ": no collider coverage was declared");
         } else {
             for collider_spec in spec.colliders {
-                let collider = query_prim(collider_spec.path,
+                let collider = query_prim(doc, collider_spec.path,
                     ["physics:collisionEnabled", "visibility"], (), false);
                 let enabled = if query_ok(collider) {
                     collider.attrs["physics:collisionEnabled"]

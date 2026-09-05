@@ -210,6 +210,12 @@ impl DocBackedTwinScenes {
         self.map.get(&doc).map(|s| (s.name.clone(), s.rel.clone()))
     }
 
+    /// Last document generation applied to its canonical stage. An absent
+    /// cursor means the document has not completed projection admission.
+    pub fn synced_generation(&self, doc: DocumentId) -> Option<u64> {
+        self.map.get(&doc).and_then(|scene| scene.synced_generation)
+    }
+
     /// Claim a document for the user-facing document session. Returns `true`
     /// only when this call created the claim, allowing callers to publish one
     /// ownership transition without duplicating lifecycle events.

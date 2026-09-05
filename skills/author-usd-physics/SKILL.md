@@ -29,7 +29,9 @@ solver-resolution workaround.
 For asset-level checks, the authored `assembly_audit` tool can inspect explicit
 composed joint body relationships, cardinal axes, optional local frames,
 rigid-body/joint coverage, and mass/inertia/collider manifests. Use those
-reports to diagnose authored topology before changing solver settings. The
+reports to diagnose authored topology before changing solver settings. Pass the
+exact Editor document id first to each stage-reading helper; `()` explicitly
+selects the mounted live scene, not the focused preview. The
 tool does not infer a body from a name, turn a raycast wheel into a rigid body,
 or replace the standard USD physics owner.
 

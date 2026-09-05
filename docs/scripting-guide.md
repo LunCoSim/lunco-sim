@@ -475,7 +475,12 @@ of the agent workflow.
 ### Authored assembly diagnostics
 
 Use the [`assembly_audit`](../assets/scripting/tools/assembly_audit.rhai)
-library with an explicit composed assembly manifest. `topology_report` checks
+library with an explicit document and composed assembly manifest, for example
+`assembly_audit::topology_report(doc, manifest)`. Every stage-reading helper
+takes `doc` first; pass `()` only to audit the mounted live scene. A document
+query fails until its canonical projection matches the document generation;
+it never reads another preview or falls through to the live scene.
+`topology_report` checks
 prim existence, type, direct children, and caller-supplied relationship targets;
 `mount_contract_report` checks the host socket, socket occupancy, component
 attachment joint, asset, and joint-kind reciprocity. `joint_frame_report`

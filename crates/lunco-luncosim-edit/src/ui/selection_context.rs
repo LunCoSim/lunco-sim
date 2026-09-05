@@ -123,7 +123,7 @@ fn selection_item(
         }),
         serde_json::json!({
             "command": "QueryUsdPrim",
-            "rhai": "assembly_edit::inspect",
+            "rhai": "assembly_audit::query_prim",
         }),
         serde_json::json!({
             "command": "ApplyUsdOps",

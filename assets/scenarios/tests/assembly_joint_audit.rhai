@@ -6,11 +6,11 @@ fn on_tick(me) {
     this.done = true;
     let checks = [];
     for name in ["PayloadAdapter", "Tether", "Generic"] {
-        let result = assembly_audit::joint_frame_report([#{ path: "/JointAudit/" + name }]);
+        let result = assembly_audit::joint_frame_report((), [#{ path: "/JointAudit/" + name }]);
         checks.push(t_true(result.ok, name + " accepts a joint without a primary axis: " + result.errors));
     }
     for name in ["Hinge", "Slide", "Ball"] {
-        let result = assembly_audit::joint_frame_report([#{ path: "/JointAudit/" + name, axis: "X" }]);
+        let result = assembly_audit::joint_frame_report((), [#{ path: "/JointAudit/" + name, axis: "X" }]);
         checks.push(t_true(result.ok && result.frames[0].axis == "X",
             name + " resolves the standard omitted X axis: " + result.errors));
     }
@@ -26,11 +26,11 @@ fn on_tick(me) {
         #{ path: "/JointAudit/Hinge", require_positions: true },
         #{ path: "/JointAudit/Hinge", require_rotations: true },
     ] {
-        let result = assembly_audit::joint_frame_report([spec]);
+        let result = assembly_audit::joint_frame_report((), [spec]);
         checks.push(t_true(!result.ok && result.errors.len() > 0,
             "invalid joint contract fails visibly: " + spec));
     }
-    let steering = assembly_audit::joint_frame_report([#{
+    let steering = assembly_audit::joint_frame_report((), [#{
         path: "/JointAudit/Steering", axis: "Y",
         body0: "/JointAudit/Host", body1: "/JointAudit/Part",
         require_positions: true, require_rotations: true,
@@ -47,7 +47,7 @@ fn on_tick(me) {
         && precisions.attrs.halfRotation == [0.0, 0.0, 0.0, 1.0],
         "quatd and quath use the same USD component order"));
     for name in ["Steering", "Unknown"] {
-        let coverage = assembly_audit::body_joint_coverage_report([#{
+        let coverage = assembly_audit::body_joint_coverage_report((), [#{
             path: "/JointAudit/Part",
             joints: [#{ path: "/JointAudit/" + name }],
         }]);
