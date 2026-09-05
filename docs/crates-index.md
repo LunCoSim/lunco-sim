@@ -188,7 +188,7 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Orbital mechanics and solar-system simulation spine. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, gravity vectors, and automatic Sphere-of-Influence/frame migration. User-facing anchors/orbits declare physical intent; the crate resolves concrete BigSpace grids and performs the projection. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Orbital mechanics and solar-system simulation spine. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, gravity vectors, and automatic Sphere-of-Influence/frame migration. User-facing anchors/orbits declare physical intent; the crate resolves concrete BigSpace grids and performs the projection. Its UI feature also owns the active lunar-location `MoonMapPanel`, which consumes `SurfacePoseQuery` rather than maintaining a second coordinate source. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
 
 **`lunco-celestial-ephemeris`**
 Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.

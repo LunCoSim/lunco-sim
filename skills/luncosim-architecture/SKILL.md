@@ -105,6 +105,12 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+For a live celestial-location panel, consume `SurfacePoseQuery` for the active
+`LocalAvatar` and keep any map projection in the domain UI owner. Do not read a
+root-frame transform as latitude/longitude or create a second geodetic cache;
+clear the transient view-model at `SceneTeardown` and `TwinClosed`, and show an
+explicit empty state when the body-fixed pose is missing or ambiguous.
+
 Workbench perspectives publish scene visibility as layout intent. A perspective
 that uses the full window as its 3D presentation must opt into
 `Perspective::scene_visible_when_docked()` so opening a transient side or

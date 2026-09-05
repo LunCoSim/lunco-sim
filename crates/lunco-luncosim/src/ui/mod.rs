@@ -253,6 +253,7 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
             .add_plugins(lunco_luncosim_edit::SceneEditPlugin)
             .add_plugins(lunco_luncosim_edit::ui::SceneEditUiPlugin)
+            .add_plugins(lunco_celestial::ui::MoonMapUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
             // pipeline) used to be added here. It now lives inside
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
