@@ -1599,6 +1599,10 @@ mod tests {
             "Scene backed".into()
         }
 
+        fn icon(&self) -> crate::UiIcon {
+            crate::UiIcon::Info
+        }
+
         fn scene_visible_when_docked(&self) -> bool {
             true
         }

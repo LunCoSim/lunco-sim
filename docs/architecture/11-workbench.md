@@ -111,7 +111,9 @@ the side panels for tabbed dock trees.
    right-side transport, perspective, and window-control group. When those
    groups cannot coexist, File and View stay direct and the remaining
    registered menus are exposed under an accessible `More` menu; no command
-   callback or menu state is duplicated.
+   callback or menu state is duplicated. Each registered perspective declares a
+   semantic `UiIcon`; the workbench paints that vector icon beside the plain
+   title through the same keyboard-focusable switcher path.
 2. **Workbench body (below the title bar)** — activity bar, side browser,
    viewport, properties/inspector, and the toggleable bottom panel are arranged
    around the persistent central viewport.

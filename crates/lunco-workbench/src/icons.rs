@@ -9,6 +9,16 @@ use bevy_egui::egui;
 /// The semantic control icons shared by the workbench and its overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIcon {
+    /// Live 3D view perspective.
+    View,
+    /// Scene construction perspective.
+    Build,
+    /// Assembly authoring perspective.
+    Editor,
+    /// Modelica and subsystem analysis perspective.
+    Analyze,
+    /// Terrain authoring perspective.
+    Terrain,
     /// Close or cancel.
     Close,
     /// Maximize a window.
@@ -65,6 +75,82 @@ pub fn paint_icon(painter: &egui::Painter, icon: UiIcon, rect: egui::Rect, color
     let center = rect.center();
 
     match icon {
+        UiIcon::View => {
+            painter.circle_stroke(center, rect.width() * 0.31, stroke);
+            painter.circle_filled(center, stroke.width * 1.35, color);
+        }
+        UiIcon::Build => {
+            painter.line_segment(
+                [
+                    egui::pos2(left + rect.width() * 0.2, top + rect.height() * 0.2),
+                    egui::pos2(right - rect.width() * 0.2, bottom - rect.height() * 0.2),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(right - rect.width() * 0.2, top + rect.height() * 0.2),
+                    egui::pos2(left + rect.width() * 0.2, bottom - rect.height() * 0.2),
+                ],
+                stroke,
+            );
+            painter.rect_filled(
+                egui::Rect::from_center_size(
+                    egui::pos2(left + rect.width() * 0.2, top + rect.height() * 0.2),
+                    egui::vec2(rect.width() * 0.28, rect.height() * 0.2),
+                ),
+                1.0,
+                color,
+            );
+        }
+        UiIcon::Editor | UiIcon::Edit => {
+            painter.line_segment(
+                [
+                    egui::pos2(left + rect.width() * 0.1, bottom - rect.height() * 0.1),
+                    egui::pos2(right - rect.width() * 0.08, top + rect.height() * 0.12),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(left + rect.width() * 0.1, bottom - rect.height() * 0.1),
+                    egui::pos2(left + rect.width() * 0.3, bottom - rect.height() * 0.18),
+                ],
+                stroke,
+            );
+        }
+        UiIcon::Analyze => {
+            painter.line(
+                vec![
+                    egui::pos2(left, bottom),
+                    egui::pos2(left, top),
+                    egui::pos2(right, top),
+                ],
+                stroke,
+            );
+            painter.line(
+                vec![
+                    egui::pos2(left + rect.width() * 0.1, bottom - rect.height() * 0.18),
+                    egui::pos2(left + rect.width() * 0.38, center.y),
+                    egui::pos2(left + rect.width() * 0.6, bottom - rect.height() * 0.4),
+                    egui::pos2(right, bottom - rect.height() * 0.72),
+                ],
+                stroke,
+            );
+        }
+        UiIcon::Terrain => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(left, bottom),
+                    egui::pos2(center.x - rect.width() * 0.08, top + rect.height() * 0.24),
+                    egui::pos2(center.x + rect.width() * 0.08, top + rect.height() * 0.45),
+                    egui::pos2(right, top + rect.height() * 0.12),
+                    egui::pos2(right, bottom),
+                ],
+                egui::Color32::TRANSPARENT,
+                stroke,
+            ));
+        }
         UiIcon::Close | UiIcon::Error => {
             painter.line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
             painter.line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
@@ -80,22 +166,6 @@ pub fn paint_icon(painter: &egui::Painter, icon: UiIcon, rect: egui::Rect, color
                 [
                     egui::pos2(center.x, top + rect.height() * 0.4),
                     egui::pos2(center.x, bottom - rect.height() * 0.16),
-                ],
-                stroke,
-            );
-        }
-        UiIcon::Edit => {
-            painter.line_segment(
-                [
-                    egui::pos2(left + rect.width() * 0.1, bottom - rect.height() * 0.1),
-                    egui::pos2(right - rect.width() * 0.08, top + rect.height() * 0.12),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(left + rect.width() * 0.1, bottom - rect.height() * 0.1),
-                    egui::pos2(left + rect.width() * 0.3, bottom - rect.height() * 0.18),
                 ],
                 stroke,
             );

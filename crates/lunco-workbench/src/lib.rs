@@ -59,7 +59,7 @@ use egui_dock::{
 };
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_theme::ColorAlpha;
+use lunco_theme::{ColorAlpha, Theme};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -3938,10 +3938,11 @@ fn top_menu_mode(
 fn measured_titlebar_right_width(
     ui: &egui::Ui,
     layout: &WorkbenchLayout,
+    theme: &Theme,
     titlebar_control_size: egui::Vec2,
 ) -> f32 {
     let tabs = perspective_switcher_tabs(layout);
-    let tab_width = measured_menu_row_width(ui, tabs.iter().map(|(_, title, _)| title.as_str()));
+    let tab_width = measured_perspective_tabs_width(ui, &tabs, theme);
     let transport_width = titlebar_control_size.x;
     #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
     let window_controls_width = titlebar_control_size.x * 3.0;
@@ -3954,6 +3955,123 @@ fn measured_titlebar_right_width(
     let buttons = tabs.len() + 1 + window_control_count;
     let gaps = buttons.saturating_sub(1) as f32 * ui.spacing().item_spacing.x;
     tab_width + transport_width + window_controls_width + gaps + ui.spacing().item_spacing.x * 2.0
+}
+
+/// One registered perspective as presented in the title-bar switcher.
+///
+/// The icon and title are intentionally separate fields. Keeping this shape
+/// close to the renderer prevents a second caller from reconstructing a
+/// perspective label or silently dropping its semantic icon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PerspectiveTab {
+    id: PerspectiveId,
+    icon: UiIcon,
+    title: String,
+    active: bool,
+}
+
+fn perspective_tab_icon_size(theme: &Theme) -> f32 {
+    // The icon sits inside the same title-bar metric as the window controls.
+    // Derive its size from that shared metric so it remains stable when a
+    // theme changes the chrome scale.
+    theme.spacing.titlebar_control_size.y * 0.7
+}
+
+fn measured_perspective_tab_width(
+    ui: &egui::Ui,
+    tab: &PerspectiveTab,
+    theme: &Theme,
+) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let title_width = ui
+        .painter()
+        .layout_no_wrap(tab.title.clone(), font, ui.visuals().text_color())
+        .size()
+        .x;
+    let icon_size = perspective_tab_icon_size(theme);
+    let icon_gap = theme.spacing.item_spacing;
+    title_width
+        + icon_size
+        + icon_gap
+        + theme.spacing.button_padding.x * 2.0
+}
+
+fn measured_perspective_tabs_width(
+    ui: &egui::Ui,
+    tabs: &[PerspectiveTab],
+    theme: &Theme,
+) -> f32 {
+    let width = tabs
+        .iter()
+        .map(|tab| measured_perspective_tab_width(ui, tab, theme))
+        .sum::<f32>();
+    width + ui.spacing().item_spacing.x * tabs.len().saturating_sub(1) as f32
+}
+
+/// Paint one perspective switcher tab using the same vector icon and egui
+/// interaction contract for every perspective.
+fn perspective_tab_button(
+    ui: &mut egui::Ui,
+    tab: &PerspectiveTab,
+    theme: &Theme,
+) -> egui::Response {
+    let width = measured_perspective_tab_width(ui, tab, theme);
+    let height = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let visuals = ui.style().interact_selectable(&response, tab.active);
+
+    if tab.active {
+        ui.painter()
+            .rect_filled(rect, theme.rounding.button, theme.tokens.surface_raised);
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, theme.rounding.button, visuals.bg_fill);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            theme.rounding.button,
+            visuals.fg_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    let icon_size = perspective_tab_icon_size(theme);
+    let padding_x = theme.spacing.button_padding.x;
+    let icon_gap = theme.spacing.item_spacing;
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + padding_x, rect.center().y - icon_size * 0.5),
+        egui::vec2(icon_size, icon_size),
+    );
+    paint_icon(ui.painter(), tab.icon, icon_rect, visuals.fg_stroke.color);
+
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(
+        tab.title.clone(),
+        font,
+        visuals.fg_stroke.color,
+    );
+    ui.painter().galley(
+        egui::pos2(
+            icon_rect.right() + icon_gap,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        visuals.fg_stroke.color,
+    );
+
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            tab.active,
+            &tab.title,
+        )
+    });
+    response.on_hover_text(format!(
+        "Switch to {} perspective (Tab to focus; Enter or Space to activate)",
+        tab.title
+    ))
 }
 
 fn truncate_title_to_width(ui: &egui::Ui, title: &str, max_width: f32) -> String {
@@ -4274,7 +4392,7 @@ fn render_layout(
             let menu_mode = top_menu_mode(
                 ui.available_width(),
                 direct_menu_width,
-                measured_titlebar_right_width(ui, layout, titlebar_control_size),
+                measured_titlebar_right_width(ui, layout, theme, titlebar_control_size),
             );
             let r_file = ui.menu_button("File", |ui| {
                 // Active doc gates Save / Save As / Close — there's
@@ -4820,32 +4938,14 @@ fn render_layout(
                 }
                 let tabs = perspective_switcher_tabs(&layout);
                 if tabs.len() > 1 {
-                    for (id, title, is_active) in tabs {
-                        let mut label = egui::RichText::new(title.as_str()).color(if is_active {
-                            theme.colors.text
-                        } else {
-                            theme.colors.subtext1
-                        });
-                        if is_active {
-                            label = label.strong();
-                        }
-                        let mut button = egui::Button::new(label)
-                            .corner_radius(theme.rounding.button)
-                            .selected(is_active)
-                            // Selection is communicated by the raised fill and
-                            // stronger label; the accent keyline is too loud in
-                            // the compact title bar.
-                            .stroke(egui::Stroke::NONE);
-                        if is_active {
-                            button = button.fill(theme.tokens.surface_raised);
-                        }
-                        let response = ui.add(button);
-                        anchor_rects.push((perspective_help_anchor(id), response.rect));
-                        if response.clicked() && !is_active {
+                    for tab in tabs {
+                        let response = perspective_tab_button(ui, &tab, theme);
+                        anchor_rects.push((perspective_help_anchor(tab.id), response.rect));
+                        if response.clicked() && !tab.active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
                                 .0
-                                .push(LayoutRequest::ActivatePerspective(id.0.to_owned()));
+                                .push(LayoutRequest::ActivatePerspective(tab.id.0.to_owned()));
                         }
                     }
                 }
@@ -5242,7 +5342,7 @@ fn scene_camera_is_rendering(world: &World) -> bool {
 /// Build the title-bar perspective entries from the registered perspectives.
 /// Registration controls availability for authored flows and API commands;
 /// [`Perspective::show_in_switcher`] controls only everyday navigation chrome.
-fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<(PerspectiveId, String, bool)> {
+fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<PerspectiveTab> {
     let active = layout.active_perspective;
     layout
         .perspectives
@@ -5250,7 +5350,12 @@ fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<(PerspectiveId, St
         .filter(|perspective| perspective.show_in_switcher())
         .map(|perspective| {
             let id = perspective.id();
-            (id, perspective.title(), active == Some(id))
+            PerspectiveTab {
+                id,
+                icon: perspective.icon(),
+                title: perspective.title(),
+                active: active == Some(id),
+            }
         })
         // Iterate in reverse so right-to-left layout still puts them in
         // registration order from left to right.
@@ -6821,6 +6926,10 @@ mod tests {
             "Scene-backed test".into()
         }
 
+        fn icon(&self) -> UiIcon {
+            UiIcon::Info
+        }
+
         fn scene_visible_when_docked(&self) -> bool {
             true
         }
@@ -7161,6 +7270,9 @@ mod tests {
         fn title(&self) -> String {
             self.title.to_string()
         }
+        fn icon(&self) -> UiIcon {
+            UiIcon::Info
+        }
         fn show_in_switcher(&self) -> bool {
             self.id != PerspectiveId("hidden")
         }
@@ -7183,6 +7295,10 @@ mod tests {
 
         fn title(&self) -> String {
             self.id.0.to_string()
+        }
+
+        fn icon(&self) -> UiIcon {
+            UiIcon::Info
         }
 
         fn apply(&self, layout: &mut WorkbenchLayout) {
@@ -7241,7 +7357,7 @@ mod tests {
 
         let ids = perspective_switcher_tabs(&layout)
             .into_iter()
-            .map(|(id, _, _)| id)
+            .map(|tab| tab.id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![PerspectiveId("b"), PerspectiveId("a")]);
 
@@ -7263,7 +7379,7 @@ mod tests {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
             id: PerspectiveId("visible"),
-            title: "⚒ Build",
+            title: "Build",
             marker: PanelId("visible_panel"),
         });
         layout.register_perspective(TestPerspective {
@@ -7274,7 +7390,7 @@ mod tests {
 
         assert_eq!(
             perspective_help::visible_perspective_title(&layout, PerspectiveId("visible")),
-            Some("⚒ Build".to_owned())
+            Some("Build".to_owned())
         );
         assert_eq!(
             perspective_help::visible_perspective_title(&layout, PerspectiveId("hidden")),

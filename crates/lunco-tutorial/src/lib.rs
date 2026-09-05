@@ -2059,6 +2059,10 @@ mod tests {
             self.id.into()
         }
 
+        fn icon(&self) -> lunco_workbench::UiIcon {
+            lunco_workbench::UiIcon::Info
+        }
+
         fn apply(&self, layout: &mut WorkbenchLayout) {
             layout.set_side_browser(Some(PanelId(self.marker)));
         }

@@ -12,7 +12,7 @@
 //! set of Perspectives is composed by the host app as it registers panels,
 //! not hardcoded here.
 
-use crate::{PanelId, WorkbenchLayout};
+use crate::{PanelId, UiIcon, WorkbenchLayout};
 
 /// Stable identifier for a Perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,6 +39,13 @@ pub trait Perspective: Send + Sync + 'static {
 
     /// Human-readable title for the Perspective tab.
     fn title(&self) -> String;
+
+    /// Semantic icon painted by the workbench in the Perspective tab.
+    ///
+    /// Icons are part of the perspective contract rather than encoded in the
+    /// title. This keeps navigation legible with every host font and gives
+    /// the title bar one renderer for all registered perspectives.
+    fn icon(&self) -> UiIcon;
 
     /// Whether this perspective is shown in the default title-bar switcher.
     ///
