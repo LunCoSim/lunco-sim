@@ -53,6 +53,13 @@ proposal reaches the USD owner. Keep the generated plan in one reviewed
 change set; a successful Rhai plan is not permission to omit the explicit
 joint, frame, collider, mass, or generation contract.
 
+For reusable referenced parts, use `assembly_builder::find_compatible_socket`
+and `assembly_builder::mount_component`. These helpers select authored socket
+relationships and derive the reflected fixed/revolute/prismatic joint; the
+existing `AttachComponent` owner remains responsible for plug-frame math,
+reference lowering, occupancy, and atomic journalling. Do not copy a reference
+and guess a transform when the component already advertises a mount plug.
+
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
 colliders projected by the Avian bridge in the active BigSpace frame. Do not

@@ -395,7 +395,7 @@ A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, geometry, retrofit bodies, and alignment plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, geometry, retrofit bodies, socket mating, and alignment plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -501,6 +501,15 @@ explicit edge signs, and a non-negative gap. Unsupported or ambiguous input is
 returned as a failed plan before any document mutation. The implementation is
 ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
 registered at runtime without adding a Rust command or a second USD writer.
+
+`find_compatible_socket` and `mount_component` are the referenced-part path:
+they select a unique authored socket, derive its typed fixed/revolute/prismatic
+joint from mount metadata, and delegate plug-frame placement, reference
+lowering, occupancy, joint creation, and journalling to the existing
+`AttachComponent` owner. They reject missing, occupied, incompatible, and
+ambiguous sockets before submission. This is how a Griffin or FLIP assembly
+script can build from reusable USD components without reproducing USD syntax
+or frame math in every scenario.
 
 Structural authoring uses the same typed operation surface: `add_prim`,
 `remove_prim`, `move_prim`, `payload`, and `active` expose the existing

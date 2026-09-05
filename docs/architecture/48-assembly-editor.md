@@ -402,6 +402,14 @@ listed by `ListToolLibraries` and completion, and its source is hot-reloadable
 through the standard tool-library loader. It intentionally exposes no direct
 USDA writer, runtime-only setter, guessed target, or unowned preview operation.
 
+The dynamic `assembly_builder` library is the semantic construction layer above
+these primitives. Its placement/alignment plans operate on exact queried paths;
+its socket helpers select authored mount relationships and call the existing
+`AttachComponent` owner for frame math and atomic lowering. A vehicle recipe can
+therefore be updated as Rhai without adding a Rust command or duplicating the
+USD writer, while missing or ambiguous authored relationships still fail at the
+authoritative validator.
+
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly
 selects the mounted live scene. `QueryUsdPrim { doc, path, ... }` resolves the

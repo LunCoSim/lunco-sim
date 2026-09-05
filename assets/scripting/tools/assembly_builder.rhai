@@ -350,6 +350,120 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
+/// Resolve exactly one empty, authored socket for a reusable component.
+///
+/// The host's `lunco:mount:sockets` relationship is the source of truth. This
+/// helper never searches by a leaf name or invents a socket from a grouping
+/// convention; zero or multiple compatible sockets fail before the attach
+/// command is submitted. The returned `joint` value is the reflected typed
+/// AttachJoint expected by `assembly_edit::attach_component`.
+fn find_compatible_socket(doc, host_path, socket_kind, joint_kind, asset,
+    require_empty) {
+    if doc == () || host_path == () || socket_kind == () || joint_kind == ()
+        || asset == () {
+        return plan_error("find_compatible_socket requires document, host, socket kind, joint kind, and asset");
+    }
+
+    let host = query("QueryUsdPrim", #{
+        doc: doc,
+        path: host_path,
+        rels: ["lunco:mount:sockets"],
+    });
+    if !query_ok(host) || host.relationships == ()
+        || host.relationships["lunco:mount:sockets"] == () {
+        return plan_error(host_path + ": host has no authored mount sockets");
+    }
+
+    let candidates = [];
+    for socket_path in host.relationships["lunco:mount:sockets"] {
+        let socket = query("QueryUsdPrim", #{
+            doc: doc,
+            path: socket_path,
+            attrs: [
+                "lunco:mount:socket",
+                "lunco:mount:joint",
+                "lunco:mount:axis",
+                "lunco:mount:asset",
+            ],
+            rels: ["lunco:mount:part"],
+        });
+        if !query_ok(socket) || socket.attrs == () { continue; }
+        if socket.attrs["lunco:mount:socket"] != socket_kind
+            || socket.attrs["lunco:mount:joint"] != joint_kind
+            || socket.attrs["lunco:mount:asset"] != asset {
+            continue;
+        }
+
+        let occupied = socket.relationships["lunco:mount:part"];
+        if require_empty && occupied != () && occupied.len() != 0 { continue; }
+
+        let joint = socket.attrs["lunco:mount:joint"];
+        let joint_value = if joint == "fixed" {
+            "Fixed"
+        } else if joint == "revolute" || joint == "prismatic" {
+            let axis = socket.attrs["lunco:mount:axis"];
+            if !cardinal_axis(axis) {
+                return plan_error(socket_path + ": articulated socket requires X, Y, or Z axis");
+            }
+            if joint == "revolute" {
+                #{ Revolute: #{ axis: axis } }
+            } else {
+                #{ Prismatic: #{ axis: axis } }
+            }
+        } else {
+            return plan_error(socket_path + ": unsupported authored mount joint kind");
+        };
+        candidates.push(#{ path: socket_path, joint: joint_value });
+    }
+
+    if candidates.len() == 0 {
+        return plan_error(host_path + ": no compatible authored mount socket");
+    }
+    if candidates.len() != 1 {
+        return plan_error(host_path + ": compatible mount socket is ambiguous");
+    }
+    #{
+        ok: true,
+        socket_path: candidates[0].path,
+        joint: candidates[0].joint,
+    }
+}
+
+/// Attach a reusable component by its authored host/socket contract.
+///
+/// The command owner performs plug-frame resolution, reference lowering,
+/// joint creation, occupancy, and one-change-set journalling. This wrapper
+/// supplies only semantic intent: select the unique socket, derive the typed
+/// joint from its metadata, and ask the existing owner to snap the component
+/// into place. Neutral placement/rotation values are required by the public
+/// AttachSpec but are not used to guess the socket frame.
+fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
+    asset, name, joint_name) {
+    if edit_target == () || name == () || joint_name == () {
+        return plan_error("mount_component requires edit target, component name, and joint name");
+    }
+    let selected = find_compatible_socket(doc, host_path, socket_kind,
+        joint_kind, asset, true);
+    if !selected.ok { return selected; }
+
+    let result = assembly_edit::attach_component(doc, #{
+        edit_target: edit_target,
+        socket_path: selected.socket_path,
+        host_path: host_path,
+        name: name,
+        joint_name: joint_name,
+        asset: asset,
+        placement: [0.0, 0.0, 0.0],
+        rotate_deg: [0.0, 0.0, 0.0],
+        joint: selected.joint,
+    });
+    if result.ok {
+        result.kind = "socket_mount";
+        result.socket_path = selected.socket_path;
+    }
+    result
+}
+
 /// Read a local translation while rejecting transforms this simple alignment
 /// policy cannot interpret. A missing translate opinion is USD identity.
 fn local_translation(doc, path) {

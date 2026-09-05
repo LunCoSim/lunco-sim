@@ -231,6 +231,15 @@ marks no-selection, multi-selection, stale entries, and duplicate projected
 paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
 
+For semantic component construction, use `assembly_builder::find_compatible_socket`
+and `assembly_builder::mount_component`. The builder selects the exact
+authored socket and derives the reflected joint contract; the existing typed
+attach owner still performs plug-frame resolution and the atomic reference,
+occupancy, and joint edit. Do not hand-author a reference plus guessed
+transform when a component advertises a mount plug. This Rhai library is
+dynamic, so a Twin or workspace can replace the policy without a Rust-core
+change while retaining the same authoritative attach validator.
+
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
 Pass the exact document id as the first argument to every stage-reading helper,

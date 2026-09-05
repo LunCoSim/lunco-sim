@@ -98,39 +98,6 @@ fn catalog_entry() {
     ()
 }
 
-fn compatible_socket(asset, require_empty) {
-    let host = query("QueryUsdPrim", #{
-        path: HOST,
-        rels: ["lunco:mount:sockets"],
-    });
-    let sockets = one_relationship(host, "lunco:mount:sockets");
-    if sockets == () { return (); }
-
-    // Compatibility is authored data: schema, accepted plug kind, joint kind,
-    // matching asset, and empty occupancy. The script does not infer a path
-    // from a grouping name or from the component/joint leaf names.
-    for socket_path in sockets {
-        let socket = query("QueryUsdPrim", #{
-            path: socket_path,
-            attrs: [
-                "lunco:mount:socket",
-                "lunco:mount:joint",
-                "lunco:mount:asset",
-            ],
-            rels: ["lunco:mount:part"],
-        });
-        if !query_ok(socket) || socket.attrs == () { continue; }
-        let occupied = one_relationship(socket, "lunco:mount:part");
-        if socket.attrs["lunco:mount:socket"] == SOCKET_KIND
-            && socket.attrs["lunco:mount:joint"] == JOINT_KIND
-            && socket.attrs["lunco:mount:asset"] == asset
-            && (!require_empty || occupied == () || occupied.len() == 0) {
-            return socket_path;
-        }
-    }
-    ()
-}
-
 fn attached_relationships(me) {
     let component = assembly_edit::inspect(me.doc, COMPONENT);
     let part = query("QueryUsdPrim", #{
@@ -216,11 +183,14 @@ fn on_tick(me) {
             return;
         }
         this.asset = "lunco://" + entry.source.path;
-        this.socket = compatible_socket(this.asset, false);
-        if this.socket == () {
-            if this.elapsed > 12.0 { fail(this, "saved workflow could not restore its socket selection"); }
+        let selected = assembly_builder::find_compatible_socket(
+            this.doc, HOST, SOCKET_KIND, JOINT_KIND, this.asset, false,
+        );
+        if !selected.ok {
+            if this.elapsed > 12.0 { fail(this, "saved workflow could not restore its socket selection: " + selected.error); }
             return;
         }
+        this.socket = selected.socket_path;
         let dirty = document_is_dirty(this.doc);
         if dirty == () {
             if this.elapsed > 12.0 { fail(this, "document dirty state was not discoverable after reload"); }
@@ -248,27 +218,31 @@ fn on_tick(me) {
             return;
         }
         this.asset = "lunco://" + entry.source.path;
-        this.socket = compatible_socket(this.asset, true);
-        if this.socket == () {
-            if this.elapsed > 12.0 { fail(this, "no compatible empty socket was selectable"); }
+        let missing = assembly_builder::find_compatible_socket(
+            this.doc, HOST, SOCKET_KIND, JOINT_KIND,
+            "lunco://components/mounting/missing.usda", true,
+        );
+        let selected = assembly_builder::find_compatible_socket(
+            this.doc, HOST, SOCKET_KIND, JOINT_KIND, this.asset, true,
+        );
+        if missing.ok || !selected.ok {
+            if this.elapsed > 12.0 { fail(this, "semantic socket selection did not fail closed or select the unique socket"); }
             return;
         }
+        this.socket = selected.socket_path;
 
         // The attachment is authored in the persistent root layer so the
         // subsequent SaveAs + RestartScene proves the normal document path.
-        let result = assembly_edit::attach_component(this.doc, #{
-            edit_target: "@root@",
-            socket_path: this.socket,
-            host_path: HOST,
-            name: "Payload",
-            joint_name: "assembly_joint",
-            asset: this.asset,
-            placement: [0.0, 0.0, 0.0],
-            rotate_deg: [0.0, 0.0, 0.0],
-            joint: "Fixed",
-        });
+        let result = assembly_builder::mount_component(
+            this.doc, "@root@", HOST, SOCKET_KIND, JOINT_KIND,
+            this.asset, "Payload", "assembly_joint",
+        );
         if !result.ok {
-            fail(this, "AttachComponent was rejected: " + result.error);
+            fail(this, "semantic socket mount was rejected: " + result.error);
+            return;
+        }
+        if result.socket_path != this.socket {
+            fail(this, "semantic socket mount selected a different socket than its inspected plan");
             return;
         }
         this.phase = "check_attached";
