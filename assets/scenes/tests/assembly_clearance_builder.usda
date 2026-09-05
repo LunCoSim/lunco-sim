@@ -1,0 +1,86 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyClearanceBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Acceptance fixture for Rhai-native placement clearance. The moving and
+# blocker frames share one authored parent so the tool can compare their
+# translation-only local coordinates without inventing transform semantics.
+def Xform "AssemblyClearanceBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+        def Xform "Blocker"
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            {
+                double size = 2.0
+                double3 xformOp:scale = (1.0, 1.0, 1.0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+
+        def Xform "Moving"
+        {
+            double3 xformOp:translate = (4.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            {
+                double size = 1.0
+                double3 xformOp:scale = (1.0, 1.0, 1.0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+
+        def Xform "NotCube"
+        {
+            double3 xformOp:translate = (0.0, 3.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Sphere "Shape"
+            {
+                double radius = 1.0
+            }
+        }
+
+        def Xform "RotatedBlocker"
+        {
+            double3 xformOp:translate = (0.0, -3.0, 0.0)
+            double3 xformOp:rotateXYZ = (0.0, 0.0, 15.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+            def Cube "Shape"
+            {
+                double size = 2.0
+                double3 xformOp:scale = (1.0, 1.0, 1.0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-clearance-builder"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_clearance_builder.rhai@
+        }
+    }
+}

@@ -505,6 +505,15 @@ implementation is
 ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
 registered at runtime without adding a Rust command or a second USD writer.
 
+`place_with_clearance_plan` is the conservative placement path for parts that
+must stay clear of authored geometry. It takes exact moving/blocker frame and
+Cube-shape paths under one translation-only parent, checks the composed Cube
+envelopes with `assembly_audit::aabb_clearance`, and rejects overlap,
+insufficient gap, duplicate blockers, rotated frames, or non-Cube geometry
+before the plan reaches proposal. The resulting operation is still reviewed
+and committed through `assembly_edit`, so replacing this Rhai policy does not
+create a second USD writer.
+
 `find_compatible_socket` and `mount_component` are the referenced-part path:
 they select a unique authored socket, derive its typed fixed/revolute/prismatic
 joint from mount metadata, and delegate plug-frame placement, reference

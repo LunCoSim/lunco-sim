@@ -98,18 +98,22 @@ impl TwinToolLibraries {
 /// Seed the built-in tools (idempotent). Call once at plugin build, BEFORE the
 /// runtime engine is created, so they bind immediately:
 ///   - every `assets/scripting/tools/*.rhai` — a rhai-source library, name = stem
-///     (`formation`, `survey`, `debug_viz`, …). Add one by dropping a file. The
-///     files are embedded + enumerated by [`lunco_assets::scripting::tool_libraries`]
-///     (the asset-owning crate), so wasm — which has no filesystem — is covered;
-///     the runtime Twin scan ([`load_tool_libraries_from_dir`]) is the native-only,
-///     user-authored counterpart. The scan only reads source; the active-Twin
-///     observer installs it through [`TwinToolLibraries`] so ownership and
-///     restoration stay in one place.
+///     (`formation`, `survey`, `debug_viz`, …). Native checkouts read the
+///     editable files at startup through
+///     [`lunco_assets::scripting::active_tool_libraries`]; packaged and wasm
+///     builds use the embedded source. Add or replace a file without a Rust
+///     rebuild. The runtime Twin scan ([`load_tool_libraries_from_dir`]) remains
+///     the native-only, user-authored counterpart. The scan only reads source;
+///     the active-Twin observer installs it through [`TwinToolLibraries`] so
+///     ownership and restoration stay in one place.
 ///   - `mathx` — a NATIVE (Rust) tool, proving the backend-agnostic abstraction:
 ///     the same `name::fn(...)` call site works whether the tool is rhai or Rust.
 pub fn register_builtins() {
-    for (name, src) in lunco_assets::scripting::tool_libraries() {
-        lunco_tools_rhai::register_rhai_tool(name, src);
+    let tools = lunco_assets::scripting::active_tool_libraries().unwrap_or_else(|error| {
+        panic!("active Rhai tool libraries must be readable: {error}");
+    });
+    for (name, src) in tools {
+        lunco_tools_rhai::register_rhai_tool(&name, &src);
     }
     lunco_tools_rhai::register_native_tool(
         "mathx",
