@@ -51,6 +51,7 @@ fn rover_network_root_contains_program_api_components() {
         "Shaft_FR",
         "Shaft_RL",
         "Shaft_RR",
+        "Drivetrain",
     ]
     .into_iter()
     .map(|name| format!("{rover}/{name}"))
