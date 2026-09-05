@@ -399,6 +399,14 @@ Use the smallest existing typed intent that expresses the change:
   non-Cube geometry, duplicate blockers, overlap, and less than the requested
   gap before proposal. The returned transform remains a normal reviewed
   change set.
+- Use `assembly_builder::place_with_collision_clearance_plan` for referenced,
+  Cylinder, Mesh, or compound bodies. Supply exact moving/blocker body paths
+  and a minimum gap; it reads `QueryUsdPrim { collision_bounds: true }` from
+  the shared composed collision owner, requires a translation-only common
+  parent chain, and rejects missing, malformed, unsupported, overlapping, or
+  duplicated collision envelopes before proposal. This is the preferred
+  dynamic Rhai path for general assembly placement; it does not duplicate
+  primitive dimensions or write USD directly.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.

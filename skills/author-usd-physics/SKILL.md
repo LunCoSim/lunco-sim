@@ -55,9 +55,13 @@ change set; a successful Rhai plan is not permission to omit the explicit
 joint, frame, collider, mass, or generation contract.
 
 For physical placement, use `assembly_builder::place_with_clearance_plan` with
-explicit Cube envelopes and blocker paths before proposing a transform. It
-rejects overlap, insufficient gap, duplicate blockers, non-Cube shapes, and
-rotated or otherwise non-translation-only frames. Do not rely on visual
+explicit Cube envelopes, or
+`assembly_builder::place_with_collision_clearance_plan` with exact moving and
+blocker body paths for referenced, Cylinder, Mesh, or compound bodies. The
+general tool reads aggregate `QueryUsdPrim { collision_bounds: true }` results
+from the shared collision owner and requires a translation-only common parent
+chain. Both paths reject overlap, insufficient gap, duplicate blockers, and
+ambiguous frame/geometry data before proposal. Do not rely on visual
 separation or an unreviewed generated USD transform to establish clearance.
 
 For reusable referenced parts, use `assembly_builder::find_compatible_socket`

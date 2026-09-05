@@ -1,0 +1,113 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyCollisionClearanceBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Acceptance fixture for generic Rhai placement against composed Cube,
+# Cylinder, compound, visual-only, rotated, and malformed collision bodies.
+def Xform "AssemblyCollisionClearanceBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+        def Xform "CompoundBlocker"
+        {
+            def Cube "Left"
+            (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                double size = 2.0
+                double3 xformOp:translate = (-1.0, 0.0, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def Cube "Right"
+            (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                double size = 2.0
+                double3 xformOp:translate = (1.0, 0.0, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+        }
+
+        def Xform "MovingCylinder"
+        {
+            double3 xformOp:translate = (6.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cylinder "Shape"
+            (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                double radius = 0.5
+                double height = 2.0
+                token axis = "Y"
+            }
+        }
+
+        def Xform "VisualOnly"
+        {
+            double3 xformOp:translate = (0.0, 4.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            {
+                double size = 2.0
+            }
+        }
+
+        def Xform "RotatedBlocker"
+        {
+            double3 xformOp:translate = (0.0, -4.0, 0.0)
+            double3 xformOp:rotateXYZ = (0.0, 0.0, 15.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+            def Cube "Shape"
+            (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                double size = 2.0
+            }
+        }
+
+        def Xform "MalformedBlocker"
+        {
+            double3 xformOp:translate = (0.0, 8.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                string size = "not-a-number"
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-collision-clearance-builder"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_collision_clearance_builder.rhai@
+        }
+    }
+}

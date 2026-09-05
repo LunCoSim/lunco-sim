@@ -26,6 +26,11 @@
 //! `position_frame: "canonical_stage"`; they do not read a preview physics pose.
 //! Quaternion attributes are arrays in USD component order `[w, x, y, z]`,
 //! at authored precision promoted to f64, without a coordinate-basis change.
+//! A request with `collision_bounds: true` adds the aggregate composed
+//! collision AABB in canonical stage coordinates. It is derived by the shared
+//! `lunco_usd_bevy::collision_aabb` reader, so compound ownership, standard
+//! shape dimensions, purpose filtering, transforms, and malformed-data errors
+//! have one owner for API, Rhai, and other consumers.
 //!
 //! ## Request
 //!
@@ -33,6 +38,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "/Hab1/ShieldWall/OuterSurface"}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc": 7, "path": "…", "collision_bounds": true}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is
@@ -124,8 +130,9 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-/// `QueryUsdPrim { doc?, path, attrs?, rels?, children? }` → composed attributes,
-/// requested relationships, optional direct children, and world pose.
+/// `QueryUsdPrim { doc?, path, attrs?, rels?, children?, collision_bounds? }`
+/// → composed attributes, requested relationships, optional direct children,
+/// optional aggregate collision bounds, and world pose.
 pub struct QueryUsdPrimProvider;
 
 impl ApiQueryProvider for QueryUsdPrimProvider {
@@ -166,6 +173,10 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             });
         let include_children = params
             .get("children")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let include_collision_bounds = params
+            .get("collision_bounds")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
@@ -253,6 +264,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             serde_json::Map<String, serde_json::Value>,
             serde_json::Map<String, serde_json::Value>,
             Vec<String>,
+            Option<serde_json::Value>,
         )> = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                 return ApiResponse::error(
@@ -278,6 +290,41 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     }
                 };
             }
+
+            let collision_bounds = if include_collision_bounds {
+                match found {
+                    Some(cs) => match lunco_usd_bevy::collision_aabb(&cs.view(), path) {
+                        Ok(Some(aabb)) => Some(serde_json::json!({
+                            "min": [aabb.min.x, aabb.min.y, aabb.min.z],
+                            "max": [aabb.max.x, aabb.max.y, aabb.max.z],
+                            "center": [
+                                (aabb.min.x + aabb.max.x) * 0.5,
+                                (aabb.min.y + aabb.max.y) * 0.5,
+                                (aabb.min.z + aabb.max.z) * 0.5,
+                            ],
+                            "half_extents": [
+                                (aabb.max.x - aabb.min.x) * 0.5,
+                                (aabb.max.y - aabb.min.y) * 0.5,
+                                (aabb.max.z - aabb.min.z) * 0.5,
+                            ],
+                            "frame": "canonical_stage",
+                            "rest_depth": aabb.rest_depth(),
+                        })),
+                        Ok(None) => Some(serde_json::Value::Null),
+                        Err(error) => {
+                            return ApiResponse::error(
+                                ApiErrorCode::InternalError,
+                                format!(
+                                    "QueryUsdPrim: invalid collision bounds at `{path}`: {error}"
+                                ),
+                            );
+                        }
+                    },
+                    None => Some(serde_json::Value::Null),
+                }
+            } else {
+                None
+            };
 
             found.map(|cs| {
                 let view = cs.view();
@@ -306,11 +353,17 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 } else {
                     Vec::new()
                 };
-                (type_name, map, relationships, children)
+                (
+                    type_name,
+                    map,
+                    relationships,
+                    children,
+                    collision_bounds.clone(),
+                )
             })
         };
 
-        let Some((type_name, attrs, relationships, children)) = read else {
+        let Some((type_name, attrs, relationships, children, collision_bounds)) = read else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!(
@@ -340,6 +393,9 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         }
         if include_children {
             out["children"] = serde_json::json!(children);
+        }
+        if include_collision_bounds {
+            out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
         }
 
         if let Some((entity, _)) = spawned {

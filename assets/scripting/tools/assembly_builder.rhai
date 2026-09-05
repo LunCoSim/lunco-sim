@@ -651,3 +651,119 @@ fn place_with_clearance_plan(doc, edit_target, moving_path, moving_shape,
     placement.minimum_gap = minimum_gap;
     placement
 }
+
+/// Verify every ancestor frame that affects a shared-parent placement is
+/// translation-only. Collision bounds are reported in canonical stage axes;
+/// comparing them after a candidate translation is valid only when the common
+/// parent chain does not rotate or scale those axes.
+fn translation_only_frame_chain(doc, path, owner) {
+    let frame = path;
+    while frame != "/" {
+        let inspected = local_translation(doc, frame);
+        if !inspected.ok {
+            return plan_error(owner + ": " + inspected.error);
+        }
+        frame = parent_path(frame);
+    }
+    #{ ok: true }
+}
+
+/// Read a body-owned composed collision envelope through the shared query
+/// surface. Primitive dimensions, compound ownership, purpose filtering, and
+/// malformed-data errors remain in the existing collision_aabb owner.
+fn composed_collision_bounds(doc, path, role) {
+    let record = assembly_audit::collision_bounds_record(doc, path);
+    if !query_ok(record) {
+        let detail = "composed collision query failed";
+        if record.error != () { detail = record.error; }
+        return plan_error(role + " " + path + ": " + detail);
+    }
+    let bounds = record.collision_bounds;
+    if bounds == () {
+        return plan_error(role + " " + path + ": no composed collision geometry");
+    }
+    if bounds.frame != "canonical_stage" {
+        return plan_error(role + " " + path + ": collision bounds have an unsupported frame");
+    }
+    let center = vector3(bounds.center, role + " collision center");
+    let half_extents = vector3(bounds.half_extents, role + " collision half extents");
+    if !center.ok { return center; }
+    if !half_extents.ok { return half_extents; }
+    for i in 0..3 {
+        if !half_extents.value[i].is_finite() || half_extents.value[i] < 0.0 {
+            return plan_error(role + " " + path + ": collision half extents are invalid");
+        }
+    }
+    #{ ok: true, center: center.value, half_extents: half_extents.value }
+}
+
+/// Place a translation-only body using its aggregate composed collision bounds
+/// and the same bounds reader for every blocker. The caller supplies exact body
+/// paths; each blocker is { path: "/Assembly/Obstacle" }. All bodies share one
+/// authored parent and every ancestor frame is translation-only, so the
+/// candidate shift can be applied to the canonical-stage moving AABB without
+/// inventing a second transform or primitive-geometry implementation.
+fn place_with_collision_clearance_plan(doc, edit_target, moving_path,
+    translation, blockers, minimum_gap) {
+    if doc == () || edit_target == () || moving_path == ()
+        || blockers == () || blockers.len() == 0 {
+        return plan_error("place_with_collision_clearance_plan requires a document, moving body, and explicit blockers");
+    }
+    if minimum_gap == () || !minimum_gap.is_finite() || minimum_gap < 0.0 {
+        return plan_error("place_with_collision_clearance_plan requires a finite non-negative minimum gap");
+    }
+    let valid_translation = vector3(translation, "candidate translation");
+    if !valid_translation.ok { return valid_translation; }
+    for value in translation {
+        if !value.is_finite() {
+            return plan_error("candidate translation must contain finite components");
+        }
+    }
+
+    let parent = parent_path(moving_path);
+    let frame_chain = translation_only_frame_chain(doc, parent, moving_path);
+    if !frame_chain.ok { return frame_chain; }
+    let moving = local_translation(doc, moving_path);
+    if !moving.ok { return moving; }
+    let moving_bounds = composed_collision_bounds(doc, moving_path, "moving body");
+    if !moving_bounds.ok { return moving_bounds; }
+
+    let candidate_center = [
+        moving_bounds.center[0] + translation[0] - moving.value[0],
+        moving_bounds.center[1] + translation[1] - moving.value[1],
+        moving_bounds.center[2] + translation[2] - moving.value[2],
+    ];
+    let seen_paths = [];
+    for blocker in blockers {
+        if blocker == () || blocker.path == () {
+            return plan_error("each collision-clearance blocker requires an exact body path");
+        }
+        if blocker.path == moving_path || seen_paths.contains(blocker.path) {
+            return plan_error("collision-clearance blockers must be unique and distinct from the moving body");
+        }
+        if parent_path(blocker.path) != parent {
+            return plan_error("collision-clearance blockers must share the moving body's authored parent");
+        }
+        let blocker_position = local_translation(doc, blocker.path);
+        if !blocker_position.ok { return blocker_position; }
+        let blocker_bounds = composed_collision_bounds(doc, blocker.path, "blocker body");
+        if !blocker_bounds.ok { return blocker_bounds; }
+        let clearance = assembly_audit::aabb_clearance(
+            candidate_center, moving_bounds.half_extents,
+            blocker_bounds.center, blocker_bounds.half_extents,
+        );
+        if clearance == () || clearance.margin < minimum_gap {
+            return plan_error(moving_path + ": candidate overlaps or violates the "
+                + minimum_gap.to_string() + " m collision clearance from " + blocker.path);
+        }
+        seen_paths.push(blocker.path);
+    }
+
+    let placement = place_plan(edit_target, moving_path, translation, (), ());
+    placement.kind = "collision_clearance_placement";
+    placement.blockers = seen_paths;
+    placement.minimum_gap = minimum_gap;
+    placement.collision_frame = "canonical_stage";
+    placement.candidate_center = candidate_center;
+    placement
+}

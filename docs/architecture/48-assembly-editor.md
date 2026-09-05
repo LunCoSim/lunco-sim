@@ -394,6 +394,17 @@ minimum gap before proposal. Rotated frames, non-Cube shapes, duplicate
 blockers, and malformed paths remain visible authoring errors rather than
 being converted into guessed bounds.
 
+For referenced, cylindrical, mesh, or compound parts, use
+`place_with_collision_clearance_plan`. It takes exact moving and blocker body
+paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request is
+serialized from the shared `lunco_usd_bevy::collision_aabb` owner in the
+canonical stage frame. The tool only applies a candidate translation when all
+bodies share a translation-only parent chain, then checks the aggregate AABBs
+against the caller's minimum gap. Missing collision geometry, malformed or
+unsupported collision data, overlap, duplicate paths, and rotated frames fail
+before a proposal is created. This keeps positioning policy hot-reloadable in
+Rhai while shape, purpose, ownership, and transform semantics remain singular.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
 `parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,
@@ -443,8 +454,10 @@ coverage, and mass/inertia plus explicit collider coverage. Its
 preview/transform boundary; it does not author transforms or create a second
 selection or journal. Callers supply the assembly manifest and expected
 targets, so missing metadata fails visibly instead of being inferred from
-names. Raycast wheels are not listed as rigid bodies: only actual movable
-bodies are checked for joint coverage.
+names. `collision_bounds: true` exposes the shared composed aggregate envelope
+for placement and inspection; a null envelope means visual-only geometry,
+whereas malformed collision data is an error. Raycast wheels are not listed as
+rigid bodies: only actual movable bodies are checked for joint coverage.
 
 Preview-only visual projection does not attach generic Rhai or builtin programs.
 The `UsdPreviewOnly` scope guards the program attachment owner as well as the

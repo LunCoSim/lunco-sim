@@ -142,6 +142,25 @@ fn query_prim(doc, path, attrs, rels, children) {
     query("QueryUsdPrim", request)
 }
 
+/// Read the one authoritative composed collision envelope for an exact body
+/// path. The returned record preserves query errors so an authoring tool can
+/// reject malformed collision data visibly; it never reconstructs primitive
+/// dimensions in Rhai.
+fn collision_bounds_record(doc, path) {
+    let request = #{ path: path, collision_bounds: true };
+    if doc != () { request.doc = doc; }
+    query("QueryUsdPrim", request)
+}
+
+/// Return the composed collision envelope or `()` when the body is visual-only
+/// or the query failed. Use `collision_bounds_record` when the caller needs to
+/// distinguish absent geometry from a malformed query.
+fn collision_bounds(doc, path) {
+    let record = collision_bounds_record(doc, path);
+    if !query_ok(record) { return (); }
+    record.collision_bounds
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
