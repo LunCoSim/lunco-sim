@@ -39,6 +39,23 @@ mod wheel_spin;
 pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
 use wheel_spin::update_wheel_spin;
 
+/// Orient an Avian contact normal so it points from the support surface toward
+/// the requested body. Avian stores manifold normals from collider 1 to
+/// collider 2; every wheel-contact consumer must use this one convention.
+pub fn contact_normal_for_body(
+    pair: &ContactPair,
+    manifold: &ContactManifold,
+    body: Entity,
+) -> Option<DVec3> {
+    if pair.body1 == Some(body) {
+        Some(-manifold.normal)
+    } else if pair.body2 == Some(body) {
+        Some(manifold.normal)
+    } else {
+        None
+    }
+}
+
 pub mod wheel_kinematics;
 use wheel_kinematics::wheel_hub_pose;
 

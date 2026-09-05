@@ -5,8 +5,8 @@
 //! use their retained Avian ray hit and jointed wheels use Avian contact
 //! manifolds. The history is stored in the active physics/grid frame and is
 //! never inferred from render transforms, root motion, or controller intent.
-//! The analytic terrain oracle supplies the Y coordinate when the trail mesh is
-//! rebuilt.
+//! The analytic terrain oracle supplies the frame-correct point and support
+//! normal when the trail mesh is rebuilt.
 //!
 //! The history is deliberately bounded and session-scoped. It is cleared at
 //! [`lunco_core::SceneTeardown`], reset when the active physics frame changes,
@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 
-use avian3d::prelude::{Collisions, Position, RayHits, Rotation};
+use avian3d::prelude::{ColliderOf, Collisions, Position, RayHits, RigidBody, Rotation};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::coords::{GridPos, GridRot};
@@ -28,7 +28,7 @@ use lunco_mobility::{
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_sim::PhysicalWheel;
 
-use super::waypoint_click::build_ribbon_mesh;
+use super::waypoint_click::{build_ribbon_mesh, RibbonPoint};
 
 /// Minimum horizontal travel before a new history sample is admitted.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;
@@ -38,6 +38,10 @@ const TRAIL_MAX_POINTS: usize = 1024;
 /// The trail is an annotation rather than a road or terrain deformation.
 const TRAIL_HALF_WIDTH_M: f32 = 0.16;
 const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.09;
+/// A wheel contact must support some upward load. This excludes vertical wall
+/// contacts while preserving steep but physically driveable static surfaces.
+const TRAIL_MIN_SUPPORT_NORMAL_Y: f64 = 0.2;
+const TRAIL_SURFACE_NORMAL_EPS_M: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrailSurfaceMode {
@@ -46,14 +50,6 @@ enum TrailSurfaceMode {
     /// Reproject the contact's horizontal coordinates through the DEM oracle.
     AnalyticTerrain,
 }
-
-/// Terrain-owned physics colliders that may produce a trail contact. Other
-/// static bodies, such as a step or a rover-mounted obstacle, are not ground.
-type TerrainCollider = Or<(
-    With<lunco_terrain_surface::ColliderTileOf>,
-    With<lunco_terrain_surface::DemHeightField>,
-    With<lunco_terrain_surface::FlatSiteSurface>,
-)>;
 
 /// Physics-frame contact history for one topology-derived vehicle.
 #[derive(Component, Clone, Debug, Default)]
@@ -64,7 +60,24 @@ pub(crate) struct VehicleTrailHistory {
 
 #[derive(Clone, Debug, Default)]
 struct WheelTrailHistory {
-    points: VecDeque<DVec3>,
+    points: VecDeque<TrailContact>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TrailContact {
+    point: DVec3,
+    normal: DVec3,
+}
+
+impl TrailContact {
+    fn new(point: DVec3, normal: DVec3) -> Option<Self> {
+        if !point.is_finite() || !normal.is_finite() {
+            return None;
+        }
+        let normal = normal.normalize_or_zero();
+        (normal.length_squared() > 1.0e-12 && normal.y >= TRAIL_MIN_SUPPORT_NORMAL_Y)
+            .then_some(Self { point, normal })
+    }
 }
 
 impl VehicleTrailHistory {
@@ -76,10 +89,7 @@ impl VehicleTrailHistory {
     /// Admit one solved pose, filling a large fixed-update gap with points on
     /// the solved contact segment. The interpolation is only a bounded visual
     /// approximation; the endpoints still come from Avian's actual contact.
-    fn record(&mut self, frame: Entity, wheel: Entity, position: DVec3) -> bool {
-        if !position.is_finite() {
-            return false;
-        }
+    fn record(&mut self, frame: Entity, wheel: Entity, contact: TrailContact) -> bool {
         if self.frame != Some(frame) {
             self.clear();
             self.frame = Some(frame);
@@ -87,18 +97,25 @@ impl VehicleTrailHistory {
 
         let points = &mut self.lanes.entry(wheel).or_default().points;
         let Some(previous) = points.back().copied() else {
-            points.push_back(position);
+            points.push_back(contact);
             return true;
         };
-        let distance = DVec3::new(position.x - previous.x, 0.0, position.z - previous.z).length();
+        let distance = DVec3::new(
+            contact.point.x - previous.point.x,
+            0.0,
+            contact.point.z - previous.point.z,
+        )
+        .length();
         if distance < TRAIL_SAMPLE_SPACING_M {
             return false;
         }
 
         let steps = (distance / TRAIL_SAMPLE_SPACING_M).ceil().max(1.0) as usize;
         for step in 1..=steps {
-            let point = previous.lerp(position, step as f64 / steps as f64);
-            points.push_back(point);
+            let t = step as f64 / steps as f64;
+            let point = previous.point.lerp(contact.point, t);
+            let normal = previous.normal.lerp(contact.normal, t).normalize_or_zero();
+            points.push_back(TrailContact { point, normal });
             while points.len() > TRAIL_MAX_POINTS {
                 points.pop_front();
             }
@@ -127,7 +144,7 @@ pub(crate) struct TrailVisualProjection {
 #[derive(Clone, Debug)]
 struct TrailLane {
     wheel: Entity,
-    points: Vec<DVec3>,
+    points: Vec<RibbonPoint>,
 }
 
 /// Find the topology-derived vehicle owner for a wheel. The walk deliberately
@@ -151,6 +168,29 @@ fn mobility_root(
     }
 }
 
+fn support_normal(normal: DVec3) -> Option<DVec3> {
+    let normal = normal.normalize_or_zero();
+    (normal.is_finite()
+        && normal.length_squared() > 1.0e-12
+        && normal.y >= TRAIL_MIN_SUPPORT_NORMAL_Y)
+        .then_some(normal)
+}
+
+fn static_body_for_collider(
+    collider: Entity,
+    q_bodies: &Query<&RigidBody>,
+    q_collider_of: &Query<&ColliderOf>,
+) -> Option<Entity> {
+    let body = q_collider_of
+        .get(collider)
+        .map_or(collider, |collider_of| collider_of.body);
+    q_bodies
+        .get(body)
+        .ok()
+        .is_some_and(|body| body.is_static())
+        .then_some(body)
+}
+
 fn valid_raycast_contact(
     wheel: &WheelRaycast,
     suspension: &Suspension,
@@ -158,16 +198,17 @@ fn valid_raycast_contact(
     wheel_transform: &Transform,
     mount: &WheelBodyMount,
     q_bodies: &Query<(&Position, &Rotation)>,
-    ground_colliders: &Query<(), TerrainCollider>,
-) -> Option<DVec3> {
+    q_rigid_bodies: &Query<&RigidBody>,
+    q_collider_of: &Query<&ColliderOf>,
+) -> Option<TrailContact> {
     if wheel.last_normal_force < 1.0 {
         return None;
     }
     let hit = hits.iter_sorted().find(|hit| {
-        ground_colliders.get(hit.entity).is_ok()
-            && hit.normal.is_finite()
-            && hit.normal.length_squared() > 1.0e-12
+        static_body_for_collider(hit.entity, q_rigid_bodies, q_collider_of).is_some()
+            && support_normal(hit.normal).is_some()
     })?;
+    let normal = support_normal(hit.normal)?;
     let (body_position, body_rotation) = q_bodies.get(mount.body).ok()?;
     let (hub, rotation) = wheel_hub_pose(
         GridPos(body_position.0),
@@ -182,7 +223,7 @@ fn valid_raycast_contact(
         wheel.wheel_radius,
         hit.distance,
     );
-    point.is_finite().then_some(point)
+    TrailContact::new(point, normal)
 }
 
 /// Avian contact-point centroid for a jointed wheel. Normal impulse is used as
@@ -191,31 +232,66 @@ fn valid_raycast_contact(
 fn physical_wheel_contact_point(
     collisions: &Collisions,
     wheel: Entity,
-    ground_colliders: &Query<(), TerrainCollider>,
-) -> Option<DVec3> {
+    q_rigid_bodies: &Query<&RigidBody>,
+    q_collider_of: &Query<&ColliderOf>,
+) -> Option<TrailContact> {
     let mut weighted = DVec3::ZERO;
+    let mut weighted_normal = DVec3::ZERO;
     let mut total_impulse = 0.0;
     for pair in collisions.collisions_with(wheel) {
         if !pair.is_touching() {
             continue;
         }
-        if ![pair.collider1, pair.collider2]
-            .into_iter()
-            .any(|collider| ground_colliders.get(collider).is_ok())
+        let wheel_is_body1 = pair.body1 == Some(wheel);
+        let wheel_is_body2 = pair.body2 == Some(wheel);
+        if !wheel_is_body1 && !wheel_is_body2 {
+            continue;
+        }
+        let support_collider = if wheel_is_body1 {
+            pair.collider2
+        } else {
+            pair.collider1
+        };
+        let support_body = if wheel_is_body1 {
+            pair.body2
+        } else {
+            pair.body1
+        }
+        .or_else(|| {
+            q_collider_of
+                .get(support_collider)
+                .ok()
+                .map(|collider_of| collider_of.body)
+        });
+        let Some(support_body) = support_body else {
+            continue;
+        };
+        if !q_rigid_bodies
+            .get(support_body)
+            .is_ok_and(RigidBody::is_static)
         {
             continue;
         }
         for manifold in &pair.manifolds {
+            let Some(normal) = lunco_mobility::contact_normal_for_body(pair, manifold, wheel)
+            else {
+                continue;
+            };
+            let Some(normal) = support_normal(normal) else {
+                continue;
+            };
             for point in &manifold.points {
                 let impulse = point.normal_impulse as f64;
                 if impulse.is_finite() && impulse > 0.0 && point.point.is_finite() {
                     weighted += point.point * impulse;
+                    weighted_normal += normal * impulse;
                     total_impulse += impulse;
                 }
             }
         }
     }
-    (total_impulse > 0.0).then_some(weighted / total_impulse)
+    (total_impulse > 0.0)
+        .then(|| TrailContact::new(weighted / total_impulse, weighted_normal / total_impulse))?
 }
 
 /// Shared ticket for sampling/projection changes, including removed scene
@@ -275,6 +351,8 @@ pub(crate) fn sample_vehicle_trails(
     q_roots: Query<(), With<MobilityRoot>>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(&Position, &Rotation)>,
+    q_rigid_bodies: Query<&RigidBody>,
+    q_collider_of: Query<&ColliderOf>,
     q_raycast_wheels: Query<(
         Entity,
         &WheelRaycast,
@@ -284,7 +362,6 @@ pub(crate) fn sample_vehicle_trails(
         &WheelBodyMount,
     )>,
     q_physical_wheels: Query<Entity, (With<PhysicalWheel>, With<JointedWheelTire>)>,
-    q_ground_colliders: Query<(), TerrainCollider>,
     collisions: Collisions,
 ) {
     let mut samples = Vec::new();
@@ -294,35 +371,39 @@ pub(crate) fn sample_vehicle_trails(
         let Some(vehicle) = mobility_root(wheel_entity, &q_roots, &q_parents) else {
             continue;
         };
-        let Some(point) = valid_raycast_contact(
+        let Some(contact) = valid_raycast_contact(
             wheel,
             suspension,
             hits,
             wheel_transform,
             mount,
             &q_bodies,
-            &q_ground_colliders,
+            &q_rigid_bodies,
+            &q_collider_of,
         ) else {
             continue;
         };
-        samples.push((vehicle, wheel_entity, point));
+        samples.push((vehicle, wheel_entity, contact));
     }
     for wheel_entity in q_physical_wheels.iter() {
         active_wheels.insert(wheel_entity);
         let Some(vehicle) = mobility_root(wheel_entity, &q_roots, &q_parents) else {
             continue;
         };
-        let Some(point) =
-            physical_wheel_contact_point(&collisions, wheel_entity, &q_ground_colliders)
-        else {
+        let Some(contact) = physical_wheel_contact_point(
+            &collisions,
+            wheel_entity,
+            &q_rigid_bodies,
+            &q_collider_of,
+        ) else {
             continue;
         };
-        samples.push((vehicle, wheel_entity, point));
+        samples.push((vehicle, wheel_entity, contact));
     }
 
-    for (vehicle, wheel, point) in samples {
+    for (vehicle, wheel, contact) in samples {
         if let Ok(mut history) = q_histories.get_mut(vehicle) {
-            history.record(active_frame.0, wheel, point);
+            history.record(active_frame.0, wheel, contact);
         }
     }
     for mut history in q_histories.iter_mut() {
@@ -366,21 +447,30 @@ pub(crate) fn trail_projection_rebuild_is_pending(
 }
 
 fn project_trail_to_surface(
-    points: impl Iterator<Item = DVec3>,
+    contacts: impl Iterator<Item = TrailContact>,
     surface: &lunco_terrain_surface::GridSurfaceQuery,
     mode: TrailSurfaceMode,
-) -> Option<Vec<DVec3>> {
+) -> Option<Vec<RibbonPoint>> {
     if mode == TrailSurfaceMode::PhysicsContact {
-        // The solved physics contact is already on the authored collider when
-        // the scene has no analytic DEM. Keep that contact instead of inventing
-        // a chassis-height or terrain-height fallback.
-        Some(points.collect())
+        // The solved physics contact is already on the authored static support
+        // collider. Keep both its point and support frame.
+        Some(
+            contacts
+                .map(|contact| RibbonPoint {
+                    position: contact.point,
+                    normal: contact.normal,
+                })
+                .collect(),
+        )
     } else {
-        points
-            .map(|point| {
+        contacts
+            .map(|contact| {
                 surface
-                    .height_at(GridPos(point))
-                    .map(|height| DVec3::new(point.x, height, point.z))
+                    .sample_surface(GridPos(contact.point), TRAIL_SURFACE_NORMAL_EPS_M)
+                    .map(|sample| RibbonPoint {
+                        position: sample.point.0,
+                        normal: sample.normal,
+                    })
             })
             .collect()
     }
@@ -438,7 +528,7 @@ fn trail_signature(
     wheel: Entity,
     frame: Option<Entity>,
     surface: Option<(Entity, u64)>,
-    points: &[DVec3],
+    points: &[RibbonPoint],
 ) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     vehicle.hash(&mut hash);
@@ -446,9 +536,12 @@ fn trail_signature(
     frame.hash(&mut hash);
     surface.hash(&mut hash);
     for point in points {
-        point.x.to_bits().hash(&mut hash);
-        point.y.to_bits().hash(&mut hash);
-        point.z.to_bits().hash(&mut hash);
+        point.position.x.to_bits().hash(&mut hash);
+        point.position.y.to_bits().hash(&mut hash);
+        point.position.z.to_bits().hash(&mut hash);
+        point.normal.x.to_bits().hash(&mut hash);
+        point.normal.y.to_bits().hash(&mut hash);
+        point.normal.z.to_bits().hash(&mut hash);
     }
     hash.finish()
 }
@@ -508,7 +601,7 @@ pub(crate) fn sync_vehicle_trail_meshes(
                 &lane.points,
             );
             let previous = existing.remove(&key);
-            let Some(anchor) = lane.points.first().copied() else {
+            let Some(anchor) = lane.points.first().map(|point| point.position) else {
                 continue;
             };
             let Some(new_mesh) = build_ribbon_mesh(
@@ -595,20 +688,43 @@ pub(crate) fn clear_vehicle_trails(
 mod tests {
     use super::*;
 
+    fn flat_contact(point: DVec3) -> TrailContact {
+        TrailContact::new(point, DVec3::Y).expect("flat support contact")
+    }
+
+    #[test]
+    fn only_upward_static_support_normals_can_leave_a_trail() {
+        assert!(support_normal(DVec3::Y).is_some());
+        assert!(support_normal(DVec3::new(-0.6, 0.8, 0.0)).is_some());
+        assert!(support_normal(DVec3::X).is_none());
+        assert!(support_normal(-DVec3::Y).is_none());
+        assert!(support_normal(DVec3::NAN).is_none());
+    }
+
     #[test]
     fn history_samples_contact_lanes_and_stays_bounded() {
         let frame = Entity::PLACEHOLDER;
         let wheel = Entity::from_bits(7);
         let mut history = VehicleTrailHistory::default();
-        assert!(history.record(frame, wheel, DVec3::ZERO));
-        assert!(history.record(frame, wheel, DVec3::new(10.0, 5.0, 0.0)));
+        assert!(history.record(frame, wheel, flat_contact(DVec3::ZERO)));
+        assert!(history.record(frame, wheel, flat_contact(DVec3::new(10.0, 5.0, 0.0)),));
         let points = &history.lanes[&wheel].points;
-        assert_eq!(points.front().copied(), Some(DVec3::ZERO));
-        assert_eq!(points.back().copied(), Some(DVec3::new(10.0, 5.0, 0.0)));
+        assert_eq!(
+            points.front().map(|contact| contact.point),
+            Some(DVec3::ZERO)
+        );
+        assert_eq!(
+            points.back().map(|contact| contact.point),
+            Some(DVec3::new(10.0, 5.0, 0.0))
+        );
         assert!(points.len() > 2);
 
         for i in 0..(TRAIL_MAX_POINTS + 128) {
-            history.record(frame, wheel, DVec3::new(10.0 + i as f64, 0.0, 0.0));
+            history.record(
+                frame,
+                wheel,
+                flat_contact(DVec3::new(10.0 + i as f64, 0.0, 0.0)),
+            );
         }
         assert_eq!(history.lanes[&wheel].points.len(), TRAIL_MAX_POINTS);
     }
@@ -619,16 +735,16 @@ mod tests {
         let second = Entity::from_bits(2);
         let wheel = Entity::from_bits(3);
         let mut history = VehicleTrailHistory::default();
-        history.record(first, wheel, DVec3::new(10.0, 0.0, 20.0));
-        history.record(first, wheel, DVec3::new(12.0, 0.0, 20.0));
+        history.record(first, wheel, flat_contact(DVec3::new(10.0, 0.0, 20.0)));
+        history.record(first, wheel, flat_contact(DVec3::new(12.0, 0.0, 20.0)));
         assert_eq!(history.lanes[&wheel].points.len(), 5);
 
-        history.record(second, wheel, DVec3::new(-3.0, 0.0, 4.0));
+        history.record(second, wheel, flat_contact(DVec3::new(-3.0, 0.0, 4.0)));
         assert_eq!(history.frame, Some(second));
         assert_eq!(history.lanes.len(), 1);
         assert_eq!(
             history.lanes[&wheel].points.as_slices().0,
-            &[DVec3::new(-3.0, 0.0, 4.0)]
+            &[flat_contact(DVec3::new(-3.0, 0.0, 4.0))]
         );
     }
 
@@ -639,33 +755,64 @@ mod tests {
         let right = Entity::from_bits(12);
         let mut history = VehicleTrailHistory::default();
 
-        history.record(frame, left, DVec3::new(-1.0, 0.0, 0.0));
-        history.record(frame, left, DVec3::new(-1.0, 0.0, -1.0));
-        history.record(frame, right, DVec3::new(1.0, 0.0, 0.0));
-        history.record(frame, right, DVec3::new(1.0, 0.0, -1.0));
+        history.record(frame, left, flat_contact(DVec3::new(-1.0, 0.0, 0.0)));
+        history.record(frame, left, flat_contact(DVec3::new(-1.0, 0.0, -1.0)));
+        history.record(frame, right, flat_contact(DVec3::new(1.0, 0.0, 0.0)));
+        history.record(frame, right, flat_contact(DVec3::new(1.0, 0.0, -1.0)));
 
         assert_eq!(history.lanes.len(), 2);
         assert_eq!(
-            history.lanes[&left].points.front().copied(),
+            history.lanes[&left]
+                .points
+                .front()
+                .map(|contact| contact.point),
             Some(DVec3::new(-1.0, 0.0, 0.0))
         );
         assert_eq!(
-            history.lanes[&right].points.front().copied(),
+            history.lanes[&right]
+                .points
+                .front()
+                .map(|contact| contact.point),
             Some(DVec3::new(1.0, 0.0, 0.0))
         );
     }
 
     #[test]
+    fn history_retains_and_interpolates_the_solved_support_frame() {
+        let frame = Entity::PLACEHOLDER;
+        let wheel = Entity::from_bits(13);
+        let normal = DVec3::new(-0.6, 0.8, 0.0);
+        let mut history = VehicleTrailHistory::default();
+
+        history.record(frame, wheel, flat_contact(DVec3::ZERO));
+        history.record(
+            frame,
+            wheel,
+            TrailContact::new(DVec3::new(2.0, 0.0, 0.0), normal).unwrap(),
+        );
+        let samples = &history.lanes[&wheel].points;
+
+        assert_eq!(samples.len(), 5);
+        assert_eq!(samples.front().unwrap().normal, DVec3::Y);
+        assert!((samples.back().unwrap().normal - normal).length() < 1.0e-12);
+        assert!((samples[2].normal - DVec3::new(-0.3, 0.9, 0.0).normalize()).length() < 1.0e-12);
+    }
+
+    #[test]
     fn trail_mesh_is_a_surface_ribbon_with_turn_safe_vertices() {
         let points = [
-            DVec3::new(0.0, 0.0, 0.0),
-            DVec3::new(3.0, 1.0, 0.0),
-            DVec3::new(3.0, 2.0, 3.0),
-            DVec3::new(0.0, 3.0, 3.0),
+            flat_contact(DVec3::new(0.0, 0.0, 0.0)),
+            flat_contact(DVec3::new(3.0, 1.0, 0.0)),
+            flat_contact(DVec3::new(3.0, 2.0, 3.0)),
+            flat_contact(DVec3::new(0.0, 3.0, 3.0)),
         ];
+        let points = points.map(|contact| RibbonPoint {
+            position: contact.point,
+            normal: contact.normal,
+        });
         let mesh = build_ribbon_mesh(
             &points,
-            points[0],
+            points[0].position,
             TRAIL_HALF_WIDTH_M,
             TRAIL_SURFACE_CLEARANCE_M,
         )
@@ -678,20 +825,67 @@ mod tests {
     }
 
     #[test]
+    fn trail_mesh_clearance_and_normals_follow_a_ramp_support_frame() {
+        let normal = DVec3::new(-0.6, 0.8, 0.0);
+        let points = [
+            RibbonPoint {
+                position: DVec3::ZERO,
+                normal,
+            },
+            RibbonPoint {
+                position: DVec3::new(2.0, 1.5, 0.0),
+                normal,
+            },
+        ];
+        let mesh = build_ribbon_mesh(&points, DVec3::ZERO, 0.2, 0.1).expect("ramp ribbon");
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .expect("ribbon positions")
+        else {
+            panic!("ribbon positions must be Float32x3");
+        };
+        let bevy::mesh::VertexAttributeValues::Float32x3(normals) = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .expect("ribbon normals")
+        else {
+            panic!("ribbon normals must be Float32x3");
+        };
+
+        assert!((positions[0][1] - 0.08).abs() < 1.0e-6);
+        assert!((positions[0][0] - (-0.06)).abs() < 1.0e-6);
+        assert!((normals[0][0] - (-0.6)).abs() < 1.0e-6);
+        assert!((normals[0][1] - 0.8).abs() < 1.0e-6);
+    }
+
+    #[test]
     fn contact_points_are_retained_without_an_analytic_dem() {
-        let points = [DVec3::new(1.0, 0.25, 2.0), DVec3::new(2.0, 0.5, 2.0)];
+        let contacts = [
+            flat_contact(DVec3::new(1.0, 0.25, 2.0)),
+            flat_contact(DVec3::new(2.0, 0.5, 2.0)),
+        ];
         let mut app = App::new();
         let system = app.world_mut().register_system(
             move |surface: lunco_terrain_surface::GridSurfaceQuery| {
                 project_trail_to_surface(
-                    points.into_iter(),
+                    contacts.into_iter(),
                     &surface,
                     TrailSurfaceMode::PhysicsContact,
                 )
             },
         );
         let projected = app.world_mut().run_system(system).unwrap();
-        assert_eq!(projected, Some(points.to_vec()));
+        assert_eq!(
+            projected,
+            Some(
+                contacts
+                    .into_iter()
+                    .map(|contact| RibbonPoint {
+                        position: contact.point,
+                        normal: contact.normal,
+                    })
+                    .collect()
+            )
+        );
     }
 
     #[test]
@@ -699,8 +893,8 @@ mod tests {
         let frame = Entity::from_bits(21);
         let wheel = Entity::from_bits(22);
         let mut history = VehicleTrailHistory::default();
-        history.record(frame, wheel, DVec3::ZERO);
-        history.record(frame, wheel, DVec3::X);
+        history.record(frame, wheel, flat_contact(DVec3::ZERO));
+        history.record(frame, wheel, flat_contact(DVec3::X));
 
         let mut app = App::new();
         let vehicle = app.world_mut().spawn((MobilityRoot, history)).id();
@@ -711,7 +905,16 @@ mod tests {
                 vehicle,
                 vec![TrailLane {
                     wheel,
-                    points: vec![DVec3::ZERO, DVec3::X],
+                    points: vec![
+                        RibbonPoint {
+                            position: DVec3::ZERO,
+                            normal: DVec3::Y,
+                        },
+                        RibbonPoint {
+                            position: DVec3::X,
+                            normal: DVec3::Y,
+                        },
+                    ],
                 }],
             )]),
         });

@@ -55,6 +55,17 @@ pub struct SurfaceHit {
     pub terrain: Entity,
 }
 
+/// A sampled analytic surface point in the active physics/grid frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceSample {
+    /// Point on the terrain surface in the active physics/grid frame.
+    pub point: GridPos,
+    /// Upward surface normal in the active physics/grid frame.
+    pub normal: DVec3,
+    /// Which terrain answered the query.
+    pub terrain: Entity,
+}
+
 /// A footprint fitted to the surface: where a body of a given size rests, and
 /// how it is oriented by the slope under it.
 #[derive(Clone, Copy, Debug)]
@@ -207,48 +218,53 @@ impl GridSurfaceQuery<'_, '_> {
         self.sample(p).map(|(_, y)| y)
     }
 
+    /// Sample the analytic surface point and its frame-correct normal together.
+    ///
+    /// Consumers that need geometry on the surface must use this method rather
+    /// than combining [`Self::height_at`] with a second normal calculation. The
+    /// terrain pose is applied to both values here, so a rotated or nested DEM
+    /// cannot produce a point in one frame and a normal in another.
+    pub fn sample_surface(&self, p: GridPos, eps: f64) -> Option<SurfaceSample> {
+        let (frame, _) = self.frame()?;
+        self.terrains.iter().find_map(|(entity, terrain, pose)| {
+            if pose.frame != frame {
+                return None;
+            }
+            let (position, rotation) = (pose.position, pose.rotation);
+            let local = rotation.inverse() * (p.0 - position);
+            let height = height_in_footprint(&terrain.0, GridPos(local))?;
+            let half = terrain.0.half_extent() as f64;
+            let normal = rotation
+                * DVec3::from_array(normal_at_bounded(
+                    terrain.0.as_ref(),
+                    local.x,
+                    local.z,
+                    eps.max(1.0e-6),
+                    half,
+                ));
+            let normal = normal.normalize_or_zero();
+            (normal.is_finite() && normal.length_squared() > 1.0e-12).then_some(SurfaceSample {
+                point: GridPos(position + rotation * DVec3::new(local.x, height, local.z)),
+                normal,
+                terrain: entity,
+            })
+        })
+    }
+
     /// Slope angle under a grid-absolute point, in radians.
     ///
     /// This keeps seminar/runtime diagnostics on the same analytic terrain
     /// authority as placement and route planning; render-overlay normals are
     /// view/LOD dependent and are not suitable for a measured grade.
     pub fn slope_at(&self, p: GridPos, eps: f64) -> Option<f64> {
-        let (frame, _) = self.frame()?;
-        self.terrains.iter().find_map(|(_entity, terrain, pose)| {
-            if pose.frame != frame {
-                return None;
-            }
-            let (position, rotation) = (pose.position, pose.rotation);
-            let local = rotation.inverse() * (p.0 - position);
-            height_in_footprint(&terrain.0, GridPos(local)).map(|_| {
-                let half = terrain.0.half_extent() as f64;
-                let normal =
-                    normal_at_bounded(terrain.0.as_ref(), local.x, local.z, eps.max(1.0e-6), half);
-                let normal = rotation * DVec3::from_array(normal);
-                normal
-                    .normalize_or_zero()
-                    .dot(DVec3::Y)
-                    .clamp(-1.0, 1.0)
-                    .acos()
-            })
-        })
+        self.sample_surface(p, eps)
+            .map(|sample| sample.normal.dot(DVec3::Y).clamp(-1.0, 1.0).acos())
     }
 
     /// [`Self::height_at`] plus which terrain answered.
     pub fn sample(&self, p: GridPos) -> Option<(Entity, f64)> {
-        let (frame, _) = self.frame()?;
-        for (entity, hf, pose) in self.terrains.iter() {
-            if pose.frame != frame {
-                continue;
-            }
-            let (position, rotation) = (pose.position, pose.rotation);
-            let local = rotation.inverse() * (p.0 - position);
-            if let Some(y) = height_in_footprint(&hf.0, GridPos(local)) {
-                let point = position + rotation * DVec3::new(local.x, y, local.z);
-                return Some((entity, point.y));
-            }
-        }
-        None
+        self.sample_surface(p, 1.0)
+            .map(|sample| (sample.terrain, sample.point.0.y))
     }
 
     /// Nearest analytic surface hit along a grid-absolute ray, across all DEMs.
@@ -498,7 +514,7 @@ mod tests {
         Arc::new(SurfaceOracle::bare(Arc::new(grid)))
     }
 
-    fn world_with_terrain(elevation: f64) -> (App, Entity) {
+    fn world_with_oracle(oracle: Arc<SurfaceOracle>) -> (App, Entity) {
         let mut app = App::new();
         let frame = app
             .world_mut()
@@ -507,17 +523,17 @@ mod tests {
         app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let terrain = app
             .world_mut()
-            .spawn((
-                DemHeightField(flat_dem_at(elevation, 500.0)),
-                Transform::IDENTITY,
-                ChildOf(frame),
-            ))
+            .spawn((DemHeightField(oracle), Transform::IDENTITY, ChildOf(frame)))
             .id();
         let project = app
             .world_mut()
             .register_system(update_terrain_physics_frame_poses);
         app.world_mut().run_system(project).unwrap();
         (app, terrain)
+    }
+
+    fn world_with_terrain(elevation: f64) -> (App, Entity) {
+        world_with_oracle(flat_dem_at(elevation, 500.0))
     }
 
     #[test]
@@ -538,6 +554,36 @@ mod tests {
         });
         let got = app.world_mut().run_system(sys).unwrap();
         assert_eq!(got, Some(0.0));
+    }
+
+    #[test]
+    fn sample_surface_returns_the_point_and_normal_in_one_active_frame() {
+        let res = 9;
+        let half_extent = 40.0_f32;
+        let spacing = 2.0 * half_extent as f64 / (res as f64 - 1.0);
+        let heights = (0..res * res)
+            .map(|index| {
+                let x = (index % res) as f64 * spacing - half_extent as f64;
+                2.0 + 0.5 * x
+            })
+            .collect();
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(HeightGrid {
+            res,
+            half_extent,
+            heights,
+        })));
+        let (mut app, _) = world_with_oracle(oracle);
+        let sys = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.sample_surface(GridPos(DVec3::new(3.0, 999.0, -7.0)), 0.5)
+        });
+        let sample = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .expect("the sloped DEM covers the query");
+
+        assert!((sample.point.0.y - 3.5).abs() < 1.0e-6);
+        assert!((sample.normal - DVec3::new(-0.5, 1.0, 0.0).normalize()).length() < 1.0e-6);
     }
 
     #[test]

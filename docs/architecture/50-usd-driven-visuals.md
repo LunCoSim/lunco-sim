@@ -60,15 +60,23 @@ actually travelled. `lunco-luncosim-edit::ui::trail::VehicleTrailPlugin` records
 topology-derived wheel after the solved physics step, in the active physics/grid frame.
 Raycast lanes use the wheel's retained Avian `RayHits` and the same mobility-owned
 contact-point geometry used by suspension and tire forces. Jointed lanes use the
-impulse-weighted points in Avian's contact manifolds. It never samples
-`GlobalTransform`, controller intent, or the authored route. The history is
-interpolated only to fill a large display-frame gap, capped at 1024 points per lane,
-and projected through `GridSurfaceQuery` before mesh generation. A missing surface
-sample fails that lane closed rather than drawing a detached chord through unknown
-ground.
+impulse-weighted points and support normals in Avian's contact manifolds, with the
+wheel/body orientation taken from the shared tire convention. A contact is a
+supported trail surface when it belongs to a static rigid body and its normal has
+an upward component; this includes ordinary authored static ramps such as the
+sandbox fixture without requiring a terrain marker, while excluding rover-to-rover
+contacts and vertical wall hits. It never samples `GlobalTransform`, controller
+intent, or the authored route. The history retains both point and support normal,
+interpolates them only to fill a large display-frame gap, is capped at 1024 points
+per lane, and uses the combined point+normal `GridSurfaceQuery` sample when an
+analytic DEM owns the location. A missing surface sample fails that lane closed
+rather than drawing a detached chord through unknown ground.
 
 Each trail lane reuses the route ribbon's world-space triangle-strip builder, with its
-own width and clearance. It is transient Bevy presentation parented to the active
+own width and clearance. The shared builder projects the tangent into each support
+plane, offsets clearance along the support normal, and writes that normal to the
+mesh; routes and trails therefore share one surface-frame geometry owner. It is
+transient Bevy presentation parented to the active
 physics frame; it is not USD topology, terrain deformation, telemetry, or a per-frame
 document edit. Scene teardown clears both the mesh and history, and an active-frame
 change starts a new history, so a later Twin or grid cannot inherit a stale path.

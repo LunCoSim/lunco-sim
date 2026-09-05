@@ -1141,8 +1141,8 @@ pub(crate) struct RouteVisualTarget {
 #[derive(Clone, Debug)]
 pub(crate) struct RouteVisualRoute {
     pub targets: Vec<RouteVisualTarget>,
-    pub green: Vec<DVec3>,
-    pub blue: Vec<DVec3>,
+    pub green: Vec<RibbonPoint>,
+    pub blue: Vec<RibbonPoint>,
     pub focused: bool,
 }
 
@@ -1646,15 +1646,24 @@ fn route_ribbon_points(
     (green, blue)
 }
 
+/// One point in a surface-aligned ribbon. Both route annotations and wheel
+/// trails use this same geometry contract so neither can silently flatten a
+/// sloped support surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RibbonPoint {
+    pub position: DVec3,
+    pub normal: DVec3,
+}
+
 /// Build a surface-separated ribbon through `points`, with vertices expressed
 /// relative to `anchor` (the entity's own origin) so f32 vertex precision stays
 /// tight regardless of how far the route sits from the world origin.
 ///
-/// `points` are grid-absolute positions returned by the terrain/waypoint
-/// projection. The route renderer adds one fixed presentation clearance to every
-/// vertex; it never reuses a marker's authored radius or local visual offset.
+/// `points` are grid-absolute positions and support normals returned by the
+/// authoritative route/trail projection. Clearance is measured along the
+/// support normal and the ribbon lies in that local support plane.
 pub(crate) fn build_ribbon_mesh(
-    points: &[DVec3],
+    points: &[RibbonPoint],
     anchor: DVec3,
     half_width: f32,
     surface_clearance: f32,
@@ -1670,21 +1679,22 @@ pub(crate) fn build_ribbon_mesh(
     let mut uv: Vec<[f32; 2]> = Vec::with_capacity(n * 2);
     let mut previous_right = None;
     for i in 0..n {
-        // Use the local route direction, flattened to the ground plane so the
-        // ribbon stays level across slopes instead of twisting. At a U-turn
-        // (the Apollo 15 W3 → W4 → W3 turnaround), the central difference is
-        // zero; keep the incoming direction there instead of inventing a
-        // world-axis tangent that breaks the ribbon at the waypoint.
-        let tan = route_tangent(points, i);
-        let right = route_right(tan, previous_right);
+        // Project the local path direction into the support plane so the ribbon
+        // follows slopes without twisting. At a U-turn (the Apollo 15 W3 → W4
+        // → W3 turnaround), the central difference is zero; keep the incoming
+        // direction there instead of inventing a world-axis tangent that breaks
+        // the ribbon at the waypoint.
+        let tan = ribbon_tangent(points, i);
+        let right = ribbon_right(tan, points[i].normal, previous_right);
         previous_right = Some(right);
         let right = right * half_width as f64;
-        let base = (points[i] - anchor).as_vec3() + Vec3::Y * surface_clearance;
+        let normal = points[i].normal.as_vec3();
+        let base = (points[i].position - anchor).as_vec3() + normal * surface_clearance;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
         pos.push((base + r).to_array());
-        nrm.push([0.0, 1.0, 0.0]);
-        nrm.push([0.0, 1.0, 0.0]);
+        nrm.push(normal.to_array());
+        nrm.push(normal.to_array());
         let v = i as f32;
         uv.push([0.0, v]);
         uv.push([1.0, v]);
@@ -1705,33 +1715,39 @@ pub(crate) fn build_ribbon_mesh(
     Some(mesh)
 }
 
-fn route_tangent(points: &[DVec3], index: usize) -> DVec3 {
+fn ribbon_tangent(points: &[RibbonPoint], index: usize) -> DVec3 {
     debug_assert!(!points.is_empty());
-    let current = points[index];
-    let prev = points[index.saturating_sub(1)];
-    let next = points[(index + 1).min(points.len() - 1)];
+    let current = points[index].position;
+    let normal = points[index].normal;
+    let prev = points[index.saturating_sub(1)].position;
+    let next = points[(index + 1).min(points.len() - 1)].position;
 
     let mut tangent = next - prev;
-    tangent.y = 0.0;
+    tangent -= normal * tangent.dot(normal);
     if tangent.length_squared() < 1.0e-9 {
         tangent = current - prev;
-        tangent.y = 0.0;
+        tangent -= normal * tangent.dot(normal);
     }
     if tangent.length_squared() < 1.0e-9 {
         tangent = next - current;
-        tangent.y = 0.0;
+        tangent -= normal * tangent.dot(normal);
     }
     if tangent.length_squared() < 1.0e-9 {
-        DVec3::Z
+        let reference = if normal.dot(DVec3::Z).abs() < 0.9 {
+            DVec3::Z
+        } else {
+            DVec3::X
+        };
+        normal.cross(reference).normalize_or_zero()
     } else {
         tangent.normalize()
     }
 }
 
-fn route_right(tangent: DVec3, previous_right: Option<DVec3>) -> DVec3 {
-    let mut right = tangent.cross(DVec3::Y);
+fn ribbon_right(tangent: DVec3, normal: DVec3, previous_right: Option<DVec3>) -> DVec3 {
+    let mut right = tangent.cross(normal);
     if right.length_squared() < 1.0e-9 {
-        right = DVec3::X;
+        right = normal.cross(DVec3::Z);
     }
     let mut right = right.normalize();
     // A route ribbon is an unoriented strip. Keep its lateral frame coherent
@@ -1773,15 +1789,26 @@ fn project_route_to_surface(
     path: &[DVec3],
     surface: &lunco_terrain_surface::GridSurfaceQuery,
     surface_present: bool,
-) -> Option<Vec<DVec3>> {
+) -> Option<Vec<RibbonPoint>> {
     if !surface_present {
-        return Some(path.to_vec());
+        return Some(
+            path.iter()
+                .copied()
+                .map(|position| RibbonPoint {
+                    position,
+                    normal: DVec3::Y,
+                })
+                .collect(),
+        );
     }
     path.iter()
         .map(|point| {
             surface
-                .height_at(lunco_core::coords::GridPos(*point))
-                .map(|height| DVec3::new(point.x, height, point.z))
+                .sample_surface(lunco_core::coords::GridPos(*point), 1.0)
+                .map(|sample| RibbonPoint {
+                    position: sample.point.0,
+                    normal: sample.normal,
+                })
         })
         .collect()
 }
@@ -1792,7 +1819,7 @@ fn route_geometry(
     closed: bool,
     surface: &lunco_terrain_surface::GridSurfaceQuery,
     surface_present: bool,
-) -> Option<Vec<DVec3>> {
+) -> Option<Vec<RibbonPoint>> {
     if points.len() < 2 {
         return None;
     }
@@ -2167,9 +2194,12 @@ fn route_mesh_signature(
         PathPart::Remaining => &route.blue,
     };
     for point in points {
-        point.x.to_bits().hash(&mut hash);
-        point.y.to_bits().hash(&mut hash);
-        point.z.to_bits().hash(&mut hash);
+        point.position.x.to_bits().hash(&mut hash);
+        point.position.y.to_bits().hash(&mut hash);
+        point.position.z.to_bits().hash(&mut hash);
+        point.normal.x.to_bits().hash(&mut hash);
+        point.normal.y.to_bits().hash(&mut hash);
+        point.normal.z.to_bits().hash(&mut hash);
     }
     hash.finish()
 }
@@ -2258,7 +2288,7 @@ pub(crate) fn sync_route_visual_meshes(
                 }
                 let Some(new_mesh) = build_ribbon_mesh(
                     points,
-                    points[0],
+                    points[0].position,
                     ROUTE_RIBBON_HALF_WIDTH_M,
                     ROUTE_SURFACE_CLEARANCE_M,
                 ) else {
@@ -2268,7 +2298,7 @@ pub(crate) fn sync_route_visual_meshes(
                 if parent == frame_entity {
                     if let Some(mut mesh) = meshes.get_mut(&handle) {
                         *mesh = new_mesh;
-                        let (cell, local) = grid.translation_to_grid(points[0]);
+                        let (cell, local) = grid.translation_to_grid(points[0].position);
                         commands.entity(entity).try_insert((
                             route_look(part, route.focused),
                             cell,
@@ -2286,7 +2316,7 @@ pub(crate) fn sync_route_visual_meshes(
                 // may be attached to an obsolete frame. In either case the old
                 // entity must not survive beside the replacement.
                 commands.entity(entity).try_despawn();
-                let (cell, local) = grid.translation_to_grid(points[0]);
+                let (cell, local) = grid.translation_to_grid(points[0].position);
                 commands.spawn((
                     Mesh3d(meshes.add(new_mesh)),
                     route_look(part, route.focused),
@@ -2304,13 +2334,13 @@ pub(crate) fn sync_route_visual_meshes(
             }
             let Some(mesh) = build_ribbon_mesh(
                 points,
-                points[0],
+                points[0].position,
                 ROUTE_RIBBON_HALF_WIDTH_M,
                 ROUTE_SURFACE_CLEARANCE_M,
             ) else {
                 continue;
             };
-            let (cell, local) = grid.translation_to_grid(points[0]);
+            let (cell, local) = grid.translation_to_grid(points[0].position);
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
                 route_look(part, route.focused),
@@ -2352,8 +2382,8 @@ pub(crate) fn clear_route_visual_projection(
 mod tests {
     use super::{
         has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
-        route_ribbon_points, route_right, route_tangent, route_visual_state, runtime_route_loops,
-        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        ribbon_right, ribbon_tangent, route_ribbon_points, route_visual_state, runtime_route_loops,
+        BehaviorXml, ReachedWaypoints, RibbonPoint, WAYPOINT_MARKER_ASSET,
     };
     use crate::surface_pick::{resolve_cursor_surface, SurfacePickPolicy};
     use bevy::math::DVec3;
@@ -2551,18 +2581,31 @@ mod tests {
     #[test]
     fn turnaround_uses_the_incoming_route_direction_for_ribbon_orientation() {
         let points = [
-            DVec3::new(0.0, 10.0, 0.0),
-            DVec3::new(10.0, 20.0, 0.0),
-            DVec3::new(0.0, 30.0, 0.0),
+            RibbonPoint {
+                position: DVec3::new(0.0, 10.0, 0.0),
+                normal: DVec3::Y,
+            },
+            RibbonPoint {
+                position: DVec3::new(10.0, 20.0, 0.0),
+                normal: DVec3::Y,
+            },
+            RibbonPoint {
+                position: DVec3::new(0.0, 30.0, 0.0),
+                normal: DVec3::Y,
+            },
         ];
 
-        assert_eq!(route_tangent(&points, 1), DVec3::X);
+        assert_eq!(ribbon_tangent(&points, 1), DVec3::X);
 
         let rights = points
             .iter()
             .enumerate()
             .scan(None, |previous, (index, _)| {
-                let right = route_right(route_tangent(&points, index), *previous);
+                let right = ribbon_right(
+                    ribbon_tangent(&points, index),
+                    points[index].normal,
+                    *previous,
+                );
                 *previous = Some(right);
                 Some(right)
             })

@@ -206,10 +206,8 @@ pub fn apply_jointed_tire_forces(
                     // The contact normal points from collider1 to collider2. Flip
                     // it when the wheel is collider/body1 so the tire sees the
                     // ground-to-wheel support normal.
-                    let normal = if wheel_is_body1 {
-                        -manifold.normal
-                    } else {
-                        manifold.normal
+                    let Some(normal) = crate::contact_normal_for_body(pair, manifold, wheel) else {
+                        continue;
                     };
                     let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
                     for point in &manifold.points {
