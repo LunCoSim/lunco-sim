@@ -668,6 +668,381 @@ fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
     result
 }
 
+// ── Existing-mount frame realignment ───────────────────────────────────────
+
+fn finite_vector3(value, label) {
+    if value == () || value.len() != 3 {
+        return plan_error(label + " must have three components");
+    }
+    for component in value {
+        if !component.is_finite() {
+            return plan_error(label + " must contain finite components");
+        }
+    }
+    #{ ok: true, value: value }
+}
+
+// Quaternion multiplication for the [x,y,z,w] representation used by the
+// public qrot() helper. The product has the same convention as Bevy/GLAM:
+// q_mul(a,b) applies b, then a.
+fn mount_quat_mul(a, b) {
+    [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ]
+}
+
+fn mount_quat_inverse(q) {
+    let length_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    [
+        -q[0] / length_sq,
+        -q[1] / length_sq,
+        -q[2] / length_sq,
+        q[3] / length_sq,
+    ]
+}
+
+// USD rotateXYZ is the fixed-axis/extrinsic sequence used by the existing
+// typed SetRotate contract. GLAM expresses it as Rz * Ry * Rx.
+fn mount_quat_from_xyz_deg(rotation) {
+    let half_x = rotation[0] * 0.008726646259971648;
+    let half_y = rotation[1] * 0.008726646259971648;
+    let half_z = rotation[2] * 0.008726646259971648;
+    let qx = [half_x.sin(), 0.0, 0.0, half_x.cos()];
+    let qy = [0.0, half_y.sin(), 0.0, half_y.cos()];
+    let qz = [0.0, 0.0, half_z.sin(), half_z.cos()];
+    mount_quat_mul(qz, mount_quat_mul(qy, qx))
+}
+
+fn mount_atan2(y, x) {
+    let half_pi = 1.5707963267948966;
+    let pi = 3.141592653589793;
+    if x > 0.0 { return (y / x).atan(); }
+    if x < 0.0 && y >= 0.0 { return (y / x).atan() + pi; }
+    if x < 0.0 && y < 0.0 { return (y / x).atan() - pi; }
+    if y > 0.0 { return half_pi; }
+    if y < 0.0 { return -half_pi; }
+    0.0
+}
+
+// Return the canonical XYZ degrees accepted by SetRotate. This is the same
+// decomposition as GLAM's EulerRot::XYZEx for Rz * Ry * Rx. The gimbal-lock
+// branch chooses zero Z, matching the shared typed transform reader.
+fn mount_xyz_deg_from_quat(q) {
+    let x = q[0];
+    let y = q[1];
+    let z = q[2];
+    let w = q[3];
+    let m00 = 1.0 - 2.0 * (y * y + z * z);
+    let m10 = 2.0 * (x * y + w * z);
+    let m20 = 2.0 * (x * z - w * y);
+    let m21 = 2.0 * (y * z + w * x);
+    let m22 = 1.0 - 2.0 * (x * x + y * y);
+    let cy = (m00 * m00 + m10 * m10).sqrt();
+    let radians_to_degrees = 57.29577951308232;
+    if cy > 1.0e-8 {
+        [
+            mount_atan2(m21, m22) * radians_to_degrees,
+            (-m20).asin() * radians_to_degrees,
+            mount_atan2(m10, m00) * radians_to_degrees,
+        ]
+    } else {
+        [
+            mount_atan2(-2.0 * (x * y - w * z), w * w + x * x - y * y - z * z)
+                * radians_to_degrees,
+            (-m20).asin() * radians_to_degrees,
+            0.0,
+        ]
+    }
+}
+
+fn mount_transform_identity() {
+    #{ translation: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0] }
+}
+
+// Compose a * b in the canonical stage frame. Scale is deliberately absent:
+// mount frames are rigid contracts, so a non-unit scale is rejected before a
+// proposal rather than silently baking scale into a rigid part placement.
+fn mount_transform_compose(a, b) {
+    #{
+        translation: vadd(a.translation, qrot(a.rotation, b.translation)),
+        rotation: mount_quat_mul(a.rotation, b.rotation),
+    }
+}
+
+fn mount_transform_inverse(value) {
+    let inverse_rotation = mount_quat_inverse(value.rotation);
+    #{
+        translation: vscale(qrot(inverse_rotation, value.translation), -1.0),
+        rotation: inverse_rotation,
+    }
+}
+
+fn mount_local_transform(doc, path) {
+    let record = query("QueryUsdPrim", #{
+        doc: doc,
+        path: path,
+        attrs: ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale", "xformOpOrder"],
+    });
+    if !query_ok(record) {
+        return plan_error(path + ": composed frame prim is unavailable");
+    }
+
+    let translate = record.attrs["xformOp:translate"];
+    let rotate = record.attrs["xformOp:rotateXYZ"];
+    let scale = record.attrs["xformOp:scale"];
+    let order = record.attrs["xformOpOrder"];
+    if order == () {
+        if translate != () || rotate != () || scale != () {
+            return plan_error(path + ": frame transform data requires an explicit xformOpOrder");
+        }
+        return #{ ok: true, value: mount_transform_identity() };
+    }
+
+    let result = mount_transform_identity();
+    let seen = [];
+    for op in order {
+        if op == "!resetXformStack!" || op.starts_with("!invert!") {
+            return plan_error(path + ": frame transforms cannot use reset or inverse xform ops");
+        }
+        if seen.contains(op) {
+            return plan_error(path + ": frame xformOpOrder repeats " + op);
+        }
+        seen.push(op);
+        let operation = mount_transform_identity();
+        if op == "xformOp:translate" {
+            let valid = finite_vector3(translate, path + " translation");
+            if !valid.ok { return valid; }
+            operation.translation = valid.value;
+        } else if op == "xformOp:rotateXYZ" {
+            let valid = finite_vector3(rotate, path + " rotateXYZ");
+            if !valid.ok { return valid; }
+            operation.rotation = mount_quat_from_xyz_deg(valid.value);
+        } else if op == "xformOp:scale" {
+            let valid = finite_vector3(scale, path + " scale");
+            if !valid.ok { return valid; }
+            for component in valid.value {
+                if (component - 1.0).abs() > 1.0e-9 {
+                    return plan_error(path + ": mount frames require unit scale");
+                }
+            }
+        } else {
+            return plan_error(path + ": unsupported rigid frame operation " + op);
+        }
+        // USD's ordered stack is multiplied left-to-right. Thus the first
+        // listed operation is the left matrix factor, as in the typed reader.
+        result = mount_transform_compose(result, operation);
+    }
+    #{ ok: true, value: result }
+}
+
+// Compose a frame below a body root while intentionally excluding the body
+// root's own placement. This mirrors the existing mount reader, but remains a
+// dynamically replaceable authoring policy: only the resulting generic typed
+// ops cross into Rust.
+fn mount_frame_in_body(doc, body_root, frame_path) {
+    if frame_path != body_root && !frame_path.starts_with(body_root + "/") {
+        return plan_error(frame_path + ": frame is outside body root " + body_root);
+    }
+    if frame_path == body_root {
+        return #{ ok: true, value: mount_transform_identity() };
+    }
+
+    let current = frame_path;
+    let accumulated = mount_local_transform(doc, current);
+    if !accumulated.ok { return accumulated; }
+    let value = accumulated.value;
+    while parent_path(current) != body_root {
+        current = parent_path(current);
+        let local = mount_local_transform(doc, current);
+        if !local.ok { return local; }
+        value = mount_transform_compose(local.value, value);
+    }
+    #{ ok: true, value: value }
+}
+
+fn mount_relationship_targets(record, name) {
+    if !query_ok(record) || record.relationships == () || record.relationships[name] == () {
+        return [];
+    }
+    record.relationships[name]
+}
+
+fn mount_count_target(targets, expected) {
+    let count = 0;
+    for target in targets {
+        if target == expected { count += 1; }
+    }
+    count
+}
+
+/// Build one atomic plan to realign an already attached part to its explicit
+/// socket and plug frames. This is the dynamic counterpart of the Editor's
+/// mount snap: moving either authored frame is enough to recalculate the part
+/// and the exact recorded joint anchor. It never creates or removes topology.
+///
+/// The reader deliberately supports only canonical, rigid `translate` and
+/// `rotateXYZ` stacks with unit scale. Unsupported matrices, inverse stacks,
+/// non-unit scales, malformed values, missing relationships, and mismatched
+/// body identities fail before proposal/commit. That narrow contract keeps the
+/// tool safe to hot-reload while the generic USD owner remains authoritative
+/// for target validation, journalling, and projection.
+fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
+    part_path, joint_path) {
+    if doc == () || edit_target == () || host_path == () || socket_path == ()
+        || part_path == () || joint_path == () {
+        return plan_error("mount_frame_realignment_plan requires document, edit target, host, socket, part, and joint paths");
+    }
+    for path in [host_path, socket_path, part_path, joint_path] {
+        if !path.starts_with("/") || path.ends_with("/") {
+            return plan_error("mount_frame_realignment_plan paths must be absolute USD paths");
+        }
+    }
+    if part_path == host_path || !part_path.starts_with(host_path + "/") {
+        return plan_error("mounted part must be a strict descendant of the host body");
+    }
+    if socket_path == host_path || !socket_path.starts_with(host_path + "/") {
+        return plan_error("socket must be a strict descendant of the host body");
+    }
+
+    let host = query("QueryUsdPrim", #{
+        doc: doc,
+        path: host_path,
+        rels: ["lunco:mount:sockets"],
+    });
+    if !query_ok(host) {
+        return plan_error(host_path + ": mount host is unavailable");
+    }
+    let advertised = mount_relationship_targets(host, "lunco:mount:sockets");
+    if mount_count_target(advertised, socket_path) != 1 {
+        return plan_error(socket_path + ": socket must be advertised exactly once by its host");
+    }
+
+    let socket = query("QueryUsdPrim", #{
+        doc: doc,
+        path: socket_path,
+        attrs: ["lunco:mount:socket", "lunco:mount:joint", "lunco:mount:axis"],
+        rels: ["lunco:mount:part"],
+    });
+    if !query_ok(socket) {
+        return plan_error(socket_path + ": authored socket is unavailable");
+    }
+    let socket_kind = socket.attrs["lunco:mount:socket"];
+    let joint_kind = socket.attrs["lunco:mount:joint"];
+    if socket_kind == () || socket_kind == "" || joint_kind == () || joint_kind == "" {
+        return plan_error(socket_path + ": socket requires explicit mount kind and joint kind");
+    }
+    if joint_kind != "fixed" && joint_kind != "revolute" && joint_kind != "prismatic" {
+        return plan_error(socket_path + ": unsupported authored mount joint kind");
+    }
+    if (joint_kind == "revolute" || joint_kind == "prismatic")
+        && !cardinal_axis(socket.attrs["lunco:mount:axis"]) {
+        return plan_error(socket_path + ": articulated socket requires X, Y, or Z axis");
+    }
+    let occupied = mount_relationship_targets(socket, "lunco:mount:part");
+    if occupied.len() != 1 || occupied[0] != part_path {
+        return plan_error(socket_path + ": socket occupancy must name the exact mounted part");
+    }
+
+    let part = query("QueryUsdPrim", #{
+        doc: doc,
+        path: part_path,
+        attrs: ["lunco:mount:plug"],
+        rels: ["lunco:mount:frame", "lunco:mount:attachmentJoint"],
+    });
+    if !query_ok(part) {
+        return plan_error(part_path + ": mounted part is unavailable");
+    }
+    if part.attrs["lunco:mount:plug"] != socket_kind {
+        return plan_error(part_path + ": plug kind does not match the authored socket kind");
+    }
+    let plug_frames = mount_relationship_targets(part, "lunco:mount:frame");
+    if plug_frames.len() != 1 {
+        return plan_error(part_path + ": mount frame relationship must have exactly one target");
+    }
+    let plug_path = plug_frames[0];
+    if plug_path == part_path || !plug_path.starts_with(part_path + "/") {
+        return plan_error(plug_path + ": plug frame must be a descendant of its part");
+    }
+    let attachment_joints = mount_relationship_targets(part, "lunco:mount:attachmentJoint");
+    if attachment_joints.len() != 1 || attachment_joints[0] != joint_path {
+        return plan_error(part_path + ": attachment joint relationship must name the exact supplied joint");
+    }
+
+    let joint = query("QueryUsdPrim", #{
+        doc: doc,
+        path: joint_path,
+        rels: ["physics:body0", "physics:body1"],
+    });
+    if !query_ok(joint) {
+        return plan_error(joint_path + ": attachment joint is unavailable");
+    }
+    let body0 = mount_relationship_targets(joint, "physics:body0");
+    let body1 = mount_relationship_targets(joint, "physics:body1");
+    if body0.len() != 1 || body0[0] != host_path
+        || body1.len() != 1 || body1[0] != part_path {
+        return plan_error(joint_path + ": joint body relationships do not match host and part");
+    }
+
+    let socket_frame = mount_frame_in_body(doc, host_path, socket_path);
+    if !socket_frame.ok { return socket_frame; }
+    let plug_frame = mount_frame_in_body(doc, part_path, plug_path);
+    if !plug_frame.ok { return plug_frame; }
+    let placement = mount_transform_compose(
+        socket_frame.value, mount_transform_inverse(plug_frame.value),
+    );
+    let placement_rotation = mount_xyz_deg_from_quat(placement.rotation);
+    let translation = finite_vector3(placement.translation, "resolved mount translation");
+    if !translation.ok { return translation; }
+    let rotation = finite_vector3(placement_rotation, "resolved mount rotation");
+    if !rotation.ok { return rotation; }
+    let local_pos0 = assembly_edit::tuple3_literal(placement.translation);
+    let local_pos1 = assembly_edit::tuple3_literal([0.0, 0.0, 0.0]);
+    if local_pos0 == () || local_pos1 == () {
+        return plan_error("resolved mount placement could not be serialized");
+    }
+
+    #{
+        ok: true,
+        kind: "mount_frame_realignment",
+        host_path: host_path,
+        socket_path: socket_path,
+        part_path: part_path,
+        plug_path: plug_path,
+        joint_path: joint_path,
+        placement: placement.translation,
+        rotation: placement_rotation,
+        ops: [
+            #{ SetTranslate: #{
+                edit_target: edit_target,
+                path: part_path,
+                value: placement.translation,
+            }},
+            #{ SetRotate: #{
+                edit_target: edit_target,
+                path: part_path,
+                value: placement_rotation,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: joint_path,
+                name: "physics:localPos0",
+                type_name: "point3f",
+                value: local_pos0,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: joint_path,
+                name: "physics:localPos1",
+                type_name: "point3f",
+                value: local_pos1,
+            }},
+        ],
+    }
+}
+
 /// Read a local translation while rejecting transforms this simple alignment
 /// policy cannot interpret. A missing translate opinion is USD identity.
 fn local_translation(doc, path) {

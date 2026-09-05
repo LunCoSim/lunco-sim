@@ -26,7 +26,8 @@ components, they never restate them**.
 For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
 placement, Cube and composed collision alignment/clearance,
-referenced-part mounting, and body/joint plans. The
+referenced-part mounting, existing-mount frame realignment, and body/joint
+plans. The
 mission-level `griffin_flip_builder.rhai` library composes those helpers into
 paired Griffin ramp, validated four-wheel FLIP layout, and complete
 lander/adapter/rover manifest recipes. Use these plans with the existing
@@ -43,6 +44,12 @@ or thermal choices with `assembly_builder::select_variants_plan`; variant
 selection is a subtree recompose and is intentionally a second reviewed plan.
 The recipe and its validation remain editable Rhai, so changing the vehicle
 authoring policy does not require a Rust-core rebuild.
+
+When a vehicle part is already attached and a socket or plug frame moves, use
+`assembly_builder::mount_frame_realignment_plan` with the exact authored paths.
+The tool composes nested `translate`/`rotateXYZ` unit-scale frames, updates the
+part and its recorded joint anchor atomically through the review boundary, and
+rejects invalid topology or non-rigid frame data before any USD edit.
 
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`

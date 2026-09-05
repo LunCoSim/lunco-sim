@@ -75,6 +75,14 @@ existing `AttachComponent` owner remains responsible for plug-frame math,
 reference lowering, occupancy, and atomic journalling. Do not copy a reference
 and guess a transform when the component already advertises a mount plug.
 
+For a part that is already mounted, use
+`assembly_builder::mount_frame_realignment_plan` with the exact host, socket,
+part, and recorded-joint paths. It is a dynamic Rhai plan for nested canonical
+rigid frame composition and emits the part transform plus both exact joint
+anchors as one reviewed operation set. It preserves topology and fails before
+proposal on missing/ambiguous relationships, wrong plug/body identity,
+unsupported frame stacks, malformed values, or non-unit scale.
+
 When a model is a reusable referenced assembly rather than a socket attachment,
 use `assembly_builder::referenced_instance_plan` or
 `assembly_builder::flip_rover_instance_plan` for the explicit identity and

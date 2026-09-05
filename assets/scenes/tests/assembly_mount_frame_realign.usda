@@ -1,0 +1,165 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyMountFrameRealignTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Acceptance fixture for dynamic Rhai mount-frame realignment. The host's
+# authored placement is intentionally non-zero: frame composition must exclude
+# the body root itself and return a host-local part transform. Both valid and
+# invalid contracts stay in this fixture so the scenario can exercise the
+# same plan builder before any operation is proposed.
+def Xform "AssemblyMountFrameRealignTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Chassis" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountHostAPI"]
+    )
+    {
+        float physics:mass = 20.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        double3 xformOp:translate = (50.0, 2.0, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel lunco:mount:sockets = [
+            </AssemblyMountFrameRealignTest/Chassis/Interfaces/SocketBank/snap>,
+            </AssemblyMountFrameRealignTest/Chassis/Interfaces/SocketBank/bad_scale>
+        ]
+
+        def Xform "Interfaces"
+        {
+            def Xform "SocketBank"
+            {
+                double3 xformOp:translate = (1.0, 0.0, 0.0)
+                double3 xformOp:rotateXYZ = (0.0, 0.0, 30.0)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+                def Xform "snap" (
+                    kind = "subcomponent"
+                    prepend apiSchemas = ["LunCoMountSocketAPI"]
+                )
+                {
+                    uniform token lunco:mount:socket = "payload"
+                    uniform token lunco:mount:joint = "fixed"
+                    rel lunco:mount:part = </AssemblyMountFrameRealignTest/Chassis/Payload>
+                    double3 xformOp:translate = (0.0, 2.0, 0.0)
+                    double3 xformOp:rotateXYZ = (0.0, 0.0, 45.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+                }
+
+                # This socket is a complete but invalid mount contract. Its
+                # non-unit frame scale must be rejected before a proposal.
+                def Xform "bad_scale" (
+                    kind = "subcomponent"
+                    prepend apiSchemas = ["LunCoMountSocketAPI"]
+                )
+                {
+                    uniform token lunco:mount:socket = "bad_payload"
+                    uniform token lunco:mount:joint = "fixed"
+                    rel lunco:mount:part = </AssemblyMountFrameRealignTest/Chassis/BadPayload>
+                    double3 xformOp:translate = (0.0, -2.0, 0.0)
+                    double3 xformOp:scale = (2.0, 1.0, 1.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                }
+            }
+        }
+
+        def Xform "Payload" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI", "LunCoMountAttachmentAPI"]
+        )
+        {
+            float physics:mass = 2.0
+            float3 physics:diagonalInertia = (0.5, 0.5, 0.5)
+            # Deliberately wrong; the scenario replaces it with the composed
+            # socket-to-plug placement in the host-local frame.
+            double3 xformOp:translate = (8.0, -2.0, 0.0)
+            double3 xformOp:rotateXYZ = (0.0, 0.0, 90.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            uniform token lunco:mount:plug = "payload"
+            rel lunco:mount:frame = </AssemblyMountFrameRealignTest/Chassis/Payload/Interfaces/PlugBank/hub>
+            rel lunco:mount:attachmentJoint = </AssemblyMountFrameRealignTest/Chassis/Constraints/PayloadMount>
+
+            def Xform "Interfaces"
+            {
+                def Xform "PlugBank"
+                {
+                    double3 xformOp:translate = (0.5, 0.0, 0.0)
+                    double3 xformOp:rotateXYZ = (0.0, 0.0, -15.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+                    def Xform "hub" (
+                        kind = "subcomponent"
+                    )
+                    {
+                        double3 xformOp:translate = (0.0, 0.5, 0.0)
+                        uniform token[] xformOpOrder = ["xformOp:translate"]
+                    }
+                }
+            }
+        }
+
+        def Xform "BadPayload" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI", "LunCoMountAttachmentAPI"]
+        )
+        {
+            float physics:mass = 2.0
+            float3 physics:diagonalInertia = (0.5, 0.5, 0.5)
+            uniform token lunco:mount:plug = "bad_payload"
+            rel lunco:mount:frame = </AssemblyMountFrameRealignTest/Chassis/BadPayload/Interfaces/hub>
+            rel lunco:mount:attachmentJoint = </AssemblyMountFrameRealignTest/Chassis/Constraints/BadPayloadMount>
+
+            def Xform "Interfaces"
+            {
+                def Xform "hub" (
+                    kind = "subcomponent"
+                )
+                {
+                    double3 xformOp:translate = (0.0, 0.0, 0.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate"]
+                }
+            }
+        }
+
+        def Scope "Constraints"
+        {
+            def PhysicsFixedJoint "PayloadMount"
+            {
+                rel physics:body0 = </AssemblyMountFrameRealignTest/Chassis>
+                rel physics:body1 = </AssemblyMountFrameRealignTest/Chassis/Payload>
+                point3f physics:localPos0 = (8.0, -2.0, 0.0)
+                point3f physics:localPos1 = (0.0, 0.0, 0.0)
+                quatf physics:localRot0 = (0.7933533, 0.0, 0.0, 0.6087614)
+                quatf physics:localRot1 = (0.9914449, 0.0, 0.0, -0.1305262)
+            }
+
+            def PhysicsFixedJoint "BadPayloadMount"
+            {
+                rel physics:body0 = </AssemblyMountFrameRealignTest/Chassis>
+                rel physics:body1 = </AssemblyMountFrameRealignTest/Chassis/BadPayload>
+                point3f physics:localPos0 = (0.0, 0.0, 0.0)
+                point3f physics:localPos1 = (0.0, 0.0, 0.0)
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-mount-frame-realign"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_mount_frame_realign.rhai@
+        }
+    }
+}

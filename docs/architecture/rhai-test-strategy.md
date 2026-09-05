@@ -171,6 +171,7 @@ separate scenes.
 | Explicit camera, light, composed geometry, collision, and fixed-joint wiring | `assets/scenes/tests/authored_runtime_contracts.usda` + `authored_runtime_contracts.rhai` | `authored_runtime_contracts_negative.usda` + matching Rhai | `QueryUsdPrim`, authored camera track, `Raycast`, `GroundHeight` |
 | Composed battery/solar envelopes | `battery_mounts` | `battery_mounts_negative` | `QueryUsdPrim` and world poses |
 | Component socket, plug-kind, and joint rejection | `socket_attach_rejection` | same fixture's rejected command cases | public `AttachComponent` |
+| Existing-mount nested-frame snap, joint-anchor update, and invalid-frame rejection | `assembly_mount_frame_realign` | same fixture's rejected Rhai plans | dynamic `assembly_builder` plan plus `QueryUsdPrim` |
 | Reload/reset and event-gated authored policy | `component_detach`, `rhai_event_delivery` | `rhai_event_delivery_negative` | public commands and telemetry |
 | Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
 | Possession and handoff authority | `tutorial_authority_handoff`, `descent_lander_runtime` | authority-conflict cases in those scenarios | semantic commands, events, and final owner |
