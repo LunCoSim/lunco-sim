@@ -252,6 +252,13 @@ distance joints and generic `PhysicsJoint` have no primary axis. Use
 authored frames. Run `assembly_joint_audit` for the diagnostic regression.
 
 For numeric part transforms, use the focused preview's Inspector Transform
+section for referenced children as well as locally authored parts. Wait for
+the component's dependency closure to load before proposing transforms; a
+missing composed child must reject, not be manufactured by a preliminary
+attribute edit. Check inherited transform order and undo with the authored
+`referenced_part_edit` graphics regression when changing this owner.
+
+Use the Inspector Transform
 section or call the existing `assembly_edit::transform(doc, edit_target, path,
 translation, rotation, scale, parent_gen)` helper with the exact selection
 context. Preview values are local canonical metres, Euler XYZ degrees, and

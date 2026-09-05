@@ -32,7 +32,7 @@ use crate::{UsdRead, UsdStageAsset};
 /// [`fetch_layer_closure`](crate::compose)). The loader uses it to prepare the
 /// initial projection plan; the canonical owner uses the same recipe to open
 /// the live `!Send` stage for authoring and incremental re-projection.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StageRecipe {
     pub root_id: String,
     pub bytes: HashMap<String, Vec<u8>>,

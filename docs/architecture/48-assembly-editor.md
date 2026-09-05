@@ -251,6 +251,15 @@ disposable fork, including negative selection and revision cases. Its real
 `SELECTION_AI_WORKFLOW` verdict is required; a completed render frame alone is
 not acceptance of the workflow or of a user's design.
 
+Transform commands validate referenced children through the document's loaded
+dependency closure, supplied by the existing canonical stage. The document
+recomposes its current authored opinions with that closure for each operation,
+so a rename followed by a child transform in one proposal uses the new path.
+Inherited `xformOpOrder` comes from that composition; the edit authors only an
+`over` and the changed properties in the selected layer. Dependency data is
+never flattened into saved source. `referenced_part_edit` exercises this path,
+missing-target rejection, inherited scale, and grouped undo.
+
 The Inspector uses that same lease boundary for numeric transform edits. A
 selected entity under the focused preview root is edited as its composed USD
 prim's local canonical transform: the controls display metres, Euler XYZ
