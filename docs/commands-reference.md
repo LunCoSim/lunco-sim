@@ -201,53 +201,44 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `vessel` | `Entity` |  The vessel entity to toggle autopilot on/off. |
 
-#### `ToggleJointViz`
+#### `AcquireDiagnosticVisual`
 
- Toggle joint / wheel-force visualization.
+ Acquire one explicit camera or runtime-collider diagnostic lease. The API
+ bridge resolves the stable target `api_id`; the returned `lease_id` is opaque.
+ Repeating the same target/kind/policy is idempotent.
 
- `#[Command(default)]` → all-false. Pass only the flags you want on.
- Rhai: `cmd("ToggleJointViz", #{show_joints: true, show_wheel_forces: true})`.
-
-- *defined in:* `crates/lunco-luncosim-edit/src/joint_viz.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `show_joints` | `bool` |  Show joint anchors + axes. |
-| `show_wheel_forces` | `bool` |  Show wheel force boxes + arrows. |
-
-#### `TogglePhysicsArrows`
-
- Typed command to flip the global physics-arrows toggle from the
- API / scripts / UI buttons.
-
- Empty / default fields mean "don't change that flag" — but
- `#[Command(default)]` produces a struct of all-false, so callers
- who want "only velocity" pass `{"velocity": true}` and the rest
- stays as supplied (or defaults to false). Idempotent.
-
-- *defined in:* `crates/lunco-luncosim-edit/src/physics_viz.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `enabled` | `bool` |  Master enable. |
-| `velocity` | `bool` |  Velocity arrows on every dynamic body when `enabled`. |
-| `force` | `bool` |  Force arrows on every dynamic body when `enabled`. Ignored  for bodies without a `ConstantForce`. |
+| `target` | `Entity` |  Explicit camera or collider entity. |
+| `kind` | `String` |  `camera` or `collider`. |
+| `policy` | `String` |  Optional `default` presentation policy. |
 
-#### `TogglePhysicsGizmo`
+#### `ReleaseDiagnosticVisual`
 
- Toggle the selected-body dynamics / frames gizmo.
+ Release an opaque temporary diagnostic lease. Releasing an already-released
+ or stale handle returns a visible command failure.
 
- `#[Command(default)]` → all-false; pass only the flags you want on.
- Rhai: `cmd("TogglePhysicsGizmo", #{show_mass: true, show_forces: true})`.
- Leaves `newtons_per_meter` untouched.
-
-- *defined in:* `crates/lunco-luncosim-edit/src/physics_gizmo.rs`
+- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `show_mass` | `bool` |  CoM + inertia layer. |
-| `show_forces` | `bool` |  Force-arrows layer. |
-| `show_frames` | `bool` |  Body-frame triads layer. |
+| `lease` | `u64` |  Opaque lease id from `AcquireDiagnosticVisual`. |
+
+#### `UpdateDiagnosticVisual`
+
+ Update an existing explicit diagnostic lease in place. Unchanged updates do
+ not rebuild the diagnostic snapshot or create another overlay.
+
+- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `lease` | `u64` |  Opaque lease id from `AcquireDiagnosticVisual`. |
+| `target` | `GlobalEntityId` |  Optional replacement stable `api_id`; omitted to keep the current target. |
+| `kind` | `String` |  Optional replacement kind. |
+| `policy` | `String` |  Optional replacement `default` policy. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 

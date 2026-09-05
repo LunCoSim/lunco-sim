@@ -1,13 +1,13 @@
 # Temporary diagnostic visuals — one lease, one render path
 
-> Status: Design · Audience: contributors adding camera, collider, frame, or
-> dynamics diagnostics
+> Status: Implemented · Audience: contributors adding camera, collider, frame,
+> or dynamics diagnostics
 
-This document defines the future contract for temporary camera and collider
+This document defines the contract for temporary camera and collider
 visualization. It is a runtime diagnostic view, not authored scene content. The
-design deliberately reuses the existing `Gizmos`, USD, Avian, BigSpace,
-viewport, tool, and lifecycle owners. It does not add a USD schema, a second
-scene model, or a second camera/physics path.
+implementation reuses the existing `Gizmos`, USD, Avian, BigSpace, viewport,
+tool, and lifecycle owners. It does not add a USD schema, a second scene model,
+or a second camera/physics path.
 
 ## Decision
 
@@ -33,11 +33,9 @@ isolation, and cleanup. No diagnostic operation writes USD, Avian state,
 
 The existing `physics_viz.rs`, `joint_viz.rs`, and `physics_gizmo.rs` are the
 source-backed implementation precedents: they already use immediate-mode
-`Gizmos`, read runtime state, and keep presentation outside USD. Their separate
-global toggle commands (`TogglePhysicsArrows`, `ToggleJointViz`, and
-`TogglePhysicsGizmo`) must be migrated under this lease boundary when the
-feature is implemented; a fourth toggle API is not allowed. The migration
-removes the old commands and resources in the same implementation change.
+`Gizmos`, read runtime state, and keep presentation outside USD. Their former
+global toggle commands and resources are now represented by built-in entries in
+this same lease store; a fourth toggle API is not allowed.
 
 This lease is only for transient diagnostics. Authored geometry, route ribbons,
 motion trails, HUDs, and the transform gizmo retain their existing owners and
@@ -68,8 +66,7 @@ topology, not to rebuild a second collider.
 
 ## Lease contract
 
-The implementation adds one typed command family, with names illustrative until
-the command schema is authored:
+The implementation adds one typed command family:
 
 ```text
 AcquireDiagnosticVisual { target, kind, policy } → DiagnosticVisualLease
@@ -234,9 +231,9 @@ beside the state it writes.
 
 ## Test and acceptance plan
 
-The implementation should add only tests that protect generic mechanism seams;
-observable behavior belongs in an authored Rhai scenario exercised by the
-production binary.
+The implementation adds only generic mechanism tests in Rust; observable
+behavior belongs in an authored Rhai scenario exercised by the production
+binary.
 
 ### Focused mechanism checks
 
@@ -257,8 +254,10 @@ Author `assets/scenes/tests/diagnostic_visuals.usda` from standard `UsdGeom`,
 
 1. explicit camera acquire/update/release and the camera's actual projection;
 2. explicit collider acquire for a simple and compound body;
-3. a missing target, unsupported collider, stale handle, and headless
-   `render_unavailable` result;
+3. a missing target, unsupported collider, stale handle, and the headless
+   render boundary (the editor command surface is unavailable without a
+   viewport; a registered command rejects a missing viewport as
+   `render_unavailable`);
 4. Twin add/close and scene reload, proving isolation and revocation;
 5. unchanged repeated commands, proving no duplicate lease or geometry;
 6. no USD or physics-port changes after the diagnostic commands.

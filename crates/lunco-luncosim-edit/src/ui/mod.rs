@@ -8,12 +8,12 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, ControlBinding, InputPorts, TheLocalAvatar};
+use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAvatar};
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
-    PerspectiveId, VIEWPORT_PANEL_ID, ViewportPanel, WorkbenchAppExt, WorkbenchLayout,
+    PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
 };
 
 pub mod asset_visibility;
@@ -1006,9 +1006,9 @@ impl Plugin for SceneEditUiPlugin {
     }
 }
 
-/// Register checkbox rows in the workbench Settings menu for the joint
-/// and wheel-force gizmos. Mutates [`joint_viz::JointVizSettings`]
-/// directly; the resource is not persisted (debug toggle, defaults off).
+/// Register checkbox rows in the workbench Settings menu for the temporary
+/// diagnostics. All rows update the shared lease store; the resource is not
+/// persisted and is cleared at scene teardown.
 fn register_debug_viz_settings(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
@@ -1016,44 +1016,66 @@ fn register_debug_viz_settings(world: &mut World) {
     };
     layout.register_settings_submenu("Debug visualization", |ui, ctx| {
         ui.label(egui::RichText::new("Debug Visualization").weak().small());
-        let Some(mut settings) = ctx
-            .resource::<crate::joint_viz::JointVizSettings>()
-            .copied()
+        let Some(mut store) = ctx
+            .resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
+            .cloned()
         else {
             return;
         };
-        let original_settings = settings;
-        let Some(mut gizmo) = ctx
-            .resource::<crate::physics_gizmo::PhysicsGizmoSettings>()
-            .copied()
-        else {
-            return;
-        };
-        let original_gizmo = gizmo;
-        ui.checkbox(&mut settings.show_joints, "Show joints")
+        let root = ctx
+            .resource::<SceneMountState>()
+            .and_then(SceneMountState::active_root);
+        let mut show_joints =
+            store.builtin_enabled(crate::diagnostic_visuals::DiagnosticVisualKind::Joints);
+        let mut show_wheel_forces =
+            store.builtin_enabled(crate::diagnostic_visuals::DiagnosticVisualKind::WheelForces);
+        let mut show_mass =
+            store.builtin_enabled(crate::diagnostic_visuals::DiagnosticVisualKind::PhysicsMass);
+        let mut show_forces =
+            store.builtin_enabled(crate::diagnostic_visuals::DiagnosticVisualKind::PhysicsForces);
+        let mut show_frames =
+            store.builtin_enabled(crate::diagnostic_visuals::DiagnosticVisualKind::PhysicsFrames);
+        let original = (
+            show_joints,
+            show_wheel_forces,
+            show_mass,
+            show_forces,
+            show_frames,
+        );
+        ui.checkbox(&mut show_joints, "Show joints")
             .on_hover_text("Draw anchor dots + axis lines for every Avian joint");
-        ui.checkbox(&mut settings.show_wheel_forces, "Show wheel forces")
+        ui.checkbox(&mut show_wheel_forces, "Show wheel forces")
             .on_hover_text("Draw a force box + arrow at every wheel");
-        ui.checkbox(&mut gizmo.show_mass, "Selected-body mass")
+        ui.checkbox(&mut show_mass, "Selected-body mass")
             .on_hover_text(
                 "CoM marker + inertia ellipsoid/axes for the selected \
                  vessel and its rigid-body parts",
             );
-        ui.checkbox(&mut gizmo.show_forces, "Selected-body forces")
+        ui.checkbox(&mut show_forces, "Selected-body forces")
             .on_hover_text(
                 "Tire, normal-load, gravity and net-force arrows for the \
                  selected vessel and its rigid-body parts",
             );
-        ui.checkbox(&mut gizmo.show_frames, "Selected-body frames")
+        ui.checkbox(&mut show_frames, "Selected-body frames")
             .on_hover_text(
                 "XYZ frame triads (RGB = XYZ) + revolute anchors for the \
                  selected vessel's rigid-body parts",
             );
-        if settings != original_settings {
-            ctx.set_resource(settings);
-        }
-        if gizmo != original_gizmo {
-            ctx.set_resource(gizmo);
+        let current = (
+            show_joints,
+            show_wheel_forces,
+            show_mass,
+            show_forces,
+            show_frames,
+        );
+        if current != original {
+            use crate::diagnostic_visuals::DiagnosticVisualKind as Kind;
+            store.set_builtin(Kind::Joints, show_joints, root);
+            store.set_builtin(Kind::WheelForces, show_wheel_forces, root);
+            store.set_builtin(Kind::PhysicsMass, show_mass, root);
+            store.set_builtin(Kind::PhysicsForces, show_forces, root);
+            store.set_builtin(Kind::PhysicsFrames, show_frames, root);
+            ctx.set_resource(store);
         }
     });
 }

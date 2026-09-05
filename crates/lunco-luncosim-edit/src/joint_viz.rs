@@ -1,8 +1,8 @@
 //! Joint + wheel-force visualization gizmos.
 //!
-//! Mirrors `physics_viz.rs`'s pattern: a global [`JointVizSettings`]
-//! resource + a [`ToggleJointViz`] [`Command`](lunco_core::Command) for
-//! UI / API / Rhai parity (`cmd("ToggleJointViz", #{show_joints: true})`).
+//! Reads the shared diagnostic lease store for the editor's scene-wide joint
+//! and wheel-force policies. Camera and collider diagnostics use the same
+//! store through explicit acquire/update/release commands.
 //!
 //! Two independent layers, each toggled separately:
 //!
@@ -19,49 +19,15 @@
 //! Both systems early-return when their flag is off, so the cost is
 //! effectively zero when visualization is disabled.
 
+use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};
 use avian3d::dynamics::joints::{DistanceJoint, SphericalJoint};
 use avian3d::prelude::{
     FixedJoint, JointAnchor, JointForces, JointFrame, LinearVelocity, PrismaticJoint,
     RevoluteJoint, RigidBody,
 };
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
 use lunco_mobility::{JointedWheelTire, WheelBodyMount, WheelRaycast};
 use lunco_usd_sim::PhysicalWheel;
-
-// ── Settings resource + typed command ────────────────────────────────────
-
-/// Global toggle for joint + wheel-force visualization.
-///
-/// Flip via [`ToggleJointViz`] command (UI / API / Rhai).
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
-pub struct JointVizSettings {
-    /// Draw anchor dots + axis lines for all Avian joints.
-    pub show_joints: bool,
-    /// Draw a force box + arrow at every wheel.
-    pub show_wheel_forces: bool,
-}
-
-/// Toggle joint / wheel-force visualization.
-///
-/// `#[Command(default)]` → all-false. Pass only the flags you want on.
-/// Rhai: `cmd("ToggleJointViz", #{show_joints: true, show_wheel_forces: true})`.
-#[Command(default)]
-pub struct ToggleJointViz {
-    /// Show joint anchors + axes.
-    pub show_joints: bool,
-    /// Show wheel force boxes + arrows.
-    pub show_wheel_forces: bool,
-}
-
-#[on_command(ToggleJointViz)]
-fn on_toggle_joint_viz(trigger: On<ToggleJointViz>, mut settings: ResMut<JointVizSettings>) {
-    let cmd = trigger.event();
-    settings.show_joints = cmd.show_joints;
-    settings.show_wheel_forces = cmd.show_wheel_forces;
-}
-
-register_commands!(on_toggle_joint_viz,);
 
 // ── Visual constants ─────────────────────────────────────────────────────
 
@@ -143,7 +109,7 @@ fn arrow_vector(vector: Vec3, meters_per_unit: f32) -> Option<Vec3> {
 /// anchor positions and axis (if any) extracted from the joint data.
 pub fn draw_joint_viz(
     mut gizmos: Gizmos,
-    settings: Res<JointVizSettings>,
+    settings: Res<DiagnosticVisualStore>,
     q_revolute: Query<&RevoluteJoint>,
     q_prismatic: Query<&PrismaticJoint>,
     q_fixed: Query<&FixedJoint>,
@@ -151,7 +117,7 @@ pub fn draw_joint_viz(
     q_distance: Query<&DistanceJoint>,
     q_transforms: Query<&GlobalTransform>,
 ) {
-    if !settings.show_joints {
+    if !settings.builtin_enabled(DiagnosticVisualKind::Joints) {
         return;
     }
 
@@ -234,7 +200,7 @@ pub fn draw_joint_viz(
 /// rocker-bogie) and `WheelRaycast` (raycast, e.g. skid/Ackermann).
 pub fn draw_wheel_force_viz(
     mut gizmos: Gizmos,
-    settings: Res<JointVizSettings>,
+    settings: Res<DiagnosticVisualStore>,
     q_physical: Query<
         (&GlobalTransform, Option<&LinearVelocity>, &JointedWheelTire),
         With<PhysicalWheel>,
@@ -251,7 +217,7 @@ pub fn draw_wheel_force_viz(
     q_bodies: Query<&GlobalTransform, With<RigidBody>>,
     q_joint_forces: Query<&JointForces>,
 ) {
-    if !settings.show_wheel_forces {
+    if !settings.builtin_enabled(DiagnosticVisualKind::WheelForces) {
         return;
     }
 

@@ -1,0 +1,111 @@
+#usda 1.0
+(
+    defaultPrim = "DiagnosticVisualsTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Small production fixture for the runtime diagnostic lease boundary. Camera
+# and collider facts are ordinary USD scene data; the overlays themselves are
+# never authored into this stage.
+def Xform "DiagnosticVisualsTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Explicit camera, simple collider, and compound collider targets for diagnostic lease tests."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Camera "VisualCamera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        double3 lunco:cameraLookAt = (0.0, 1.0, -6.0)
+        double3 xformOp:translate = (0.0, 3.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 28.0
+        float2 clippingRange = (0.1, 1000.0)
+    }
+
+    def Camera "ReviewCamera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        double3 lunco:cameraLookAt = (0.0, 1.0, -6.0)
+        double3 xformOp:translate = (0.0, 4.0, 18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 35.0
+        float2 clippingRange = (0.1, 1000.0)
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "VisualCamera",
+        }
+    }
+
+    def Cube "SimpleBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.5
+        double3 xformOp:translate = (-2.0, 1.0, -6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        color3f[] primvars:displayColor = [(0.85, 0.25, 0.15)]
+    }
+
+    def Xform "CompoundBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double3 xformOp:translate = (2.0, 1.0, -6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 3.0
+        bool physics:rigidBodyEnabled = false
+
+        def Cube "HullA" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-0.65, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            bool physics:collisionEnabled = true
+            color3f[] primvars:displayColor = [(0.15, 0.4, 0.85)]
+        }
+
+        def Cube "HullB" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0.65, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            bool physics:collisionEnabled = true
+            color3f[] primvars:displayColor = [(0.2, 0.65, 0.9)]
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "diagnostic-visuals"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/diagnostic_visuals.rhai@
+        }
+    }
+}

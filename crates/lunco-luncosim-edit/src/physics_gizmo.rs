@@ -28,8 +28,7 @@
 //! - **Frames** (separate toggle) — an XYZ triad (RGB = XYZ) at every
 //!   rigid body's origin, oriented by its `GlobalTransform` rotation,
 //!   plus anchor dots for `RevoluteJoint`s connecting bodies of the
-//!   selection. Other joint types are already covered scene-wide by
-//!   `joint_viz.rs` (`ToggleJointViz`).
+//!   selection. Other joint types are covered scene-wide by `joint_viz.rs`.
 //!
 //! ## Legend
 //!
@@ -63,16 +62,12 @@
 //!
 //! ## Toggle path
 //!
-//! Off by default. Three independent layers (`show_mass` = CoM +
-//! inertia, `show_forces` = force arrows, `show_frames` = triads +
-//! pins), each reachable three equivalent ways:
-//! - Workbench **Settings menu → Debug Visualization → "Selected-body
-//!   mass" / "Selected-body forces" / "Selected-body frames"**
-//!   (registered in `ui/mod.rs`);
-//! - typed command, UI/API/Rhai parity:
-//!   `cmd("TogglePhysicsGizmo", #{show_mass: true, show_forces: true, show_frames: true})`;
-//! - the [`PhysicsGizmoSettings`] resource directly.
+//! The three layers are leases in the shared diagnostic store. The workbench
+//! Settings menu creates or releases the corresponding scene-scoped lease;
+//! camera and collider leases use the typed API/Rhai acquire/update/release
+//! commands.
 
+use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};
 use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::prelude::{
     ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Gravity, JointAnchor, JointFrame,
@@ -81,75 +76,10 @@ use avian3d::prelude::{
 use bevy::color::palettes::tailwind;
 use bevy::prelude::*;
 use lunco_core::coords::ancestor_grid_anchor;
-use lunco_core::{on_command, register_commands, Command, GridAnchor};
+use lunco_core::GridAnchor;
 use lunco_mobility::WheelRaycast;
 
 use lunco_scene_commands::SelectedEntities;
-
-// ── Settings resource + typed command ────────────────────────────────────
-
-/// Global toggle + tuning for the selected-body dynamics gizmo.
-///
-/// Off by default; flip via the workbench Settings menu, the
-/// [`TogglePhysicsGizmo`] command, or this resource directly.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
-pub struct PhysicsGizmoSettings {
-    /// Draw CoM markers + inertia ellipsoids/axes for the selected
-    /// vessel and its rigid-body descendants.
-    pub show_mass: bool,
-    /// Draw force arrows (tire, normal load, gravity, net integrator)
-    /// for the same set. Independent of `show_mass` so a mass-budget
-    /// pass isn't cluttered by arrows and vice versa.
-    pub show_forces: bool,
-    /// Draw body-frame XYZ triads (+ revolute anchors) for the same
-    /// set. Independent so an engineer chasing a frame-mixing bug can
-    /// see triads without the dynamics clutter.
-    pub show_frames: bool,
-    /// Force-arrow scale: how many newtons map to one metre of arrow.
-    /// Linear, then clamped to [`MAX_ARROW_LEN`]. 500 N/m makes a
-    /// ~150 kg lunar rover's per-wheel load (~60 N) read at ~12 cm and
-    /// an Earth-weight chassis (~1.5 kN) saturate visibly.
-    pub newtons_per_meter: f32,
-}
-
-impl Default for PhysicsGizmoSettings {
-    fn default() -> Self {
-        Self {
-            show_mass: false,
-            show_forces: false,
-            show_frames: false,
-            newtons_per_meter: 500.0,
-        }
-    }
-}
-
-/// Toggle the selected-body dynamics / frames gizmo.
-///
-/// `#[Command(default)]` → all-false; pass only the flags you want on.
-/// Rhai: `cmd("TogglePhysicsGizmo", #{show_mass: true, show_forces: true})`.
-/// Leaves `newtons_per_meter` untouched.
-#[Command(default)]
-pub struct TogglePhysicsGizmo {
-    /// CoM + inertia layer.
-    pub show_mass: bool,
-    /// Force-arrows layer.
-    pub show_forces: bool,
-    /// Body-frame triads layer.
-    pub show_frames: bool,
-}
-
-#[on_command(TogglePhysicsGizmo)]
-fn on_toggle_physics_gizmo(
-    trigger: On<TogglePhysicsGizmo>,
-    mut settings: ResMut<PhysicsGizmoSettings>,
-) {
-    let cmd = trigger.event();
-    settings.show_mass = cmd.show_mass;
-    settings.show_forces = cmd.show_forces;
-    settings.show_frames = cmd.show_frames;
-}
-
-register_commands!(on_toggle_physics_gizmo,);
 
 // ── Visual constants ─────────────────────────────────────────────────────
 
@@ -176,6 +106,7 @@ const NET_FORCE_COLOR: Srgba = tailwind::ROSE_400;
 const AXIS_X_COLOR: Srgba = tailwind::RED_500;
 const AXIS_Y_COLOR: Srgba = tailwind::GREEN_500;
 const AXIS_Z_COLOR: Srgba = tailwind::BLUE_500;
+const NEWTONS_PER_METER: f32 = 500.0;
 
 // ── Selection scope ──────────────────────────────────────────────────────
 
@@ -228,7 +159,7 @@ fn force_arrow(force: Vec3, newtons_per_meter: f32) -> Option<Vec3> {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_physics_gizmo(
     mut gizmos: Gizmos,
-    settings: Res<PhysicsGizmoSettings>,
+    settings: Res<DiagnosticVisualStore>,
     selected: Res<SelectedEntities>,
     q_parents: Query<&ChildOf>,
     q_anchors: Query<(), With<GridAnchor>>,
@@ -247,7 +178,9 @@ pub fn draw_physics_gizmo(
     q_gtf: Query<&GlobalTransform>,
     gravity: Option<Res<Gravity>>,
 ) {
-    if !settings.show_mass && !settings.show_forces {
+    let show_mass = settings.builtin_enabled(DiagnosticVisualKind::PhysicsMass);
+    let show_forces = settings.builtin_enabled(DiagnosticVisualKind::PhysicsForces);
+    if !show_mass && !show_forces {
         return;
     }
     let Some(subtree) = selected_subtree(&selected, &q_parents, &q_anchors, &q_children) else {
@@ -259,7 +192,7 @@ pub fn draw_physics_gizmo(
         .map(|tf| tf.rotation() * Vec3::Y)
         .unwrap_or(Vec3::Y);
     let g = gravity.map(|g| g.0.as_vec3());
-    let npm = settings.newtons_per_meter;
+    let npm = NEWTONS_PER_METER;
 
     for &entity in &subtree {
         // Rigid-body layer: CoM, inertia, gravity, net force.
@@ -273,7 +206,7 @@ pub fn draw_physics_gizmo(
                 .unwrap_or_else(|| gtf.translation());
 
             // CoM marker — sphere + cross so it reads at any zoom.
-            if settings.show_mass {
+            if show_mass {
                 gizmos.sphere(com_world, COM_RADIUS, COM_COLOR);
                 for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
                     gizmos.line(
@@ -285,7 +218,7 @@ pub fn draw_physics_gizmo(
             }
 
             // Equivalent solid ellipsoid from the principal moments.
-            if let (true, Some(m), Some(inertia)) = (settings.show_mass, mass, inertia) {
+            if let (true, Some(m), Some(inertia)) = (show_mass, mass, inertia) {
                 let m = m.value() as f32;
                 if m > 0.0 {
                     let (principal, local_frame) =
@@ -334,7 +267,7 @@ pub fn draw_physics_gizmo(
                 }
             }
 
-            if let (true, Some(m)) = (settings.show_forces, mass) {
+            if let (true, Some(m)) = (show_forces, mass) {
                 let m = m.value() as f32;
                 // Gravity m·g at the CoM. `Gravity` is a grid-frame
                 // vector; grids never rotate, so it is direction-valid
@@ -361,7 +294,7 @@ pub fn draw_physics_gizmo(
         // Wheel layer: tire + normal forces at the hub. `tire_force`
         // is a grid-frame vector (direction-valid in render, see
         // above); the hub anchor point comes from `GlobalTransform`.
-        if !settings.show_forces {
+        if !show_forces {
             continue;
         }
         if let Ok((wheel, gtf)) = q_wheels.get(entity) {
@@ -389,7 +322,7 @@ pub fn draw_physics_gizmo(
 /// render-frame pose the body actually has.
 pub fn draw_frame_gizmo(
     mut gizmos: Gizmos,
-    settings: Res<PhysicsGizmoSettings>,
+    settings: Res<DiagnosticVisualStore>,
     selected: Res<SelectedEntities>,
     q_parents: Query<&ChildOf>,
     q_anchors: Query<(), With<GridAnchor>>,
@@ -397,7 +330,7 @@ pub fn draw_frame_gizmo(
     q_bodies: Query<&GlobalTransform, With<RigidBody>>,
     q_revolute: Query<&RevoluteJoint>,
 ) {
-    if !settings.show_frames {
+    if !settings.builtin_enabled(DiagnosticVisualKind::PhysicsFrames) {
         return;
     }
     let Some(subtree) = selected_subtree(&selected, &q_parents, &q_anchors, &q_children) else {
