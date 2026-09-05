@@ -357,6 +357,31 @@ namespace moves, payload arcs, and non-destructive activation. They do not
 expose raw source replacement; a caller must inspect the exact path and pass
 the returned generation.
 
+The physics plan helpers `rigid_body_plan` and `revolute_joint_plan` compose
+the repeated standard USD facts needed by a moving assembly part. They return
+typed operation arrays for `batch` or `propose`; they do not mutate a document
+or create a second physics owner. `rigid_body_plan` requires mass, centre of
+mass, and diagonal inertia and applies both `PhysicsRigidBodyAPI` and
+`PhysicsMassAPI`. `revolute_joint_plan` requires both body paths, both local
+anchors, both local quaternions, a cardinal axis, ordered degree limits, and
+the explicit collision policy. Shape geometry, transforms, and kinematic
+state remain caller-authored facts. These builders make a complete
+reviewable body/joint plan easy to produce without hiding missing topology;
+the existing USD validators and `assembly_audit` reports remain authoritative.
+
+Semantic construction belongs one layer above these low-level planners in the
+hot-reloadable `assembly_builder` Rhai tool library. `place_plan` emits the
+standard local transform operations; `cube_plan` and `movable_cube_plan`
+compose ordinary `UsdGeom`/`UsdPhysics` shape, collider, body, mass, and
+placement facts; `hinge_plan` delegates to the framed revolute planner; and
+`align_centers_plan`/`align_cube_edges_plan` compute placements only from
+explicit queried paths and authored extents. The alignment helpers reject
+different parents, unsupported local rotations, missing shapes, invalid axes,
+and invalid edge signs instead of guessing. These are dynamic Rhai policy
+tools, so a domain author can add or replace a construction policy without
+rebuilding Rust; they still return the existing typed plans and cannot bypass
+review, generation checks, journalling, or USD composition.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
 `parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,

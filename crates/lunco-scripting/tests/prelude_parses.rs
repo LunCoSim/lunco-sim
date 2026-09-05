@@ -118,6 +118,8 @@ fn usd_authoring_surface_is_namespaced() {
         "payload",
         "active",
         "batch",
+        "rigid_body_plan",
+        "revolute_joint_plan",
         "attach_component",
         "detach_component",
         "attach_program",

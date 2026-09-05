@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyLayoutBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Acceptance fixture for semantic placement and alignment tools. The scenario
+# changes only standard local transforms; the two cubes provide authored
+# extents for the alignment policy to inspect.
+def Xform "AssemblyLayoutBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+        def Xform "Target"
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            {
+                double size = 2.0
+                double3 xformOp:scale = (1.0, 1.0, 1.0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+
+        def Xform "Moving"
+        {
+            double3 xformOp:translate = (4.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            def Cube "Shape"
+            {
+                double size = 1.0
+                double3 xformOp:scale = (1.0, 1.0, 1.0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-layout-builder"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_layout_builder.rhai@
+        }
+    }
+}
