@@ -1,4 +1,4 @@
-# LunCoSim: open-source system-level simulation for space missions 🌎🚀🌚
+# LunCoSim
 
 [![Discord](https://img.shields.io/discord/979381990220513320?style=flat-square&label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/A6U3GdvQum)
 [![X](https://img.shields.io/badge/Follow-%40LunCoSim-000000?style=flat-square&logo=x&logoColor=white)](https://twitter.com/LunCoSim)
@@ -7,105 +7,76 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-brightgreen?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
-**LunCoSim** is an open-source system-level co-simulation platform for space missions. It connects OpenUSD scene composition, equation-based Modelica behavior, rigid-body mechanics, terrain, mission policy, and API control so teams can study how a vehicle and its mission behave together.
+### Build a space mission. See how it behaves.
 
-[**Website**](https://lunco.space/) | [**Documentation Hub**](docs/README.md) | [**Join Discord**](https://discord.gg/A6U3GdvQum)
+LunCoSim is an open-source simulation workbench for space engineers,
+researchers, and students. Assemble vehicles and environments, connect physical
+models, and explore how a system behaves throughout an operation.
 
----
+A rover's suspension, its controller, and the terrain all affect the same
+traverse. LunCoSim brings those interactions into one scene, with models you
+can inspect, parameters you can change, and telemetry you can follow.
 
-## 🛰 The mission: make system behavior executable
+[**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
+· [Tutorials](docs/tutorials/README.md)
+· [Watch demos](https://www.youtube.com/@LunCoSim)
+· [Join the community](https://discord.gg/A6U3GdvQum)
 
-Subsystem studies answer important discipline questions. LunCoSim adds the mission context: the rover, environment, resources, controls, and operations can be exercised together so the interactions between them are visible before a design decision hardens.
+## What can you do with it?
 
-### Current platform capabilities
+- **Build and drive a rover.** Assemble a vehicle, explore wheel and suspension
+  behavior, and observe its interaction with terrain.
+- **Connect equations to motion.** Wire a Modelica controller to a lander's
+  rigid-body physics and inspect the feedback loop.
+- **Explore subsystem behavior.** Edit electrical, thermal, and mechanical
+  models in the embedded Modelica workbench, run parameter studies, and compare
+  plots.
+- **Script an operation.** Define mission phases, waypoints, and responses to
+  events, then inspect the resulting state through the UI or API.
 
-| Capability | Current path | Engineering value |
-|---|---|---|
-| **System composition** | **OpenUSD** | Compose the vehicle, environment, ports, parameters, and authored mission topology from inspectable scene data. |
-| **Equation-based behavior** | **Modelica + dynamic synthesis** | Generate connected electrical, thermal, and other continuous models from the assembled system while preserving physical connection semantics. |
-| **Mechanics and environment** | **Rigid-body physics + terrain** | Exercise vehicle motion, contacts, route geometry, and environmental interactions in the same study. |
-| **Mission policy** | **Rhai scenarios** | Express objectives, phases, autonomy, observations, and event responses without moving continuous control math into ad hoc scripts. |
-| **Automation and control** | **HTTP/MCP/API boundaries** | Let engineers, scripts, and AI agents inspect state, issue commands, run scenarios, and compare outcomes through the same runtime boundary. |
-| **Reproducible implementation** | **Rust + open source** | Inspect the runtime, authored assets, scenarios, tests, and generated-model path in one public repository. |
+Start with the [lander and rover walkthrough](docs/tutorials/01-lander-rover-mission.md)
+or see [how a Modelica model drives a physical vehicle](docs/tutorials/03-cosim.md).
 
----
+## Your mission is an editable project
 
-## 🛠 Key Capabilities
+A **Twin** is a project folder containing the scene, models, scripts, and
+configuration. OpenUSD describes the assembly and its connections; Modelica
+describes continuous behavior; Rhai scripts describe the operation. You can
+reuse components and change authored models and scenarios without rebuilding
+the Rust engine.
 
-- **System-level co-simulation**: Connect specialized participants around one mission question instead of treating every subsystem result as an isolated answer.
-- **Large-frame spatial precision**: Use an f64 spatial foundation for vehicle-scale geometry and large mission frames in one scene.
-- **AI-ready operation**: Agents and scripts can inspect state, issue typed commands, run scenarios, and compare outcomes through the same boundary used by engineers.
-- **Scriptable mission policy**: Attach authored Rhai scenarios for lifecycle hooks, sensing, objectives, and event-driven behavior. Continuous control laws remain in Modelica and engine kernels; see the **[Scripting Guide](docs/scripting-guide.md)**.
-- **Inspectability**: Keep OpenUSD composition, generated Modelica source, runtime telemetry, diagnostics, and mission evidence connected to the study.
+The same command interface serves the workbench, scripts, and AI agents, so
+you can move from interactive exploration to automated studies.
 
----
+[Create your first Twin](docs/tutorials/00-create-a-twin.md)
+· [Explore the component library](docs/component-index.md)
+· [Automate through the API](docs/apps/README.md#talking-to-a-running-app--http-api--mcp)
 
-## 🏁 Fast Track
+## Try it
 
-### ▶ Download and run locally
-Use the **[latest release](https://github.com/LunCoSim/lunco-sim/releases/latest)** for a packaged build. The website’s **[download guide](https://lunco.space/download)** explains how to choose a release, start with a mission question, and trace the resulting study.
+1. Download the installer for your platform from [GitHub Releases](https://github.com/LunCoSim/lunco-sim/releases).
+   See the [installation guide](docs/apps/luncosim/README.md#desktop-updates) for package details.
+2. Open the app's Tutorials menu. Start with **View, Build & Lunica** to find
+   your way around, then **First Drive** to try a rover.
+3. Follow a [walkthrough](docs/tutorials/README.md#authoring-walkthroughs) to build your own project.
 
-### 💻 Run locally
+LunCoSim is under active development. Model coverage and maturity vary;
+engineering conclusions need validation for their intended use. Check the
+[feature status](specs/README.md) and [known limitations](docs/reviews/README.md).
 
-```bash
-git clone https://github.com/LunCoSim/lunco-sim.git
-cd lunco-sim
-```
+## Build with us
 
-Then launch the entry point that fits your goal:
+Have a mission to model, a component to contribute, or a result to compare?
+[Bring it to Discord](https://discord.gg/A6U3GdvQum).
+For bugs, [open an issue](https://github.com/LunCoSim/lunco-sim/issues) with the
+release version, steps to reproduce, and expected behavior.
 
-### 1. LunCoSim — the mission simulator
-The production simulator loads composed USD scenes and provides ground physics,
-rover/mobility tools, scene editing, mission operation, and the embedded
-Modelica workbench.
+[Build from source](docs/apps/README.md#build-from-source)
+· [Documentation](docs/README.md)
+· [Contributor and agent guide](AGENTS.md)
+· [Roadmap and integrations](docs/architecture/engineering-backlog-and-standards.md)
 
-```bash
-cargo build -p lunco-luncosim --bin luncosim
-target/debug/luncosim
-```
-
-After building, use `target/debug/luncosim` directly for launches, validation,
-and scene tests. The former sandbox executable name is retired.
-
-### 2. Lunica — the engineering workbench
-Focus on Modelica modeling, schematic diagramming, and subsystem analysis.
-
-```bash
-cargo run --bin lunica
-```
-
-> **Driving it from code or an AI agent?** Launch any app with `--api` and drive it over HTTP/MCP — see the **[AI Agent Guide](AGENTS.md)** and the task-oriented **[skills](skills/)**.
-
----
-
-## 🏗 Ecosystem & Governance
-
-- **[Documentation Hub](docs/README.md)** — Usage guides and architectural deep-dives.
-- **[Scripting Guide](docs/scripting-guide.md)** — Write hot-reloadable rhai scenarios & mission timelines.
-- **[AI Agent Guide](AGENTS.md)** & **[Skills](skills/)** — Drive and extend LunCoSim from code or an AI agent.
-- **[Crates Index](docs/crates-index.md)** — A map of our 60+ specialized crates.
-- **[Principles](docs/principles.md)** — Our non-negotiable mandates: TDD-First, Headless-First, and Tunability.
-
----
-
-## 🗺️ Planned integrations
-
-The following items describe future integration work, not current website or runtime claims.
-
-| Milestone | Status | Description |
-|---|---|---|
-| **System-Level Core** | ✅ Foundation | Multi-domain co-simulation (USD + Modelica + Avian3D) with f64 precision. |
-| **Real-world Validation** | 📝 Planned | **HIL/SIL Integration** (Spec 027) for Hardware-in-the-loop validation. |
-| **Industrial Interop** | 📝 Planned | **NASA GMAT** (Spec 022) for orbital mechanics and **ROS2** for robotics control. |
-| **Advanced Physics** | 📝 Planned | **PINN-based Terramechanics** (Spec 025) for high-fidelity regolith interaction. |
-| **Autonomous Missions** | 📝 Planned | **Agent-Driven Sim** (Spec 033) and **Mission Replay/Audit** (Spec 020). |
-
----
-
-## 🤝 Community & Vision
-
-LunCo is built by a global community of engineers and researchers making professional space engineering tools accessible to everyone.
-
-- [**Discord**](https://discord.gg/A6U3GdvQum) | [**Twitter**](https://twitter.com/LunCoSim) | [**LinkedIn**](https://www.linkedin.com/company/luncosim/) | [**YouTube**](https://www.youtube.com/@LunCoSim)
-
-**Want to join the mission?** [**Apply to the core team**](https://tally.so/r/3jX6aE).
+LunCoSim is licensed under [Apache 2.0](LICENSE).
+[Website](https://lunco.space/)
+· [LinkedIn](https://www.linkedin.com/company/luncosim/)
+· [X](https://twitter.com/LunCoSim)
