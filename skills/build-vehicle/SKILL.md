@@ -25,8 +25,8 @@ components, they never restate them**.
 
 For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
-placement, alignment, composed collision-clearance, referenced-part mounting,
-and body/joint plans. The
+placement, Cube and composed collision alignment/clearance,
+referenced-part mounting, and body/joint plans. The
 mission-level `griffin_flip_builder.rhai` library composes those helpers into
 paired Griffin ramp, validated four-wheel FLIP layout, and complete
 lander/adapter/rover manifest recipes. Use these plans with the existing

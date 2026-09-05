@@ -405,6 +405,15 @@ unsupported collision data, overlap, duplicate paths, and rotated frames fail
 before a proposal is created. This keeps positioning policy hot-reloadable in
 Rhai while shape, purpose, ownership, and transform semantics remain singular.
 
+The same envelope contract provides `align_collision_centers_plan` and
+`align_collision_edges_plan`. They align aggregate body bounds on an explicit
+axis and edge sign, preserve the other authored translation components, and
+emit ordinary reviewed `SetTranslate` operations. They reject different
+parents, rotated/scaled frame chains, missing or malformed collision geometry,
+invalid axes/edges, and ambiguous paths before proposal. This gives general
+parts the same deterministic snap behavior as Cube alignment without turning
+the Rhai library into a second geometry reader.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
 `parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,

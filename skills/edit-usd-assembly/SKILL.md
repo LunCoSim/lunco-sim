@@ -407,6 +407,13 @@ Use the smallest existing typed intent that expresses the change:
   duplicated collision envelopes before proposal. This is the preferred
   dynamic Rhai path for general assembly placement; it does not duplicate
   primitive dimensions or write USD directly.
+- For general-body snap editing, use
+  `assembly_builder::align_collision_centers_plan` or
+  `assembly_builder::align_collision_edges_plan`. They align aggregate
+  composed bounds for exact sibling paths on an explicit axis, edge, and gap,
+  preserve unrelated translation components, and return reviewed
+  `SetTranslate` plans. The same translation-only parent-chain and
+  malformed/missing collision-data checks apply.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.

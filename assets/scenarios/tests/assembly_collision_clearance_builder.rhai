@@ -9,6 +9,7 @@ const MOVING = ASSEMBLY + "/MovingCylinder";
 const VISUAL_ONLY = ASSEMBLY + "/VisualOnly";
 const ROTATED = ASSEMBLY + "/RotatedBlocker";
 const MALFORMED = ASSEMBLY + "/MalformedBlocker";
+const MISSING = ASSEMBLY + "/MissingBody";
 
 fn query_ok(record) {
     record != () && record.ok != false
@@ -89,6 +90,18 @@ fn on_tick(me) {
                 "shared query exposes the composed Cylinder bounds"),
             t_true(this.compound_bounds_ok == true,
                 "shared query aggregates the compound blocker bounds"),
+            t_true(this.center_alignment_ok == true,
+                "collision-envelope centre alignment returns the expected local placement"),
+            t_true(this.edge_alignment_ok == true,
+                "collision-envelope edge alignment preserves the requested gap"),
+            t_true(this.invalid_axis_rejected == true,
+                "collision-envelope alignment rejects invalid axes"),
+            t_true(this.invalid_edge_rejected == true,
+                "collision-envelope alignment rejects invalid edge signs"),
+            t_true(this.missing_alignment_rejected == true,
+                "collision-envelope alignment rejects missing bodies"),
+            t_true(this.alignment_rotated_rejected == true,
+                "collision-envelope alignment rejects rotated body frames"),
             t_true(this.valid_plan == true
                 && this.valid_plan_kind == "collision_clearance_placement",
                 "valid collision input returns a typed placement plan"),
@@ -131,6 +144,40 @@ fn on_tick(me) {
     this.compound_bounds_ok = blocker_record.collision_bounds.frame == "canonical_stage"
         && blocker_record.collision_bounds.center[0].abs() <= 0.001
         && (blocker_record.collision_bounds.half_extents[0] - 2.0).abs() <= 0.001;
+
+    let center_alignment = assembly_builder::align_collision_centers_plan(
+        this.doc, "@root@", MOVING, BLOCKER, "X", 0.0,
+    );
+    let edge_alignment = assembly_builder::align_collision_edges_plan(
+        this.doc, "@root@", MOVING, BLOCKER, "X", -1, 1, 0.25,
+    );
+    let invalid_axis = assembly_builder::align_collision_centers_plan(
+        this.doc, "@root@", MOVING, BLOCKER, "W", 0.0,
+    );
+    let invalid_edge = assembly_builder::align_collision_edges_plan(
+        this.doc, "@root@", MOVING, BLOCKER, "X", 0, 1, 0.25,
+    );
+    let missing_alignment = assembly_builder::align_collision_centers_plan(
+        this.doc, "@root@", MOVING, MISSING, "X", 0.0,
+    );
+    let rotated_alignment = assembly_builder::align_collision_centers_plan(
+        this.doc, "@root@", MOVING, ROTATED, "X", 0.0,
+    );
+    if !center_alignment.ok || !edge_alignment.ok || invalid_axis.ok
+        || invalid_edge.ok || missing_alignment.ok || rotated_alignment.ok {
+        fail(this, "collision-envelope alignment did not enforce its explicit input contract");
+        return;
+    }
+    this.center_alignment_ok = center_alignment.kind == "collision_center_alignment"
+        && center_alignment.ops.len() == 1
+        && center_alignment.ops[0].SetTranslate.value[0].abs() <= 0.001;
+    this.edge_alignment_ok = edge_alignment.kind == "collision_edge_alignment"
+        && edge_alignment.ops.len() == 1
+        && (edge_alignment.ops[0].SetTranslate.value[0] - 2.75).abs() <= 0.001;
+    this.invalid_axis_rejected = invalid_axis.error.contains("axis");
+    this.invalid_edge_rejected = invalid_edge.error.contains("moving_edge");
+    this.missing_alignment_rejected = missing_alignment.error.contains("composed prim is unavailable");
+    this.alignment_rotated_rejected = rotated_alignment.error.contains("translation-only");
 
     let valid = assembly_builder::place_with_collision_clearance_plan(
         this.doc, "@root@", MOVING, [3.0, 0.0, 0.0],

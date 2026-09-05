@@ -697,6 +697,113 @@ fn composed_collision_bounds(doc, path, role) {
     #{ ok: true, center: center.value, half_extents: half_extents.value }
 }
 
+/// Collect the shared frame and aggregate-bound inputs used by collision-aware
+/// alignment. Both bodies must be siblings under one translation-only ancestor
+/// chain so canonical-stage bounds can be converted back to one local
+/// SetTranslate operation without guessing a rotation or scale.
+fn collision_alignment_context(doc, moving_path, target_path, operation) {
+    if doc == () || moving_path == () || target_path == () || moving_path == target_path {
+        return plan_error(operation + " requires an explicit document and two distinct body paths");
+    }
+    let parent = parent_path(moving_path);
+    if parent_path(target_path) != parent {
+        return plan_error(operation + " requires bodies with the same authored parent");
+    }
+    let frame_chain = translation_only_frame_chain(doc, parent, operation);
+    if !frame_chain.ok { return frame_chain; }
+    let moving = local_translation(doc, moving_path);
+    let target = local_translation(doc, target_path);
+    if !moving.ok { return moving; }
+    if !target.ok { return target; }
+    let moving_bounds = composed_collision_bounds(doc, moving_path, "moving body");
+    let target_bounds = composed_collision_bounds(doc, target_path, "target body");
+    if !moving_bounds.ok { return moving_bounds; }
+    if !target_bounds.ok { return target_bounds; }
+    #{
+        ok: true,
+        parent: parent,
+        moving: moving,
+        target: target,
+        moving_bounds: moving_bounds,
+        target_bounds: target_bounds,
+    }
+}
+
+/// Align the aggregate collision-envelope centres of two sibling bodies on one
+/// axis. The offset is measured from the target centre in the shared authored
+/// parent frame; all other authored translation components are preserved.
+fn align_collision_centers_plan(doc, edit_target, moving_path, target_path,
+    axis, offset) {
+    if edit_target == () {
+        return plan_error("align_collision_centers_plan requires an explicit edit target");
+    }
+    if !cardinal_axis(axis) {
+        return plan_error("align_collision_centers_plan axis must be X, Y, or Z");
+    }
+    if offset == () || !offset.is_finite() {
+        return plan_error("align_collision_centers_plan requires a finite offset");
+    }
+    let context = collision_alignment_context(
+        doc, moving_path, target_path, "align_collision_centers_plan",
+    );
+    if !context.ok { return context; }
+    let index = axis_index(axis);
+    let value = context.moving.value;
+    value[index] += context.target_bounds.center[index] + offset
+        - context.moving_bounds.center[index];
+    let placement = place_plan(edit_target, moving_path, value, (), ());
+    placement.kind = "collision_center_alignment";
+    placement.reference = target_path;
+    placement.axis = axis;
+    placement.offset = offset;
+    placement.collision_frame = "canonical_stage";
+    placement
+}
+
+/// Align one aggregate collision-envelope edge to another sibling body on one
+/// axis. Edge signs are -1 or +1 relative to each envelope centre and `gap`
+/// is placed outward from the target edge. This uses the composed AABB only;
+/// it does not invent a primitive-specific dimension or rotate a body.
+fn align_collision_edges_plan(doc, edit_target, moving_path, target_path,
+    axis, moving_edge, target_edge, gap) {
+    if edit_target == () {
+        return plan_error("align_collision_edges_plan requires an explicit edit target");
+    }
+    if !cardinal_axis(axis) {
+        return plan_error("align_collision_edges_plan axis must be X, Y, or Z");
+    }
+    if moving_edge != -1 && moving_edge != 1 {
+        return plan_error("align_collision_edges_plan moving_edge must be -1 or +1");
+    }
+    if target_edge != -1 && target_edge != 1 {
+        return plan_error("align_collision_edges_plan target_edge must be -1 or +1");
+    }
+    if gap == () || !gap.is_finite() || gap < 0.0 {
+        return plan_error("align_collision_edges_plan requires a finite non-negative gap");
+    }
+    let context = collision_alignment_context(
+        doc, moving_path, target_path, "align_collision_edges_plan",
+    );
+    if !context.ok { return context; }
+    let index = axis_index(axis);
+    let target_edge_center = context.target_bounds.center[index]
+        + target_edge * context.target_bounds.half_extents[index]
+        + target_edge * gap;
+    let candidate_center = target_edge_center
+        - moving_edge * context.moving_bounds.half_extents[index];
+    let value = context.moving.value;
+    value[index] += candidate_center - context.moving_bounds.center[index];
+    let placement = place_plan(edit_target, moving_path, value, (), ());
+    placement.kind = "collision_edge_alignment";
+    placement.reference = target_path;
+    placement.axis = axis;
+    placement.moving_edge = moving_edge;
+    placement.target_edge = target_edge;
+    placement.gap = gap;
+    placement.collision_frame = "canonical_stage";
+    placement
+}
+
 /// Place a translation-only body using its aggregate composed collision bounds
 /// and the same bounds reader for every blocker. The caller supplies exact body
 /// paths; each blocker is { path: "/Assembly/Obstacle" }. All bodies share one

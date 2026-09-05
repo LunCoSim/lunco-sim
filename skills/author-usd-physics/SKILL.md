@@ -63,6 +63,10 @@ from the shared collision owner and requires a translation-only common parent
 chain. Both paths reject overlap, insufficient gap, duplicate blockers, and
 ambiguous frame/geometry data before proposal. Do not rely on visual
 separation or an unreviewed generated USD transform to establish clearance.
+For deterministic mating of non-Cube bodies, use the companion
+`align_collision_centers_plan` or `align_collision_edges_plan` with exact
+paths and an explicit axis/edge/gap; these plans preserve authored physics
+facts and still require review before commit.
 
 For reusable referenced parts, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. These helpers select authored socket

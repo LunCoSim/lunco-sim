@@ -517,7 +517,11 @@ collision envelope through `QueryUsdPrim { collision_bounds: true }`, requires
 a shared translation-only parent chain, and rejects missing or malformed
 collision data before returning the same reviewable transform plan. The
 geometry and transform rules remain in the shared USD owner; Rhai supplies only
-the placement policy and exact paths. The resulting operation is still
+the placement policy and exact paths. Use
+`align_collision_centers_plan` or `align_collision_edges_plan` for
+center/edge snap of those same general bodies; both preserve non-target
+translation components and return the same reviewed `SetTranslate` plan.
+The resulting operation is still
 reviewed and committed through `assembly_edit`, so replacing this Rhai policy
 does not create a second USD writer.
 
@@ -789,7 +793,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, alignment, composed collision-clearance, geometry, socket mating, retrofit, and body/joint plans |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, Cube and composed collision alignment/clearance, geometry, socket mating, retrofit, and body/joint plans |
 | [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, and complete mission-manifest plans |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
