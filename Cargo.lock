@@ -7241,7 +7241,6 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-workbench",
- "lunco-workspace",
  "serde",
  "serde_json",
 ]
