@@ -956,18 +956,9 @@ pub struct PendingEvents {
 /// Every live document of one domain, keyed by [`DocumentId`] — **and the one
 /// place that knows a file-backed document's identity is its path.**
 ///
-/// This was hand-copied per domain (`DocumentRegistry<UsdDocument>`, `ModelicaDocument
-/// Registry`, `ScriptRegistry`): same `hosts` map, same `next_doc_id`, same
-/// pending rings, same journal wiring — and each hand-rolled (or omitted) the
-/// open-by-path rule, so each broke differently:
-///
-/// * **USD** deduped by path but never refreshed the content ⇒ re-opening an
-///   edited `.usda` replayed the OLD scene until the app was restarted.
-/// * **Modelica** never deduped at all ⇒ opening one `.mo` twice minted TWO
-///   documents, two tabs, two undo stacks, both saving over each other.
-///
-/// One missing concept, two opposite bugs. [`open_file`](Self::open_file) is
-/// that concept, written once: **identity is reused, content is not.**
+/// [`open_file`](Self::open_file) reuses a file's identity while refreshing
+/// clean content. New documents and forks use [`DocumentId::fresh`] so their
+/// lifecycle events and generic commands remain unambiguous across domains.
 ///
 /// WHY IT LIVES HERE, not in `lunco-doc`:
 /// * `lunco-twin-journal` depends on `lunco-doc`, so `lunco-doc` reaching the
@@ -990,7 +981,6 @@ pub struct DocumentRegistry<D: lunco_doc::Document> {
     /// set, every host gets a [`JournalOpRecorder`] so edits — including undo /
     /// redo — auto-record. `None` in headless-without-journal builds.
     journal: Option<JournalResource>,
-    next_doc_id: u64,
     pending_opened: Vec<DocumentId>,
     pending_changes: Vec<DocumentId>,
     pending_closed: Vec<DocumentId>,
@@ -1016,7 +1006,6 @@ impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
         Self {
             hosts: HashMap::new(),
             journal: None,
-            next_doc_id: 0,
             pending_opened: Vec::new(),
             pending_changes: Vec::new(),
             pending_closed: Vec::new(),
@@ -1033,8 +1022,7 @@ where
     /// lifecycle events. The low-level path — see
     /// [`open_file`](Self::open_file) for anything with a filesystem path.
     fn install(&mut self, make: impl FnOnce(DocumentId) -> D) -> DocumentId {
-        self.next_doc_id = self.next_doc_id.saturating_add(1);
-        let id = DocumentId::new(self.next_doc_id);
+        let id = DocumentId::fresh();
         self.hosts
             .insert(id, lunco_doc::DocumentHost::new(make(id)));
         // Fit the journal recorder at creation so the very first edit is
@@ -1273,11 +1261,7 @@ where
     where
         D: lunco_doc::ForkableDocument,
     {
-        let new_id = self
-            .next_doc_id
-            .checked_add(1)
-            .map(DocumentId::new)
-            .ok_or_else(|| lunco_doc::Reject::InvalidOp("document id space exhausted".into()))?;
+        let new_id = DocumentId::fresh();
         let forked_host = {
             let source_host = self.hosts.get(&source).ok_or_else(|| {
                 lunco_doc::Reject::InvalidOp(format!("unknown source document {source}"))
@@ -1286,7 +1270,6 @@ where
                 .fork(new_id, name)
                 .map_err(|error| lunco_doc::Reject::InvalidOp(error.to_string()))?
         };
-        self.next_doc_id = new_id.raw();
         self.hosts.insert(new_id, forked_host);
         self.attach_recorder(new_id);
         self.pending_opened.push(new_id);

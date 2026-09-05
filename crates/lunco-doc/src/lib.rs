@@ -163,10 +163,9 @@ pub trait Resolver {
 
 /// Stable identifier for a [`Document`].
 ///
-/// Backed by a `u64`. Applications are free to assign ids however they want —
-/// an incrementing counter, a hash of a file path, a Bevy entity bits, etc.
-/// `lunco-doc` treats ids as opaque and only requires them to be unique within
-/// the app's Document population.
+/// Live documents allocate their opaque, process-wide unique handle with
+/// [`DocumentId::fresh`]. File identity remains the document origin; a handle
+/// must not be derived from an entity, file path, or domain-local counter.
 ///
 /// Derives `Reflect` so commands and other reflect-aware structs can carry
 /// `DocumentId` directly instead of repeating raw `u64` conversions at every
@@ -189,6 +188,13 @@ pub trait Resolver {
 pub struct DocumentId(pub u64);
 
 impl DocumentId {
+    /// Allocate a JS-safe live-document handle through the shared core ID
+    /// generator, independent of domain and registry lifetime. Session restore
+    /// remaps stored references to freshly allocated handles.
+    pub fn fresh() -> Self {
+        Self(lunco_core::ids::make_id_53())
+    }
+
     /// Construct a [`crate::DocumentId`] from a raw `u64`.
     pub const fn new(raw: u64) -> Self {
         Self(raw)

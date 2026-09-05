@@ -1,17 +1,9 @@
 //! USD's binding of the generic document registry.
 //!
-//! There is **no `DocumentRegistry<UsdDocument>`**. Every live `.usda` document lives in
-//! [`lunco_doc_bevy::DocumentRegistry<UsdDocument>`], the same type Modelica and
-//! scripting use — `allocate` / `open_file` / `host` / `apply` / `replay_op` /
-//! the pending-event rings are written once, there.
-//!
-//! WHAT USED TO BE HERE, and why it isn't: a hand-copied registry (same `hosts`
-//! map, same `next_doc_id`, same rings, same journal wiring as Modelica's) that
-//! also hand-rolled the open-by-path rule — dedup by path, but never refresh the
-//! content. So re-opening an edited `.usda` replayed the OLD scene until the app
-//! restarted. Modelica's copy omitted the dedup instead and minted duplicate
-//! documents. One rule, two hand-rolled copies, two opposite bugs; it now lives
-//! in [`lunco_doc_bevy::DocumentRegistry::open_file`] alone.
+//! Every live `.usda` document lives in
+//! [`lunco_doc_bevy::DocumentRegistry<UsdDocument>`]. It owns file-path
+//! deduplication, host history, journal wiring and lifecycle events. New live
+//! handles come from [`lunco_doc::DocumentId::fresh`], shared across domains.
 //!
 //! USD's own half of the contract is [`lunco_doc::FileBacked`] on
 //! [`UsdDocument`](crate::document::UsdDocument) (`crate::document`) — how to

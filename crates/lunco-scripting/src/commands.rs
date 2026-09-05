@@ -45,29 +45,6 @@ use lunco_doc::DocumentId;
 #[cfg(all(feature = "python", not(feature = "rhai")))]
 use crate::doc::ScriptedModel;
 
-/// Mints unique `ScriptDocument` ids for scenarios attached via [`RunScenario`].
-/// Based high (1<<40) so it never collides with hand-authored document ids
-/// (tests, fixtures) in the same `ScriptRegistry`.
-#[cfg(feature = "rhai")]
-#[derive(Resource)]
-pub struct ScenarioDocAllocator(u64);
-
-#[cfg(feature = "rhai")]
-impl Default for ScenarioDocAllocator {
-    fn default() -> Self {
-        Self(1 << 40)
-    }
-}
-
-#[cfg(feature = "rhai")]
-impl ScenarioDocAllocator {
-    fn next(&mut self) -> u64 {
-        let id = self.0;
-        self.0 += 1;
-        id
-    }
-}
-
 /// Run a rhai snippet against the live world — the scripting escape hatch when
 /// no typed command covers what you need.
 ///
@@ -153,7 +130,6 @@ impl Default for RunScenario {
 fn on_run_scenario(
     _t: On<RunScenario>,
     mut registry: ResMut<ScriptRegistry>,
-    mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
@@ -168,7 +144,6 @@ fn on_run_scenario(
         false,
         guard.and_then(|g| g.0),
         &mut registry,
-        &mut alloc,
         &q_existing,
         &mut commands,
     );
@@ -198,7 +173,6 @@ pub(crate) fn attach_rhai_scenario(
     scene_owned: bool,
     authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
-    alloc: &mut ScenarioDocAllocator,
     q_existing: &Query<&ScriptedModel>,
     commands: &mut Commands,
 ) -> (u64, u64) {
@@ -213,7 +187,7 @@ pub(crate) fn attach_rhai_scenario(
                 .unwrap_or(0);
             (id, next_gen)
         }
-        None => (alloc.next(), 0),
+        None => (DocumentId::fresh().raw(), 0),
     };
 
     // Execution scope from a `// @scope client|both` directive in the source, so
@@ -284,7 +258,6 @@ pub fn attach_embedded_scenarios(
         Without<ScriptedModel>,
     >,
     mut registry: ResMut<ScriptRegistry>,
-    mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     mut commands: Commands,
 ) {
@@ -300,7 +273,6 @@ pub fn attach_embedded_scenarios(
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
             None,
             &mut registry,
-            &mut alloc,
             &q_existing,
             &mut commands,
         );
@@ -752,7 +724,6 @@ fn timeline_executor_source(steps: &serde_json::Value) -> String {
 fn on_run_timeline(
     _t: On<RunTimeline>,
     mut registry: ResMut<ScriptRegistry>,
-    mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
@@ -770,7 +741,6 @@ fn on_run_timeline(
         false,
         guard.and_then(|g| g.0),
         &mut registry,
-        &mut alloc,
         &q_existing,
         &mut commands,
     );
@@ -860,7 +830,6 @@ fn on_run_stored_timeline(
     store: Res<crate::timelines::TimelineStore>,
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptRegistry>,
-    mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
@@ -891,7 +860,6 @@ fn on_run_stored_timeline(
         false,
         guard.and_then(|g| g.0),
         &mut registry,
-        &mut alloc,
         &q_existing,
         &mut commands,
     );

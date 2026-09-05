@@ -41,8 +41,8 @@ simulator. Each domain defines its own Document type.
 
 Properties of a Document:
 
-1. **Identified.** Every Document has an ID, typically the Bevy `Entity`
-   that hosts it, or a stable UUID for entities that come and go.
+1. **Identified.** Every live Document has a process-wide unique `DocumentId`
+   allocated by `lunco-doc`; it is independent of its ECS projection.
 2. **Structured.** Internal data is typed (not opaque bytes). The AST of a
    `.mo` file, the prim tree of a USD stage, etc.
 3. **Mutable only via Ops.** All changes go through typed operations
@@ -189,8 +189,7 @@ pay for it until we need it**.
 **In `lunco-doc`**:
 
 ```rust
-/// Canonical identifier for a document. Usually maps to a Bevy Entity,
-/// but Documents can outlive their ECS projection.
+/// Opaque live document handle, allocated by DocumentId::fresh across domains.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DocumentId(pub u64);
 

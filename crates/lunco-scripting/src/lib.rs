@@ -448,8 +448,6 @@ impl Plugin for LunCoScriptingPlugin {
                 .runtime
                 .script_sources();
             app.insert_resource(sources);
-            // Mints document ids for scenarios attached via RunScenario.
-            app.init_resource::<commands::ScenarioDocAllocator>();
             // Event channel: scenarios subscribe to the existing TelemetryEvent
             // bus via this observer (delivered on the next scenario pass into
             // on_event hooks). Neutral — shared by every backend.

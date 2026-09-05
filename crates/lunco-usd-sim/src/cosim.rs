@@ -1910,9 +1910,7 @@ pub fn dispatch_loaded_python_sources(
             })
             .unwrap_or_default();
 
-        // Offset the Python document id away from any Modelica-allocated ids
-        // on the same entity.
-        let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
+        let doc_id = DocumentId::fresh();
         // Route through the registry funnel so a journal recorder attaches (edits
         // to this cosim script record like any other domain).
         registry.insert_document(

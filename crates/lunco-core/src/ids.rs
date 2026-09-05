@@ -1,9 +1,9 @@
 //! Shared 53-bit time-sorted id generator.
 //!
 //! Used by [`crate::GlobalEntityId`] (entity identity) and
-//! [`crate::commands::OpId`] (event identity). Both are newtype-distinct
-//! so the compiler keeps event-ids and entity-ids from being mixed up;
-//! the generator that produces the underlying `u64` is shared.
+//! [`crate::commands::OpId`] (event identity), and by `lunco-doc` for live
+//! document handles. The identities are newtype-distinct; the generator
+//! producing their underlying `u64` is shared.
 //!
 //! - 32 bits: seconds since the LunCo epoch (2025-01-01 00:00:00 UTC)
 //! - 21 bits: random instance id + monotonic sequence within the second

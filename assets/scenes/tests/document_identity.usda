@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "DocumentIdentity"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "DocumentIdentity"
+{
+    def DistantLight "Light" { float intensity = 1 }
+    def Cube "Part" { double size = 1 }
+    def Scope "Scenario" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/document_identity.rhai@
+    }
+}
