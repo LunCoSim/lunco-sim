@@ -103,6 +103,8 @@ def Xform "GriffinFlipBuilderTest" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        double3 xformOp:translate = (0.0, 2.94, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 450.0
         float3 physics:centerOfMass = (0.0, -0.05, 0.0)
         float3 physics:diagonalInertia = (240.0, 337.5, 145.5)
