@@ -353,6 +353,22 @@ Use the smallest existing typed intent that expresses the change:
   `assembly_edit::program_input_default`, and `assembly_edit::program_output`;
   the source asset, host path, program name, edit target, and port paths remain
   explicit in `spec`.
+- `assembly_edit::rigid_body_plan(edit_target, parent_path, name, mass,
+  center_of_mass, diagonal_inertia)` returns a typed operation plan for a new
+  body frame with explicit `PhysicsRigidBodyAPI`, `PhysicsMassAPI`, mass,
+  centre-of-mass, and diagonal inertia. `assembly_edit::revolute_joint_plan`
+  similarly requires two body paths, both local anchors and quaternions, a
+  cardinal axis, ordered degree limits, and collision policy. Append the
+  returned `.ops` to one reviewed proposal; these helpers do not author
+  transforms, shapes, or hidden defaults.
+- For construction from parts, use the hot-reloadable
+  `assembly_builder` library. `place_plan` emits a local transform plan;
+  `cube_plan` and `movable_cube_plan` compose standard geometry, collider,
+  body, mass, and placement facts; `hinge_plan` delegates to the framed
+  revolute planner; and `align_centers_plan`/`align_cube_edges_plan` derive
+  placements from explicit queried paths and reject unsupported parent/frame
+  assumptions. These helpers return the same typed `.ops` consumed by
+  `propose`/`batch`; they do not write USDA or bypass the document owner.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.

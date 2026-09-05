@@ -35,6 +35,23 @@ selects the mounted live scene, not the focused preview. The
 tool does not infer a body from a name, turn a raycast wheel into a rigid body,
 or replace the standard USD physics owner.
 
+When an Editor workflow creates a new moving part, use
+`assembly_edit::rigid_body_plan` for the explicit body schema and mass facts,
+then add the shape, collider, and local transform in the same proposal. Use
+`assembly_edit::revolute_joint_plan` for a rotating part: pass both body paths,
+both authored frame anchors and quaternions, the cardinal joint axis, ordered
+degree limits, and the collision policy. These helpers return typed operations
+for review; they do not infer bodies from hierarchy or drive a mechanism with
+Euler poses.
+
+For higher-level construction, use the dynamically reloadable
+`assembly_builder` Rhai library. Its `movable_cube_plan` and `hinge_plan`
+compose the same explicit standard USD facts, while its placement and cube
+edge-alignment plans reject ambiguous parent/frame assumptions before the
+proposal reaches the USD owner. Keep the generated plan in one reviewed
+change set; a successful Rhai plan is not permission to omit the explicit
+joint, frame, collider, mass, or generation contract.
+
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
 colliders projected by the Avian bridge in the active BigSpace frame. Do not

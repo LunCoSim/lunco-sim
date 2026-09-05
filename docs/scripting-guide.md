@@ -320,11 +320,14 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`);
   common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
   `value` are validated against that operation at the command boundary.
-- **Script-first authoring:** the namespaced `assembly_edit` tool owns
+- **Script-first authoring:** the dynamically reloadable `assembly_builder`
+  tool provides semantic placement, geometry, and alignment plans above the
+  namespaced `assembly_edit` tool, which owns
   explicit-document USD editing (`add_prim`, `transform`, `attribute`,
   `schema`, `variant`, `relationship`, `connection`, `batch`,
   `assembly_edit::attach_component`, `assembly_edit::detach_component`, and
-  `assembly_edit::attach_program`) plus its `program_input_*`/`program_output`
+  `assembly_edit::attach_program`) plus its `rigid_body_plan`,
+  `revolute_joint_plan`, `program_input_*`, and `program_output`
   constructors. `modelica_apply` and its
   typed operation constructors remain in
   [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
@@ -392,7 +395,7 @@ A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, geometry, and alignment plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -458,13 +461,46 @@ spec)` passes the complete source, port, connection, and realtime-safety
 contract to the typed `AttachProgram` command; build its port maps with the
 namespaced `assembly_edit::program_input_connection`,
 `assembly_edit::program_input_default`, and `assembly_edit::program_output`
-helpers. Use `undo`/`redo` on the same explicit
-document. `keyframe` and `remove_keyframe` author or remove one USD time sample
+helpers. For a new moving part, `assembly_edit::rigid_body_plan` returns the
+explicit body schema, mass, centre-of-mass, and diagonal-inertia operations;
+`assembly_edit::revolute_joint_plan` returns a fully framed, bounded joint
+with explicit body relationships, axis, degree limits, and collision policy.
+Append each plan's `.ops` to one reviewed `propose`/`batch` change set, then
+add the part's shape, collision API, and transform explicitly. Use
+`undo`/`redo` on the same explicit document. `keyframe` and `remove_keyframe`
+author or remove one USD time sample
 through the same journaled operations used by the Editor Inspector; `time` is
 a USD time code and `value` is the literal for its explicit `type_name`.
 Playback and scrubbing remain the shared `ControlAnimation` transport in the
 Environment panel. There is no assembly-specific runtime setter or second
 animation clock.
+
+### Semantic assembly construction
+
+Use the dynamically loaded `assembly_builder` library when authoring a model
+from parts. It expresses intent above individual USD operations and returns a
+typed plan for the same reviewed `assembly_edit::propose`/`batch` boundary:
+
+```rhai
+let part = assembly_builder::movable_cube_plan(
+    "@root@", "/Assembly", "Panel", 2.0,
+    [0.0, 0.0, 0.0], [0.5, 0.75, 0.5],
+    1.0, [1.0, 0.0, 0.0], (), [1.0, 0.2, 0.8], true,
+);
+let proposal = assembly_edit::propose(
+    doc, #{ Assembly: () }, "Create panel", part.ops, generation,
+);
+```
+
+`place_plan` handles local translation, Euler XYZ rotation, and scale;
+`cube_plan` handles a standard `UsdGeom.Cube` and optional collider;
+`hinge_plan` handles a fully framed revolute joint; and the alignment plans
+use explicit queried prim/shape paths. Center alignment requires one authored
+parent. Cube-edge alignment additionally requires axis-aligned cube extents,
+explicit edge signs, and a non-negative gap. Unsupported or ambiguous input is
+returned as a failed plan before any document mutation. The implementation is
+ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
+registered at runtime without adding a Rust command or a second USD writer.
 
 Structural authoring uses the same typed operation surface: `add_prim`,
 `remove_prim`, `move_prim`, `payload`, and `active` expose the existing
@@ -713,6 +749,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, geometry, and alignment plans |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 

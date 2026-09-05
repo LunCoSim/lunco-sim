@@ -477,6 +477,199 @@ fn batch(doc, label, ops, parent_gen) {
     })
 }
 
+/// Format one explicit three-component USD literal from numeric components.
+/// The generic SetAttribute op accepts USDA literals, so these helpers keep
+/// callers from hand-assembling tuple syntax while leaving the type explicit.
+fn tuple3_literal(values) {
+    if values == () || values.len() != 3 { return (); }
+    "(" + values[0].to_string() + ", " + values[1].to_string()
+        + ", " + values[2].to_string() + ")"
+}
+
+/// Format one explicit four-component USD quaternion literal.
+fn quat4_literal(values) {
+    if values == () || values.len() != 4 { return (); }
+    "(" + values[0].to_string() + ", " + values[1].to_string()
+        + ", " + values[2].to_string() + ", " + values[3].to_string() + ")"
+}
+
+fn plan_error(message) {
+    #{ ok: false, error: message, ops: [] }
+}
+
+/// Build the standard authored facts for a new rigid-body frame.
+///
+/// This returns typed operations for `batch` or `propose`; it does not mutate
+/// a document. Position, shape children, collision ownership, and any
+/// kinematic state remain explicit caller-owned operations. Mass, centre of
+/// mass, and diagonal inertia are required so a body cannot be created with a
+/// hidden physics default.
+fn rigid_body_plan(edit_target, parent_path, name, mass, center_of_mass, diagonal_inertia) {
+    if edit_target == () || parent_path == () || name == () {
+        return plan_error("rigid_body_plan requires an edit target, parent path, and name");
+    }
+    if mass <= 0.0 {
+        return plan_error("rigid_body_plan requires positive mass");
+    }
+    let com = tuple3_literal(center_of_mass);
+    let inertia = tuple3_literal(diagonal_inertia);
+    if com == () || inertia == () {
+        return plan_error("rigid_body_plan requires three-component centre of mass and inertia");
+    }
+
+    let path = parent_path + "/" + name;
+    #{
+        ok: true,
+        path: path,
+        ops: [
+            #{ AddPrim: #{
+                edit_target: edit_target,
+                parent_path: parent_path,
+                name: name,
+                type_name: "Xform",
+                reference: (),
+            }},
+            #{ SetApiSchemas: #{
+                edit_target: edit_target,
+                path: path,
+                schemas: ["PhysicsRigidBodyAPI", "PhysicsMassAPI"],
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:mass",
+                type_name: "float",
+                value: mass.to_string(),
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:centerOfMass",
+                type_name: "point3f",
+                value: com,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:diagonalInertia",
+                type_name: "float3",
+                value: inertia,
+            }},
+        ],
+    }
+}
+
+/// Build a fully framed, bounded standard USD revolute joint.
+///
+/// Body paths, both local anchors, both local frame quaternions, axis, limits,
+/// and collision policy are required arguments. An explicit operation plan is
+/// returned for review or one grouped journal commit; no Euler rotation or
+/// implicit body relationship is introduced.
+fn revolute_joint_plan(edit_target, parent_path, name, body0, body1, axis,
+    local_pos0, local_pos1, local_rot0, local_rot1, lower_limit, upper_limit,
+    collision_enabled) {
+    if edit_target == () || parent_path == () || name == ()
+        || body0 == () || body1 == () {
+        return plan_error("revolute_joint_plan requires edit target, parent, name, and two body paths");
+    }
+    if axis != "X" && axis != "Y" && axis != "Z" {
+        return plan_error("revolute_joint_plan axis must be X, Y, or Z");
+    }
+    if lower_limit == () || upper_limit == () || lower_limit > upper_limit {
+        return plan_error("revolute_joint_plan requires ordered angular limits in degrees");
+    }
+    let pos0 = tuple3_literal(local_pos0);
+    let pos1 = tuple3_literal(local_pos1);
+    let rot0 = quat4_literal(local_rot0);
+    let rot1 = quat4_literal(local_rot1);
+    if pos0 == () || pos1 == () || rot0 == () || rot1 == () {
+        return plan_error("revolute_joint_plan requires two positions and two quaternions");
+    }
+
+    let path = parent_path + "/" + name;
+    #{
+        ok: true,
+        path: path,
+        ops: [
+            #{ AddPrim: #{
+                edit_target: edit_target,
+                parent_path: parent_path,
+                name: name,
+                type_name: "PhysicsRevoluteJoint",
+                reference: (),
+            }},
+            #{ SetRelationship: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:body0",
+                targets: [body0],
+            }},
+            #{ SetRelationship: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:body1",
+                targets: [body1],
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:axis",
+                type_name: "token",
+                value: "\"" + axis + "\"",
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localPos0",
+                type_name: "point3f",
+                value: pos0,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localPos1",
+                type_name: "point3f",
+                value: pos1,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localRot0",
+                type_name: "quatf",
+                value: rot0,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:localRot1",
+                type_name: "quatf",
+                value: rot1,
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:lowerLimit",
+                type_name: "float",
+                value: lower_limit.to_string(),
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:upperLimit",
+                type_name: "float",
+                value: upper_limit.to_string(),
+            }},
+            #{ SetAttribute: #{
+                edit_target: edit_target,
+                path: path,
+                name: "physics:collisionEnabled",
+                type_name: "bool",
+                value: collision_enabled.to_string(),
+            }},
+        ],
+    }
+}
+
 /// Validate and queue an explicit proposal without mutating the document.
 /// `scope` is one of `SourceAsset`, `Assembly`, or `InstanceOverride`; the
 /// proposal must carry the generation the caller inspected.

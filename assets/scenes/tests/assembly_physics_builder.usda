@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyPhysicsBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Acceptance fixture for the explicit assembly physics plan builders. The
+# scenario adds one framed body and one bounded revolute joint through the
+# normal Editor proposal path; the authored Host is the stable parent body.
+def Xform "AssemblyPhysicsBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Host" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:kinematicEnabled = true
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (1.0, 0.5, 1.0)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            bool physics:collisionEnabled = true
+            color3f[] primvars:displayColor = [(0.28, 0.32, 0.38)]
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "assembly-physics-builder"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_physics_builder.rhai@
+        }
+    }
+}
