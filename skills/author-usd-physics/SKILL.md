@@ -60,6 +60,13 @@ existing `AttachComponent` owner remains responsible for plug-frame math,
 reference lowering, occupancy, and atomic journalling. Do not copy a reference
 and guess a transform when the component already advertises a mount plug.
 
+Mission-level recipes may compose these generic helpers through the dynamic
+`griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two
+explicit Griffin ramp identities and `flip_four_wheel_layout_plan` for the
+four authored FLIP wheel stations. Both return reviewed typed operations and
+reject missing, duplicated, swapped, or dimensionally inconsistent identities;
+they do not supply undocumented flight values.
+
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
 colliders projected by the Avian bridge in the active BigSpace frame. Do not

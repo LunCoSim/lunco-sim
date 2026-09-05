@@ -240,6 +240,12 @@ transform when a component advertises a mount plug. This Rhai library is
 dynamic, so a Twin or workspace can replace the policy without a Rust-core
 change while retaining the same authoritative attach validator.
 
+For the current Griffin/FLIP study package, the dynamic
+`griffin_flip_builder` library composes the same generic surface into paired
+ramp and four-wheel layout recipes. Treat its mass, inertia, dimensions, and
+frame values as caller-supplied study inputs; inspect the exact composed prims
+and proposal diagnostics before committing an authored edit.
+
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
 Pass the exact document id as the first argument to every stage-reading helper,

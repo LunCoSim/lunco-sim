@@ -410,6 +410,13 @@ therefore be updated as Rhai without adding a Rust command or duplicating the
 USD writer, while missing or ambiguous authored relationships still fail at the
 authoritative validator.
 
+Mission-specific recipes remain data-driven Rhai. The current
+`griffin_flip_builder` library composes the generic builder into a symmetric
+Griffin ramp plan and a validated FLIP four-wheel layout plan. Adding or
+changing a mission recipe therefore does not add a Rust command; the recipe
+still supplies exact paths and study inputs and submits only through the
+existing proposal/attach/journal owners.
+
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly
 selects the mounted live scene. `QueryUsdPrim { doc, path, ... }` resolves the
