@@ -238,6 +238,19 @@ an arbitrary entity. `assembly_edit::selection_context()` reads the focused
 context and `selection_context_for(preview)` reads a hidden open preview
 without changing user-visible focus.
 
+For an agent request such as “the selected part is wrong”, that context is the
+referent. The agent reads the matching viewport readiness and document
+generation, diagnoses from composed facts and the visible frame, then proposes
+explicit typed operations. Before commit it rechecks focus, selected paths,
+edit target and generation; a changed or ambiguous context requires resolution,
+not silent retargeting. The journal owns undo/redo, and save is a separate user
+approval. This policy lives in `skills/edit-usd-assembly/SKILL.md`, not a second
+selection registry or AI-only mutation API. The authored graphics scenario
+`selection_ai_workflow` verifies the command/query correction loop on a
+disposable fork, including negative selection and revision cases. Its real
+`SELECTION_AI_WORKFLOW` verdict is required; a completed render frame alone is
+not acceptance of the workflow or of a user's design.
+
 The Inspector uses that same lease boundary for numeric transform edits. A
 selected entity under the focused preview root is edited as its composed USD
 prim's local canonical transform: the controls display metres, Euler XYZ

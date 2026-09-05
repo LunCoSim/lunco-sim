@@ -75,6 +75,34 @@ curl -s -X POST http://127.0.0.1:4127/api/commands \
 
 Read that local PNG with the image viewer before reporting the checkpoint.
 
+## Respond to “the selected part is wrong”
+
+Treat the visible selection as the user's referent, not a filename or display
+name guessed from conversation. Read `selection_context()` first, then the
+matching `viewport()` and `describe(doc)`. Require the focused preview, exact
+selected paths, and matching ready document/projected generations. An empty,
+stale, or ambiguous selection is a clarification point; a singular request
+with multiple selected parts must not silently choose the primary entry.
+
+Inspect the composed selected prim and capture the visible frame. If the
+problem is not established by those facts and the user's requirements, ask
+what should change before inventing a design. Explain the scoped correction in
+ordinary language; users do not need to supply internal document handles.
+
+Build a proposal from the captured identities and generation. Immediately
+before committing, reread selection and document state. If focus, selected
+paths, edit target, or generation changed, do not retarget or commit silently:
+reinspect and resolve which selection the request applies to. Proposals carry
+explicit paths and are not dynamically rebound to whatever is selected later.
+
+After commit, wait for the matching projected generation, inspect composed
+facts and the screenshot, and present the result for revision or undo. Use
+the same document's `UndoDocument`/`RedoDocument` for feedback. Save remains a
+separate approval gate. The authored `selection_ai_workflow` graphics scenario
+exercises context isolation, selection-change detection, proposals, stale
+generation rejection and undo; inspect its real production verdict, not just
+frame completion. It does not substitute for user acceptance of a real design.
+
 ## Choose Editor or Builder
 
 Use **Editor** (shown as `✎ Editor` in the perspective switcher) for one specific reusable assembly: open its USD document from
