@@ -362,7 +362,7 @@ fn physical_wheel_clearance_pairs_compose_through_the_variant() {
 }
 
 #[test]
-fn six_wheel_camera_composes_its_lowered_mount_offset() {
+fn six_wheel_camera_composes_its_rear_mount_offset() {
     let cs = compose("vessels/rovers/six_wheel_rover.usda");
     let view = cs.view();
     let camera = SdfPath::new("/SixWheelRover/FrontCamera").expect("camera path");
@@ -379,8 +379,8 @@ fn six_wheel_camera_composes_its_lowered_mount_offset() {
 
     assert_eq!(
         view.value_vec3(&camera, "xformOp:translate"),
-        Some([0.0, 0.55, -1.35]),
-        "the six-wheel asset must override only its mounted camera eye height"
+        Some([0.0, 0.55, 4.0]),
+        "the six-wheel asset must keep its rear-mounted camera eye height"
     );
     assert_eq!(
         view.vec3_f64(&camera, "lunco:cameraLookAt"),
