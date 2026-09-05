@@ -1391,27 +1391,6 @@ impl SettingsSection for RenderingQualitySettings {
     }
 }
 
-/// Why a shadow map is temporarily suppressed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ShadowMapSuppressionReason {
-    /// The explicit graphics caster limit excluded this caster.
-    ConfiguredLimit,
-}
-
-/// Records the user/scene shadow intent while the explicit graphics caster
-/// limit excludes a map. `last_applied_enabled` is the effective value written
-/// by the suppression policy. A restore therefore cannot overwrite a later
-/// explicit owner that changed the Bevy component while it was suppressed.
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ShadowMapSuppressed {
-    /// The value to restore when the suppression is removed, including a
-    /// policy or command change made while the map was suppressed.
-    pub restore_enabled: bool,
-    /// The last effective value written by the suppression owner.
-    pub last_applied_enabled: bool,
-    pub reason: ShadowMapSuppressionReason,
-}
-
 /// Which directional shadow ranges were explicitly authored by USD.
 ///
 /// Renderer settings provide defaults for omitted range attributes. This
