@@ -10,6 +10,7 @@
 //! It does not add attributes to USD or require a visualization binding.
 
 use bevy::prelude::*;
+use lunco_core::GlobalEntityId;
 use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -160,7 +161,12 @@ pub fn retain_modelica_runtime_state(
     mut signals: Option<ResMut<SignalRegistry>>,
     documents: Option<Res<ModelicaDocumentRegistry>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
-    models: Query<(Entity, &ModelicaModel, Option<Ref<ModelicaSignalLayout>>)>,
+    models: Query<(
+        Entity,
+        &ModelicaModel,
+        Option<Ref<ModelicaSignalLayout>>,
+        Option<&GlobalEntityId>,
+    )>,
 ) {
     let Some(settings) = settings else {
         return;
@@ -185,7 +191,7 @@ pub fn retain_modelica_runtime_state(
     // the registry provides this count without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, model, layout) in &models {
+    for (entity, model, layout, global_owner) in &models {
         let document = documents.as_ref().and_then(|documents| {
             documents
                 .host(model.document)
@@ -232,6 +238,9 @@ pub fn retain_modelica_runtime_state(
                     settings.max_channels
                 );
                 continue;
+            }
+            if let Some(owner) = global_owner {
+                signals.associate_global_owner(&signal, *owner);
             }
 
             // Generated-document metadata can become available after the

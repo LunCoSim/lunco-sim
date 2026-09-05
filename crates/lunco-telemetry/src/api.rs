@@ -65,15 +65,16 @@ impl ChannelOwner {
     }
 }
 
-/// Resolve the same owner identity used by the shared signal registry. A missing
-/// `GlobalEntityId` is not zero: zero is an invalid placeholder that collapses all
-/// local physics/model signals with the same name into one API key.
-fn channel_owner(world: &World, entity: Entity) -> ChannelOwner {
-    world
-        .get::<GlobalEntityId>(entity)
-        .copied()
+/// Resolve the stable owner captured by the shared signal registry, falling back to
+/// the live ECS component for older/session-local entries. A missing `GlobalEntityId`
+/// is not zero: zero is an invalid placeholder that collapses all local physics/model
+/// signals with the same name into one API key.
+fn channel_owner(world: &World, signals: &SignalRegistry, signal: &SignalRef) -> ChannelOwner {
+    signals
+        .global_owner(signal)
+        .or_else(|| world.get::<GlobalEntityId>(signal.entity).copied())
         .map(ChannelOwner::Api)
-        .unwrap_or(ChannelOwner::Session(entity))
+        .unwrap_or(ChannelOwner::Session(signal.entity))
 }
 
 fn channel_key(owner: ChannelOwner, name: &str) -> String {
@@ -108,7 +109,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
         let mut channels: Vec<serde_json::Value> = signals
             .iter_scalar()
             .map(|(sig, history)| {
-                let owner = channel_owner(world, sig.entity);
+                let owner = channel_owner(world, signals, sig);
                 let meta = signals.meta(sig);
                 serde_json::json!({
                     "key": channel_key(owner, &sig.path),
@@ -196,7 +197,9 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             let Some(signal) = signals
                 .iter_scalar()
                 .map(|(signal, _)| signal)
-                .find(|signal| channel_owner(world, signal.entity) == owner && signal.path == name)
+                .find(|signal| {
+                    channel_owner(world, signals, signal) == owner && signal.path == name
+                })
                 .cloned()
             else {
                 return ApiResponse::error(
@@ -304,7 +307,7 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
             .iter_scalar()
             .map(|(signal, _)| {
                 (
-                    channel_key(channel_owner(world, signal.entity), &signal.path),
+                    channel_key(channel_owner(world, signals, signal), &signal.path),
                     signal.clone(),
                 )
             })
@@ -493,6 +496,53 @@ mod tests {
             channel["presentation"]["formula"],
             "sum of measured channels"
         );
+    }
+
+    #[test]
+    fn archived_api_channel_keeps_its_key_and_history() {
+        let mut world = World::new();
+        world.insert_resource(lunco_time::WorldTime::default());
+        let entity = world.spawn(GlobalEntityId::from_raw(42)).id();
+        let signal = SignalRef::new(entity, "motor_current");
+        let mut registry = SignalRegistry::default();
+        registry.push_scalar(signal.clone(), 12.0, 3.5);
+        registry.associate_global_owner(&signal, GlobalEntityId::from_raw(42));
+        registry.deactivate_entity(entity);
+        world.insert_resource(registry);
+        world.despawn(entity);
+
+        let list = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = list
+        else {
+            panic!("list provider must return archived channels");
+        };
+        assert_eq!(data["channels"][0]["key"], "api/42:motor_current");
+        assert_eq!(data["channels"][0]["active"], false);
+
+        let history = QueryTelemetryHistoryProvider
+            .execute(&world, &serde_json::json!({"key": "api/42:motor_current"}));
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = history
+        else {
+            panic!("archived API channel history must remain queryable");
+        };
+        assert_eq!(data["samples"][0]["t"], 12.0);
+        assert_eq!(data["samples"][0]["v"], 3.5);
+
+        let recording = ExportTelemetryRecordingProvider.execute(
+            &world,
+            &serde_json::json!({"keys": ["api/42:motor_current"]}),
+        );
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = recording
+        else {
+            panic!("archived API channel export must remain addressable");
+        };
+        assert_eq!(data["series"]["api/42:motor_current"][0], 3.5);
     }
 
     #[test]

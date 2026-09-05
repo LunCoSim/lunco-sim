@@ -12,6 +12,7 @@ use avian3d::prelude::{
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use lunco_core::GlobalEntityId;
 use lunco_core::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
@@ -64,6 +65,7 @@ pub fn retain_physics_telemetry(
             &UsdPrimPath,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
+            Option<&GlobalEntityId>,
         ),
         With<RigidBody>,
     >,
@@ -84,6 +86,7 @@ pub fn retain_physics_telemetry(
         &WheelRaycast,
         &Suspension,
         &avian3d::prelude::RayHits,
+        Option<&GlobalEntityId>,
     )>,
 ) {
     let Some(settings) = settings else {
@@ -146,7 +149,7 @@ pub fn retain_physics_telemetry(
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, prim, linear, angular) in &bodies {
+    for (entity, prim, linear, angular, global_owner) in &bodies {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -446,6 +449,7 @@ pub fn retain_physics_telemetry(
             signals,
             settings.as_ref(),
             entity,
+            global_owner.copied(),
             &prim.path,
             time,
             samples,
@@ -458,7 +462,7 @@ pub fn retain_physics_telemetry(
         state.last_sample_times.insert(entity, time);
     }
 
-    for (entity, prim, wheel, suspension, hits) in &wheels {
+    for (entity, prim, wheel, suspension, hits, global_owner) in &wheels {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -519,6 +523,7 @@ pub fn retain_physics_telemetry(
             signals,
             settings.as_ref(),
             entity,
+            global_owner.copied(),
             &prim.path,
             time,
             samples,
@@ -642,6 +647,7 @@ fn retain_samples(
     signals: &mut SignalRegistry,
     settings: &TelemetrySettings,
     entity: Entity,
+    global_owner: Option<GlobalEntityId>,
     group_path: &str,
     time: f64,
     samples: impl IntoIterator<Item = PhysicsSample>,
@@ -662,6 +668,9 @@ fn retain_samples(
                 settings.max_channels
             );
             continue;
+        }
+        if let Some(owner) = global_owner {
+            signals.associate_global_owner(&signal, owner);
         }
         if metadata_dirty || !metadata.contains_key(&signal) {
             let signal_meta = SignalMeta {

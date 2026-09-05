@@ -42,6 +42,13 @@ tree. The browser defaults to current publishers and exposes archived history on
 an explicit display setting; `ListTelemetryChannels` keeps the `active` field so API clients
 can make the same live-versus-history choice without guessing from names.
 
+For a producer with a `GlobalEntityId`, `SignalRegistry` captures that owner when the signal is
+first retained. The query and export surfaces use the captured owner before consulting the live
+ECS component, so an archived network channel keeps its original `api/<GlobalEntityId>:<name>`
+key after the source despawns. Session-local producers remain keyed by their live
+`Entity::to_bits()` identity. Producers must associate the owner at the retention boundary;
+consumers must not reconstruct archived ownership from a missing entity or a display label.
+
 ### Archived history is not automatically stale
 
 An archived row means that its publisher was removed during this process (for example, a
@@ -310,9 +317,10 @@ Two decisions that make that possible:
 - **Channel key = `"<owner>:<name>"`, never the name alone.** Names collide — two rovers both
   report `motor_current`. `owner` is `api/<GlobalEntityId>` for network-addressable model
   entities and `session/<Entity::to_bits()>` for deliberately local physics/model entities.
-  The latter is explicit session identity, never the invalid `0` placeholder. The key is
-  the wire form of the same `(SignalRef::entity, SignalRef::path)` identity rendered by
-  the native telemetry window.
+  The latter is explicit session identity, never the invalid `0` placeholder. The stable API
+  owner is captured by `SignalRegistry` while the source is live, so this key remains unchanged
+  when an archived network source is gone. The key is the wire form of the same
+  `(SignalRef::entity, SignalRef::path)` identity rendered by the native telemetry window.
 - **Times are `sim_secs`, not `epoch_jd`.** Julian Date is ~2.46e6, so an `f64` has ~86 µs of
   resolution left there: a plot axis built on it quantises into visible stair-steps and a range
   query is sloppy at its edges. Responses carry `epoch_jd` separately for wall-clock labelling.

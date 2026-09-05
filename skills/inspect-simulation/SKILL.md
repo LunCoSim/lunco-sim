@@ -30,6 +30,7 @@ or the `mcp__lunco__*` tools if wired.
 | `read_port` `{api_id, port}` | a single named port value. |
 | `watch_ports` `{api_id, …}` | a **time-series** of ports (use when you need change over time, not a single sample). |
 | `snapshot_variables` (`SnapshotVariables`) | current Modelica variable values (the solver's state). |
+| `ListTelemetryChannels` / `QueryTelemetryHistory` | retained scalar catalog and history. Keep the returned channel key; an archived channel remains queryable under its captured `api/<GlobalEntityId>:<name>` key after its source disappears. |
 | `cosim_status` | every USD-driven cosim entity end-to-end: `{name, y, vy, netForce, force_y_input, buoyancy, modelica_*}` — verify a **Modelica → physics** chain without logs. |
 | `rover_status` | rover-specific convenience readout. |
 | `capture_screenshot` (`CaptureScreenshot`) | raw PNG — save `-o /tmp/x.png`, then Read it. Confirms what numbers can't (did it tip over?). |

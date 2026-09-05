@@ -137,6 +137,7 @@ pub fn drain_sim_samples_to_viz(
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
     doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
     telemetry_settings: Option<Res<TelemetrySettings>>,
+    owners: Query<Option<&lunco_core::GlobalEntityId>>,
 ) {
     if stream.batches.is_empty() {
         return;
@@ -175,6 +176,9 @@ pub fn drain_sim_samples_to_viz(
                 continue;
             }
             let signal = SignalRef::new(batch.entity, name.clone());
+            if let Ok(Some(owner)) = owners.get(batch.entity) {
+                sigs.associate_global_owner(&signal, *owner);
+            }
             let changed = sigs
                 .scalar_history(&signal)
                 .and_then(|history| history.samples.back())
