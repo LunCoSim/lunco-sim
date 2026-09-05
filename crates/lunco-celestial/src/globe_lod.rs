@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::*;
 use lunco_core::SceneViewport;
 use lunco_materials::{ShaderLook, ShaderLookReady};
@@ -398,6 +399,13 @@ pub struct GlobeTiles {
     last_selection_resident_revision: u64,
     resident_revision: u64,
     last_selection_lod_key: Option<(u64, u32, u64)>,
+    /// CPU mesh builds queued away from the frame thread. The task result is
+    /// installed into `Assets<Mesh>` only after it is ready; tile selection and
+    /// visibility remain owned by this reconciler.
+    pending_meshes: HashMap<TileCoord, Task<Mesh>>,
+    /// Reused completion scratch for `pending_meshes`, avoiding a new vector
+    /// allocation on every reconciliation pass.
+    completed_meshes: Vec<(TileCoord, Mesh)>,
 }
 
 #[derive(Clone)]
@@ -807,6 +815,7 @@ pub(crate) fn update_globe_lod(
                 lod.surface_grid
             )
         });
+        let tile_bytes = tile_mesh_bytes(lod.res);
 
         // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a
@@ -827,12 +836,52 @@ pub(crate) fn update_globe_lod(
             }
             tiles.mesh_cache.clear();
             tiles.mesh_cache_bytes = 0;
+            tiles.pending_meshes.clear();
+            tiles.completed_meshes.clear();
             tiles.last_solve_cam = None;
             tiles.desired.clear();
             tiles.last_selection_cam = None;
             tiles.last_selection_handoff = None;
             tiles.last_selection_lod_key = None;
             tiles.resident_revision = tiles.resident_revision.wrapping_add(1);
+        }
+
+        // Poll completed CPU builds without ever waiting for one. The old
+        // synchronous path spent tens of milliseconds in
+        // `create_quadsphere_tile_mesh` while the frame thread was trying to
+        // bootstrap the globe. Installing the finished Mesh on the main thread
+        // is required by Bevy, but the expensive vertex generation is not.
+        {
+            let GlobeTiles {
+                pending_meshes,
+                completed_meshes,
+                ..
+            } = &mut *tiles;
+            completed_meshes.clear();
+            pending_meshes.retain(|coord, task| {
+                match block_on(future::poll_once(&mut *task)) {
+                    Some(mesh) => {
+                        completed_meshes.push((*coord, mesh));
+                        false
+                    }
+                    None => true,
+                }
+            });
+        }
+        let mesh_completion_pending = !tiles.completed_meshes.is_empty();
+        while let Some((coord, mesh)) = tiles.completed_meshes.pop() {
+            tiles.cache_clock = tiles.cache_clock.wrapping_add(1);
+            let last_used = tiles.cache_clock;
+            let handle = meshes.add(mesh);
+            tiles.mesh_cache.insert(
+                coord,
+                CachedTileMesh {
+                    handle,
+                    bytes: tile_bytes,
+                    last_used,
+                },
+            );
+            tiles.mesh_cache_bytes = tiles.mesh_cache_bytes.saturating_add(tile_bytes);
         }
 
         // CAMERA-MOTION GATE. Resident reconciliation still runs while a
@@ -857,6 +906,7 @@ pub(crate) fn update_globe_lod(
                 && tiles.last_solve_camera == Some(camera_entity)
                 && all_resident_ready
                 && tiles.retiring.is_empty()
+                && !mesh_completion_pending
                 && (camera_body_local - prev_cam).length_squared() < slack * slack
             {
                 continue;
@@ -948,6 +998,11 @@ pub(crate) fn update_globe_lod(
                 missing.insert(root);
             }
         }
+        // A camera move can invalidate a queued mesh before its worker has
+        // started. Drop that work at the authoritative selection boundary so
+        // stale globe detail cannot consume the worker pool or later enter the
+        // mesh cache.
+        tiles.pending_meshes.retain(|coord, _| missing.contains(coord));
         let mut prioritized: Vec<(TileCoord, f64)> = missing
             .into_iter()
             .map(|coord| {
@@ -966,9 +1021,11 @@ pub(crate) fn update_globe_lod(
         // Initial fill is budgeted too. A scene load must not synchronously
         // allocate the whole finest visible shell before the render thread can
         // upload anything; the same backpressure applies at every camera range.
-        let tile_bytes = tile_mesh_bytes(lod.res);
         let mut fresh_bytes = 0usize;
         for (coord, _) in prioritized.into_iter().take(budget.spawn_tiles_per_frame) {
+            if tiles.pending_meshes.contains_key(&coord) {
+                continue;
+            }
             let needs_fresh_mesh = !tiles.mesh_cache.contains_key(&coord);
             if needs_fresh_mesh
                 && (fresh_bytes.saturating_add(tile_bytes) > budget.max_fresh_mesh_bytes_per_frame
@@ -994,29 +1051,27 @@ pub(crate) fn update_globe_lod(
                 cached.last_used = cache_clock;
                 cached.handle.clone()
             } else {
-                let mesh = create_quadsphere_tile_mesh(
-                    body_ent,
-                    coord.face,
-                    coord.level,
-                    coord.i,
-                    coord.j,
-                    lod.radius_m,
-                    lod.res,
-                    tile_body_local,
-                    handoff.map(GlobeHandoff::patch),
-                );
-                let handle = meshes.add(mesh);
-                tiles.mesh_cache.insert(
-                    coord,
-                    CachedTileMesh {
-                        handle: handle.clone(),
-                        bytes: tile_bytes,
-                        last_used: cache_clock,
-                    },
-                );
-                tiles.mesh_cache_bytes = tiles.mesh_cache_bytes.saturating_add(tile_bytes);
+                let handoff = handoff.cloned();
+                let radius = lod.radius_m;
+                let res = lod.res;
                 fresh_bytes = fresh_bytes.saturating_add(tile_bytes);
-                handle
+                let task = AsyncComputeTaskPool::get().spawn(async move {
+                    let _span = bevy::log::info_span!("globe_tile_mesh").entered();
+                    let patch = handoff.as_ref().map(GlobeHandoff::patch);
+                    create_quadsphere_tile_mesh(
+                        body_ent,
+                        coord.face,
+                        coord.level,
+                        coord.i,
+                        coord.j,
+                        radius,
+                        res,
+                        tile_body_local,
+                        patch,
+                    )
+                });
+                tiles.pending_meshes.insert(coord, task);
+                continue;
             };
             // Atomic (ChildOf, CellCoord, Transform): the grid-local pose is
             // authored at spawn, so no render-derived GlobalTransform is needed
