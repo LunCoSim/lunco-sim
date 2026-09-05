@@ -260,6 +260,14 @@ Inherited `xformOpOrder` comes from that composition; the edit authors only an
 never flattened into saved source. `referenced_part_edit` exercises this path,
 missing-target rejection, inherited scale, and grouped undo.
 
+Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
+simulation projector. Domain member discovery, synthesis, and asynchronous
+completion use `lunco_usd_bevy::is_preview_only`; presentation collections do
+not load runtime member classes or publish generated solver participants.
+Structural collection queries and lint remain available independently of this
+execution gate. `preview_domain_isolation` compares a live electrical network
+with an edited preview, including an invalid preview connection.
+
 The Inspector uses that same lease boundary for numeric transform edits. A
 selected entity under the focused preview root is edited as its composed USD
 prim's local canonical transform: the controls display metres, Euler XYZ

@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "PreviewDomainIsolation"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "PreviewDomainIsolation" (kind = "assembly")
+{
+    def DistantLight "Light" { float intensity = 1 }
+    def Xform "Network" (prepend apiSchemas = ["CollectionAPI:components"])
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        rel collection:components:includes = [</PreviewDomainIsolation/Network/Battery>, </PreviewDomainIsolation/Network/Panel>]
+        float outputs:voltage.connect = </PreviewDomainIsolation/Network/Battery.outputs:terminal_voltage_v>
+        def Xform "Battery" (prepend references = @lunco://components/power/battery.usda@</Battery>) {}
+        def Xform "Panel" (prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>)
+        {
+            token connectors:p.connect = </PreviewDomainIsolation/Network/Battery.connectors:p>
+        }
+    }
+    def Scope "Scenario" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/preview_domain_isolation.rhai@
+    }
+}

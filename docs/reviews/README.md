@@ -14,6 +14,9 @@ lesson, which belongs in the architecture doc for that subsystem.
 
 ## Standing issues
 
+- [`open-usd-preview-readiness-handover.md`](open-usd-preview-readiness-handover.md) —
+  Asset Editor 05 implementation handoff, runtime evidence, and the pending
+  official Trello Review mutation.
 - [`open-200fps-performance-handover.md`](open-200fps-performance-handover.md) —
   the Apollo High-quality frame loop is below the stable 200 FPS target; the
   handover records the Tracy evidence and owner-first optimization plan.
