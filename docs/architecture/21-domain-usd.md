@@ -590,6 +590,17 @@ must use their own explicitly defined scheme.
 
 ### Transform decode
 
+Visual reprojection replaces the complete pose when a prim authors a transform
+stack, including zero translation and identity rotation/scale. The primitive
+axis correction is then applied once to that decoded pose. An omitted stack
+preserves the existing spawn placement; a prior rendered pose is not the base
+for an authored stack. The generic projection regression is
+`canonical_dispatch_test::authored_identity_pose_replaces_previous_primitive_projection`.
+Coarse document edits replace the canonical stage and advance its generation,
+even though the replacement's change sink is empty. Generation zero identifies
+the initial asset snapshot; an edited replacement must remain on the live
+composed reader path.
+
 One shared stack (`lunco-usd-bevy`, `local_transform_at`) decodes a prim's local
 `Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
 instantiate path) and the per-frame animation sampler, so a static pose and its animated

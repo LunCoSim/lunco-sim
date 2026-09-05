@@ -1902,11 +1902,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             }
         }
 
-        // Transform (position and rotation)
-        // Preserve any existing transform set by the spawning code (e.g., rover position).
-        // Only override position/rotation if the USD prim has explicit NON-ZERO values.
-        // A zero translation in USD means "no offset" — it shouldn't overwrite a spawn position.
-        let mut transform = existing_tf.cloned().unwrap_or_default();
         // Full local transform: the authoritative USD `xformOpOrder` stack. An
         // omitted stack is the USD identity and preserves the code-set spawn
         // pose; malformed authored data rejects this prim instead of being guessed.
@@ -1924,18 +1919,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 return;
             }
         };
-        if let Some(v) = usd_tf.map(|t| t.translation) {
-            // Only apply USD translation if it's non-zero (avoid overwriting spawn positions).
-            if v.length_squared() > 1e-6 {
-                transform.translation = v;
-            }
-        }
-        if let Some(q) = usd_tf.map(|t| t.rotation) {
-            // Only apply a non-identity USD rotation (preserve spawn rotation otherwise).
-            if !q.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                transform.rotation = q;
-            }
-        }
+        // An authored stack owns the complete pose, including zero translation,
+        // identity rotation and authored scale. Apply the primitive axis exactly once
+        // to that pose, not to the previous visual projection.
+        let mut transform = usd_tf.unwrap_or_else(|| existing_tf.cloned().unwrap_or_default());
         // UsdGeomCylinder.axis token (X|Y|Z, default Z). Compose the
         // axis-induced rotation onto the entity Transform so a Y-axis
         // Bevy `Cylinder` mesh appears along the authored axis without
@@ -1989,18 +1976,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 }
             }
         }
-        // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling composed with
-        // translate + rotate. `Cube` prims rely on this to express differing
-        // width/height/depth, since UsdGeomCube itself has only `size`. The
-        // composed transform (matrix / xformOpOrder) carries scale too.
-        let usd_scale = usd_tf.map(|t| t.scale);
-        if let Some(v) = usd_scale {
-            let nonzero = v.x.abs() > 1e-6 || v.y.abs() > 1e-6 || v.z.abs() > 1e-6;
-            if nonzero {
-                transform.scale = v;
-            }
-        }
-
         // Honour `token visibility = "invisible"` and the
         // `lunco:placeholder = true` author flag — both apply as
         // `Visibility::Hidden`.
