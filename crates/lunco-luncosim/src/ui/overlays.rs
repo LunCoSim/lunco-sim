@@ -43,7 +43,8 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
     settings.is_some_and(|s| s.sky_clock)
 }
 
-/// Contribute the sky-clock controls to the workbench Time menu.
+/// Contribute the sky-clock controls and visibility preference to the workbench
+/// Time menu.
 ///
 /// Registered at `Startup`; a no-op when the workbench layout is absent (headless
 /// runs, `luncosim test`), which is why it takes `&mut World` and bails rather than
@@ -54,6 +55,28 @@ pub(crate) fn register_time_menu(world: &mut World) {
     };
     layout.register_time_menu(|ui, ctx| {
         super::celestial_time::sky_clock_menu_ui(ui, ctx);
+
+        ui.separator();
+        ui.label(
+            bevy_egui::egui::RichText::new("Viewport overlays")
+                .weak()
+                .small(),
+        );
+        // Edit a copy and write back only on a real change: `set_resource`
+        // applies the replacement after the menu pass, so opening the menu does
+        // not mark the resource changed and rewrite settings.json.
+        let Some(mut edited) = ctx.resource::<OverlaySettings>().copied() else {
+            return;
+        };
+        let original = edited;
+        ui.checkbox(&mut edited.sky_clock, "Time HUD (top-left)")
+            .on_hover_text(
+                "Show the floating celestial time HUD. The same sky-clock controls \
+                 remain available in this menu when the HUD is hidden.",
+            );
+        if edited != original {
+            ctx.set_resource(edited);
+        }
     });
 }
 
