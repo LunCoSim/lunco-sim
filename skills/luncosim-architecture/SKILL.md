@@ -94,7 +94,8 @@ input or to add an alternate propagation path.
 
 Use the same owner-local revision/cursor shape for other stable projections:
 the Modelica document registry wakes engine sync, telemetry producers pace by
-their authoritative model/fixed time, behavior target paths are cached per
+their authoritative model/fixed time and capture a live `GlobalEntityId` in the
+render-free `SignalRegistry` before a source can become archived, behavior target paths are cached per
 entity and invalidated by authored XML or active-frame ancestry, terrain
 curvature reacts to its input components, and globe LOD caches pure selection
 until camera/LOD/handoff/residency inputs change. These cursors suppress work;

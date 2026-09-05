@@ -545,6 +545,7 @@ fn retain_sample(
     trigger: On<SampledParameter>,
     settings: Res<TelemetrySettings>,
     channels: Query<(&Parameter, Option<&RetainedSignalMeta>)>,
+    owners: Query<Option<&lunco_core::GlobalEntityId>>,
     mut commands: Commands,
     mut signals: ResMut<lunco_signal::SignalRegistry>,
 ) {
@@ -564,6 +565,9 @@ fn retain_sample(
     };
     let retention = channel.retention.unwrap_or(settings.default_retention);
     let signal = lunco_signal::SignalRef::new(s.source, s.name.clone());
+    if let Ok(Some(owner)) = owners.get(s.source) {
+        signals.associate_global_owner(&signal, *owner);
+    }
 
     signals.push_scalar_with_capacity(
         signal.clone(),

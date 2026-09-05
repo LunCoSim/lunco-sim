@@ -382,6 +382,10 @@ pub struct SignalRegistry {
     scalar_history: HashMap<SignalRef, ScalarHistory>,
     types: HashMap<SignalRef, SignalType>,
     meta: HashMap<SignalRef, SignalMeta>,
+    /// Stable wire owners captured while a producer is live.  The ECS component
+    /// may disappear when an archived source despawns, but the API key for its
+    /// retained history must not change with it.
+    global_owners: HashMap<SignalRef, GlobalEntityId>,
     /// Sources may disappear while their mission history remains useful.  This
     /// records the live/inactive boundary without deleting samples or metadata.
     inactive: std::collections::HashSet<SignalRef>,
@@ -550,6 +554,23 @@ impl SignalRegistry {
         }
     }
 
+    /// Remember the stable API owner for a signal while its producer is live.
+    ///
+    /// [`SignalRef`] remains session-local because it is the native registry
+    /// identity.  This separate owner map is the wire-identity projection: it
+    /// lets archived history keep its `api/<GlobalEntityId>` key after the ECS
+    /// source and its [`GlobalEntityId`] component are gone.
+    pub fn associate_global_owner(&mut self, sig: &SignalRef, owner: GlobalEntityId) {
+        if self.global_owners.insert(sig.clone(), owner) != Some(owner) {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
+    /// Stable API owner captured for this signal, if its producer supplied one.
+    pub fn global_owner(&self, sig: &SignalRef) -> Option<GlobalEntityId> {
+        self.global_owners.get(sig).copied()
+    }
+
     /// Revision for UI catalogs. It changes only when their rendered channel
     /// descriptors can change, never while ordinary samples stream in.
     pub fn catalog_revision(&self) -> u64 {
@@ -613,6 +634,7 @@ impl SignalRegistry {
         self.scalar_history.retain(|r, _| r.entity != entity);
         self.types.retain(|r, _| r.entity != entity);
         self.meta.retain(|r, _| r.entity != entity);
+        self.global_owners.retain(|r, _| r.entity != entity);
         self.inactive.retain(|r| r.entity != entity);
         if changed {
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
@@ -627,6 +649,7 @@ impl SignalRegistry {
     pub fn remove_signal(&mut self, sig: &SignalRef) {
         let changed = self.scalar_history.remove(sig).is_some() | self.types.remove(sig).is_some();
         self.meta.remove(sig);
+        self.global_owners.remove(sig);
         self.inactive.remove(sig);
         if changed {
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
@@ -815,6 +838,22 @@ mod tests {
         let reborn = Entity::from_raw_u32(99).unwrap();
         let resolved = persisted.resolve(|g| (g == gid).then_some(reborn)).unwrap();
         assert_eq!(resolved, SignalRef::new(reborn, "motor_current"));
+    }
+
+    #[test]
+    fn an_archived_signal_keeps_its_stable_api_owner() {
+        let entity = Entity::from_raw_u32(7).unwrap();
+        let signal = SignalRef::new(entity, "motor_current");
+        let owner = GlobalEntityId::from_raw(42);
+        let mut registry = SignalRegistry::default();
+
+        registry.push_scalar(signal.clone(), 0.0, 1.0);
+        registry.associate_global_owner(&signal, owner);
+        registry.deactivate_entity(entity);
+
+        assert_eq!(registry.global_owner(&signal), Some(owner));
+        assert!(!registry.is_active(&signal));
+        assert_eq!(registry.scalar_history(&signal).unwrap().len(), 1);
     }
 
     /// A global signal has no entity to stabilise — it round-trips as `None` and
