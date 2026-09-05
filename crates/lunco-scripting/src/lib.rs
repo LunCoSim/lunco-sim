@@ -240,6 +240,13 @@ pub fn register_builtin_policies() -> Result<(), String> {
             lunco_core::session::DATASET_PROVISION_HOOK,
             "dataset_provisioning",
         ),
+        // Renderer Rust publishes shadow-resource facts only; the authored
+        // Rhai policy owns the warning decision and message.
+        (
+            "render_shadow_quality",
+            lunco_core::session::RENDER_SHADOW_QUALITY_HOOK,
+            "shadow_quality",
+        ),
         // Generated Modelica source, topology and diagram schema. The USD
         // projector supplies the complete composed graph as facts; this policy
         // owns the emitted model and its presentation without a Rust edit.
@@ -736,5 +743,37 @@ mod journal_tests {
         // Unknown doc and non-ScriptOp payloads fail softly (logged, false).
         assert!(!reg.replay_op(DocumentId::new(999), &op));
         assert!(!reg.replay_op(id, &serde_json::json!({ "nope": 1 })));
+    }
+}
+
+#[cfg(all(test, feature = "rhai"))]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn render_shadow_quality_policy_owns_the_warning_message() {
+        register_builtin_policies().expect("built-in policies compile");
+        let facts = lunco_hooks::HookValue::map([
+            ("directional_casters", lunco_hooks::HookValue::Int(0)),
+            ("point_casters", lunco_hooks::HookValue::Int(5)),
+            ("spot_casters", lunco_hooks::HookValue::Int(0)),
+            (
+                "max_directional_shadow_casters",
+                lunco_hooks::HookValue::Int(0),
+            ),
+            ("max_point_shadow_casters", lunco_hooks::HookValue::Int(1)),
+            ("max_spot_shadow_casters", lunco_hooks::HookValue::Int(0)),
+            ("estimated_bytes", lunco_hooks::HookValue::Int(1)),
+            ("budget_bytes", lunco_hooks::HookValue::Int(2)),
+        ]);
+        let result = lunco_hooks::invoke(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK, &[facts])
+            .expect("the render shadow policy is registered")
+            .expect("the render shadow policy accepts renderer facts");
+        let lunco_hooks::HookValue::Str(message) = result else {
+            panic!("the render shadow policy must return warning text when limits are unmet");
+        };
+        assert!(message.contains("5 point caster(s) exceed the configured limit of 1"));
+        assert!(message.contains("All authored shadow maps remain enabled"));
+        lunco_hooks::unregister(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK);
     }
 }

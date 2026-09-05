@@ -166,9 +166,9 @@ than introducing a LunCo schema for that renderer-facing geometry intent.
 
 The same ownership rule applies to a light's shadow admission: `UsdLuxShadowAPI`'s
 `inputs:shadow:enable` is the authoritative intent for every `DistantLight` and local
-light. Runtime render-quality limits may reject casters when an explicit resource budget
-is exceeded, but application state must not rewrite an authored `false` to `true` or
-invent a possession-based shadow policy.
+light. Runtime render-quality limits publish resource facts when an explicit resource
+budget is exceeded, and the authored Rhai render policy may report those facts as a
+warning. No runtime path may mutate an authored light or silently omit its shadow map.
 
 Read on the **gprim**, not the shader: two prims sharing one material can disagree about
 casting, and `material:binding` is not the place to say so.

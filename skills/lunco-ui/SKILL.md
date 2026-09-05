@@ -166,6 +166,9 @@ load-preserving accumulation target. It does not replace
 `Panel`/egui, create a second UI camera, or permit templates to mutate domain
 state. Use this skill for workbench panels and use `runtime-ui` for authored
 HTML/CSS surfaces; do not create a hybrid shim for one widget. The
+manifest controls the retained surface's outer rectangle: the runtime pins its
+minimum and maximum size to the resolved placement and clips overflow, while
+the authored CSS/profile must fit its contents inside that boundary. The
 `lunco-ui::modal` host is the canonical owner of queued modal outcomes,
 scrim, focus, Esc dismissal, and typed `CloseModal` dispatch; HUI does not yet
 supply those dialog semantics or checkbox/input state events.

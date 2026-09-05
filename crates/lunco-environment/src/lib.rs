@@ -501,7 +501,6 @@ fn on_set_environment_light(
             &mut Transform,
             &mut DirectionalLight,
             Option<&mut CascadeShadowConfig>,
-            Option<&mut lunco_render::ShadowMapSuppressed>,
         ),
         (
             With<DirectionalLight>,
@@ -518,7 +517,7 @@ fn on_set_environment_light(
     // The command has one authoritative scene-sun target. Refuse ambiguity
     // rather than applying a user command to an arbitrary set of lights.
     if q_sun.iter().count() == 1 {
-        let Ok((mut _tf, mut light, cascades, suppressed)) = q_sun.single_mut() else {
+        let Ok((mut _tf, mut light, cascades)) = q_sun.single_mut() else {
             unreachable!("a counted scene sun must remain queryable");
         };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
@@ -560,16 +559,7 @@ fn on_set_environment_light(
             light.color = Color::linear_rgb(r, g, b);
         }
         if let Some(s) = cmd.shadow_maps_enabled {
-            if let Some(mut suppressed) = suppressed {
-                // Keep the explicit command as the restore intent, while the
-                // configured caster policy continues to own the effective
-                // Bevy flag until admission changes.
-                suppressed.restore_enabled = s;
-                suppressed.last_applied_enabled = false;
-                light.shadow_maps_enabled = false;
-            } else {
-                light.shadow_maps_enabled = s;
-            }
+            light.shadow_maps_enabled = s;
         }
         if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
             let Some(mut cfg) = cascades else {
