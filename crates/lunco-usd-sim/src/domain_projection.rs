@@ -2536,8 +2536,14 @@ fn commit_domain_projection(
 /// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
     mut commands: Commands,
-    added: Query<(), Added<UsdPrimPath>>,
-    identity_added: Query<(), Added<lunco_core::GlobalEntityId>>,
+    preview: (
+        Query<&ChildOf>,
+        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+    ),
+    triggers: (
+        Query<(), Added<UsdPrimPath>>,
+        Query<(), Added<lunco_core::GlobalEntityId>>,
+    ),
     prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -2565,6 +2571,7 @@ pub fn project_domain_islands(
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
     let started = web_time::Instant::now();
+    let (added, identity_added) = triggers;
     let mut projected = 0usize;
     let mut projection_dirty = projection.p0();
     if !projection_is_due_from_flags(
@@ -2594,6 +2601,9 @@ pub fn project_domain_islands(
     }
     let Some(channels) = channels else { return };
     for (entity, prim, previous, installed_model, instance_projection) in &prims {
+        if lunco_usd_bevy::is_preview_only(entity, &preview.0, &preview.1) {
+            continue;
+        }
         if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
             continue;
         }
@@ -2725,6 +2735,10 @@ pub fn project_domain_islands(
 /// wait for Rhai, network extraction, or generated-source validation.
 pub fn poll_domain_projection_tasks(
     mut commands: Commands,
+    preview: (
+        Query<&ChildOf>,
+        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+    ),
     mut pending: ResMut<PendingDomainProjections>,
     prims: Query<(
         &UsdPrimPath,
@@ -2741,6 +2755,12 @@ pub fn poll_domain_projection_tasks(
     let Some(channels) = channels else { return };
     let mut index = 0;
     while index < pending.tasks.len() {
+        // A task may finish after its entity enters a presentation-only lease.
+        // Cancel before polling so it cannot publish a runtime participant.
+        if lunco_usd_bevy::is_preview_only(pending.tasks[index].entity, &preview.0, &preview.1) {
+            pending.tasks.swap_remove(index);
+            continue;
+        }
         let ready = block_on(future::poll_once(&mut pending.tasks[index].task));
         let Some(synthesized) = ready else {
             index += 1;
@@ -4121,6 +4141,10 @@ pub(crate) fn domain_projection_due(
 /// by the Modelica asset events; there is no time-based give-up path.
 pub fn resolve_member_classes(
     prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
+    preview: (
+        Query<&ChildOf>,
+        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+    ),
     added: Query<(), Added<UsdPrimPath>>,
     mut classes: ResMut<MemberClasses>,
     mut projection_dirty: ResMut<ProjectionDirty>,
@@ -4173,7 +4197,10 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        for (_entity, prim, instance_projection) in &prims {
+        for (entity, prim, instance_projection) in &prims {
+            if lunco_usd_bevy::is_preview_only(entity, &preview.0, &preview.1) {
+                continue;
+            }
             let id = prim.stage_handle.id();
             let Some(stage_asset) = stages.get(&prim.stage_handle) else {
                 continue;

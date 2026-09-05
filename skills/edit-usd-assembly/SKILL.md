@@ -462,6 +462,12 @@ or `assembly_edit::close_document(doc)` after the final checkpoint. Keep
 undo/redo available through `UndoDocument` and `RedoDocument` during feedback.
 
 For runtime behavior, use the production scene/scenario gate and inspect its
+real verdict. An Editor preview must not synthesize or execute Modelica merely
+because it contains a component collection; use `preview_domain_isolation`
+when changing that runtime admission boundary. Preview queries remain valid
+even when the authored network is incomplete.
+
+For physical acceptance, inspect the production scene/scenario's
 real verdict. `--validate` is parse/preflight only. For code or authored asset
 changes, run the narrowest relevant checks after the interactive session; do
 not claim a screenshot proves physics, persistence, or reload. Before closing,
