@@ -202,9 +202,11 @@ by authored XML or active-frame ancestry changes. Celestial terrain curvature is
 reconciled only when its authoritative inputs change, and globe LOD caches the
 pure desired leaf selection separately from readiness and bounded tile
 streaming. Globe LOD also builds fresh cube-sphere meshes on the compute pool;
-the frame thread only installs completed `Mesh` assets and reconciles residency.
-These are owner-local cursors, not compatibility stores or alternate sources of
-truth.
+the frame thread only installs a bounded number of completed `Mesh` assets per
+body per frame and reconciles residency. Completed worker results remain queued
+until that asset-upload budget admits them, so off-thread generation cannot turn
+into an unbounded main-thread upload burst. These are owner-local cursors, not
+compatibility stores or alternate sources of truth.
 
 The engine exposure producer has one shared 20 Hz cadence gate for its change
 detector and publisher. The first publication is immediate; subsequent stable

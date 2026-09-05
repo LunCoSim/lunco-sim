@@ -403,8 +403,9 @@ pub struct GlobeTiles {
     /// installed into `Assets<Mesh>` only after it is ready; tile selection and
     /// visibility remain owned by this reconciler.
     pending_meshes: HashMap<TileCoord, Task<Mesh>>,
-    /// Reused completion scratch for `pending_meshes`, avoiding a new vector
-    /// allocation on every reconciliation pass.
+    /// Completed worker meshes waiting for the bounded main-thread upload
+    /// budget. The queue is retained across reconciliations so a worker burst
+    /// cannot become an upload burst in one frame.
     completed_meshes: Vec<(TileCoord, Mesh)>,
 }
 
@@ -506,6 +507,11 @@ pub(crate) fn globe_lod_update_due(
 pub struct GlobeLodBudget {
     /// Maximum fresh tile entities created for one body in one frame.
     pub spawn_tiles_per_frame: usize,
+    /// Maximum completed CPU meshes uploaded to `Assets<Mesh>` for one body in
+    /// one frame. Mesh generation is off-thread, but the Bevy asset insertion
+    /// still belongs to the frame thread and must be bounded separately from
+    /// task admission.
+    pub mesh_uploads_per_frame: usize,
     /// Maximum retired tile entities released for one body in one frame.
     pub despawn_tiles_per_frame: usize,
     /// Approximate mesh bytes allowed for resident and retiring tile entities.
@@ -520,6 +526,7 @@ impl Default for GlobeLodBudget {
     fn default() -> Self {
         Self {
             spawn_tiles_per_frame: 16,
+            mesh_uploads_per_frame: 4,
             despawn_tiles_per_frame: 32,
             max_resident_mesh_bytes: 64 * 1024 * 1024,
             max_cached_mesh_bytes: 16 * 1024 * 1024,
@@ -857,7 +864,6 @@ pub(crate) fn update_globe_lod(
                 completed_meshes,
                 ..
             } = &mut *tiles;
-            completed_meshes.clear();
             pending_meshes.retain(|coord, task| {
                 match block_on(future::poll_once(&mut *task)) {
                     Some(mesh) => {
@@ -869,7 +875,14 @@ pub(crate) fn update_globe_lod(
             });
         }
         let mesh_completion_pending = !tiles.completed_meshes.is_empty();
-        while let Some((coord, mesh)) = tiles.completed_meshes.pop() {
+        // A worker can finish many meshes between two render frames. Keep the
+        // completed queue across reconciliations and bound only the main-thread
+        // asset uploads; otherwise a healthy compute phase still produces a
+        // periodic frame hitch when all finished meshes are installed together.
+        for _ in 0..budget.mesh_uploads_per_frame {
+            let Some((coord, mesh)) = tiles.completed_meshes.pop() else {
+                break;
+            };
             tiles.cache_clock = tiles.cache_clock.wrapping_add(1);
             let last_used = tiles.cache_clock;
             let handle = meshes.add(mesh);
@@ -1024,6 +1037,13 @@ pub(crate) fn update_globe_lod(
         let mut fresh_bytes = 0usize;
         for (coord, _) in prioritized.into_iter().take(budget.spawn_tiles_per_frame) {
             if tiles.pending_meshes.contains_key(&coord) {
+                continue;
+            }
+            if tiles
+                .completed_meshes
+                .iter()
+                .any(|(completed, _)| *completed == coord)
+            {
                 continue;
             }
             let needs_fresh_mesh = !tiles.mesh_cache.contains_key(&coord);
