@@ -440,6 +440,18 @@ USD writer, while missing or ambiguous authored relationships still fail at the
 authoritative validator. A completed body/joint identity is likewise rejected
 by a construction recipe until the caller chooses an explicit update plan.
 
+Referenced construction has one additional sequencing rule. Use
+`assembly_builder::referenced_instance_plan` or
+`flip_rover_instance_plan` to author the identity, reference, and local pose
+first; once the referenced asset closure is visible in the composed query,
+use `select_variants_plan` for variant selections. Variant selection is a
+composition-arc change and therefore triggers the existing coarse recompose;
+separating it from first-use reference loading keeps the dynamic recipe from
+creating a root with an uncomposed subtree. The production
+`assembly_component_builder` scenario proves this with an empty assembly and
+four composed FLIP wheel paths, while duplicate identities, missing parents,
+invalid references, and unavailable variant targets fail before proposal.
+
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
 Griffin ramp plan and a validated FLIP four-wheel layout plan. Its

@@ -505,6 +505,16 @@ implementation is
 ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
 registered at runtime without adding a Rust command or a second USD writer.
 
+For reusable referenced models, `referenced_instance_plan` authors one
+explicit identity, asset URI, parent, and local placement. The convenience
+`flip_rover_instance_plan` validates four unique wheel descendants for a
+FLIP-style rover. First-use reference loading and variant reconfiguration are
+separate reviewed plans: wait until the composed instance children are
+queryable, then use `select_variants_plan`. This is required because variant
+selection recomposes a subtree, while a newly referenced asset may still be
+loading. The `assembly_component_builder` production scenario demonstrates
+the complete empty-assembly flow and its pre-proposal rejection cases.
+
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
 Cube-shape paths under one translation-only parent, checks the composed Cube
@@ -793,7 +803,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, Cube and composed collision alignment/clearance, geometry, socket mating, retrofit, and body/joint plans |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
 | [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, and complete mission-manifest plans |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |

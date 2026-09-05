@@ -392,6 +392,15 @@ Use the smallest existing typed intent that expresses the change:
   body/joint identities are rejected by the construction recipe and require an
   explicit update plan; these helpers do not write USDA or bypass the document
   owner.
+- For a reusable referenced assembly, use
+  `assembly_builder::referenced_instance_plan` or
+  `assembly_builder::flip_rover_instance_plan` to author the explicit
+  component identity, asset URI, parent, and local pose. The FLIP helper checks
+  four unique wheel descendants before proposal. Materialize first-use
+  references before applying composition-changing variants; once the composed
+  children are queryable, use `assembly_builder::select_variants_plan` as a
+  second reviewed plan. This sequencing keeps async reference loading and
+  coarse variant recomposition from producing a root with missing children.
 - Use `assembly_builder::place_with_clearance_plan` when placing a part near
   other authored geometry. Supply the exact moving frame and Cube shape plus
   every exact blocker frame and Cube shape. The frames must share a

@@ -75,6 +75,14 @@ existing `AttachComponent` owner remains responsible for plug-frame math,
 reference lowering, occupancy, and atomic journalling. Do not copy a reference
 and guess a transform when the component already advertises a mount plug.
 
+When a model is a reusable referenced assembly rather than a socket attachment,
+use `assembly_builder::referenced_instance_plan` or
+`assembly_builder::flip_rover_instance_plan` for the explicit identity and
+placement, then wait for its composed children before using
+`assembly_builder::select_variants_plan`. This keeps first-use asset loading
+separate from the variant recompose and makes missing wheel identities or
+variant targets fail in Rhai before review.
+
 Mission-level recipes may compose these generic helpers through the dynamic
 `griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two
 explicit Griffin ramp identities and `flip_four_wheel_layout_plan` for the

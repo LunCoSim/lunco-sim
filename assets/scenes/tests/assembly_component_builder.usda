@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyComponentBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Empty authored assembly. The production Rhai scenario adds a complete
+# four-wheel rover reference through the reviewed assembly plan; this fixture
+# deliberately contains no hand-authored vehicle geometry.
+def Xform "AssemblyComponentBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_component_builder.rhai@
+        }
+    }
+}

@@ -35,6 +35,15 @@ components and supply mission study values explicitly. The complete mission
 recipe rejects a missing or miswired fixed adapter before authoring, and a
 completed body/joint identity must be updated explicitly rather than rebuilt.
 
+For a rover assembled from one reusable reference, use
+`assembly_builder::flip_rover_instance_plan` to validate the four explicit
+wheel descendants and author the identity, URI, and pose. Let the referenced
+asset finish composing before applying non-default drivetrain/power/generation
+or thermal choices with `assembly_builder::select_variants_plan`; variant
+selection is a subtree recompose and is intentionally a second reviewed plan.
+The recipe and its validation remain editable Rhai, so changing the vehicle
+authoring policy does not require a Rust-core rebuild.
+
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
 (per-wheel port wiring + `driveLaw` variant), `six_wheel_independent.usda`

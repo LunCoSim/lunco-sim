@@ -41,6 +41,22 @@ fn parent_path(path) {
     if result == "" { "/" } else { "/" + result }
 }
 
+fn variant_selection_values(path, variants) {
+    let selections = [];
+    if variants == () { return #{ ok: true, value: selections }; }
+    let seen = [];
+    for selection in variants {
+        if selection == () || selection.variant_set == ()
+            || selection.variant == () || selection.variant_set == ""
+            || selection.variant == "" || seen.contains(selection.variant_set) {
+            return plan_error(path + ": variants require unique variant_set and variant fields");
+        }
+        seen.push(selection.variant_set);
+        selections.push(selection);
+    }
+    #{ ok: true, value: selections }
+}
+
 /// Return one local transform change set. Rotation is Euler XYZ degrees and
 /// scale is unitless, matching the existing Inspector transform contract.
 /// The result is a pure typed plan; it does not mutate the document.
@@ -87,6 +103,188 @@ fn place_plan(edit_target, path, translation, rotation, scale) {
         }});
     }
     #{ ok: true, kind: "placement", path: path, ops: ops }
+}
+
+/// Build one referenced component instance without writing USDA source.
+///
+/// The reference is the component's identity and composition boundary; local
+/// schemas, attributes, and transform opinions are explicit instance
+/// decisions. Variant selections have a separate second-phase plan because
+/// they recompose the subtree and must not race first-use reference loading.
+/// The parent and target are inspected before a plan is returned, so a recipe
+/// cannot silently create a duplicate or write below a missing frame. The
+/// typed document owner still validates the reference, composition, and
+/// operation ordering when the plan is reviewed.
+fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
+    translation, rotation, scale, api_schemas, attributes) {
+    if doc == () || edit_target == () || parent == () || name == ()
+        || type_name == () || asset == () {
+        return plan_error("referenced_instance_plan requires document, edit target, parent, name, type, and asset");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("referenced_instance_plan parent must be an absolute USD path");
+    }
+    if name == "" || name.contains("/") {
+        return plan_error("referenced_instance_plan name must be one USD identifier");
+    }
+    if type_name == "" {
+        return plan_error("referenced_instance_plan requires an explicit USD type");
+    }
+    if !asset.starts_with("lunco://") || asset.len() <= "lunco://".len()
+        || asset.contains(" ") || asset.contains("@") {
+        return plan_error("referenced_instance_plan asset must be a non-empty lunco:// URI without USDA delimiters");
+    }
+
+    let parent_record = query("QueryUsdPrim", #{
+        doc: doc,
+        path: parent,
+        children: false,
+    });
+    if !query_ok(parent_record) {
+        return plan_error(parent + ": referenced instance parent is unavailable");
+    }
+    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let existing = query("QueryUsdPrim", #{
+        doc: doc,
+        path: path,
+        children: false,
+    });
+    if query_ok(existing) {
+        return plan_error(path + ": referenced instance identity is already occupied");
+    }
+
+    let schemas = [];
+    if api_schemas != () {
+        let seen = [];
+        for schema in api_schemas {
+            if schema == () || schema == "" || seen.contains(schema) {
+                return plan_error(path + ": API schema list contains an empty or duplicate entry");
+            }
+            seen.push(schema);
+            schemas.push(schema);
+        }
+    }
+
+    let attrs = [];
+    if attributes != () {
+        let seen = [];
+        for attribute in attributes {
+            if attribute == () || attribute.name == () || attribute.type_name == ()
+                || attribute.value == () || attribute.name == ""
+                || attribute.type_name == "" || seen.contains(attribute.name) {
+                return plan_error(path + ": attributes require unique name, type_name, and value fields");
+            }
+            seen.push(attribute.name);
+            attrs.push(attribute);
+        }
+    }
+
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: type_name,
+        reference: asset,
+    }}];
+    if schemas.len() > 0 {
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: edit_target,
+            path: path,
+            schemas: schemas,
+        }});
+    }
+    for attribute in attrs {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: path,
+            name: attribute.name,
+            type_name: attribute.type_name,
+            value: attribute.value.to_string(),
+        }});
+    }
+    if translation != () || rotation != () || scale != () {
+        let placement = place_plan(edit_target, path, translation, rotation, scale);
+        if !placement.ok { return placement; }
+        for op in placement.ops { ops.push(op); }
+    }
+    #{
+        ok: true,
+        kind: "referenced_instance",
+        path: path,
+        asset: asset,
+        ops: ops,
+    }
+}
+
+/// Build a second-phase variant-selection plan for an already materialized
+/// referenced instance. Variant changes recompose a subtree, so first-use
+/// reference materialization must complete before this plan is proposed. The
+/// plan is still pure and dynamically reloadable; the document owner remains
+/// responsible for the coarse rebuild and journal boundary.
+fn select_variants_plan(doc, edit_target, path, variants) {
+    if doc == () || edit_target == () || path == () || variants == () {
+        return plan_error("select_variants_plan requires document, edit target, path, and variants");
+    }
+    if !path.starts_with("/") || path.ends_with("/") {
+        return plan_error("select_variants_plan path must be an absolute USD prim path");
+    }
+    let record = query("QueryUsdPrim", #{ doc: doc, path: path, children: false });
+    if !query_ok(record) {
+        return plan_error(path + ": variant-selection target is unavailable");
+    }
+    let valid = variant_selection_values(path, variants);
+    if !valid.ok { return valid; }
+    if valid.value.len() == 0 {
+        return plan_error(path + ": select_variants_plan requires at least one selection");
+    }
+    let ops = [];
+    for selection in valid.value {
+        ops.push(#{ SetVariantSelection: #{
+            edit_target: edit_target,
+            path: path,
+            variant_set: selection.variant_set,
+            variant: selection.variant,
+        }});
+    }
+    #{
+        ok: true,
+        kind: "variant_selection",
+        path: path,
+        variants: valid.value,
+        ops: ops,
+    }
+}
+
+/// Instantiate a complete four-wheel rover assembly from one maintained USD
+/// vehicle asset. The asset owns its chassis, wheel, suspension, drivetrain,
+/// and controller composition; this recipe owns only the explicit instance
+/// identity, placement, and expected wheel paths. Variant choices are applied
+/// afterward through `select_variants_plan` once the reference closure is
+/// materialized. The paths are checked before proposal for uniqueness and
+/// containment, then the production scenario inspects their composed
+/// Cylinder/index/dimension contract after the reference is committed.
+fn flip_rover_instance_plan(doc, edit_target, parent, name, asset,
+    translation, rotation, wheel_paths) {
+    if wheel_paths == () || wheel_paths.len() != 4 {
+        return plan_error("flip_rover_instance_plan requires exactly four explicit wheel paths");
+    }
+    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let seen = [];
+    for wheel_path in wheel_paths {
+        if wheel_path == () || !wheel_path.starts_with(path + "/")
+            || seen.contains(wheel_path) {
+            return plan_error("flip_rover_instance_plan wheel paths must be unique descendants of the instance");
+        }
+        seen.push(wheel_path);
+    }
+    let plan = referenced_instance_plan(
+        doc, edit_target, parent, name, "Xform", asset,
+        translation, rotation, (), (), (),
+    );
+    if !plan.ok { return plan; }
+    plan.kind = "flip_rover_instance";
+    plan.wheel_paths = seen;
+    plan
 }
 
 /// Build a standard Cube shape under an existing frame with an explicit scale
