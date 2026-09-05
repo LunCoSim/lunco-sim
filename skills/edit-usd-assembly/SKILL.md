@@ -210,6 +210,12 @@ not list raycast wheels as rigid bodies or invent a joint to make that audit
 pass. Missing relationships, bodies, or colliders are defects to fix at their
 authored owner.
 
+For `joint_frame_report`, supply `axis` only for revolute, prismatic or
+spherical joints (their standard omitted axis is X). Fixed payload adapters,
+distance joints and generic `PhysicsJoint` have no primary axis. Use
+`require_positions`/`require_rotations` only when the design requires explicit
+authored frames. Run `assembly_joint_audit` for the diagnostic regression.
+
 For numeric part transforms, use the focused preview's Inspector Transform
 section or call the existing `assembly_edit::transform(doc, edit_target, path,
 translation, rotation, scale, parent_gen)` helper with the exact selection

@@ -356,6 +356,19 @@ targets, so missing metadata fails visibly instead of being inferred from
 names. Raycast wheels are not listed as rigid bodies: only actual movable
 bodies are checked for joint coverage.
 
+Joint diagnostics recognize the standard USD joint types explicitly. Only
+revolute, prismatic and spherical joints have a primary axis; an omitted axis
+on those schemas means X. Fixed payload adapters, distance joints and generic
+`PhysicsJoint` contracts require no primary axis. A caller asking for one on
+an axis-free type receives an error. The production `assembly_joint_audit`
+scene covers these contracts and rejects invalid types, axes, body targets,
+required missing frames and reversed limits.
+`QueryUsdPrim` reads quaternion attributes through the shared `UsdRead::quat_d`
+reader and returns `[w, x, y, z]` in authored USD coordinates. It preserves
+float, double and half quaternion opinions instead of reporting them absent.
+These type and axis semantics follow the
+[OpenUSD joint schema](https://openusd.org/release/api/usd_physics_page_front.html).
+
 The companion `assembly_ui` tool library is presentation policy over the same
 typed boundary. Its templates describe the registered `editor` perspective,
 Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and
