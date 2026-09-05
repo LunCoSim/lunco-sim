@@ -54,6 +54,12 @@ proposal reaches the USD owner. Keep the generated plan in one reviewed
 change set; a successful Rhai plan is not permission to omit the explicit
 joint, frame, collider, mass, or generation contract.
 
+For physical placement, use `assembly_builder::place_with_clearance_plan` with
+explicit Cube envelopes and blocker paths before proposing a transform. It
+rejects overlap, insufficient gap, duplicate blockers, non-Cube shapes, and
+rotated or otherwise non-translation-only frames. Do not rely on visual
+separation or an unreviewed generated USD transform to establish clearance.
+
 For reusable referenced parts, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. These helpers select authored socket
 relationships and derive the reflected fixed/revolute/prismatic joint; the

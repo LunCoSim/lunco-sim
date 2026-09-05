@@ -386,6 +386,14 @@ replace a construction policy without rebuilding Rust; they still return the
 existing typed plans and cannot bypass review, generation checks, journalling,
 or USD composition.
 
+`place_with_clearance_plan` is the placement gate for explicit axis-aligned
+Cube envelopes. It requires one moving frame and every blocker frame/shape to
+be exact composed paths under the same authored parent, uses the pure
+`assembly_audit::aabb_clearance` helper, and rejects overlap or insufficient
+minimum gap before proposal. Rotated frames, non-Cube shapes, duplicate
+blockers, and malformed paths remain visible authoring errors rather than
+being converted into guessed bounds.
+
 The proposal helpers are described in the proposal review contract below;
 they are the only review path exposed by this library. The optional
 `parent_gen` on `add_prim`, `remove_prim`, `move_prim`, `transform`,

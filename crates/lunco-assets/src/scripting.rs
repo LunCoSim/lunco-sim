@@ -11,6 +11,10 @@
 //! directory is selected, its contents are authoritative and parse failures
 //! are surfaced; consumers do not silently switch to stale embedded policy.
 //!
+//! Native checkouts read the prelude, policy, and tool directories from disk at
+//! startup; packaged and wasm builds use the embedded copies. Runtime tool
+//! replacement uses the registration command and does not require a restart.
+//!
 //! Three layers, each its own flat directory:
 //!   - `prelude/`  — always-on helpers, merged into one flat namespace.
 //!   - `tools/`    — namespaced `name::fn(...)` tool libraries (name = stem).
@@ -116,9 +120,30 @@ fn disk_rhai_files(dir: &std::path::Path) -> Result<Option<Vec<(String, String)>
     Ok(Some(files))
 }
 
-/// Built-in tool libraries (`assets/scripting/tools/*.rhai`) as `(stem, source)`.
+/// Embedded built-in tool libraries (`assets/scripting/tools/*.rhai`) as
+/// `(stem, source)`. Native startup uses [`active_tool_libraries`] so a
+/// checkout can replace these sources without rebuilding Rust.
 pub fn tool_libraries() -> Vec<(&'static str, &'static str)> {
     rhai_files(&TOOLS)
+}
+
+/// Active built-in tool libraries for native startup.
+///
+/// A checkout with an editable `assets/scripting/tools/` directory reads those
+/// files at startup. That directory is authoritative: an unreadable or empty
+/// directory is an error rather than a silent return to stale embedded policy.
+/// Packaged and wasm builds use the embedded source because no editable asset
+/// tree is available there. Runtime `RegisterToolLibrary` remains the
+/// hot-reload path after startup.
+pub fn active_tool_libraries() -> Result<Vec<(String, String)>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(files) = disk_rhai_files(&crate::assets_dir_abs().join("scripting/tools"))? {
+        return Ok(files);
+    }
+    Ok(tool_libraries()
+        .into_iter()
+        .map(|(name, source)| (name.to_string(), source.to_string()))
+        .collect())
 }
 
 /// Example scenarios (`assets/scripting/examples/*.rhai`) as `(stem, source)`.

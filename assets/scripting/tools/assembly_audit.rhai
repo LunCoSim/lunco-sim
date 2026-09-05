@@ -40,7 +40,7 @@ fn composed_transform_contract(doc, path, expected_scale, expected_order, epsilo
 /// world-space contract instead of a guessed AABB.
 fn axis_aligned_cube_half_extents(doc, path) {
     let record = query_prim(doc, path, ["size", "xformOp:scale", "xformOpOrder"], (), false);
-    if record == () || record.ok == false || record.attrs == () {
+    if record == () || record.ok == false || record.attrs == () || record.type_name != "Cube" {
         return ();
     }
     let size = record.attrs["size"];
@@ -68,6 +68,30 @@ fn axis_aligned_cube_half_extents(doc, path) {
     ]
 }
 
+/// Return the greatest separating margin between two axis-aligned boxes.
+/// A non-negative margin means the boxes do not overlap; a negative margin is
+/// the smallest penetration depth. The caller supplies positions and half
+/// extents in one already-shared frame, so this helper does not guess world
+/// transforms or geometry dimensions.
+fn aabb_clearance(position_a, extents_a, position_b, extents_b) {
+    if position_a == () || position_b == () || extents_a == () || extents_b == ()
+        || position_a.len() != 3 || position_b.len() != 3
+        || extents_a.len() != 3 || extents_b.len() != 3 {
+        return ();
+    }
+    let margin = -1.0e30;
+    let axis = -1;
+    for i in 0..3 {
+        let candidate = (position_a[i] - position_b[i]).abs()
+            - extents_a[i].abs() - extents_b[i].abs();
+        if candidate > margin {
+            margin = candidate;
+            axis = i;
+        }
+    }
+    #{ margin: margin, axis: axis, separated: margin >= 0.0 }
+}
+
 fn world_position(doc, path) {
     let record = query_prim(doc, path, [], (), false);
     if !query_ok(record) { return (); }
@@ -80,16 +104,11 @@ fn world_position(doc, path) {
 fn world_aabb_overlap(doc, path_a, extents_a, path_b, extents_b, epsilon) {
     let a = world_position(doc, path_a);
     let b = world_position(doc, path_b);
-    if a == () || b == () || extents_a == () || extents_b == ()
-        || a.len() != 3 || b.len() != 3 || extents_a.len() != 3 || extents_b.len() != 3 {
+    let clearance = aabb_clearance(a, extents_a, b, extents_b);
+    if clearance == () {
         return false;
     }
-    for i in 0..3 {
-        if (a[i] - b[i]).abs() > extents_a[i] + extents_b[i] + epsilon {
-            return false;
-        }
-    }
-    true
+    clearance.margin <= epsilon
 }
 
 /// Verify a host-to-mount-to-pivot seating chain in the composed stage.

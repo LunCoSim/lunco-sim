@@ -576,3 +576,78 @@ fn align_cube_edges_plan(doc, edit_target, moving_path, moving_shape,
     placement.gap = gap;
     placement
 }
+
+/// Place one translation-only Cube frame while enforcing an explicit minimum
+/// AABB clearance from every listed blocker. All frames and shapes are exact
+/// composed paths. The common parent requirement makes the candidate and the
+/// queried blocker positions comparable without inventing world-transform or
+/// shape semantics; callers with rotated geometry must supply a different
+/// authored contract rather than receiving a plausible placement.
+fn place_with_clearance_plan(doc, edit_target, moving_path, moving_shape,
+    translation, blockers, minimum_gap) {
+    if doc == () || edit_target == () || moving_path == () || moving_shape == ()
+        || blockers == () || blockers.len() == 0 {
+        return plan_error("place_with_clearance_plan requires a document, moving Cube, and explicit blockers");
+    }
+    if minimum_gap == () || !minimum_gap.is_finite() || minimum_gap < 0.0 {
+        return plan_error("place_with_clearance_plan requires a finite non-negative minimum gap");
+    }
+    let valid_translation = vector3(translation, "candidate translation");
+    if !valid_translation.ok { return valid_translation; }
+    if !moving_shape.starts_with(moving_path + "/") {
+        return plan_error("moving shape must be an exact descendant of the moving prim");
+    }
+
+    let parent = parent_path(moving_path);
+    if parent != "/" {
+        let parent_frame = local_translation(doc, parent);
+        if !parent_frame.ok {
+            return plan_error(parent + ": clearance requires a translation-only authored parent frame");
+        }
+    }
+    let moving = local_translation(doc, moving_path);
+    if !moving.ok { return moving; }
+    let moving_extents = assembly_audit::axis_aligned_cube_half_extents(doc, moving_shape);
+    if moving_extents == () {
+        return plan_error(moving_shape + ": moving shape must be a composed axis-aligned Cube");
+    }
+
+    let seen_paths = [];
+    let seen_shapes = [];
+    for blocker in blockers {
+        if blocker == () || blocker.path == () || blocker.shape == () {
+            return plan_error("each clearance blocker requires exact path and shape fields");
+        }
+        if blocker.path == moving_path || seen_paths.contains(blocker.path)
+            || seen_shapes.contains(blocker.shape) {
+            return plan_error("clearance blockers must be unique and distinct from the moving prim");
+        }
+        if parent_path(blocker.path) != parent {
+            return plan_error("clearance blockers must share the moving prim's authored parent");
+        }
+        if !blocker.shape.starts_with(blocker.path + "/") {
+            return plan_error(blocker.shape + ": blocker shape must be an exact descendant of its prim");
+        }
+        let blocker_position = local_translation(doc, blocker.path);
+        if !blocker_position.ok { return blocker_position; }
+        let blocker_extents = assembly_audit::axis_aligned_cube_half_extents(doc, blocker.shape);
+        if blocker_extents == () {
+            return plan_error(blocker.shape + ": blocker shape must be a composed axis-aligned Cube");
+        }
+        let clearance = assembly_audit::aabb_clearance(
+            translation, moving_extents, blocker_position.value, blocker_extents,
+        );
+        if clearance == () || clearance.margin < minimum_gap {
+            return plan_error(moving_path + ": candidate overlaps or violates the "
+                + minimum_gap.to_string() + " m clearance from " + blocker.path);
+        }
+        seen_paths.push(blocker.path);
+        seen_shapes.push(blocker.shape);
+    }
+
+    let placement = place_plan(edit_target, moving_path, translation, (), ());
+    placement.kind = "clearance_placement";
+    placement.blockers = seen_paths;
+    placement.minimum_gap = minimum_gap;
+    placement
+}

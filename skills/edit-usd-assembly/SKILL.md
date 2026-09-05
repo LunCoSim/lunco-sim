@@ -392,6 +392,13 @@ Use the smallest existing typed intent that expresses the change:
   body/joint identities are rejected by the construction recipe and require an
   explicit update plan; these helpers do not write USDA or bypass the document
   owner.
+- Use `assembly_builder::place_with_clearance_plan` when placing a part near
+  other authored geometry. Supply the exact moving frame and Cube shape plus
+  every exact blocker frame and Cube shape. The frames must share a
+  translation-only authored parent; the helper rejects rotated frames,
+  non-Cube geometry, duplicate blockers, overlap, and less than the requested
+  gap before proposal. The returned transform remains a normal reviewed
+  change set.
 - `batch` or a proposal is one journal/change-set unit when an intent changes
   multiple facts. Supply the inspected `parent_gen` so a stale edit fails
   atomically.
