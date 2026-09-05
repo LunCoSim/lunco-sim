@@ -90,7 +90,6 @@ pub struct ShaderRegistry {
     documents: HashMap<DocumentId, DocumentHost<ShaderDocument>>,
     by_path: HashMap<String, DocumentId>,
     journal: Option<lunco_doc_bevy::JournalResource>,
-    next_id: u64,
 }
 
 impl ShaderRegistry {
@@ -100,8 +99,7 @@ impl ShaderRegistry {
         if let Some(id) = self.by_path.get(path) {
             return *id;
         }
-        self.next_id += 1;
-        let id = DocumentId::new(self.next_id);
+        let id = DocumentId::fresh();
         self.documents.insert(
             id,
             DocumentHost::new(ShaderDocument::new(id.raw(), path, initial_source)),

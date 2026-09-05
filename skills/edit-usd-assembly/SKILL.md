@@ -116,6 +116,9 @@ the active simulation viewport.
    `assembly_edit::fork_document(source, name)`. These are the normal async
    document lifecycle paths; `LoadScene` is only for mounting a scene.
 2. Query `ListOpenDocuments` and select the returned `DocumentId`.
+   IDs are process-wide live handles shared by all document domains. Confirm
+   the returned kind and file origin; never derive an ID from an entity or
+   reuse a number from a previous launch. A fork has its own fresh handle.
 3. Query `assembly_edit::viewport()` and capture a screenshot when the user
    asks what is visible. Correlate the focused preview/view and visible tabs
    with `ListOpenDocuments`; use the returned explicit handles, never a title.

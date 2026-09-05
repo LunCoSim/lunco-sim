@@ -35,6 +35,15 @@ registry means diffing a megabyte of binary through an undo stack. Conversely a
 
 ## 2. Identity is the path
 
+Live handles are allocated by `lunco_doc::DocumentId::fresh`, using the shared
+core 53-bit ID generator for USD, Modelica, scripts, and shaders. These handles
+fit losslessly in JSON/browser numbers. Opening, reserving an
+async document, and forking all use this owner. Closing a document or replacing
+a registry never reuses its handle. `DocumentId::new(raw)` decodes an existing
+handle; it is not an allocation API. File-path deduplication still belongs to
+the registry, and session restore remaps stored handles to fresh live ones.
+Journal-only registration and experiment keys are not live document handles.
+
 **One file ⇒ one document.** Two `DocumentId`s for one path means two undo stacks,
 two journal streams, two tabs, and racing saves — split-brain over the user's work.
 

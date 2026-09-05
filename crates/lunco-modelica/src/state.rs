@@ -348,7 +348,6 @@ pub struct ModelicaDocumentRegistry {
     /// a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
     /// including undo/redo — auto-record (A3). `None` → no recording.
     journal: Option<lunco_doc_bevy::JournalResource>,
-    next_doc_id: u64,
     /// Docs that were just added via `allocate*`. Drained into
     /// [`lunco_doc_bevy::DocumentOpened`] triggers each frame.
     pending_opened: Vec<DocumentId>,
@@ -376,8 +375,7 @@ impl ModelicaDocumentRegistry {
     /// holding `source`. Display name is `Untitled-<id>`. Not linked
     /// to any entity.
     pub fn allocate(&mut self, source: String) -> DocumentId {
-        self.next_doc_id = self.next_doc_id.saturating_add(1);
-        let id = DocumentId::new(self.next_doc_id);
+        let id = DocumentId::fresh();
         let origin = DocumentOrigin::untitled(format!("Untitled-{}", id.raw()));
         let doc = ModelicaDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
@@ -392,8 +390,7 @@ impl ModelicaDocumentRegistry {
     /// explicit origin. Use this when opening from disk or bundled
     /// assets so `SaveDocument` + read-only badges work.
     pub fn allocate_with_origin(&mut self, source: String, origin: DocumentOrigin) -> DocumentId {
-        self.next_doc_id = self.next_doc_id.saturating_add(1);
-        let id = DocumentId::new(self.next_doc_id);
+        let id = DocumentId::fresh();
         let doc = ModelicaDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
         self.attach_recorder(id);
@@ -416,8 +413,7 @@ impl ModelicaDocumentRegistry {
     /// `install_prebuilt`. UI panels that query the registry with
     /// an unallocated id just see a miss.
     pub fn reserve_id(&mut self) -> DocumentId {
-        self.next_doc_id = self.next_doc_id.saturating_add(1);
-        DocumentId::new(self.next_doc_id)
+        DocumentId::fresh()
     }
 
     /// Install a pre-built document under a previously-reserved id.
@@ -798,6 +794,25 @@ impl ModelicaDocumentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_ids_are_unique_across_registries() {
+        let mut modelica = ModelicaDocumentRegistry::default();
+        let mut generic = lunco_doc_bevy::DocumentRegistry::<ModelicaDocument>::default();
+        let first = modelica.allocate("model A end A;".into());
+        let second = generic.allocate(
+            "model B end B;".into(),
+            lunco_doc::PathlessOrigin::Untitled { name: "B".into() },
+        );
+        assert_ne!(
+            first, second,
+            "generic commands must identify only one document"
+        );
+        let reserved = modelica.reserve_id();
+        assert_ne!(reserved, second);
+        assert!(modelica.host(second).is_none());
+        assert!(!generic.contains(first));
+    }
 
     fn fake_entity(bits: u64) -> Entity {
         Entity::from_bits(bits)

@@ -15,7 +15,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`), installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, generic scalar `[settings]`, and file indexing. |
 | **`lunco-twin-journal`** | Canonical Twin-scoped op log: Lamport-ordered entries, DAG parents (for future merges), Streams + Composition, ChangeSets, Markers (named milestones), Branches, `UndoManager`. CRDT-shapable schema; in-memory backend today, yrs-swap-ready. |
-| **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
+| **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets`** | Unified asset management: cache resolution across worktrees, versioned downloads (`Assets.toml`, SHA-256), and texture processing. |
