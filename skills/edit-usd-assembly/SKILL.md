@@ -231,6 +231,10 @@ unitless scale factors; the Inspector commits changed translation, rotation,
 and/or scale fields as one journaled `ApplyUsdOps` edit. The typed
 `UsdOp::SetScale` operation preserves the standard `xformOpOrder` and stage
 unit/axis boundary.
+When editing a primitive's standard `axis`, compare the visible result after
+reprojection with the composed attribute. Repeated axis edits must apply the
+axis correction once to the authored pose, including identity rotation. A
+generation acknowledgement alone does not prove that the visible pose agrees.
 The standard transform gizmo is also available for the focused preview: select
 the exact prim, drag its unparented proxy, and release to commit the changed
 local translation, Euler XYZ rotation, and/or unitless scale as one

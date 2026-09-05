@@ -870,20 +870,18 @@ impl CanonicalStages {
         self.by_asset.is_empty()
     }
 
-    /// Force-rebuild the live stage for `asset` from `recipe`, **replacing** any
-    /// existing one (and its sink). Used when an async asset reload lands (twin
-    /// overlay edits) and the reconcile must read the *post-edit* composed stage:
-    /// rebuilding inline here — from the reloaded asset's own fresh recipe — makes
-    /// the reconcile self-contained, with no ordering dependency on the separate
-    /// [`sync_canonical_stages`] system that reacts to the same asset event.
-    /// Returns `false` if the build fails.
+    /// Replace the live stage after a coarse document edit. The new stage has
+    /// an empty change sink, but is already authored state: advance the existing
+    /// generation so every reader selects it instead of the initial asset plan.
+    /// A failed build leaves the previous stage and generation unchanged.
     pub fn rebuild(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
         recipe: &crate::StageRecipe,
     ) -> bool {
         match CanonicalStage::from_recipe(recipe) {
-            Ok(cs) => {
+            Ok(mut cs) => {
+                cs.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
                 self.by_asset.insert(asset, cs);
                 true
             }

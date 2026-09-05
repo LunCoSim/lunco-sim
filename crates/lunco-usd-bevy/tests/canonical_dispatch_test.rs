@@ -121,6 +121,148 @@ fn entity_at(app: &mut App, path: &str) -> Option<Entity> {
 }
 
 #[test]
+fn authored_identity_pose_replaces_previous_primitive_projection() {
+    use lunco_usd_bevy::{UsdVisualProjectionQueued, UsdVisualSynced};
+    use openusd::sdf::{Path, Value};
+
+    let mut app = app();
+    let recipe = StageRecipe::from_source(
+        "inmemory://axis.usda",
+        r#"#usda 1.0
+(upAxis = "Y", metersPerUnit = 1)
+def Cylinder "Post" {
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    uniform token axis = "Z"
+}
+def Xform "Placement" {}
+"#,
+    );
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<UsdStageAsset>>()
+        .add(UsdStageAsset::from_recipe(recipe.clone()).unwrap());
+    let stage_id = handle.id();
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .insert(stage_id, CanonicalStage::from_recipe(&recipe).unwrap());
+    let entity = app
+        .world_mut()
+        .spawn((
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/Post".into(),
+            },
+            Transform::from_xyz(9.0, 8.0, 7.0)
+                .with_rotation(Quat::from_rotation_y(0.4))
+                .with_scale(Vec3::splat(2.0)),
+        ))
+        .id();
+    let placement_pose =
+        Transform::from_xyz(4.0, 5.0, 6.0).with_rotation(Quat::from_rotation_z(0.3));
+    let placement = app
+        .world_mut()
+        .spawn((
+            UsdPrimPath {
+                stage_handle: handle,
+                path: "/Placement".into(),
+            },
+            placement_pose,
+        ))
+        .id();
+    for axis in ["Z", "Y", "Z", "Z", "Y"] {
+        app.world()
+            .non_send::<CanonicalStages>()
+            .get(stage_id)
+            .unwrap()
+            .projector()
+            .author_attribute(
+                &Path::new("/Post").unwrap(),
+                "axis",
+                "token",
+                Value::Token(axis.into()),
+            )
+            .unwrap();
+        // The document-side change consumer advances the live reader generation
+        // before queuing reprojection; this crate test exercises that same seam.
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<UsdVisualSynced>()
+            .insert(UsdVisualProjectionQueued);
+        for _ in 0..256 {
+            app.update();
+            if app.world().get::<UsdVisualSynced>(entity).is_some() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(app.world().get::<UsdVisualSynced>(entity).is_some());
+        let transform = app.world().get::<Transform>(entity).unwrap();
+        assert_eq!(transform.translation, Vec3::ZERO);
+        assert_eq!(transform.scale, Vec3::ONE);
+        let expected = if axis == "Z" { Vec3::Z } else { Vec3::Y };
+        assert!(
+            (transform.rotation * Vec3::Y).abs_diff_eq(expected, 1e-5),
+            "axis {axis}: {transform:?}"
+        );
+    }
+    assert_eq!(
+        app.world().get::<Transform>(placement),
+        Some(&placement_pose)
+    );
+    // Coarse document edits replace the stage without emitting incremental
+    // notices. They must still move the reader beyond the initial asset plan.
+    let previous_generation = app
+        .world()
+        .non_send::<CanonicalStages>()
+        .get(stage_id)
+        .unwrap()
+        .generation();
+    let rebuilt = StageRecipe::from_source(
+        "inmemory://axis.usda",
+        r#"#usda 1.0
+(upAxis = "Y", metersPerUnit = 1)
+def Cylinder "Post" {
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    uniform token axis = "Y"
+}
+"#,
+    );
+    assert!(app
+        .world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .rebuild(stage_id, &rebuilt));
+    assert!(
+        app.world()
+            .non_send::<CanonicalStages>()
+            .get(stage_id)
+            .unwrap()
+            .generation()
+            > previous_generation
+    );
+    app.world_mut()
+        .entity_mut(entity)
+        .remove::<UsdVisualSynced>()
+        .insert(UsdVisualProjectionQueued);
+    for _ in 0..256 {
+        app.update();
+        if app.world().get::<UsdVisualSynced>(entity).is_some() {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(app.world().get::<UsdVisualSynced>(entity).is_some());
+    assert!(
+        (app.world().get::<Transform>(entity).unwrap().rotation * Vec3::Y)
+            .abs_diff_eq(Vec3::Y, 1e-5)
+    );
+}
+
+#[test]
 fn recipe_asset_instantiates_from_prepared_projection_plan() {
     let mut app = app();
 
