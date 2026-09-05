@@ -103,6 +103,22 @@ pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
         .resolver(DocResolver)
         .in_memory(DOC_ROOT_ID)
         .map_err(|e| anyhow!("create document stage: {e}"))?;
+    populate_doc_root(stage, data)
+}
+
+/// Compose current authored opinions with an already-loaded dependency closure.
+/// The resolver owns dependency interpretation; only the root layer is replaced.
+pub fn open_doc_stage_with_recipe(data: &sdf::Data, recipe: &crate::StageRecipe) -> Result<Stage> {
+    let stage = Stage::builder()
+        .resolver(lunco_usd_compose::LuncoUsdResolver::new(
+            recipe.bytes.clone(),
+        ))
+        .in_memory(recipe.root_id.as_str())
+        .map_err(|e| anyhow!("create composed document stage: {e}"))?;
+    populate_doc_root(stage, data)
+}
+
+fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
     let root_id = stage.root_layer().identifier().to_owned();
     let source = data.clone();
     let mut root = stage

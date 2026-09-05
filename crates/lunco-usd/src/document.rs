@@ -647,6 +647,9 @@ impl lunco_twin_journal::OpPayload for UsdOp {
 #[derive(Debug)]
 pub struct UsdDocument {
     id: DocumentId,
+    /// Loaded dependencies for synchronous composed authoring reads. Current
+    /// root opinions always come from this document, including earlier group ops.
+    authoring_recipe: Option<std::sync::Arc<lunco_usd_bevy::StageRecipe>>,
     /// The **base** layer: the authored scene's specs (references intact). This
     /// is the canonical content [`source`](Self::source) serializes and Save
     /// writes to disk. Root-targeted ops edit this layer.
@@ -706,6 +709,7 @@ impl Clone for UsdDocument {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            authoring_recipe: self.authoring_recipe.clone(),
             base: self.base.clone(),
             runtime: self.runtime.clone(),
             parse_error: self.parse_error.clone(),
@@ -758,6 +762,7 @@ impl UsdDocument {
         };
         Self {
             id,
+            authoring_recipe: None,
             base,
             runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
             parse_error,
@@ -805,6 +810,52 @@ impl UsdDocument {
     /// runtime op lands.
     pub fn runtime_data(&self) -> &sdf::Data {
         &self.runtime
+    }
+
+    pub(crate) fn set_authoring_recipe(&mut self, recipe: Option<lunco_usd_bevy::StageRecipe>) {
+        self.authoring_recipe = recipe.map(std::sync::Arc::new);
+    }
+
+    /// Validate against real composition and preserve its inherited operation
+    /// order. No dependency data is copied into the authored layer.
+    fn transform_edit_context(
+        &self,
+        path: &str,
+        op_name: &str,
+    ) -> Result<(SdfPath, Vec<String>, bool), DocumentError> {
+        let prim_path = parse_prim_path(path)?;
+        let data = self.composed_arc();
+        let stage = match &self.authoring_recipe {
+            Some(recipe) => author::open_doc_stage_with_recipe(&data, recipe),
+            None => open_doc_stage(&data),
+        }
+        .map_err(author_err)?;
+        let prim = stage.prim(prim_path.clone());
+        if !prim.is_valid().map_err(author_err)? {
+            return Err(DocumentError::ValidationFailed(format!(
+                "composed transform target `{path}` not found"
+            )));
+        }
+        let order = match prim
+            .attribute("xformOpOrder")
+            .get::<sdf::Value>()
+            .map_err(author_err)?
+        {
+            Some(sdf::Value::TokenVec(values)) => values.into_iter().map(Into::into).collect(),
+            Some(sdf::Value::StringVec(values)) => values,
+            Some(sdf::Value::TokenListOp(values)) => {
+                values.flatten().into_iter().map(Into::into).collect()
+            }
+            Some(sdf::Value::StringListOp(values)) => values.flatten(),
+            None => Vec::new(),
+            Some(_) => {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "invalid xformOpOrder at `{path}`"
+                )))
+            }
+        };
+        let append = !order.iter().any(|token| token == op_name);
+        Ok((prim_path, order, append))
     }
 
     /// Whether `path` has a prim opinion in the requested document layer.
@@ -1572,7 +1623,8 @@ impl Document for UsdDocument {
             }
 
             UsdOp::SetTranslate { path, value, .. } => {
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:translate")?;
                 // Pre-state is read from the TARGET layer: the inverse restores
                 // that layer's opinion, and `xformOpOrder` we author lands
                 // there too.
@@ -1588,10 +1640,8 @@ impl Document for UsdDocument {
                 // layer may already list ops this edit must not discard. When
                 // the op is missing, materialise that order plus the new op into
                 // the target layer — append, never clobber.
-                let (composed_order, append_op) =
-                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:translate");
-
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
                 // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
                 // canonical (Y-up, metres) — that is what makes an op portable: the
                 // same journalled edit replays correctly against a centimetre stage
@@ -1650,7 +1700,8 @@ impl Document for UsdDocument {
                 // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
                 // (Euler XYZ degrees). Same target-layer pre-state read, same
                 // composed-order append rule.
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:rotateXYZ")?;
                 let layer = self.layer(target);
                 let rotate_existed = prim_sdf
                     .append_property("xformOp:rotateXYZ")
@@ -1659,10 +1710,8 @@ impl Document for UsdDocument {
                     .is_some();
                 let old_rotate =
                     layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
-                let (composed_order, append_op) =
-                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:rotateXYZ");
-
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
                 //
                 // Rotations convert through a quaternion (a Euler triple has no
@@ -1712,7 +1761,8 @@ impl Document for UsdDocument {
                         "SetScale `{path}` requires finite scale components"
                     )));
                 }
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:scale")?;
                 let layer = self.layer(target);
                 let scale_existed = prim_sdf
                     .append_property("xformOp:scale")
@@ -1720,10 +1770,8 @@ impl Document for UsdDocument {
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
                 let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
-                let (composed_order, append_op) =
-                    xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, "xformOp:scale");
-
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
                 let conv = authoring_stage_convention(&stage)?;
                 let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
                 stage
