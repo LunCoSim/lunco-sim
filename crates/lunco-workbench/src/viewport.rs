@@ -78,7 +78,7 @@ use bevy::prelude::*;
 // exists when the `bevy_render` feature is on, which wasm strips.
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
-use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
+use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext, egui};
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use lunco_core::SceneViewport;
@@ -1162,7 +1162,7 @@ impl Plugin for WorkbenchViewportPlugin {
 mod tests {
     use super::*;
     use bevy::camera::CameraOutputMode;
-    use egui::{pos2, Rect};
+    use egui::{Rect, pos2};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
 
@@ -1399,7 +1399,7 @@ mod tests {
     fn collapsed_viewport_leaf_rect_is_scene() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
         let vp = rect((200.0, 30.0), (800.0, 400.0)); // the viewport leaf's rect
-                                                      // No scene_leaf (panel didn't render), no chrome card over the centre.
+        // No scene_leaf (panel didn't render), no chrome card over the centre.
         let out = resolve_scene_target(hovering((400.0, 200.0)), None, &[], Some(dock), Some(vp));
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }
@@ -1597,10 +1597,6 @@ mod tests {
 
         fn title(&self) -> String {
             "Scene backed".into()
-        }
-
-        fn icon(&self) -> crate::UiIcon {
-            crate::UiIcon::Info
         }
 
         fn scene_visible_when_docked(&self) -> bool {

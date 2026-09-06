@@ -53,18 +53,18 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use egui_dock::{
-    widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
+    DockArea, DockState, NodeIndex, Style, TabViewer, widgets::tab_viewer::OnCloseResponse,
 };
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_theme::{ColorAlpha, Theme};
+use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod icons;
-pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
+pub use icons::{UiIcon, icon_button, icon_button_sized, icon_text_button, paint_icon};
 
 mod editor_tabs;
 mod menu;
@@ -119,19 +119,19 @@ pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
     app.add_systems(schedule, render_robustness::reset_render_recovery);
 }
 pub use window_command::{
-    merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
+    CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized, merged_titlebar_window,
 };
 pub use window_persistence::{
-    load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
-    WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, SkipWindowGeometrySave, WindowGeometry,
+    WindowPersistencePlugin, load_window_geometry, restored_window,
 };
-pub use window_placement::wire_window_placement;
 #[cfg(not(target_arch = "wasm32"))]
 pub use window_placement::WindowPlacement;
+pub use window_placement::wire_window_placement;
 pub use workspace_state::{
-    finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
-    DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, WorkspaceState,
-    WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
+    AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot,
+    WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy, finalize_revision,
+    revision_term, workspace_state_path,
 };
 
 pub use menu::{MenuCtx, UndoProbeCtx};
@@ -278,11 +278,11 @@ impl HelpAnchors {
     }
 }
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
-pub use files_panel::{FilesPanel, FILES_PANEL_ID};
+pub use files_panel::{FILES_PANEL_ID, FilesPanel};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
-    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
-    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
+    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
+    TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
 };
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
@@ -719,8 +719,8 @@ pub use perspective::{Perspective, PerspectiveId};
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
-    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, VIEWPORT_PANEL_ID,
+    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -3938,11 +3938,10 @@ fn top_menu_mode(
 fn measured_titlebar_right_width(
     ui: &egui::Ui,
     layout: &WorkbenchLayout,
-    theme: &Theme,
     titlebar_control_size: egui::Vec2,
 ) -> f32 {
     let tabs = perspective_switcher_tabs(layout);
-    let tab_width = measured_perspective_tabs_width(ui, &tabs, theme);
+    let tab_width = measured_menu_row_width(ui, tabs.iter().map(|(_, title, _)| title.as_str()));
     let transport_width = titlebar_control_size.x;
     #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
     let window_controls_width = titlebar_control_size.x * 3.0;
@@ -3955,123 +3954,6 @@ fn measured_titlebar_right_width(
     let buttons = tabs.len() + 1 + window_control_count;
     let gaps = buttons.saturating_sub(1) as f32 * ui.spacing().item_spacing.x;
     tab_width + transport_width + window_controls_width + gaps + ui.spacing().item_spacing.x * 2.0
-}
-
-/// One registered perspective as presented in the title-bar switcher.
-///
-/// The icon and title are intentionally separate fields. Keeping this shape
-/// close to the renderer prevents a second caller from reconstructing a
-/// perspective label or silently dropping its semantic icon.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PerspectiveTab {
-    id: PerspectiveId,
-    icon: UiIcon,
-    title: String,
-    active: bool,
-}
-
-fn perspective_tab_icon_size(theme: &Theme) -> f32 {
-    // The icon sits inside the same title-bar metric as the window controls.
-    // Derive its size from that shared metric so it remains stable when a
-    // theme changes the chrome scale.
-    theme.spacing.titlebar_control_size.y * 0.7
-}
-
-fn measured_perspective_tab_width(
-    ui: &egui::Ui,
-    tab: &PerspectiveTab,
-    theme: &Theme,
-) -> f32 {
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let title_width = ui
-        .painter()
-        .layout_no_wrap(tab.title.clone(), font, ui.visuals().text_color())
-        .size()
-        .x;
-    let icon_size = perspective_tab_icon_size(theme);
-    let icon_gap = theme.spacing.item_spacing;
-    title_width
-        + icon_size
-        + icon_gap
-        + theme.spacing.button_padding.x * 2.0
-}
-
-fn measured_perspective_tabs_width(
-    ui: &egui::Ui,
-    tabs: &[PerspectiveTab],
-    theme: &Theme,
-) -> f32 {
-    let width = tabs
-        .iter()
-        .map(|tab| measured_perspective_tab_width(ui, tab, theme))
-        .sum::<f32>();
-    width + ui.spacing().item_spacing.x * tabs.len().saturating_sub(1) as f32
-}
-
-/// Paint one perspective switcher tab using the same vector icon and egui
-/// interaction contract for every perspective.
-fn perspective_tab_button(
-    ui: &mut egui::Ui,
-    tab: &PerspectiveTab,
-    theme: &Theme,
-) -> egui::Response {
-    let width = measured_perspective_tab_width(ui, tab, theme);
-    let height = ui.spacing().interact_size.y;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let visuals = ui.style().interact_selectable(&response, tab.active);
-
-    if tab.active {
-        ui.painter()
-            .rect_filled(rect, theme.rounding.button, theme.tokens.surface_raised);
-    } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, theme.rounding.button, visuals.bg_fill);
-    }
-    if response.has_focus() {
-        ui.painter().rect_stroke(
-            rect.shrink(1.0),
-            theme.rounding.button,
-            visuals.fg_stroke,
-            egui::StrokeKind::Inside,
-        );
-    }
-
-    let icon_size = perspective_tab_icon_size(theme);
-    let padding_x = theme.spacing.button_padding.x;
-    let icon_gap = theme.spacing.item_spacing;
-    let icon_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.left() + padding_x, rect.center().y - icon_size * 0.5),
-        egui::vec2(icon_size, icon_size),
-    );
-    paint_icon(ui.painter(), tab.icon, icon_rect, visuals.fg_stroke.color);
-
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(
-        tab.title.clone(),
-        font,
-        visuals.fg_stroke.color,
-    );
-    ui.painter().galley(
-        egui::pos2(
-            icon_rect.right() + icon_gap,
-            rect.center().y - galley.size().y * 0.5,
-        ),
-        galley,
-        visuals.fg_stroke.color,
-    );
-
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            tab.active,
-            &tab.title,
-        )
-    });
-    response.on_hover_text(format!(
-        "Switch to {} perspective (Tab to focus; Enter or Space to activate)",
-        tab.title
-    ))
 }
 
 fn truncate_title_to_width(ui: &egui::Ui, title: &str, max_width: f32) -> String {
@@ -4392,7 +4274,7 @@ fn render_layout(
             let menu_mode = top_menu_mode(
                 ui.available_width(),
                 direct_menu_width,
-                measured_titlebar_right_width(ui, layout, theme, titlebar_control_size),
+                measured_titlebar_right_width(ui, layout, titlebar_control_size),
             );
             let r_file = ui.menu_button("File", |ui| {
                 // Active doc gates Save / Save As / Close — there's
@@ -4938,14 +4820,29 @@ fn render_layout(
                 }
                 let tabs = perspective_switcher_tabs(&layout);
                 if tabs.len() > 1 {
-                    for tab in tabs {
-                        let response = perspective_tab_button(ui, &tab, theme);
-                        anchor_rects.push((perspective_help_anchor(tab.id), response.rect));
-                        if response.clicked() && !tab.active {
+                    for (id, title, is_active) in tabs {
+                        let mut label = egui::RichText::new(title.as_str()).color(if is_active {
+                            theme.colors.text
+                        } else {
+                            theme.colors.subtext1
+                        });
+                        if is_active {
+                            label = label.strong();
+                        }
+                        let mut button = egui::Button::new(label)
+                            .corner_radius(theme.rounding.button)
+                            .selected(is_active)
+                            .stroke(egui::Stroke::NONE);
+                        if is_active {
+                            button = button.fill(theme.tokens.surface_raised);
+                        }
+                        let response = ui.add(button);
+                        anchor_rects.push((perspective_help_anchor(id), response.rect));
+                        if response.clicked() && !is_active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
                                 .0
-                                .push(LayoutRequest::ActivatePerspective(tab.id.0.to_owned()));
+                                .push(LayoutRequest::ActivatePerspective(id.0.to_owned()));
                         }
                     }
                 }
@@ -5342,7 +5239,7 @@ fn scene_camera_is_rendering(world: &World) -> bool {
 /// Build the title-bar perspective entries from the registered perspectives.
 /// Registration controls availability for authored flows and API commands;
 /// [`Perspective::show_in_switcher`] controls only everyday navigation chrome.
-fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<PerspectiveTab> {
+fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<(PerspectiveId, String, bool)> {
     let active = layout.active_perspective;
     layout
         .perspectives
@@ -5350,12 +5247,7 @@ fn perspective_switcher_tabs(layout: &WorkbenchLayout) -> Vec<PerspectiveTab> {
         .filter(|perspective| perspective.show_in_switcher())
         .map(|perspective| {
             let id = perspective.id();
-            PerspectiveTab {
-                id,
-                icon: perspective.icon(),
-                title: perspective.title(),
-                active: active == Some(id),
-            }
+            (id, perspective.title(), active == Some(id))
         })
         // Iterate in reverse so right-to-left layout still puts them in
         // registration order from left to right.
@@ -6926,10 +6818,6 @@ mod tests {
             "Scene-backed test".into()
         }
 
-        fn icon(&self) -> UiIcon {
-            UiIcon::Info
-        }
-
         fn scene_visible_when_docked(&self) -> bool {
             true
         }
@@ -7175,7 +7063,7 @@ mod tests {
         }
 
         fn title(&self) -> String {
-            self.0 .0.to_string()
+            self.0.0.to_string()
         }
 
         fn default_slot(&self) -> PanelSlot {
@@ -7250,10 +7138,12 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
         assert!(layout.center.is_empty());
-        assert!(!layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center"))));
+        assert!(
+            !layout
+                .dock
+                .iter_all_tabs()
+                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center")))
+        );
         assert!(layout.panels.contains_key(&PanelId("late_center")));
     }
 
@@ -7269,9 +7159,6 @@ mod tests {
         }
         fn title(&self) -> String {
             self.title.to_string()
-        }
-        fn icon(&self) -> UiIcon {
-            UiIcon::Info
         }
         fn show_in_switcher(&self) -> bool {
             self.id != PerspectiveId("hidden")
@@ -7295,10 +7182,6 @@ mod tests {
 
         fn title(&self) -> String {
             self.id.0.to_string()
-        }
-
-        fn icon(&self) -> UiIcon {
-            UiIcon::Info
         }
 
         fn apply(&self, layout: &mut WorkbenchLayout) {
@@ -7357,7 +7240,7 @@ mod tests {
 
         let ids = perspective_switcher_tabs(&layout)
             .into_iter()
-            .map(|tab| tab.id)
+            .map(|(id, _, _)| id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![PerspectiveId("b"), PerspectiveId("a")]);
 
@@ -7518,10 +7401,12 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert!(layout.dock_cache.is_empty());
-        assert!(!layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
+        assert!(
+            !layout
+                .dock
+                .iter_all_tabs()
+                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale")))
+        );
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 

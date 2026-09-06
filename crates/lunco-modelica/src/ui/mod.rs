@@ -495,10 +495,8 @@ impl Perspective for AnalyzePerspective {
         PerspectiveId("modelica_analyze")
     }
     fn title(&self) -> String {
-        "Lunica".into()
-    }
-    fn icon(&self) -> lunco_workbench::UiIcon {
-        lunco_workbench::UiIcon::Analyze
+        // Keep the accepted equation-wave glyph in the perspective title.
+        "∿ Lunica".into()
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -1373,10 +1371,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn analyze_perspective_publishes_its_tab_icon() {
-        let perspective = AnalyzePerspective::default();
-        assert_eq!(perspective.title(), "Lunica");
-        assert_eq!(perspective.icon(), lunco_workbench::UiIcon::Analyze);
+    fn analyze_perspective_uses_accepted_tab_title() {
+        assert_eq!(AnalyzePerspective::default().title(), "∿ Lunica");
     }
 
     /// THE DATA-LOSS REGRESSION. A despawn must not destroy the document.

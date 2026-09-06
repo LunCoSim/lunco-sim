@@ -13,7 +13,7 @@ use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
-    PerspectiveId, UiIcon, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
+    PerspectiveId, VIEWPORT_PANEL_ID, ViewportPanel, WorkbenchAppExt, WorkbenchLayout,
 };
 
 pub mod asset_visibility;
@@ -1095,10 +1095,9 @@ impl Perspective for ViewPerspective {
         PerspectiveId("sandbox_view")
     }
     fn title(&self) -> String {
-        "View".into()
-    }
-    fn icon(&self) -> UiIcon {
-        UiIcon::View
+        // The icon is part of the accepted perspective title contract; the
+        // top-level View menu remains a plain menu label.
+        "◉ View".into()
     }
     fn restores_cached_layout(&self) -> bool {
         false
@@ -1125,11 +1124,9 @@ impl Perspective for BuildPerspective {
     fn id(&self) -> PerspectiveId {
         PerspectiveId("rover_build")
     }
+    // ⚒ (U+2692) renders reliably in the bundled fallback font.
     fn title(&self) -> String {
-        "Build".into()
-    }
-    fn icon(&self) -> UiIcon {
-        UiIcon::Build
+        "⚒ Build".into()
     }
     fn layout_revision(&self) -> u32 {
         // Revision 3 completes the Graphs instance in the bottom-center
@@ -1180,10 +1177,7 @@ impl Perspective for EditorPerspective {
         PerspectiveId("editor")
     }
     fn title(&self) -> String {
-        "Editor".into()
-    }
-    fn icon(&self) -> UiIcon {
-        UiIcon::Editor
+        "✎ Editor".into()
     }
     fn show_in_switcher(&self) -> bool {
         true
@@ -1226,9 +1220,6 @@ impl Perspective for TerrainPerspective {
     }
     fn title(&self) -> String {
         "Terrain".into()
-    }
-    fn icon(&self) -> UiIcon {
-        UiIcon::Terrain
     }
     fn show_in_switcher(&self) -> bool {
         false
@@ -1274,8 +1265,7 @@ mod tests {
         let perspective = EditorPerspective;
 
         assert_eq!(perspective.id(), PerspectiveId("editor"));
-        assert_eq!(perspective.title(), "Editor");
-        assert_eq!(perspective.icon(), UiIcon::Editor);
+        assert_eq!(perspective.title(), "✎ Editor");
         assert!(perspective.show_in_switcher());
     }
 }
