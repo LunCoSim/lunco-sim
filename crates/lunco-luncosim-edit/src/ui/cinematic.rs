@@ -333,6 +333,7 @@ fn on_add_camera_here(
             name,
             type_name: Some("Camera".to_string()),
             reference: None,
+            reference_prim_path: None,
         },
     });
     // `SetTranslate`/`SetRotate`/`SetScale` synthesize `xformOpOrder` when the prim has

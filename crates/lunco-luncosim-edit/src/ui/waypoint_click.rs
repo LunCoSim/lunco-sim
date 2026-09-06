@@ -1257,6 +1257,7 @@ fn author_marker_ops(
             name: WAYPOINT_ROUTE_SCOPE.to_string(),
             type_name: Some("Scope".to_string()),
             reference: None,
+            reference_prim_path: None,
         });
     }
     // First free `W<n>` — the name a scene author would have written by hand.
@@ -1277,6 +1278,7 @@ fn author_marker_ops(
         name: marker_name,
         type_name: Some("Xform".to_string()),
         reference: Some(WAYPOINT_MARKER_ASSET.to_string()),
+        reference_prim_path: None,
     });
     // The picked point is grid-absolute and is the authored placement value for
     // this marker, matching the frame used by the live route projection.
@@ -1321,6 +1323,7 @@ fn ensure_mission_program_ops(
             name: WAYPOINT_MISSION_PROGRAM.to_string(),
             type_name: Some("Scope".to_string()),
             reference: None,
+            reference_prim_path: None,
         });
         ops.push(UsdOp::SetApiSchemas {
             edit_target: LayerId::root(),

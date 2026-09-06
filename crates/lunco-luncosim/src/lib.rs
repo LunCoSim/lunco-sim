@@ -2374,6 +2374,7 @@ fn on_set_rhai_policy(
             name: "Policies".into(),
             type_name: Some("Scope".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::AddPrim {
             edit_target: root.clone(),
@@ -2381,6 +2382,7 @@ fn on_set_rhai_policy(
             name,
             type_name: Some("LunCoPolicy".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::SetAttribute {
             edit_target: root.clone(),
