@@ -1270,6 +1270,27 @@ pub fn resolve_joint_body_path(
 #[derive(Component)]
 struct PendingTerrainCollider;
 
+/// Select the collider owner from the authored terrain mode. Mesh-backed
+/// terrain waits for its async `Mesh3d`; DEM/layered terrain is built by
+/// `lunco-terrain-surface` from its retained height oracle and must not be
+/// replaced by the generic mesh bridge.
+fn terrain_uses_mesh_collider(asset_mode: Option<&str>) -> bool {
+    asset_mode == Some("mesh")
+}
+
+#[cfg(test)]
+mod terrain_collider_owner_tests {
+    use super::terrain_uses_mesh_collider;
+
+    #[test]
+    fn only_mesh_mode_uses_the_generic_mesh_collider() {
+        assert!(terrain_uses_mesh_collider(Some("mesh")));
+        assert!(!terrain_uses_mesh_collider(Some("dem")));
+        assert!(!terrain_uses_mesh_collider(Some("layered")));
+        assert!(!terrain_uses_mesh_collider(None));
+    }
+}
+
 /// Builds the static collider for a mesh-backed terrain once its `Mesh3d`
 /// asset is available. Prefers a [`heightfield`](heightfield_from_mesh) when
 /// the mesh is a regular DEM grid; otherwise falls back to a general trimesh.
@@ -1431,8 +1452,8 @@ fn process_usd_avian_prims(
     // A USD Editor preview shares the normal visual projection pipeline with
     // the live scene, but it is not a second physical world.  The preview root
     // is deliberately marked `UsdPreviewOnly`; walk to it before reading any
-    // PhysicsRigidBodyAPI so Avian cannot admit a duplicate `/Griffin1` body or
-    // a duplicate joint/collider graph into the simulation.
+    // PhysicsRigidBodyAPI so Avian cannot admit a duplicate body or a duplicate
+    // joint/collider graph into the simulation.
     if is_preview_only(entity, &q_child_of, &q_preview_only) {
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
@@ -1734,15 +1755,26 @@ fn extract_avian_prim(
         // solver combines the ground's friction/restitution with the touching
         // body's material exactly as it does for a dynamic body.  Keeping this
         // on the classification branch avoids a scene-specific ground override.
-        match build_collider_from_usd(reader, sdf_path) {
-            Ok(Some(collider)) => {
-                commands.entity(entity).try_insert(collider);
-            }
-            Ok(None) => {
-                commands.entity(entity).try_insert(PendingTerrainCollider);
-            }
-            Err(error) => {
-                log_malformed_collider_transform(sdf_path, &error);
+        //
+        // `dem`/`layered` terrain has a native collider built from the retained
+        // `SurfaceOracle` by `lunco-terrain-surface`. Only `mesh` terrain waits
+        // for the generic mesh bridge; otherwise a loaded visual mesh would
+        // replace the authoritative DEM collider on the same ECS entity.
+        if terrain_uses_mesh_collider(
+            reader
+                .text(sdf_path, "lunco:assetMode")
+                .as_deref(),
+        ) {
+            match build_collider_from_usd(reader, sdf_path) {
+                Ok(Some(collider)) => {
+                    commands.entity(entity).try_insert(collider);
+                }
+                Ok(None) => {
+                    commands.entity(entity).try_insert(PendingTerrainCollider);
+                }
+                Err(error) => {
+                    log_malformed_collider_transform(sdf_path, &error);
+                }
             }
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
@@ -3958,13 +3990,6 @@ fn apply_rigid_body_mass_props(
     // missing, so `physics:mass`, `physics:diagonalInertia` and `physics:centerOfMass`
     // were all silently inert, as were the `lunco-cosim` mass-props write ports that
     // set the same components.
-    //
-    // The angular inertia is what made this expensive: the descent lander carried
-    // `physics:mass = 2000` and ran with the inertia of the ~69 kg body its collider
-    // volume implies at default density — measured `inertia_xx` 159 kg m^2 against
-    // the 4625 its hull geometry gives. ~29x too easy to spin, so every disturbance
-    // torque was amplified ~29x and the vehicle was thrown to 25 rad/s by the weld to
-    // its rover before any stabiliser could answer.
     //
     // Note the interaction, which is why `NoAutoMass` alone fixes the common case:
     // with mass authored and inertia NOT authored, Avian runs

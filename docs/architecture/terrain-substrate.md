@@ -149,6 +149,12 @@ USD's *stronger-layer-wins / prim-order* semantics **are** the fold order. A
 session-layer override, or a new crater child prim, flows through composition to
 a new stack; tiles re-bake lazily as they stream. No DEM re-read.
 
+Collider ownership follows the authored terrain mode. `lunco:assetMode="mesh"`
+is realized by the USD-to-Avian bridge after its asynchronous `Mesh3d` loads;
+`"dem"` and `"layered"` are realized by `lunco-terrain-surface` from the
+`SurfaceOracle`. The bridge does not install a mesh placeholder for DEM-backed
+terrain, so a visual mesh cannot replace the oracle-derived physics surface.
+
 ## Three channels: what a layer actually contributes
 
 A terrain feature does not contribute *height* in general — it contributes to one

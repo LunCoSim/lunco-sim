@@ -288,7 +288,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn external_twin_composition_reads_authored_engine_layers() {
         let temp = tempfile::tempdir().expect("temporary Twin root");
-        let scene = temp.path().join("scenes/griffin_1_surface_ops.usda");
+        let scene = temp.path().join("scenes/external_twin_surface_ops.usda");
         std::fs::create_dir_all(scene.parent().expect("scene parent"))
             .expect("create scene parent");
         std::fs::write(
@@ -301,7 +301,7 @@ mod tests {
 )
 "#,
         )
-        .expect("write Griffin-style scene");
+        .expect("write external Twin scene");
 
         compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
             .expect("external Twin can resolve authored engine layers");

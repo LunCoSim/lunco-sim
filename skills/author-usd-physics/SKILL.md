@@ -470,6 +470,11 @@ owner-level exceptions because their terrain and vehicle projectors construct
 those shapes through their own contracts. `collision-enabled-without-api` is
 an error, not a runtime fallback.
 
+Terrain collider ownership is mode-specific: `lunco:assetMode="mesh"` waits for
+the USD-to-Avian mesh bridge, while `"dem"` and `"layered"` use the native
+`SurfaceOracle` collider from `lunco-terrain-surface`. Do not author or project a
+second mesh collider over DEM-backed terrain.
+
 Every renderable gprim under a composed `kind = "assembly"` vehicle must also
 state who owns its collision contract. A supported enabled
 `PhysicsCollisionAPI` shape is the ordinary owner; `PhysxVehicleWheelAPI` is the
