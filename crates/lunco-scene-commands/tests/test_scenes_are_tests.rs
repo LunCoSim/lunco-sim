@@ -20,7 +20,8 @@
 //! by directory. Both checks live here so neither half can rot alone.
 //!
 //! Every scene must bind an authored test observer. The observer's Rhai source
-//! declares `const TEST_KIND = "graphics"` when it needs the GPU; omission is
+//! declares `const TEST_KIND = "graphics"` for offscreen pixels or
+//! `const TEST_KIND = "editor"` for windowed editor workflows; omission is
 //! the deterministic headless default.
 
 use std::path::{Path, PathBuf};

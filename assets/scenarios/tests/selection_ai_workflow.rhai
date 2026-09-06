@@ -1,5 +1,5 @@
 // TEST-ONLY: selected-part agent policy over the production Editor owners.
-const TEST_KIND = "graphics";
+const TEST_KIND = "editor";
 const PART = "/SelectionAiWorkflow/Part";
 const OTHER = "/SelectionAiWorkflow/Other";
 

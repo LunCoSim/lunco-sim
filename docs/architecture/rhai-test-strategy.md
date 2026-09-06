@@ -88,8 +88,10 @@ there is no scene-specific Rust writer or `include_str!` fixture test.
    through composed USD, resolves its test Rhai source, and classifies the
    execution domain from the source's top-level literal `TEST_KIND` constant.
    Omission means deterministic headless execution; `TEST_KIND = "graphics"`
-   selects the GPU-backed renderer. `scripts/run_scene_tests.sh` consumes this
-   result and does not maintain a second scene or graphics classifier.
+   selects the GPU-backed renderer, while `TEST_KIND = "editor"` selects the
+   production windowed host for document/preview/selection workflows.
+   `scripts/run_scene_tests.sh` consumes this result and does not maintain a
+   second scene or execution-domain classifier.
 
 2. **Production scene gate.**
 

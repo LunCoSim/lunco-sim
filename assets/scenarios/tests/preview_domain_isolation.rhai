@@ -1,5 +1,5 @@
 // TEST-ONLY: preview ownership must not admit runtime Modelica networks.
-const TEST_KIND = "graphics";
+const TEST_KIND = "editor";
 const ROOT = "/PreviewDomainIsolation";
 const DORMANT = "/DormantPreviewNetwork";
 

@@ -2,7 +2,7 @@
 #
 # run_scene_tests.sh — build the production luncosim runner ONCE, then run every
 # authored scene test: deterministic headless Rhai tests plus graphics tests
-# whose Rhai observer declares `const TEST_KIND = "graphics"`.
+# whose Rhai observer declares `const TEST_KIND = "graphics"` or `"editor"`.
 #
 # Each headless scene is an authored USD file whose attached Rhai scenario ends
 # in `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
@@ -50,8 +50,9 @@
 #
 # `-j/--jobs` bounds the number of independent production processes in either
 # headless pass. It does not change the deterministic gate's `--threads 1`
-# setting, and graphics scenes remain a separate serial acceptance pass because
-# they share the offscreen renderer/GPU rather than being independent workers.
+# setting. Graphics scenes remain a separate serial acceptance pass because
+# they share the offscreen renderer/GPU. Editor scenes use the production
+# windowed host because preview/document/selection APIs are UI-owned.
 
 set -uo pipefail
 
@@ -207,11 +208,13 @@ LIST_OUTPUT="$("$BIN" test --list)" || {
 }
 SCENES=()
 GRAPHICS_SCENES=()
+EDITOR_SCENES=()
 while IFS=$'\t' read -r kind scene; do
     [[ -n "${scene:-}" ]] || continue
     case "$kind" in
         headless) SCENES+=("$scene") ;;
         graphics) GRAPHICS_SCENES+=("$scene") ;;
+        editor) EDITOR_SCENES+=("$scene") ;;
         *) echo "unknown scene test kind '$kind' for '$scene'" >&2; exit 2 ;;
     esac
 done <<< "$LIST_OUTPUT"
@@ -236,14 +239,27 @@ if [[ -n "$FILTER" ]]; then
         fi
     done
     GRAPHICS_SCENES=("${filtered[@]}")
+
+    filtered=()
+    for s in "${EDITOR_SCENES[@]}"; do
+        if ((EXACT)); then
+            [[ "$(basename "$s" .usda)" == "$FILTER" || "$s" == "$FILTER" ]] && filtered+=("$s")
+        else
+            [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        fi
+    done
+    EDITOR_SCENES=("${filtered[@]}")
 fi
 
-if [[ ${#SCENES[@]} -eq 0 && ${#GRAPHICS_SCENES[@]} -eq 0 ]]; then
+if [[ ${#SCENES[@]} -eq 0 && ${#GRAPHICS_SCENES[@]} -eq 0 && ${#EDITOR_SCENES[@]} -eq 0 ]]; then
     echo "no scene matches filter '${FILTER:-all}'" >&2
     exit 2
 fi
 for s in "${GRAPHICS_SCENES[@]}"; do
     echo "==> QUEUE $(basename "$s" .usda) — graphics assertion"
+done
+for s in "${EDITOR_SCENES[@]}"; do
+    echo "==> QUEUE $(basename "$s" .usda) — editor assertion"
 done
 
 # ── Run each scene ──────────────────────────────────────────────────────────
@@ -415,6 +431,20 @@ if [[ ${#GRAPHICS_SCENES[@]} -gt 0 ]]; then
         render_args=("$FILTER")
     fi
     if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "${render_args[@]}"; then
+        overall=1
+    fi
+fi
+
+# ── Production editor pass ──────────────────────────────────────────────────
+if [[ ${#EDITOR_SCENES[@]} -gt 0 ]]; then
+    echo
+    echo "==> editor pass (production windowed host)"
+    if ((EXACT)); then
+        editor_args=(--exact "$FILTER")
+    else
+        editor_args=("$FILTER")
+    fi
+    if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_editor_scene_tests.sh" "${editor_args[@]}"; then
         overall=1
     fi
 fi

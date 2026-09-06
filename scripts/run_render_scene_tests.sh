@@ -140,7 +140,7 @@ for scene in "${SCENES[@]}"; do
         --record-offline "$output" \
         --record-frames "$RENDER_FRAMES" \
         --record-size "$RENDER_SIZE" \
-        --scene "$scene" >"$log" 2>&1
+        --scene "$scene" </dev/null >"$log" 2>&1
     code=$?
 
     expected_last="$(printf 'frame_%06d.png' $((RENDER_FRAMES - 1)))"

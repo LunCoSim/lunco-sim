@@ -1,5 +1,5 @@
 // TEST-ONLY: run in the production windowed Editor to exercise preview leases.
-const TEST_KIND = "graphics";
+const TEST_KIND = "editor";
 const ROOT = "/DocumentAudit";
 const HINGE = ROOT + "/Hinge";
 

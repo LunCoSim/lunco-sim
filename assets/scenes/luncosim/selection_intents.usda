@@ -1,14 +1,16 @@
 #usda 1.0
 (
-    defaultPrim = "SelectionIntentTest"
+    defaultPrim = "SelectionIntentReview"
     upAxis = "Y"
     metersPerUnit = 1
 )
 
-# Production acceptance fixture for the editor's public selection intents.
-# The two static rigid bodies are independently selectable and remain in place
-# while the authored scenario drives SelectEntity through the public command bus.
-def Xform "SelectionIntentTest" (
+# Interactive editor fixture for reviewing the public selection intents.
+# This scene intentionally lives outside assets/scenes/tests: SelectEntity is
+# owned by the UI/editor host, while the automated luncosim test runner is a
+# render-free host and requires an authored Rhai verdict for every test scene.
+# The two static rigid bodies remain independently selectable in the editor.
+def Xform "SelectionIntentReview" (
     kind = "assembly"
 )
 {
@@ -64,5 +66,4 @@ def Xform "SelectionIntentTest" (
         bool physics:collisionEnabled = true
         color3f[] primvars:displayColor = [(0.15, 0.35, 0.9)]
     }
-
 }

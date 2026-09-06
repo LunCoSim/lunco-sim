@@ -65,10 +65,13 @@ compiling without emitting a clear-color first frame.
 
 Scene test observers use the same separation: a Rhai test under
 `assets/scenarios/tests/` is headless unless it declares
-`const TEST_KIND = "graphics";`. The composed USD scene only binds that
-observer through `LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list`
-uses the declaration to route headless tests to the deterministic CPU runner
-and graphics tests to the offscreen renderer.
+`const TEST_KIND = "graphics";` or `const TEST_KIND = "editor";`. The
+composed USD scene only binds that observer through
+`LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list` uses the
+declaration to route headless tests to the deterministic CPU runner, graphics
+tests to the offscreen renderer, and editor tests to the production windowed
+host. Editor-domain tests are not valid offscreen captures because preview and
+selection ownership is UI-gated.
 
 The graphics runner selects `--render-quality high` by default. Set
 `RENDER_QUALITY=balanced` or `RENDER_QUALITY=low` for a deliberate comparison.

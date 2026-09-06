@@ -9,6 +9,7 @@
 //!
 //! ```rhai
 //! const TEST_KIND = "graphics";
+//! // or `"editor"` for workflows that require the production workbench.
 //! ```
 //!
 //! This lets a runner classify a test without executing user code.  An omitted
@@ -26,6 +27,8 @@ pub const TEST_KIND_CONST: &str = "TEST_KIND";
 pub const HEADLESS_TEST_KIND: &str = "headless";
 /// The value for tests whose assertion consumes rendered pixels or UI output.
 pub const GRAPHICS_TEST_KIND: &str = "graphics";
+/// The value for tests that require the windowed production editor.
+pub const EDITOR_TEST_KIND: &str = "editor";
 
 /// Which runtime a scene test needs.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -34,6 +37,8 @@ pub enum SceneTestKind {
     Headless,
     /// Run through the offscreen renderer and inspect graphics output.
     Graphics,
+    /// Run through the windowed production editor and inspect its UI/domain APIs.
+    Editor,
 }
 
 impl SceneTestKind {
@@ -41,6 +46,7 @@ impl SceneTestKind {
         match self {
             Self::Headless => HEADLESS_TEST_KIND,
             Self::Graphics => GRAPHICS_TEST_KIND,
+            Self::Editor => EDITOR_TEST_KIND,
         }
     }
 }
@@ -79,12 +85,17 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
 
     let value = value
         .into_string()
-        .map_err(|_| format!("`{TEST_KIND_CONST}` must be `\"headless\"` or `\"graphics\"`"))?;
+        .map_err(|_| {
+            format!(
+                "`{TEST_KIND_CONST}` must be `\"headless\"`, `\"graphics\"`, or `\"editor\"`"
+            )
+        })?;
     match value.as_str() {
         HEADLESS_TEST_KIND => Ok(SceneTestKind::Headless),
         GRAPHICS_TEST_KIND => Ok(SceneTestKind::Graphics),
+        EDITOR_TEST_KIND => Ok(SceneTestKind::Editor),
         _ => Err(format!(
-            "`{TEST_KIND_CONST}` has unsupported value {value:?}; expected `{HEADLESS_TEST_KIND}` or `{GRAPHICS_TEST_KIND}`"
+            "`{TEST_KIND_CONST}` has unsupported value {value:?}; expected `{HEADLESS_TEST_KIND}`, `{GRAPHICS_TEST_KIND}`, or `{EDITOR_TEST_KIND}`"
         )),
     }
 }
@@ -221,6 +232,14 @@ mod tests {
         assert_eq!(
             classify_rhai_source("const TEST_KIND = \"graphics\";").unwrap(),
             SceneTestKind::Graphics
+        );
+    }
+
+    #[test]
+    fn literal_editor_kind_is_static_and_deterministic() {
+        assert_eq!(
+            classify_rhai_source("const TEST_KIND = \"editor\";").unwrap(),
+            SceneTestKind::Editor
         );
     }
 

@@ -1,5 +1,5 @@
 // TEST-ONLY: mixed-domain document lifecycle through the production Editor.
-const TEST_KIND = "graphics";
+const TEST_KIND = "editor";
 
 fn record_for(docs, id) {
     for record in docs.open_documents {

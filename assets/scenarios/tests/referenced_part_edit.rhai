@@ -1,5 +1,5 @@
 // TEST-ONLY: composed component edits through production proposal and journal owners.
-const TEST_KIND = "graphics";
+const TEST_KIND = "editor";
 const PANEL = "/ReferencedPartEdit/Panel";
 const RENAMED = "/ReferencedPartEdit/RenamedPanel";
 
