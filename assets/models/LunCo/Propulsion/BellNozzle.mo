@@ -39,6 +39,7 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   // ── Geometry ──────────────────────────────────────────────────────────────
   output Real throat_area "A_t (m^2)";
   output Real exit_area "A_e (m^2)";
+  output Real exit_radius_m "Exit-plane radius exposed to connected consumers (m)";
   output Real expansion_ratio "epsilon = A_e / A_t — the number that names a nozzle";
 
   // Four contour stations, the same ones the USD lathe is built from, so the
@@ -55,9 +56,15 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   output Real c_star "Characteristic velocity (m/s)";
   output Real isp_vac "Specific impulse at this design point (s)";
   output Real thrust "Thrust at chamber pressure (N)";
+  output Real exit_pressure_pa "Exit-plane pressure exposed to connected consumers (Pa)";
+  output Real chamber_pressure_pa
+    "Chamber pressure exposed to connected consumers (Pa)";
+  output Real ambient_pressure_pa
+    "Ambient pressure exposed to connected consumers (Pa)";
 equation
   throat_area = pi * throat_radius ^ 2;
   exit_area = pi * exit_radius ^ 2;
+  exit_radius_m = exit_radius;
   expansion_ratio = exit_area / throat_area;
 
   r_station_1 = throat_radius + (exit_radius - throat_radius) * (1.0 / 3.0) ^ contour;
@@ -74,4 +81,7 @@ equation
   c_star = p_chamber * throat_area / max(1e-9, p_chamber * throat_area / 1800.0);
   isp_vac = cf * c_star / g0;
   thrust = cf * p_chamber * throat_area;
+  exit_pressure_pa = p_exit;
+  chamber_pressure_pa = p_chamber;
+  ambient_pressure_pa = p_ambient;
 end BellNozzle;

@@ -28,6 +28,10 @@ model CombustionChamber
   output Real ideal_chamber_pressure_pa "Pressure implied by c-star and throat area, Pa";
   output Real chamber_temperature_k "Estimated combustion temperature, K";
   output Real thrust_n "Generated thrust, N";
+  output Real exhaust_velocity_mps
+    "Current effective exhaust velocity after combustion and mixture efficiency, m/s";
+  output Real design_exhaust_velocity_mps
+    "Nominal effective exhaust velocity before current mixture loss, m/s";
   output Real maximum_thrust_n
     "Thrust capability at the authored nominal propellant flow, N";
   output Real activity "Combustion activity, 0..1";
@@ -62,6 +66,9 @@ equation
     * combustion_efficiency * mixture_efficiency;
   thrust_n = propellant_flow * effective_exhaust_velocity_mps
     * combustion_efficiency * mixture_efficiency;
+  exhaust_velocity_mps = effective_exhaust_velocity_mps
+    * combustion_efficiency * mixture_efficiency;
+  design_exhaust_velocity_mps = effective_exhaust_velocity_mps * combustion_efficiency;
   // This is a capability signal, not a measurement of current thrust.  The
   // flight computer uses it to normalize acceleration commands against the
   // same chamber performance model that generates thrust.  Keep the contract

@@ -9,12 +9,13 @@ model RCSJet
   parameter Real g0 = 9.80665 "Standard gravity acceleration (m/s2)";
   parameter Real minimum_isp_g0 = 1.0e-6
     "Smallest specific-impulse/gravity product used for flow";
-  // A 1.25 kN attitude jet is short compared with the main engine, but its
-  // exhaust is still a metre-scale plume. These defaults are shared by every
-  // authored nozzle so the rendered envelope and photometric equations
-  // describe the same physical jet.
-  parameter Real plume_width_m = 0.28 "Full-throttle plume radius (m)";
-  parameter Real plume_length_m = 1.20 "Full-throttle plume length (m)";
+  // The plume width is also the effective exit radius for this compact jet.
+  // Its physical length is derived from thrust, mass flow, exhaust velocity, and
+  // the authored render capacity below rather than copied as a flame constant.
+  parameter Real plume_width_m = 0.28 "Effective exit radius (m)";
+  parameter Real geometry_capacity_m = 1.20 "Fixed shader envelope length (m)";
+  parameter Real pressure_threshold_pa = 1000.0
+    "Visible free-jet pressure floor (Pa)";
   parameter Real plume_luminance = 5.475
     "Rec.709 luma of the RCS plume's emissive colour";
   parameter Real plume_exitance = 44200.0
@@ -34,6 +35,12 @@ model RCSJet
   output Real activity "Normalized valve activity, 0..1";
   output Real light_intensity "RCS plume luminous power (lm)";
   output Real light_radius "RCS plume source radius (m)";
+  output Real full_throttle_length_m
+    "Derived plume length at nominal nozzle force (m)";
+  output Real visual_length_fraction
+    "Current visible length divided by the fixed shader envelope";
+  output Real exit_dynamic_pressure_pa
+    "Current exhaust dynamic pressure at the effective exit (Pa)";
 
   // The nozzle remains a reusable physical Modelica component. Photometry is
   // also an equation, but it has no state or acausal connector of its own: it
@@ -51,6 +58,9 @@ model RCSJet
   Real plume_width "Plume base radius at this throttle (m)";
   Real plume_length "Plume length at this throttle (m)";
   Real plume_area "Lateral surface of the plume cone (m2)";
+  Real exhaust_velocity_mps "Effective exhaust velocity from Isp (m/s)";
+  Real nominal_mass_flow_kgs "Nominal mass flow from force and Isp (kg/s)";
+  Real nominal_exit_dynamic_pressure_pa "Nominal dynamic pressure at the exit";
 
 equation
   thruster.valve_opening = valve_opening;
@@ -58,9 +68,23 @@ equation
   mass_flow_kgs = thruster.mass_flow_kgs;
   activity = max(0.0, min(1.0, valve_opening));
   visual_t = max(0.0, activity) ^ max(0.1, min(1.0, plume_throttle_exponent));
+  exhaust_velocity_mps = max(0.0, isp_sec) * max(0.0, g0);
+  nominal_mass_flow_kgs = max(0.0, f_nom_n)
+    / max(minimum_isp_g0, exhaust_velocity_mps);
+  nominal_exit_dynamic_pressure_pa = 0.5 * nominal_mass_flow_kgs
+    * exhaust_velocity_mps
+    / max(minimum_isp_g0, pi * plume_width_m ^ 2);
+  full_throttle_length_m = max(0.0, plume_width_m)
+    * sqrt(max(0.0, nominal_exit_dynamic_pressure_pa)
+      / max(minimum_isp_g0, pressure_threshold_pa));
   plume_width = (plume_width_idle + (1.0 - plume_width_idle) * visual_t) * plume_width_m;
-  plume_length = visual_t * plume_length_m;
+  plume_length = visual_t * full_throttle_length_m;
+  visual_length_fraction = min(1.0, max(0.0, plume_length)
+    / max(minimum_isp_g0, geometry_capacity_m));
   plume_area = pi * plume_width * sqrt(plume_width ^ 2 + plume_length ^ 2);
+  exit_dynamic_pressure_pa = 0.5 * max(0.0, mass_flow_kgs)
+    * exhaust_velocity_mps
+    / max(minimum_isp_g0, pi * plume_width_m ^ 2);
   light_intensity = visual_t * plume_exitance * plume_luminance * plume_area;
   light_radius = plume_radius_idle + visual_t * plume_radius_gain;
 end RCSJet;

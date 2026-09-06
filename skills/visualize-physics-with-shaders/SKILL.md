@@ -108,12 +108,13 @@ def SphereLight "PlumeLight"
 }
 ```
 
-The engine plume is the worked example end to end: `plume.wgsl` draws the plume
-from `throttle` inside a fixed bounding cone, and `LunCo.Propulsion.PlumePhotometry`
-turns the same `throttle` into luminous power (exitance × the plume's lateral area)
-and a source radius, landing on the child light through these ports. The equation is
-in Modelica because it is an equation; the ramp is in WGSL because it is a look; and
-nothing computes anything per tick in a script.
+The engine plume is the worked example end to end: propulsion and nozzle outputs
+feed `LunCo.Propulsion.PlumePhotometry`, which derives the physical free-jet length,
+visible length fraction, luminous power, and source radius. USD connects that length
+fraction and the light outputs to a fixed-capacity WGSL cone and its child light.
+WGSL owns the perceptual width response and flicker; Modelica owns the physical
+length and photometry; Rhai supplies stimulus and verdicts only. Zero thrust is
+therefore dark without a script-side visual mirror.
 
 **A driven `Transform` is not a licence to animate.** A transform WIRED to a port is
 a consequence — some model or joint published the number and the stage shows where
