@@ -473,7 +473,11 @@ impl SolvePreparationPool {
                     lower_started.elapsed(),
                 );
             }
-            let _ = tx.send(SolvePreparationResult { id, result });
+            if tx.send(SolvePreparationResult { id, result }).is_err() {
+                log::error!(
+                    "[modelica-runtime] solve preparation result dropped id={id} for `{model_name}`"
+                );
+            }
         });
         id
     }
@@ -629,10 +633,18 @@ fn complete_preparation(
     realtime_models: &std::collections::HashSet<Entity>,
     tx: &Sender<ModelicaResult>,
 ) {
-    let Some(work) = pending_compile_works.remove(&preparation.id) else {
+    let preparation_id = preparation.id;
+    let Some(work) = pending_compile_works.remove(&preparation_id) else {
+        bevy::log::error!(
+            "[modelica-runtime] solve preparation result {preparation_id} has no pending compile work"
+        );
         return;
     };
     if work.cancelled {
+        bevy::log::debug!(
+            "[modelica-runtime] discarded cancelled solve preparation {preparation_id} for `{}`",
+            work.model_name
+        );
         return;
     }
     // A newer Compile or Despawn owns this entity now. The worker still drains
@@ -640,6 +652,16 @@ fn complete_preparation(
     if current_sessions.get(&work.entity).copied() != Some(work.session_id)
         || work.library_gen != library_gen
     {
+        bevy::log::warn!(
+            "[modelica-runtime] discarded stale solve preparation {preparation_id} for `{}`: \
+             entity={:?} work_session={} current_session={:?} work_library_gen={} current_library_gen={}",
+            work.model_name,
+            work.entity,
+            work.session_id,
+            current_sessions.get(&work.entity),
+            work.library_gen,
+            library_gen,
+        );
         return;
     }
     match preparation.result {
@@ -655,14 +677,36 @@ fn complete_preparation(
             prepared_solve_cache
                 .models
                 .insert(work.plan.key.clone(), model);
-            finish_compile_work(
-                work,
-                steppers,
-                cached_models,
-                realtime_models,
-                prepared_solve_cache,
-                tx,
-            );
+            let entity = work.entity;
+            let session_id = work.session_id;
+            let model_name = work.model_name.clone();
+            let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                finish_compile_work(
+                    work,
+                    steppers,
+                    cached_models,
+                    realtime_models,
+                    prepared_solve_cache,
+                    tx,
+                );
+            }));
+            if let Err(payload) = commit {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic payload");
+                bevy::log::error!(
+                    "[modelica-runtime] solve preparation commit panicked for `{model_name}` \
+                     (entity={entity:?}, session={session_id}): {message}"
+                );
+                let mut result = result_ok(entity, session_id);
+                result.error = Some(format!(
+                    "Stepper preparation commit panicked for `{model_name}`: {message}"
+                ));
+                result.is_new_model = true;
+                let _ = tx.send(result);
+            }
         }
         Err(error) => compile_work_error(tx, &work, &error),
     }
@@ -2216,29 +2260,60 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
         // Block only when idle; otherwise just soak up whatever has arrived
         // since the last command, so Steps that landed during a long compile
         // are scheduled ahead of older queued compiles.
-        if compile_lane.is_empty() && step_lane.is_empty() {
+        if ready_preparations.is_empty() && compile_lane.is_empty() && step_lane.is_empty() {
             if pending_compile_works.is_empty() {
                 match rx.recv() {
                     Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
                     Err(_) => return,
                 }
             } else {
-                crossbeam_channel::select! {
-                    recv(rx) -> message => match message {
-                        Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
-                        Err(_) => return,
-                    },
+                // A live scene keeps sending Step commands while a solve is
+                // preparing. Preparation completion must win this wait: an
+                // unbiased select can repeatedly choose the hot command
+                // channel and leave a finished model uncommitted forever.
+                crossbeam_channel::select_biased! {
                     recv(solve_preparation_pool.rx) -> message => match message {
                         Ok(preparation) => ready_preparations.push_back(preparation),
+                        Err(_) => return,
+                    },
+                    recv(rx) -> message => match message {
+                        Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
                         Err(_) => return,
                     },
                 }
             }
         }
-        while let Ok(cmd) = rx.try_recv() {
+        // Completion is a lifecycle event, not background work. Process
+        // completions already staged by the blocking select before accepting
+        // more commands; otherwise a continuously-fed Step channel can keep
+        // the worker in the command-drain loop and strand a finished solver.
+        while let Ok(preparation) = solve_preparation_pool.rx.try_recv() {
+            ready_preparations.push_back(preparation);
+        }
+        while let Some(preparation) = ready_preparations.pop_front() {
+            complete_preparation(
+                preparation,
+                &mut pending_compile_works,
+                &current_sessions,
+                library_gen,
+                &mut prepared_solve_cache,
+                &mut steppers,
+                &mut cached_models,
+                &realtime_models,
+                &tx,
+            );
+        }
+
+        // Bound command intake so a hot Step producer cannot starve either
+        // preparation completions or the scheduler's own fairness points.
+        const MAX_COMMANDS_PER_ROUND: usize = 64;
+        for _ in 0..MAX_COMMANDS_PER_ROUND {
+            let Ok(cmd) = rx.try_recv() else { break };
             enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx);
         }
 
+        // A result can arrive while the bounded command batch is being
+        // admitted. Drain and commit it before selecting the next work round.
         while let Ok(preparation) = solve_preparation_pool.rx.try_recv() {
             ready_preparations.push_back(preparation);
         }
@@ -2282,13 +2357,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                 || !compile_lane.is_empty()
                 || !step_lane.is_empty())
         {
-            crossbeam_channel::select! {
-                recv(rx) -> message => match message {
-                    Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
-                    Err(_) => return,
-                },
+            // Preparation results are lifecycle completions, not optional
+            // background work. Prioritize them over the continuously-fed Step
+            // channel so a finished participant always reaches `finish_compile_work`.
+            crossbeam_channel::select_biased! {
                 recv(solve_preparation_pool.rx) -> message => match message {
                     Ok(preparation) => ready_preparations.push_back(preparation),
+                    Err(_) => return,
+                },
+                recv(rx) -> message => match message {
+                    Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
                     Err(_) => return,
                 },
             }
