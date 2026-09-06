@@ -133,6 +133,7 @@ pub(crate) fn on_create_mission_requested(
                 name: "Mission".to_string(),
                 type_name: Some("Scope".to_string()),
                 reference: None,
+                reference_prim_path: None,
             },
             UsdOp::SetApiSchemas {
                 edit_target: LayerId::root(),

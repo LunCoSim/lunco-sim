@@ -384,9 +384,21 @@ impl CanonicalStage {
         path: &SdfPath,
         type_name: Option<&str>,
         asset_path: &str,
+        reference_prim_path: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let reference = self.reference_for_loaded_asset(asset_path)?;
+        let mut reference = self.reference_for_loaded_asset(asset_path)?;
+        let explicit_target = reference_prim_path.is_some();
+        if let Some(reference_prim_path) = reference_prim_path {
+            reference.prim_path = SdfPath::new(reference_prim_path).map_err(|e| {
+                anyhow!("invalid referenced prim path `{reference_prim_path}`: {e}")
+            })?;
+        }
+        let references = if explicit_target {
+            openusd::sdf::ReferenceListOp::prepended([reference.clone()])
+        } else {
+            openusd::sdf::ReferenceListOp::explicit([reference.clone()])
+        };
         self.stage
             .batch_edit(&[self.scene_layer.as_str()], |edits| {
                 let edit = &mut edits[0];
@@ -398,9 +410,7 @@ impl CanonicalStage {
                 )?;
                 prim.set(
                     openusd::sdf::FieldKey::References.as_str(),
-                    openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::explicit(
-                        [reference.clone()],
-                    )),
+                    openusd::sdf::Value::ReferenceListOp(references.clone()),
                 );
                 Ok(())
             })
@@ -408,12 +418,14 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Author a reference to the source asset's `defaultPrim` at `path` (root
-    /// edit target), turning it into a **referenced spawn**. The target path is
-    /// authored explicitly from the already-injected source layer rather than
-    /// relying on the empty-path default-prim sentinel: openusd's live
-    /// incremental composition otherwise grafts the child namespace but does
-    /// not carry the source root's applied schemas onto the new instance prim.
+    /// Author a reference to a source asset at `path` (root edit target),
+    /// turning it into a **referenced spawn**. `reference_prim_path` selects an
+    /// explicit source prim when supplied; otherwise the source asset's
+    /// `defaultPrim` is used. The target path is authored explicitly from the
+    /// already-injected source layer rather than relying on the empty-path
+    /// default-prim sentinel: openusd's live incremental composition otherwise
+    /// grafts the child namespace but does not carry the source root's applied
+    /// schemas onto the new instance prim.
     /// Fires the change sink so the projection bridge instantiates the composed
     /// subtree. The referenced asset's layer closure must already be resolvable
     /// — inject it first via [`add_layer_bytes`](Self::add_layer_bytes) (or it
@@ -662,14 +674,17 @@ impl StageProjector<'_> {
     }
 
     /// Replay an atomic referenced runtime spawn — define the instance root and
-    /// author its explicit source `defaultPrim` reference together.
+    /// author its source reference together, optionally targeting an explicit
+    /// source prim instead of `defaultPrim`.
     pub fn author_referenced_prim(
         &self,
         path: &SdfPath,
         type_name: Option<&str>,
         asset_path: &str,
+        reference_prim_path: Option<&str>,
     ) -> anyhow::Result<()> {
-        self.0.author_referenced_prim(path, type_name, asset_path)
+        self.0
+            .author_referenced_prim(path, type_name, asset_path, reference_prim_path)
     }
 
     /// Replay a `RemovePrim` op — see [`CanonicalStage::remove_prim_at`].
@@ -1303,7 +1318,7 @@ mod authoring_tests {
         );
 
         let spawn = SdfPath::new("/World/rover_1").unwrap();
-        cs.author_referenced_prim(&spawn, Some("Xform"), asset_path)
+        cs.author_referenced_prim(&spawn, Some("Xform"), asset_path, None)
             .expect("author the referenced spawn atomically");
 
         // The sink reports the spawn path as resynced (the projector reconciles it).

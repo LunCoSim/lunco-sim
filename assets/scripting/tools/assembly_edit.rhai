@@ -267,6 +267,7 @@ fn add_prim(doc, edit_target, parent_path, name, type_name, reference, parent_ge
             name: name,
             type_name: type_name,
             reference: reference,
+            reference_prim_path: "",
         }},
     })
 }
@@ -528,6 +529,7 @@ fn rigid_body_plan(edit_target, parent_path, name, mass, center_of_mass, diagona
                 name: name,
                 type_name: "Xform",
                 reference: (),
+                reference_prim_path: "",
             }},
             #{ SetApiSchemas: #{
                 edit_target: edit_target,
@@ -597,6 +599,7 @@ fn revolute_joint_plan(edit_target, parent_path, name, body0, body1, axis,
                 name: name,
                 type_name: "PhysicsRevoluteJoint",
                 reference: (),
+                reference_prim_path: "",
             }},
             #{ SetRelationship: #{
                 edit_target: edit_target,
@@ -710,6 +713,7 @@ fn fixed_joint_plan(edit_target, parent_path, name, body0, body1,
                 name: name,
                 type_name: "PhysicsFixedJoint",
                 reference: (),
+                reference_prim_path: "",
             }},
             #{ SetRelationship: #{
                 edit_target: edit_target,

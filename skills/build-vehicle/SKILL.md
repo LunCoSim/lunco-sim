@@ -25,11 +25,12 @@ components, they never restate them**.
 
 For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
-placement, Cube and composed collision alignment/clearance,
+frame/shape construction, placement, Cube and composed collision alignment/clearance,
 referenced-part mounting, existing-mount frame realignment, and body/joint
 plans. The
 mission-level `griffin_flip_builder.rhai` library composes those helpers into
-paired Griffin ramp, validated four-wheel FLIP layout, and complete
+paired Griffin ramp, validated four-wheel FLIP layout, dynamic FLIP asset
+construction, and complete
 lander/adapter/rover manifest recipes. For a new reference assembly, use
 `griffin_mission_assembly_plan` for the maintained lander and four-wheel rover
 instances, wait for their composed children, then use
@@ -56,6 +57,14 @@ or thermal choices with `assembly_builder::select_variants_plan`; variant
 selection is a subtree recompose and is intentionally a second reviewed plan.
 The recipe and its validation remain editable Rhai, so changing the vehicle
 authoring policy does not require a Rust-core rebuild.
+
+When the reusable FLIP asset itself must be built from the maintained
+skid-rover reference, use `griffin_flip_builder::flip_rover_asset_plan`, which
+adds the payload deck, sensor mast, and solar proxy through typed Rhai plans.
+After `/SkidRover` is queryable, apply `flip_rover_asset_detail_plan` for the
+explicit FLIP metadata and wheel/solar facts. The production
+`flip_rover_asset_builder` test starts from an empty frame and keeps both
+construction and negative validation in Rhai.
 
 When a vehicle part is already attached and a socket or plug frame moves, use
 `assembly_builder::mount_frame_realignment_plan` with the exact authored paths.

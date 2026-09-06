@@ -102,6 +102,7 @@ pub fn ensure_preview_surface_ops(
             name: LOOKS.into(),
             type_name: Some("Scope".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
@@ -109,6 +110,7 @@ pub fn ensure_preview_surface_ops(
             name: mat_name,
             type_name: Some("Material".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
@@ -116,6 +118,7 @@ pub fn ensure_preview_surface_ops(
             name: SURFACE.into(),
             type_name: Some("Shader".into()),
             reference: None,
+            reference_prim_path: None,
         },
         // What makes the Shader a *preview surface* rather than an anonymous
         // node: consumers (this importer, Houdini, usdview) dispatch on `info:id`.
@@ -208,6 +211,7 @@ pub fn ensure_physics_material_ops(
             name: PHYSICS_MATERIALS.into(),
             type_name: Some("Scope".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
@@ -215,6 +219,7 @@ pub fn ensure_physics_material_ops(
             name: mat_name,
             type_name: Some("Material".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::SetApiSchemas {
             edit_target: root_layer.clone(),

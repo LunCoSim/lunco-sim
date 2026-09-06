@@ -10,6 +10,7 @@ claim can be observed through a public production surface.
 | Claim | Owner | Test form |
 |---|---|---|
 | USD identity, composition, schema shape, asset edges | USD / asset crates | Rust structural tests plus `--validate` |
+| Dynamic assembly construction and authored rejection policy | Rhai tools over USD commands/queries | Production scene + authored negative plans |
 | Modelica parsing, AST/source contract, solver/math kernel | Modelica / Rust mechanism | Rust unit and integration tests |
 | Avian joint, collider, contact and numerical mechanics | Avian / Rust mechanism | Rust mechanism tests |
 | Command dispatch, reflection, script lifecycle, hot reload, authority and teardown | Rust scripting/runtime | Generic Rust seam tests |
@@ -70,6 +71,14 @@ a headless Rhai scene: `SceneEditPlugin` is UI-gated and exposes no production
 headless selection observer. Its owning Rust tests exercise the shared
 selection observer, replace/extend/remove semantics, and highlight state
 without entering the separate active-gizmo drag mode.
+
+Dynamic asset construction follows the same boundary. The
+`flip_rover_asset_builder` scene starts from an empty USDA frame and builds the
+FLIP composition through `assembly_builder` and `griffin_flip_builder` plans.
+The complete positive topology/metadata checks and invalid base, parent, shape,
+duplicate, and wheel-detail cases are authored in Rhai. Rust retains only the
+generic typed-op and live reference-materialization mechanisms that Rhai calls;
+there is no scene-specific Rust writer or `include_str!` fixture test.
 
 ## Test tiers
 

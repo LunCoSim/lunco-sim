@@ -18,8 +18,11 @@ payload deck, sensor mast, and body-mounted solar proxy.
 The asset is intentionally labelled a study proxy. It does not claim as-built
 CAD, all-wheel-steer fidelity, or an articulated solar deployment joint; those
 are separate authored contracts. Build instances with the dynamic
-`assembly_builder::flip_rover_instance_plan`/`select_variants_plan` tools and
-verify the composed paths with the Rhai production test before review.
+`assembly_builder::flip_rover_instance_plan`/`select_variants_plan` tools. To
+construct the reusable asset from the maintained skid-rover reference, use
+`griffin_flip_builder::flip_rover_asset_plan` followed by
+`flip_rover_asset_detail_plan`; the Rhai production test verifies the composed
+paths and rejection cases before review.
 
 ---
 

@@ -308,6 +308,7 @@ fn runtime_spawn_ops(
             // the ownership boundary; the catalog remains free to expose its
             // discovery spelling to UI consumers.
             reference: Some(lunco_assets::engine_asset_uri(asset_path)),
+            reference_prim_path: None,
         },
         UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
@@ -2086,6 +2087,7 @@ pub fn persist_environment_light_to_runtime_layer(
                 name: "Environment".to_string(),
                 type_name: Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE.to_string()),
                 reference: None,
+                reference_prim_path: None,
             },
         });
     }
@@ -2142,6 +2144,7 @@ pub fn persist_environment_light_to_runtime_layer(
                     name: "AmbientFill".to_string(),
                     type_name: Some("DomeLight".to_string()),
                     reference: None,
+                    reference_prim_path: None,
                 },
             });
         }

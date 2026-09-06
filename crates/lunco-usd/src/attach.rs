@@ -282,6 +282,7 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
         name: spec.name.clone(),
         type_name: None,
         reference: Some(spec.asset.clone()),
+        reference_prim_path: None,
     }];
 
     // Persist socket occupancy in the same change set as the child and joint.
@@ -325,6 +326,7 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
         name: spec.joint_name.clone(),
         type_name: Some(spec.joint_type_name().to_string()),
         reference: None,
+        reference_prim_path: None,
     });
     // Relate the two bodies.
     ops.push(UsdOp::SetRelationship {

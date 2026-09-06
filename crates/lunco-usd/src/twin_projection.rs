@@ -389,6 +389,9 @@ struct RefSpawn {
     /// re-derives its canonical id against the scene layer, matching the id the
     /// closure bytes are injected under.
     asset_path: String,
+    /// Optional explicit prim path inside the referenced layer. `None` uses
+    /// the loaded asset's default prim.
+    reference_prim_path: Option<String>,
     /// In-flight load of the referenced asset (its loader fetches the closure).
     ref_handle: Handle<UsdStageAsset>,
     /// A SetTranslate may follow AddPrim in the same edit burst. Keep it until
@@ -408,6 +411,10 @@ pub struct PendingRefSpawns {
     items: Vec<RefSpawn>,
     ready: HashSet<AssetId<UsdStageAsset>>,
     failed: HashMap<AssetId<UsdStageAsset>, String>,
+    /// Strong handles held while a coarse document rebuild waits for a newly
+    /// referenced closure. Without this retention the load becomes `Unused`
+    /// before the async loader can publish its prepared asset.
+    retained_assets: HashMap<String, Handle<UsdStageAsset>>,
 }
 
 /// Prepared source plans waiting for the live-stage sink to create their
@@ -478,6 +485,7 @@ pub(crate) fn reset_scene_projection_state(
     pending_refs.items.clear();
     pending_refs.ready.clear();
     pending_refs.failed.clear();
+    pending_refs.retained_assets.clear();
     if let Some(pending_instances) = pending_instances.as_deref_mut() {
         pending_instances.plans.clear();
     }
@@ -940,6 +948,15 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                         op_needs_rebuild(op, waypoint)
                     }) =>
                 {
+                    if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
+                        // Keep the document generation pending until every new
+                        // reference closure is available to the live resolver.
+                        // Rebuilding first would permanently open a stage whose
+                        // root source contains the arc but whose resolver cannot
+                        // resolve it; a later variant/metadata edit would then
+                        // preserve the incomplete composition.
+                        continue;
+                    }
                     let cs = world
                         .resource::<DocumentRegistry<UsdDocument>>()
                         .host(doc)
@@ -1449,6 +1466,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             name,
             type_name,
             reference,
+            reference_prim_path,
             ..
         } => {
             let prim_path = if parent_path == "/" || parent_path.is_empty() {
@@ -1462,6 +1480,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 &prim_path,
                 type_name.clone(),
                 reference.clone(),
+                reference_prim_path.clone(),
             );
         }
         UsdOp::RemovePrim { path, .. } => {
@@ -1672,8 +1691,10 @@ fn spawn_prim_op(
     prim_path: &str,
     type_name: Option<String>,
     reference: Option<String>,
+    reference_prim_path: Option<String>,
 ) {
     use lunco_usd_bevy::CanonicalStages;
+    let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
     let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
         return;
     };
@@ -1711,7 +1732,7 @@ fn spawn_prim_op(
     };
     let ref_handle = world
         .resource::<AssetServer>()
-        .load::<UsdStageAsset>(ref_id.clone());
+        .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&ref_id).into_owned());
     let plan = if !has_layer_bytes {
         Plan::Fetch { ref_handle }
     } else if let Some(asset) = world
@@ -1740,9 +1761,12 @@ fn spawn_prim_op(
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                let result =
-                    cs.projector()
-                        .author_referenced_prim(&sp, type_name.as_deref(), &asset_path);
+                let result = cs.projector().author_referenced_prim(
+                    &sp,
+                    type_name.as_deref(),
+                    &asset_path,
+                    reference_prim_path.as_deref(),
+                );
                 if let Err(e) = result {
                     warn!("[twin] referenced spawn {prim_path}: {e}");
                 } else {
@@ -1770,6 +1794,7 @@ fn spawn_prim_op(
                     prim_path: prim_path.to_string(),
                     type_name,
                     asset_path,
+                    reference_prim_path,
                     ref_handle,
                     translate: None,
                     deferred_ops: Vec::new(),
@@ -1964,6 +1989,80 @@ fn rebuild_scene_from_composed(
     }
 }
 
+/// Make every newly referenced asset in a coarse edit available to the live
+/// stage before rebuilding it. The async `UsdStageAsset` loader already owns
+/// the complete transitive layer closure; this only transfers those bytes into
+/// the existing canonical resolver. If a closure is still loading, leave the
+/// document generation unsynced so the asset event retries the same rebuild
+/// with a complete resolver instead of publishing an incomplete stage.
+fn ensure_reference_layers_for_rebuild(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    ops: &[UsdOp],
+) -> bool {
+    let references: Vec<String> = ops
+        .iter()
+        .filter_map(|op| match op {
+            UsdOp::AddPrim {
+                reference: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .collect();
+    if references.is_empty() {
+        return true;
+    }
+
+    let mut extra = HashMap::new();
+    for asset_path in references {
+        let reference_id = {
+            let Some(cs) = world
+                .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+            else {
+                return false;
+            };
+            if cs.has_layer_bytes(&cs.canonical_reference_id(&asset_path)) {
+                continue;
+            }
+            cs.canonical_reference_id(&asset_path)
+        };
+        let handle = if let Some(handle) = world
+            .resource::<PendingRefSpawns>()
+            .retained_assets
+            .get(&reference_id)
+            .cloned()
+        {
+            handle
+        } else {
+            let handle = world
+                .resource::<AssetServer>()
+                .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&reference_id).into_owned());
+            world
+                .resource_mut::<PendingRefSpawns>()
+                .retained_assets
+                .insert(reference_id.clone(), handle.clone());
+            handle
+        };
+        let Some(asset) = world.resource::<Assets<UsdStageAsset>>().get(handle.id()) else {
+            return false;
+        };
+        let Some(recipe) = asset.recipe.as_ref() else {
+            bevy::log::warn!("[twin] referenced rebuild asset `{asset_path}` has no layer recipe");
+            return false;
+        };
+        extra.extend(recipe.bytes.clone());
+    }
+    if extra.is_empty() {
+        return true;
+    }
+    world
+        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .and_then(|stages| stages.get(scene_id))
+        .is_some_and(|cs| cs.add_layer_bytes(extra))
+}
+
 /// Complete referenced spawns whose asset closure has finished loading: inject
 /// the fetched layer bytes into the scene stage's resolver, then author the prim
 /// and its `references` arc so the openusd sink fires and `project_stage_changes`
@@ -2046,6 +2145,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 &sp,
                 item.type_name.as_deref(),
                 &item.asset_path,
+                item.reference_prim_path.as_deref(),
             );
             if result.is_ok() {
                 // Apply the transform after the prim/reference exists. This is the

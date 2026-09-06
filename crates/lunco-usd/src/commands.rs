@@ -3287,6 +3287,7 @@ fn on_set_dome_light(
             name,
             type_name: Some("DomeLight".into()),
             reference: None,
+            reference_prim_path: None,
         }];
 
         // `SetAttribute`'s non-string branch parses `value` as a USDA literal,
