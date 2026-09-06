@@ -521,7 +521,7 @@ fn movable_cube_plan(edit_target, parent, name, mass, center_of_mass,
 
 /// Promote one existing composed Xform into an explicitly massed movable
 /// body. This is the retrofit counterpart to `movable_cube_plan`: referenced
-/// Griffin parts already own their visual/collision children, so the builder
+/// parts already own their visual/collision children, so the builder
 /// must add the body opinion without replacing or duplicating that geometry.
 /// Every collider path is explicit and must already exist below the body;
 /// body/joint validators still own the final schema and relationship checks.
