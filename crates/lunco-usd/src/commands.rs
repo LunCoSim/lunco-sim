@@ -3686,6 +3686,7 @@ mod tests {
             name: name.to_owned(),
             type_name: Some("Xform".to_owned()),
             reference: None,
+            reference_prim_path: None,
         }
     }
 
@@ -4099,6 +4100,7 @@ mod tests {
                     name: "Wheel".to_owned(),
                     type_name: Some("Xform".to_owned()),
                     reference: None,
+                    reference_prim_path: None,
                 },
             )
             .expect("local assembly edit");
@@ -4159,6 +4161,7 @@ mod tests {
                         name: format!("Part{index}"),
                         type_name: Some("Xform".to_owned()),
                         reference: None,
+                        reference_prim_path: None,
                     },
                 )
                 .expect("assembly edit in history window");
@@ -4310,6 +4313,7 @@ mod tests {
                 name: "Rover".into(),
                 type_name: Some("Xform".into()),
                 reference: None,
+                reference_prim_path: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
@@ -4317,6 +4321,7 @@ mod tests {
                 name: "Body".into(),
                 type_name: Some("Cube".into()),
                 reference: None,
+                reference_prim_path: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
@@ -4324,6 +4329,7 @@ mod tests {
                 name: "WheelFL".into(),
                 type_name: Some("Cube".into()),
                 reference: None,
+                reference_prim_path: None,
             },
             UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
@@ -4413,6 +4419,7 @@ mod tests {
                 name: "Rover".into(),
                 type_name: Some("Xform".into()),
                 reference: None,
+                reference_prim_path: None,
             },
             UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
