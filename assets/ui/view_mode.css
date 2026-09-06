@@ -10,6 +10,10 @@
   --ui-earth-display: none;
   --ui-earth-background: var(--button-background);
   --ui-earth-color: var(--muted-color);
+  --ui-map-display: none;
+  --ui-map-marker-display: none;
+  --ui-map-marker-left: 0%;
+  --ui-map-marker-top: 0%;
 }
 
 #runtime-view-mode-root {
@@ -32,6 +36,138 @@
   background-color: var(--panel-background);
   color: var(--text-color);
   font-family: "LunCo UI";
+}
+
+#runtime-lunar-map {
+  display: var(--ui-map-display);
+  position: absolute;
+  top: 62px;
+  left: 36px;
+  width: 348px;
+  height: 196px;
+  flex-direction: column;
+  row-gap: 5px;
+  padding: 9px 10px 8px;
+  box-sizing: border-box;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 9px;
+  background-color: var(--panel-background);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+}
+
+#runtime-lunar-map-heading,
+#runtime-lunar-map-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#runtime-lunar-map-title,
+#runtime-lunar-map-status,
+#runtime-lunar-map-coordinates,
+#runtime-lunar-map-altitude {
+  color: var(--muted-color);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#runtime-lunar-map-status {
+  color: var(--accent-color);
+}
+
+#runtime-lunar-map-frame {
+  position: relative;
+  width: 100%;
+  height: 142px;
+  overflow: hidden;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 5px;
+  background-color: var(--panel-inner);
+}
+
+#runtime-lunar-map-equator,
+#runtime-lunar-map-meridian,
+#runtime-lunar-map-latitude-north,
+#runtime-lunar-map-latitude-south,
+#runtime-lunar-map-longitude-east,
+#runtime-lunar-map-longitude-west {
+  position: absolute;
+  border-color: rgba(166, 173, 200, 0.35);
+}
+
+#runtime-lunar-map-equator {
+  top: 50%;
+  left: 0px;
+  width: 100%;
+  border-top-width: 1px;
+}
+
+#runtime-lunar-map-meridian {
+  top: 0px;
+  left: 50%;
+  height: 100%;
+  border-left-width: 1px;
+}
+
+#runtime-lunar-map-latitude-north,
+#runtime-lunar-map-latitude-south {
+  left: 0px;
+  width: 100%;
+  border-top-width: 1px;
+}
+
+#runtime-lunar-map-latitude-north {
+  top: 25%;
+}
+
+#runtime-lunar-map-latitude-south {
+  top: 75%;
+}
+
+#runtime-lunar-map-longitude-east,
+#runtime-lunar-map-longitude-west {
+  top: 0px;
+  height: 100%;
+  border-left-width: 1px;
+}
+
+#runtime-lunar-map-longitude-east {
+  left: 25%;
+}
+
+#runtime-lunar-map-longitude-west {
+  left: 75%;
+}
+
+#runtime-lunar-map-marker {
+  display: var(--ui-map-marker-display);
+  position: absolute;
+  top: var(--ui-map-marker-top);
+  left: var(--ui-map-marker-left);
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  margin-left: -5px;
+  border-top-width: 2px;
+  border-right-width: 2px;
+  border-bottom-width: 2px;
+  border-left-width: 2px;
+  border-color: var(--accent-color);
+  border-radius: 50%;
+  background-color: var(--active-text-color);
+}
+
+#runtime-lunar-map-footer {
+  min-height: 14px;
 }
 
 #runtime-view-mode-segmented {

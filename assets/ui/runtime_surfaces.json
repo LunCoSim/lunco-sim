@@ -269,7 +269,14 @@
             "301": "var(--muted-color)",
             "399": "var(--active-text-color)"
           }
-        }
+        },
+        "map_display": { "source": "map_display" },
+        "map_status": { "source": "map_status" },
+        "map_coordinates": { "source": "map_coordinates" },
+        "map_altitude": { "source": "map_altitude" },
+        "map_marker_display": { "source": "map_marker_display" },
+        "map_marker_left": { "source": "map_marker_left" },
+        "map_marker_top": { "source": "map_marker_top" }
       },
       "actions": [
         { "callback": "runtime_view_surface", "action": "view.surface" },
@@ -283,8 +290,8 @@
         "mode": "window",
         "anchor": "top_center",
         "offset": [0.0, 50.0],
-        "width": 350.0,
-        "height": 58.0
+        "width": 420.0,
+        "height": 276.0
       }
     },
     {

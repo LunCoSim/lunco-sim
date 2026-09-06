@@ -158,6 +158,14 @@ the retained snapshot from that event. The exposure registry advances only
 when a value changes, and the retained UI applies only new exposure revisions
 or lifecycle changes. Production Rhai does not use `on_tick` for this path.
 
+The `celestial-view` surface applies the same boundary to the lunar map. The
+engine resolves the authoritative local avatar and driven vessel, reads the
+canonical `SurfacePose.geodetic`, and publishes a pure equirectangular
+projection plus explicit loading, no-fix, and valid-fix properties through the
+existing `celestial-view` namespace. HUI/Flair owns the map grid and marker
+presentation. It must not derive coordinates from transforms, duplicate pose
+state, or keep a stale marker across avatar, Twin, or scene lifecycle changes.
+
 ### Overlay ownership audit
 
 Moving every overlay into the Twin would mix persistent project policy with

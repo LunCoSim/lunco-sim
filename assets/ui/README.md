@@ -55,6 +55,15 @@ existing egui host renders the camera options from `CameraSelectionStatus` at
 the measured HUI anchor and emits the typed camera command. This keeps the
 camera identity list single-sourced while preserving the authored trigger.
 
+The `celestial-view` surface also owns the authored lunar map. Rust resolves the
+local avatar's driven vessel through `TheLocalAvatar` and `ControllerLink`,
+projects that vessel's canonical `SurfacePose.geodetic` into the map's
+equirectangular marker coordinates, and publishes only typed status and marker
+properties. The HUI/Flair template owns the map, grid, marker, and no-fix
+states; it does not reconstruct coordinates or retain a second location model.
+When there is no complete lunar surface pose, the exposure deliberately hides
+the marker and reports the authored no-fix state.
+
 ## Performance and placement
 
 The exposure registry is reactive: identical values do not advance its revision,

@@ -15,10 +15,10 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
-use lunco_celestial::OrbitalViewPin;
 use lunco_celestial::link::LinkState;
+use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureWriter};
+use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
 use lunco_core::{
     Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
 };
@@ -28,7 +28,7 @@ use lunco_modelica::ModelicaModel;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::read::UsdReadObject;
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdStageAsset, scene_root_ancestor};
+use lunco_usd_bevy::{scene_root_ancestor, CanonicalStages, SdfPath, UsdStageAsset};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
@@ -711,6 +711,50 @@ mod control_root_tests {
 mod exposure_tests {
     use super::*;
 
+    fn lunar_surface_pose(geo: lunco_celestial::Geodetic) -> lunco_celestial::SurfacePose {
+        lunco_celestial::SurfacePose {
+            site: Entity::from_bits(1),
+            body: 301,
+            site_position: lunco_celestial::SitePosition(DVec3::ZERO),
+            site_rotation: DQuat::IDENTITY,
+            body_fixed_position: lunco_celestial::BodyFixedPosition(DVec3::ZERO),
+            body_fixed_rotation: DQuat::IDENTITY,
+            geodetic: geo,
+        }
+    }
+
+    #[test]
+    fn lunar_map_projection_wraps_longitude_and_places_lunar_marker() {
+        let projection = project_lunar_map(
+            true,
+            Some(301),
+            Some(lunar_surface_pose(lunco_celestial::Geodetic::new(
+                45.0, 180.0, 12.0,
+            ))),
+        );
+
+        assert_eq!(projection.display, "flex");
+        assert_eq!(projection.status, "SURFACE FIX");
+        assert_eq!(projection.coordinates, "LAT +45.00° · LON +180.00°");
+        assert_eq!(projection.altitude, "ALT +12 m");
+        assert_eq!(projection.marker_display, "flex");
+        assert_eq!(projection.marker_left, "0.00%");
+        assert_eq!(projection.marker_top, "25.00%");
+    }
+
+    #[test]
+    fn lunar_map_projection_hides_marker_without_a_valid_lunar_surface_pose() {
+        let orbit = project_lunar_map(true, Some(301), None);
+        assert_eq!(orbit.display, "flex");
+        assert_eq!(orbit.status, "AWAITING LUNAR FIX");
+        assert_eq!(orbit.marker_display, "none");
+
+        let no_moon = project_lunar_map(false, None, None);
+        assert_eq!(no_moon.display, "none");
+        assert_eq!(no_moon.status, "MOON UNAVAILABLE");
+        assert_eq!(no_moon.marker_display, "none");
+    }
+
     #[test]
     fn link_snapshot_publishes_explicit_unavailable_state() {
         let values = link_snapshot(None, "muted", "ok", "danger");
@@ -935,6 +979,10 @@ pub(crate) fn mark_exposure_dirty(
     if driven_changed {
         refresh.driven_vessel_dirty = true;
         refresh.control_dirty = true;
+        // The map is a projection of the same driven vessel pose. Keep its
+        // snapshot on the shared bounded cadence so possession, scene handoff,
+        // and continuous surface motion cannot leave a stale marker behind.
+        refresh.celestial_dirty = true;
     }
     if schema_changed || authored_changed {
         refresh.schema_dirty = true;
@@ -1248,6 +1296,9 @@ pub(crate) fn publish_exposure(
             &mut runtime.exposures,
             &runtime.bodies,
             runtime.orbital_pin.as_deref(),
+            &runtime.local_avatar,
+            &queries.avatar,
+            &geo.surface_pose,
         );
     }
     if update_overlay {
@@ -1259,6 +1310,9 @@ fn publish_celestial_capability(
     exposures: &mut EngineExposures,
     bodies: &Query<&CelestialBody>,
     orbital_pin: Option<&OrbitalViewPin>,
+    local_avatar: &TheLocalAvatar,
+    avatars: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    surface_pose: &lunco_celestial::SurfacePoseQuery,
 ) {
     let mut moon = false;
     let mut earth = false;
@@ -1271,11 +1325,105 @@ fn publish_celestial_capability(
     }
 
     let active_body = orbital_pin.filter(|pin| pin.active).map(|pin| pin.body);
+    let local_surface_pose = local_avatar
+        .0
+        .and_then(|avatar| avatars.get(avatar).ok())
+        .and_then(|controller| surface_pose.get(controller.vessel_entity));
+    let lunar_map = project_lunar_map(moon, active_body, local_surface_pose);
     let mut ui = exposures.writer("celestial-view");
     ui.visible(moon || earth);
     ui.property("body_moon_present", moon);
     ui.property("body_earth_present", earth);
     ui.property("active_body_id", f64::from(active_body.unwrap_or_default()));
+    ui.property("map_display", lunar_map.display);
+    ui.property("map_status", lunar_map.status);
+    ui.property("map_coordinates", lunar_map.coordinates);
+    ui.property("map_altitude", lunar_map.altitude);
+    ui.property("map_marker_display", lunar_map.marker_display);
+    ui.property("map_marker_left", lunar_map.marker_left);
+    ui.property("map_marker_top", lunar_map.marker_top);
+}
+
+/// The domain-neutral snapshot required by the authored lunar map.
+///
+/// The map is an equirectangular presentation of the canonical body-fixed
+/// geodetic pose. Longitude wraps at the authored atlas seam (-180/180°),
+/// while latitude is clamped only at the physical poles. Invalid or
+/// non-lunar poses never produce a marker, so the UI cannot display a stale or
+/// fabricated location.
+#[derive(Debug, PartialEq)]
+struct LunarMapProjection {
+    display: &'static str,
+    status: &'static str,
+    coordinates: String,
+    altitude: String,
+    marker_display: &'static str,
+    marker_left: String,
+    marker_top: String,
+}
+
+fn project_lunar_map(
+    moon_present: bool,
+    active_body: Option<i32>,
+    pose: Option<lunco_celestial::SurfacePose>,
+) -> LunarMapProjection {
+    let hidden = LunarMapProjection {
+        display: "none",
+        status: "MOON UNAVAILABLE",
+        coordinates: "—".into(),
+        altitude: "—".into(),
+        marker_display: "none",
+        marker_left: "0%".into(),
+        marker_top: "0%".into(),
+    };
+    if !moon_present {
+        return hidden;
+    }
+
+    let Some(pose) = pose else {
+        return LunarMapProjection {
+            display: "flex",
+            status: if active_body == Some(301) {
+                "AWAITING LUNAR FIX"
+            } else {
+                "NO LUNAR FIX"
+            },
+            coordinates: "LAT — · LON —".into(),
+            altitude: "ALT —".into(),
+            marker_display: "none",
+            marker_left: "0%".into(),
+            marker_top: "0%".into(),
+        };
+    };
+
+    let geo = pose.geodetic;
+    if pose.body != 301
+        || !geo.lat_deg.is_finite()
+        || !geo.lon_deg.is_finite()
+        || !geo.height_m.is_finite()
+    {
+        return LunarMapProjection {
+            display: "flex",
+            status: "NO LUNAR FIX",
+            coordinates: "LAT — · LON —".into(),
+            altitude: "ALT —".into(),
+            marker_display: "none",
+            marker_left: "0%".into(),
+            marker_top: "0%".into(),
+        };
+    }
+
+    let left = ((geo.lon_deg + 180.0).rem_euclid(360.0) / 360.0 * 100.0).clamp(0.0, 100.0);
+    let top = ((90.0 - geo.lat_deg.clamp(-90.0, 90.0)) / 180.0 * 100.0).clamp(0.0, 100.0);
+    LunarMapProjection {
+        display: "flex",
+        status: "SURFACE FIX",
+        coordinates: format!("LAT {:+.2}° · LON {:+.2}°", geo.lat_deg, geo.lon_deg),
+        altitude: format!("ALT {:+.0} m", geo.height_m),
+        marker_display: "flex",
+        marker_left: format!("{left:.2}%"),
+        marker_top: format!("{top:.2}%"),
+    }
 }
 
 /// Publish the authored flight-control summary for a selected schema root.

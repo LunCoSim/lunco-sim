@@ -7,6 +7,13 @@
   <property name="earth_display">none</property>
   <property name="earth_background">var(--button-background)</property>
   <property name="earth_color">var(--muted-color)</property>
+  <property name="map_display">none</property>
+  <property name="map_status">NO LUNAR FIX</property>
+  <property name="map_coordinates">LAT — · LON —</property>
+  <property name="map_altitude">ALT —</property>
+  <property name="map_marker_display">none</property>
+  <property name="map_marker_left">0%</property>
+  <property name="map_marker_top">0%</property>
 
   <node id="runtime-view-mode-root">
     <node id="runtime-view-mode-card">
@@ -20,6 +27,26 @@
         <button id="runtime-view-mode-earth" on_press="runtime_view_earth">
           <text>Earth</text>
         </button>
+      </node>
+    </node>
+
+    <node id="runtime-lunar-map">
+      <node id="runtime-lunar-map-heading">
+        <text id="runtime-lunar-map-title">LUNAR MAP</text>
+        <text id="runtime-lunar-map-status">{map_status}</text>
+      </node>
+      <node id="runtime-lunar-map-frame">
+        <node id="runtime-lunar-map-equator" />
+        <node id="runtime-lunar-map-meridian" />
+        <node id="runtime-lunar-map-latitude-north" />
+        <node id="runtime-lunar-map-latitude-south" />
+        <node id="runtime-lunar-map-longitude-east" />
+        <node id="runtime-lunar-map-longitude-west" />
+        <node id="runtime-lunar-map-marker" />
+      </node>
+      <node id="runtime-lunar-map-footer">
+        <text id="runtime-lunar-map-coordinates">{map_coordinates}</text>
+        <text id="runtime-lunar-map-altitude">{map_altitude}</text>
       </node>
     </node>
   </node>
