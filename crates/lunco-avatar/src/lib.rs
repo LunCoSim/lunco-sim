@@ -1155,6 +1155,7 @@ impl Plugin for LunCoAvatarPlugin {
         // binaries that use the avatar without the workbench (headless server) —
         // there it stays default `false` and the gate is always open.
         app.init_resource::<lunco_core::EguiFocus>();
+        app.init_resource::<lunco_core::SceneInteractionMode>();
         app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
         // composed USD avatars receive the same policy from their `Controls` scope.
@@ -3896,6 +3897,13 @@ fn is_vessel_control_endpoint(
 /// `focus_target` API/MCP verb; only the click gesture is suppressed.
 const CELESTIAL_CLICK_FOCUS: bool = false;
 
+#[derive(bevy::ecs::system::SystemParam)]
+/// Shared scene-click mode and egui gate for the avatar pointer observer.
+pub struct SceneInteractionGate<'w> {
+    mode: Res<'w, lunco_core::SceneInteractionMode>,
+    egui_focus: Res<'w, lunco_core::EguiFocus>,
+}
+
 pub fn avatar_raycast_possession(
     // Driven by bevy_picking: a global `On<Pointer<Click>>` observer. The
     // egui-vs-scene guard is `EguiFocus.wants_pointer` (via `scene_click_ray`) —
@@ -3908,7 +3916,7 @@ pub fn avatar_raycast_possession(
         (&Camera, &GlobalTransform, Entity, &IntentState),
         (With<Avatar>, With<LocalAvatar>),
     >,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    scene_interaction: SceneInteractionGate,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
@@ -3930,6 +3938,11 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
+    // Editor perspectives reserve plain scene clicks for selection and gizmos.
+    // View mode leaves the same gesture available for possession/follow.
+    if !scene_interaction.mode.possession_owns_primary_click() {
+        return;
+    }
     // Left button only.
     if click.button != PointerButton::Primary {
         return;
@@ -3996,7 +4009,7 @@ pub fn avatar_raycast_possession(
     // click; the ray drives the analytic hit-sphere tests (celestial bodies /
     // spacecraft, which have no pickable mesh) alongside the mesh pick.
     let Some(ray) = lunco_core::scene_click_ray(
-        &egui_focus,
+        &scene_interaction.egui_focus,
         camera,
         cam_gtf,
         click.pointer_location.position,
