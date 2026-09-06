@@ -640,6 +640,47 @@ pub struct EguiFocus {
     pub wants_pointer: bool,
 }
 
+/// Which subsystem owns primary scene clicks for the active workbench mode.
+///
+/// This is a cross-crate interaction contract rather than a workbench UI detail:
+/// the editor selection observer and avatar possession observer both receive the
+/// same global pointer event, so they must consult the same authoritative mode.
+/// Binaries without a workbench keep the simulation default and retain normal
+/// possession behavior.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneInteractionMode {
+    /// Plain scene clicks may claim a controllable endpoint.
+    #[default]
+    Simulation,
+    /// Plain scene clicks belong to editor selection and manipulation.
+    Editor,
+}
+
+impl SceneInteractionMode {
+    /// Whether the editor selection observer owns a plain primary scene click.
+    pub const fn selection_owns_primary_click(self) -> bool {
+        matches!(self, Self::Editor)
+    }
+
+    /// Whether the avatar possession observer owns a plain primary scene click.
+    pub const fn possession_owns_primary_click(self) -> bool {
+        matches!(self, Self::Simulation)
+    }
+}
+
+#[cfg(test)]
+mod scene_interaction_mode_tests {
+    use super::SceneInteractionMode;
+
+    #[test]
+    fn primary_click_has_one_owner_per_mode() {
+        assert!(SceneInteractionMode::Simulation.possession_owns_primary_click());
+        assert!(!SceneInteractionMode::Simulation.selection_owns_primary_click());
+        assert!(SceneInteractionMode::Editor.selection_owns_primary_click());
+        assert!(!SceneInteractionMode::Editor.possession_owns_primary_click());
+    }
+}
+
 /// Camera ray for a discrete scene click — the SINGLE shared entry point for
 /// every scene-click observer (possession, selection, placement).
 ///

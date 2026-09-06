@@ -1105,6 +1105,9 @@ impl Perspective for ViewPerspective {
     fn scene_visible_when_docked(&self) -> bool {
         true
     }
+    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
+        lunco_core::SceneInteractionMode::Simulation
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(None);
@@ -1127,6 +1130,9 @@ impl Perspective for BuildPerspective {
     // ⚒ (U+2692) renders reliably in the bundled fallback font.
     fn title(&self) -> String {
         "⚒ Build".into()
+    }
+    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
+        lunco_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
         // Revision 3 completes the Graphs instance in the bottom-center
@@ -1182,6 +1188,9 @@ impl Perspective for EditorPerspective {
     fn show_in_switcher(&self) -> bool {
         true
     }
+    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
+        lunco_core::SceneInteractionMode::Editor
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         // Structure first: the USD prim tree is the assembly's authoring
@@ -1224,6 +1233,9 @@ impl Perspective for TerrainPerspective {
     fn show_in_switcher(&self) -> bool {
         false
     }
+    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
+        lunco_core::SceneInteractionMode::Editor
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![PanelId("tools_palette")]);
@@ -1244,6 +1256,26 @@ mod tests {
     #[test]
     fn view_perspective_keeps_scene_visible_behind_transient_panels() {
         assert!(ViewPerspective.scene_visible_when_docked());
+    }
+
+    #[test]
+    fn perspectives_assign_primary_scene_click_ownership() {
+        assert_eq!(
+            ViewPerspective.scene_interaction_mode(),
+            lunco_core::SceneInteractionMode::Simulation
+        );
+        assert_eq!(
+            BuildPerspective.scene_interaction_mode(),
+            lunco_core::SceneInteractionMode::Editor
+        );
+        assert_eq!(
+            EditorPerspective.scene_interaction_mode(),
+            lunco_core::SceneInteractionMode::Editor
+        );
+        assert_eq!(
+            TerrainPerspective.scene_interaction_mode(),
+            lunco_core::SceneInteractionMode::Editor
+        );
     }
 
     #[test]

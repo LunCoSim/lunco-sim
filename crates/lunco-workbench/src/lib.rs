@@ -975,6 +975,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<lunco_core::SceneInteractionMode>()
             .init_resource::<OfflineRecordingPresentation>()
             .init_resource::<PendingTabRequests>()
             .init_resource::<PendingLayoutRequests>()
@@ -1020,6 +1021,7 @@ impl Plugin for WorkbenchPlugin {
                 // perspective, not the outgoing one.
                 (drain_pending_layout_requests, drain_pending_tab_requests).chain(),
             )
+            .add_systems(First, perspective::sync_scene_interaction_mode)
             .add_systems(
                 Update,
                 (

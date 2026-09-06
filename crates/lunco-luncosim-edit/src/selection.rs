@@ -564,6 +564,7 @@ pub fn on_scene_click_select(
     armed_script_tool: Res<lunco_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
+    scene_interaction: Res<lunco_core::SceneInteractionMode>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
     q_prims: Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
@@ -572,6 +573,11 @@ pub fn on_scene_click_select(
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
+    // View mode reserves plain clicks for avatar possession. Selection owns
+    // the same pointer only in an editor-facing perspective.
+    if !scene_interaction.selection_owns_primary_click() {
+        return;
+    }
     // Left button only.
     if click.button != PointerButton::Primary {
         return;

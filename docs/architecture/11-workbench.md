@@ -747,6 +747,13 @@ main 3D scene surrenders any retained egui `TextEdit` focus before publishing
 semantic controls, while focused fields still capture keys until that explicit
 scene press.
 
+Perspective activation also publishes `lunco_core::SceneInteractionMode`, the
+single primary-click ownership contract shared by the editor selection and
+avatar possession observers. `sandbox_view` leaves plain clicks available for
+possession; `rover_build`, `editor`, and `terrain_sculpt` reserve them for
+selection/manipulation. Binaries without the workbench retain the core's
+simulation default.
+
 ## 11. Relationship to `lunco-ui` and domain crates
 
 ```
