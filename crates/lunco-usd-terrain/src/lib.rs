@@ -688,6 +688,7 @@ fn author_terrain_edit(
             name,
             type_name: None,
             reference: None,
+            reference_prim_path: None,
         }];
         // Logical names from the USD-free layer crate; `ns_attr` binds them into
         // `lunco:edit:` — the one place that namespace is applied.
@@ -848,6 +849,7 @@ fn on_place_rock_authored(
             name,
             type_name: None,
             reference: None,
+            reference_prim_path: None,
         }];
         let attrs: [(&str, &str, String); 5] = [
             ("lunco:layer", "token", "\"rock\"".to_string()),
@@ -1250,6 +1252,7 @@ fn ensure_document_parent_chain_ops(
                 name: segment.to_string(),
                 type_name: Some("Xform".to_string()),
                 reference: None,
+                reference_prim_path: None,
             });
         }
         current = path;
@@ -1473,6 +1476,7 @@ fn on_obstacle_spec_authored(
                     name,
                     type_name: Some("Xform".to_string()),
                     reference: None,
+                    reference_prim_path: None,
                 });
                 ops.push(lunco_usd::UsdOp::SetAttribute {
                     edit_target: lunco_usd::LayerId::runtime(),
