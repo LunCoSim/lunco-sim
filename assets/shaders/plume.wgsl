@@ -1,14 +1,14 @@
 //! Engine-exhaust plume for the general `ShaderMaterial`.
 //!
 //! The bound `Cone` is a FIXED BOUNDING VOLUME, authored at the plume's
-//! full-throttle extent and never transformed again. Everything the plume does —
-//! how far it reaches, how wide it blooms, how it shimmers — happens inside that
-//! volume, here, from `throttle`.
+//! full-throttle extent and never transformed again. The propulsion model supplies
+//! the visible axial fraction; this shader owns width response, radiance, and
+//! shimmer inside that volume.
 //!
 //! `throttle` is driven per-instance through `float inputs:throttle.connect` on
-//! the bound gprim, straight off the vessel's own `throttle` output. The plume is
-//! therefore a CONSEQUENCE of the engine's commanded state, on the same tick and
-//! by the same number the vessel published.
+//! the bound gprim from the delivered propulsion signal. The plume is therefore a
+//! CONSEQUENCE of the engine's physical state, on the same tick and by the same
+//! number the propulsion consumer reads.
 //!
 //! ## Why this shades the authored cone surface
 //!
@@ -33,14 +33,14 @@
 //! with a brightness and width response derived from
 //!
 //!     response = throttle ^ throttle_exponent
-//!     len = response                         (normalised to the authored volume)
+//!     len = derived plume-length fraction    (normalised to the authored volume)
 //!     wid = width_idle + (1 - width_idle) * response
 //!
 //! The exponent is a visual response control, not a second engine command. It
 //! keeps a low but real valve opening visible without making zero throttle glow.
-//! Both values are FRACTIONS of the authored volume, which is what keeps the
-//! per-instance sizing in USD — the outer shroud and the inner core differ only
-//! in their prim's scale, and this file has no opinion about either.
+//! Width remains a perceptual throttle response, while length is published by the
+//! propulsion-side photometry model from thrust, flow, nozzle, and pressure. The
+//! resulting fraction keeps the fixed USD envelope and the rendered plume aligned.
 //!
 //! ## Flicker
 //!
@@ -80,7 +80,9 @@
 //!@default core_color    6.0,3.5,0.9
 //!@ui      throttle      0 1   "Throttle (driven by the engine)"
 //!@default throttle      0.0
-//!@ui      throttle_exponent 0.1 1 "Visual length response to throttle"
+//!@ui      plume_length_fraction 0 1 "Derived visible length in the authored envelope"
+//!@default plume_length_fraction 0.0
+//!@ui      throttle_exponent 0.1 1 "Visual width response to throttle"
 //!@default throttle_exponent 0.35
 //!@ui      edge_color    color "Flank colour (cooler outer gas)"
 //!@default edge_color    3.0,1.0,0.12
@@ -99,6 +101,7 @@
 struct Material {
     core_color:    vec3<f32>,
     throttle:      f32,
+    plume_length_fraction: f32,
     throttle_exponent: f32,
     edge_color:    vec3<f32>,
     width_idle:    f32,
@@ -125,10 +128,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Thrust and visible plume length are different observables. A low valve
     // opening still produces a hot, camera-readable jet; the authored exponent
-    // makes that perceptual mapping explicit and editable while zero throttle
-    // remains exactly dark. The photometry model continues to use raw throttle.
+    // makes the width response explicit while the length fraction comes from the
+    // propulsion-side photometry model. Zero throttle remains exactly dark.
     let visual_throttle = pow(t, clamp(mat.throttle_exponent, 0.1, 1.0));
-    let len = max(visual_throttle, 1e-3);
+    let len = clamp(mat.plume_length_fraction, 1e-3, 1.0);
     let wid = mat.width_idle + (1.0 - mat.width_idle) * visual_throttle;
 
     // The rasteriser gives us a point on the fixed authored cone. Use the mesh
