@@ -3375,10 +3375,19 @@ impl Plugin for SandboxCorePlugin {
 /// would keep the entire simulation kinematic until an arbitrary timeout.
 ///
 /// The request is removed together with the finished collider/oracle by the
-/// terrain-surface owner. This crate only mirrors that domain-owned readiness into
-/// the USD-simulation activation resource.
+/// terrain-surface owner. A declared-but-uninstalled Twin DEM carries
+/// [`lunco_usd_terrain::DemDatasetPending`] instead of a build request; that
+/// state is equally not ready for dynamic admission. This crate only mirrors
+/// those domain-owned readiness states into the USD-simulation activation
+/// resource.
 fn track_ground_collider_pending(
-    building: Query<(), With<lunco_terrain_surface::DemTerrainRequest>>,
+    building: Query<
+        (),
+        Or<(
+            With<lunco_terrain_surface::DemTerrainRequest>,
+            With<lunco_usd_terrain::DemDatasetPending>,
+        )>,
+    >,
     mut pending: ResMut<lunco_usd::GroundColliderPending>,
 ) {
     pending.0 = !building.is_empty();
@@ -3422,6 +3431,26 @@ mod ground_collider_gate_tests {
         app.world_mut()
             .entity_mut(terrain)
             .remove::<lunco_terrain_surface::DemTerrainRequest>();
+        app.update();
+        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
+    }
+
+    #[test]
+    fn an_uninstalled_twin_dem_keeps_dynamic_activation_held() {
+        let mut app = App::new();
+        app.init_resource::<lunco_usd::GroundColliderPending>()
+            .add_systems(Update, track_ground_collider_pending);
+
+        let pending = app
+            .world_mut()
+            .spawn(lunco_usd_terrain::DemDatasetPending::new(
+                "summer-space-school/apollo15",
+            ))
+            .id();
+        app.update();
+        assert!(app.world().resource::<lunco_usd::GroundColliderPending>().0);
+
+        app.world_mut().entity_mut(pending).despawn();
         app.update();
         assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
