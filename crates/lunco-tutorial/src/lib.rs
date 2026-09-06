@@ -34,18 +34,18 @@
 
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_core::subsystems::SubsystemToggles;
 use lunco_core::{
-    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
+    Command, Severity, TelemetryEvent, TelemetryValue, on_command, register_commands,
 };
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
 use lunco_workbench::tutorial_overlay::{
-    TutorialHud, TutorialNext, TutorialRecovery, TutorialRecoveryContinueRequested,
-    TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
-    TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER,
+    TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER, TutorialHud, TutorialNext, TutorialRecovery,
+    TutorialRecoveryContinueRequested, TutorialRecoveryRetryRequested, TutorialStopRequested,
+    TutorialTargetUnavailable,
 };
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
@@ -2059,10 +2059,6 @@ mod tests {
             self.id.into()
         }
 
-        fn icon(&self) -> lunco_workbench::UiIcon {
-            lunco_workbench::UiIcon::Info
-        }
-
         fn apply(&self, layout: &mut WorkbenchLayout) {
             layout.set_side_browser(Some(PanelId(self.marker)));
         }
@@ -2139,12 +2135,14 @@ mod tests {
             app: "sandbox".into(),
         });
 
-        assert!(app
-            .world()
-            .contains_resource::<lunco_workbench::WorkbenchLayout>());
-        assert!(app
-            .world()
-            .contains_resource::<lunco_workbench::HelpAnchors>());
+        assert!(
+            app.world()
+                .contains_resource::<lunco_workbench::WorkbenchLayout>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<lunco_workbench::HelpAnchors>()
+        );
         assert!(app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>());
     }
 
