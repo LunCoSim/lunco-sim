@@ -319,6 +319,246 @@ fn mission_parent_path(path) {
     parent
 }
 
+fn flip_string_attribute(edit_target, path, name, value) {
+    #{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: name,
+        type_name: "string",
+        value: value,
+    }}
+}
+
+fn flip_float_attribute(edit_target, path, name, value) {
+    #{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: name,
+        type_name: "float",
+        value: value.to_string(),
+    }}
+}
+
+/// Build the structural part of a FLIP asset from maintained components.
+///
+/// This is an asset-construction plan, not a USDA serializer. It creates one
+/// referenced shared rover root plus FLIP's local payload and sensor frames
+/// through the generic typed shape/frame plans. Vehicle-specific opinions on
+/// the asynchronously composed chassis, wheels, and solar component are
+/// deliberately deferred to `flip_rover_asset_detail_plan`.
+fn flip_rover_asset_plan(doc, edit_target, parent, name, base_asset,
+    translation, rotation) {
+    if base_asset != "lunco://vessels/rovers/skid_rover.usda" {
+        return plan_error("FLIP asset construction requires the maintained shared skid_rover base asset");
+    }
+    let reference = assembly_builder::referenced_instance_targeted_plan(
+        doc, edit_target, parent, name, "Xform", base_asset, "/SkidRover",
+        translation, rotation, (), (), (),
+    );
+    if !reference.ok { return reference; }
+
+    let payload = assembly_builder::cube_shape_plan(
+        edit_target, reference.path, "PayloadDeck", 1.0,
+        [1.45, 0.08, 0.95], true,
+    );
+    if !payload.ok { return payload; }
+    let payload_pose = assembly_builder::place_plan(
+        edit_target, payload.path, [0.0, 0.38, 0.0], (), (),
+    );
+    if !payload_pose.ok { return payload_pose; }
+
+    let mast = assembly_builder::frame_plan(
+        edit_target, reference.path, "SensorMast", (), (), (),
+    );
+    if !mast.ok { return mast; }
+    let post = assembly_builder::cylinder_shape_plan(
+        edit_target, mast.path, "Post", 0.06, 0.55,
+        [0.0, 0.78, -0.25], (), (), false,
+    );
+    if !post.ok { return post; }
+    let bar = assembly_builder::cube_shape_plan(
+        edit_target, mast.path, "SensorBar", 1.0,
+        [0.42, 0.06, 0.08], false,
+    );
+    if !bar.ok { return bar; }
+    let bar_pose = assembly_builder::place_plan(
+        edit_target, bar.path, [0.0, 1.08, -0.25], (), (),
+    );
+    if !bar_pose.ok { return bar_pose; }
+
+    let ops = [];
+    for op in reference.ops { ops.push(op); }
+    for op in payload.ops { ops.push(op); }
+    for op in payload_pose.ops { ops.push(op); }
+    for op in mast.ops { ops.push(op); }
+    for op in post.ops { ops.push(op); }
+    for op in bar.ops { ops.push(op); }
+    for op in bar_pose.ops { ops.push(op); }
+    #{
+        ok: true,
+        kind: "flip_rover_asset",
+        path: reference.path,
+        base_asset: base_asset,
+        ops: ops,
+    }
+}
+
+/// Apply FLIP-specific facts after the shared reference and selected variants
+/// are visible on the composed stage. Every wheel/station path is supplied by
+/// the caller and checked against the composed type before any operation is
+/// returned. This keeps component ownership in USD while keeping the recipe
+/// and its assumptions hot-reloadable Rhai policy.
+fn flip_rover_asset_detail_plan(doc, edit_target, root_path, wheels) {
+    if doc == () || edit_target == () || root_path == () || wheels == ()
+        || wheels.len() != 4 {
+        return plan_error("flip_rover_asset_detail_plan requires a document, edit target, root, and four wheel records");
+    }
+    let root = query("QueryUsdPrim", #{
+        doc: doc,
+        path: root_path,
+        children: true,
+    });
+    if !query_ok(root) || root.type_name != "Xform"
+        || root.children == () || root.children.len() == 0 {
+        return plan_error(root_path + ": FLIP asset root must be a composed Xform with children");
+    }
+    let chassis_path = root_path + "/Chassis";
+    let chassis = query("QueryUsdPrim", #{
+        doc: doc,
+        path: chassis_path,
+        children: false,
+    });
+    if !query_ok(chassis) || chassis.type_name != "Cube" {
+        return plan_error(chassis_path + ": FLIP asset requires a composed Cube chassis");
+    }
+    let solar_path = root_path + "/SolarPanel";
+    let solar = query("QueryUsdPrim", #{
+        doc: doc,
+        path: solar_path,
+        children: false,
+    });
+    if !query_ok(solar) || solar.type_name != "Xform" {
+        return plan_error(solar_path + ": FLIP asset requires the selected solar component");
+    }
+
+    let seen_paths = [];
+    let seen_indexes = [];
+    let checked = [];
+    for wheel in wheels {
+        if wheel == () || wheel.station == () || wheel.wheel == ()
+            || wheel.index == () || wheel.translation == ()
+            || wheel.radius == () || wheel.width == () || wheel.moi == () {
+            return plan_error("FLIP wheel records require station, wheel, index, translation, radius, width, and moi");
+        }
+        if !wheel.station.starts_with(root_path + "/")
+            || !wheel.wheel.starts_with(wheel.station + "/")
+            || seen_paths.contains(wheel.wheel) || seen_indexes.contains(wheel.index) {
+            return plan_error("FLIP wheel records must be unique descendants with unique indexes");
+        }
+        if wheel.index < 0 || wheel.index > 3 || wheel.radius <= 0.0
+            || wheel.width <= 0.0 || wheel.moi <= 0.0 {
+            return plan_error("FLIP wheel records require indexes 0..3 and positive dimensions");
+        }
+        let station = query("QueryUsdPrim", #{
+            doc: doc,
+            path: wheel.station,
+            children: false,
+        });
+        let wheel_prim = query("QueryUsdPrim", #{
+            doc: doc,
+            path: wheel.wheel,
+            children: false,
+        });
+        if !query_ok(station) || station.type_name != "Xform"
+            || !query_ok(wheel_prim) || wheel_prim.type_name != "Cylinder" {
+            return plan_error(wheel.wheel + ": FLIP wheel station must match a composed Xform/Cylinder pair");
+        }
+        seen_paths.push(wheel.wheel);
+        seen_indexes.push(wheel.index);
+        checked.push(wheel);
+    }
+    for index in 0..4 {
+        if !seen_indexes.contains(index) {
+            return plan_error("FLIP wheel records must contain exactly indexes 0, 1, 2, and 3");
+        }
+    }
+
+    let ops = [
+        flip_string_attribute(edit_target, root_path, "lunco:mission:payload", "Astrolab FLIP"),
+        flip_string_attribute(edit_target, root_path, "lunco:mission:vehicle_family", "FLEX Lunar Innovation Platform"),
+        flip_string_attribute(edit_target, root_path, "lunco:configuration", "four-wheel skid-steer study proxy"),
+        flip_string_attribute(edit_target, root_path, "lunco:parameter_status", "public envelope plus explicit simulator assumptions"),
+        flip_string_attribute(edit_target, root_path, "lunco:provenance:source", "https://www.astrolab.space/flip-rover/"),
+        flip_string_attribute(edit_target, root_path, "lunco:provenance:engineering_boundary", "replace proxy values with FLIP as-built CAD and test data"),
+        flip_float_attribute(edit_target, root_path, "physics:mass", 450.0),
+        #{ SetAttribute: #{
+            edit_target: edit_target,
+            path: root_path,
+            name: "physics:centerOfMass",
+            type_name: "float3",
+            value: assembly_edit::tuple3_literal([0.0, -0.05, 0.0]),
+        }},
+        #{ SetAttribute: #{
+            edit_target: edit_target,
+            path: root_path,
+            name: "physics:diagonalInertia",
+            type_name: "float3",
+            value: assembly_edit::tuple3_literal([240.0, 337.5, 145.5]),
+        }},
+    ];
+    let chassis_pose = assembly_builder::place_plan(
+        edit_target, chassis_path, (), (), [2.4, 0.42, 3.15],
+    );
+    if !chassis_pose.ok { return chassis_pose; }
+    for op in chassis_pose.ops { ops.push(op); }
+    for wheel in checked {
+        let station_pose = assembly_builder::place_plan(
+            edit_target, wheel.station, wheel.translation, (), (),
+        );
+        if !station_pose.ok { return station_pose; }
+        for op in station_pose.ops { ops.push(op); }
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: wheel.wheel,
+            name: "physxVehicleWheel:radius",
+            type_name: "float",
+            value: wheel.radius.to_string(),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: wheel.wheel,
+            name: "physxVehicleWheel:width",
+            type_name: "float",
+            value: wheel.width.to_string(),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: wheel.wheel,
+            name: "physxVehicleWheel:moi",
+            type_name: "float",
+            value: wheel.moi.to_string(),
+        }});
+    }
+    let solar_pose = assembly_builder::place_plan(
+        edit_target, solar_path, [0.0, 0.45, 1.05], (), [0.39, 0.03, 0.39],
+    );
+    if !solar_pose.ok { return solar_pose; }
+    for op in solar_pose.ops { ops.push(op); }
+    ops.push(flip_string_attribute(
+        edit_target, solar_path, "lunco:installation",
+        "body-mounted photovoltaic study proxy; articulated deployment is not asserted here",
+    ));
+    ops.push(flip_float_attribute(edit_target, solar_path, "inputs:area", 4.8));
+    ops.push(flip_float_attribute(edit_target, solar_path, "inputs:efficiency", 0.30));
+    #{
+        ok: true,
+        kind: "flip_rover_asset_detail",
+        path: root_path,
+        wheel_paths: seen_paths,
+        ops: ops,
+    }
+}
+
 /// Build the first materialized Griffin/FLIP mission assembly from maintained
 /// vessel references. This is intentionally a two-body construction plan:
 /// the reference arcs remain the visual/physics asset owners, while this

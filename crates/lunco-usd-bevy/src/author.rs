@@ -170,19 +170,35 @@ pub fn extract_root_layer_data(stage: &Stage) -> Result<sdf::Data> {
 /// at the `sdf` level — the symmetric counterpart of how `compose` *reads*
 /// `Value::ReferenceListOp`, kept here so the op layer never hand-builds openusd
 /// value variants. The reference survives `data_to_usda` as a `references = @…@`
-/// metadata opinion and is resolved at render time by the PCP composer.
-pub fn author_reference(data: &mut sdf::Data, prim_path: &SdfPath, asset_path: &str) -> Result<()> {
+/// metadata opinion and is resolved at render time by the PCP composer. An
+/// optional prim path keeps the target explicit for a referenced layer whose
+/// selected variants are owned by a non-default prim.
+pub fn author_reference(
+    data: &mut sdf::Data,
+    prim_path: &SdfPath,
+    asset_path: &str,
+    reference_prim_path: Option<&str>,
+) -> Result<()> {
     let spec = data
         .spec_mut(prim_path)
         .ok_or_else(|| anyhow!("author_reference: no prim spec at {prim_path}"))?;
+    let reference_prim_path = reference_prim_path
+        .map(SdfPath::new)
+        .transpose()
+        .map_err(|e| anyhow!("author_reference: invalid referenced prim path: {e}"))?
+        .unwrap_or_default();
+    let explicit_target = !reference_prim_path.is_empty();
     let reference = sdf::Reference {
         asset_path: asset_path.to_string(),
+        prim_path: reference_prim_path,
         ..Default::default()
     };
-    spec.add(
-        "references",
-        Value::ReferenceListOp(sdf::ReferenceListOp::explicit([reference])),
-    );
+    let references = if explicit_target {
+        sdf::ReferenceListOp::prepended([reference])
+    } else {
+        sdf::ReferenceListOp::explicit([reference])
+    };
+    spec.add("references", Value::ReferenceListOp(references));
     Ok(())
 }
 
@@ -437,7 +453,7 @@ mod tests {
         stage.define_prim("/World/spawn_1").unwrap();
         let mut data = extract_root_layer_data(&stage).unwrap();
         let prim = SdfPath::new("/World/spawn_1").unwrap();
-        author_reference(&mut data, &prim, "vessels/rover.usda").unwrap();
+        author_reference(&mut data, &prim, "vessels/rover.usda", None).unwrap();
 
         // Serializes as a `references = @…@` opinion...
         let text = data_to_usda(&data).unwrap();

@@ -43,7 +43,7 @@ Current `UsdOp` set (`lunco-usd/src/document.rs`), each carrying an
 ```rust
 enum UsdOp {
     ReplaceSource   { edit_target, source },           // whole-layer text replace
-    AddPrim         { edit_target, parent_path, name, type_name, reference },
+    AddPrim         { edit_target, parent_path, name, type_name, reference, reference_prim_path },
     RemovePrim      { edit_target, path },
     MovePrim        { edit_target, from_path, to_path }, // rename / reparent (NamespaceEditor)
     SetTranslate    { edit_target, path, value },
@@ -56,8 +56,11 @@ enum UsdOp {
 }
 ```
 
-`AddReference`/`AddPayload` are folded into `AddPrim { reference }` +
-`author_reference`. Programmatic and UI edits go through the
+`AddReference`/`AddPayload` are folded into `AddPrim { reference }` plus the
+optional `reference_prim_path` and `author_reference`. An omitted target uses
+the referenced layer's `defaultPrim`; an explicit absolute target preserves a
+named source prim when the asset's composition or variants depend on it.
+Programmatic and UI edits go through the
 **`ApplyUsdOp { doc, parent_gen, op }`** or **`ApplyUsdOps { doc, parent_gen, label, ops }`** command
 (`commands.rs`), which returns a generation-ack; direct source mutation is out.
 Multi-op intents use one change set. `AttachProgram` is the typed source-backed

@@ -47,6 +47,7 @@ fn add_prim_plan(parent, name) {
         name: name,
         type_name: "Xform",
         reference: (),
+        reference_prim_path: "",
     }}]
 }
 

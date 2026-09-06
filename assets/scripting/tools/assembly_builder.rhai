@@ -117,6 +117,18 @@ fn place_plan(edit_target, path, translation, rotation, scale) {
 /// operation ordering when the plan is reviewed.
 fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
     translation, rotation, scale, api_schemas, attributes) {
+    referenced_instance_targeted_plan(
+        doc, edit_target, parent, name, type_name, asset, (),
+        translation, rotation, scale, api_schemas, attributes,
+    )
+}
+
+/// Build a referenced component instance with an optional explicit prim target.
+/// `reference_prim_path == ()` uses the referenced layer's defaultPrim. A
+/// targeted reference is useful when a composition asset owns variants on a
+/// named prim and the dynamic authoring path must preserve that identity.
+fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, asset,
+    reference_prim_path, translation, rotation, scale, api_schemas, attributes) {
     if doc == () || edit_target == () || parent == () || name == ()
         || type_name == () || asset == () {
         return plan_error("referenced_instance_plan requires document, edit target, parent, name, type, and asset");
@@ -133,6 +145,10 @@ fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
     if !asset.starts_with("lunco://") || asset.len() <= "lunco://".len()
         || asset.contains(" ") || asset.contains("@") {
         return plan_error("referenced_instance_plan asset must be a non-empty lunco:// URI without USDA delimiters");
+    }
+    if reference_prim_path != () && (!reference_prim_path.starts_with("/")
+        || reference_prim_path.ends_with("/")) {
+        return plan_error("referenced_instance_plan reference prim path must be an absolute prim path");
     }
 
     let parent_record = query("QueryUsdPrim", #{
@@ -179,13 +195,20 @@ fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
         }
     }
 
-    let ops = [#{ AddPrim: #{
+    let authored_reference_prim_path = if reference_prim_path == () {
+        ""
+    } else {
+        reference_prim_path
+    };
+    let add_prim = #{
         edit_target: edit_target,
         parent_path: parent,
         name: name,
         type_name: type_name,
         reference: asset,
-    }}];
+        reference_prim_path: authored_reference_prim_path,
+    };
+    let ops = [#{ AddPrim: add_prim }];
     if schemas.len() > 0 {
         ops.push(#{ SetApiSchemas: #{
             edit_target: edit_target,
@@ -255,6 +278,39 @@ fn select_variants_plan(doc, edit_target, path, variants) {
     }
 }
 
+/// Build an empty authored Xform frame with an optional local placement.
+///
+/// Frames are the namespace and transform owner for authored parts; geometry,
+/// collision, body, and joint contracts remain separate explicit plans. This
+/// small unit lets higher-level Rhai recipes create a clean hierarchy without
+/// spelling a raw USD prim operation at every call site.
+fn frame_plan(edit_target, parent, name, translation, rotation, scale) {
+    if edit_target == () || parent == () || name == () || name == ""
+        || name.contains("/") {
+        return plan_error("frame_plan requires an edit target, parent, and one Xform name");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("frame_plan parent must be an absolute USD path");
+    }
+    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let placement = place_plan(edit_target, path, translation, rotation, scale);
+    if !placement.ok && (translation != () || rotation != () || scale != ()) {
+        return placement;
+    }
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: "Xform",
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    if placement.ok {
+        for op in placement.ops { ops.push(op); }
+    }
+    #{ ok: true, kind: "frame", path: path, ops: ops }
+}
+
 /// Instantiate a complete four-wheel rover assembly from one maintained USD
 /// vehicle asset. The asset owns its chassis, wheel, suspension, drivetrain,
 /// and controller composition; this recipe owns only the explicit instance
@@ -290,19 +346,24 @@ fn flip_rover_instance_plan(doc, edit_target, parent, name, asset,
 /// Build a standard Cube shape under an existing frame with an explicit scale
 /// and collider. This helper never creates a body or a wrapper Xform.
 fn cube_shape_plan(edit_target, parent, name, size, scale, collision_enabled) {
-    if edit_target == () || parent == () || name == () {
+    if edit_target == () || parent == () || name == () || name == ""
+        || name.contains("/") {
         return plan_error("cube_shape_plan requires an edit target, parent path, and name");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("cube_shape_plan parent must be an absolute USD path");
     }
     if size == () || size <= 0.0 {
         return plan_error("cube_shape_plan requires a positive size");
     }
-    let shape = parent + "/" + name;
+    let shape = if parent == "/" { "/" + name } else { parent + "/" + name };
     let ops = [#{ AddPrim: #{
         edit_target: edit_target,
         parent_path: parent,
         name: name,
         type_name: "Cube",
         reference: (),
+        reference_prim_path: "",
     }}];
     if scale != () {
         let valid = vector3(scale, "cube scale");
@@ -335,6 +396,74 @@ fn cube_shape_plan(edit_target, parent, name, size, scale, collision_enabled) {
     #{ ok: true, kind: "cube_shape", path: shape, ops: ops }
 }
 
+/// Build a standard Cylinder shape with explicit dimensions, placement, and
+/// collision ownership. Like `cube_shape_plan`, this never creates a body or
+/// a wrapper frame; a caller must choose whether the shape is physical or
+/// explicitly visual-only.
+fn cylinder_shape_plan(edit_target, parent, name, radius, height,
+    translation, rotation, scale, collision_enabled) {
+    if edit_target == () || parent == () || name == () || name == ""
+        || name.contains("/") {
+        return plan_error("cylinder_shape_plan requires an edit target, parent, and one Cylinder name");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("cylinder_shape_plan parent must be an absolute USD path");
+    }
+    if radius == () || radius <= 0.0 || height == () || height <= 0.0 {
+        return plan_error("cylinder_shape_plan requires positive radius and height");
+    }
+    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let placement = place_plan(edit_target, path, translation, rotation, scale);
+    if !placement.ok && (translation != () || rotation != () || scale != ()) {
+        return placement;
+    }
+    if scale != () {
+        for component in scale {
+            if component <= 0.0 {
+                return plan_error(path + ": cylinder scale components must be positive");
+            }
+        }
+    }
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: "Cylinder",
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    if placement.ok {
+        for op in placement.ops { ops.push(op); }
+    }
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "radius",
+        type_name: "double",
+        value: radius.to_string(),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "height",
+        type_name: "double",
+        value: height.to_string(),
+    }});
+    ops.push(#{ SetApiSchemas: #{
+        edit_target: edit_target,
+        path: path,
+        schemas: ["PhysicsCollisionAPI"],
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "physics:collisionEnabled",
+        type_name: "bool",
+        value: collision_enabled.to_string(),
+    }});
+    #{ ok: true, kind: "cylinder_shape", path: path, ops: ops }
+}
+
 /// Build a standard Cube part with an explicit local placement and collider.
 /// This is the common visual/collision construction unit used by higher-level
 /// assembly policies; it does not silently create a rigid body.
@@ -359,6 +488,7 @@ fn cube_plan(edit_target, parent, name, size, translation, rotation, scale,
         name: name,
         type_name: "Xform",
         reference: (),
+        reference_prim_path: "",
     }}];
     if placement.ok {
         for op in placement.ops { ops.push(op); }
@@ -467,6 +597,7 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
                 name: path.split("/")[path.split("/").len() - 1],
                 type_name: "Xform",
                 reference: (),
+                reference_prim_path: "",
             }},
             #{ SetApiSchemas: #{
                 edit_target: edit_target,

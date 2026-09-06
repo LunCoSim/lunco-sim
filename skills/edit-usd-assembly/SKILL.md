@@ -402,7 +402,8 @@ Use the smallest existing typed intent that expresses the change:
   operations for the same reviewed proposal boundary.
 - For construction from parts, use the hot-reloadable
   `assembly_builder` library. `place_plan` emits a local transform plan;
-  `cube_plan` and `movable_cube_plan` compose standard geometry, collider,
+  `frame_plan` emits a validated Xform frame; `cube_plan`,
+  `cylinder_shape_plan`, and `movable_cube_plan` compose standard geometry, collider,
   body, mass, and placement facts; `existing_rigid_body_plan` promotes an
   exact referenced Xform by defining one local over while retaining its authored
   geometry; it rejects a repeat once a complete body contract is already
@@ -415,6 +416,8 @@ Use the smallest existing typed intent that expresses the change:
   owner.
 - For a reusable referenced assembly, use
   `assembly_builder::referenced_instance_plan` or
+  `assembly_builder::referenced_instance_targeted_plan` when the source prim
+  must be explicit, or
   `assembly_builder::flip_rover_instance_plan` to author the explicit
   component identity, asset URI, parent, and local pose. The FLIP helper checks
   four unique wheel descendants before proposal. Materialize first-use
@@ -422,6 +425,12 @@ Use the smallest existing typed intent that expresses the change:
   children are queryable, use `assembly_builder::select_variants_plan` as a
   second reviewed plan. This sequencing keeps async reference loading and
   coarse variant recomposition from producing a root with missing children.
+- To build a reusable FLIP asset from its maintained skid-rover reference, use
+  `griffin_flip_builder::flip_rover_asset_plan`, wait for the targeted
+  `/SkidRover` composition to become queryable, then use
+  `flip_rover_asset_detail_plan` for its explicit FLIP facts. The
+  `flip_rover_asset_builder` production fixture keeps the whole positive and
+  negative test in Rhai and starts from an empty frame.
 - Use `assembly_builder::place_with_clearance_plan` when placing a part near
   other authored geometry. Supply the exact moving frame and Cube shape plus
   every exact blocker frame and Cube shape. The frames must share a

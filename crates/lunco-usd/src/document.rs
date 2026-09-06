@@ -301,6 +301,11 @@ pub enum UsdOp {
         /// this is how a runtime spawn persists (the referenced content + a
         /// local `xformOp` override compose into the rendered prim).
         reference: Option<String>,
+        /// Optional prim path inside the referenced layer. `None` uses that
+        /// layer's default prim; `Some("/SkidRover")` preserves an explicit
+        /// reference target for assets whose variant composition depends on it.
+        #[serde(default)]
+        reference_prim_path: Option<String>,
     },
     /// Remove the prim at `path` together with its entire subtree. The
     /// inverse re-establishes the prior full source.
@@ -1558,8 +1563,10 @@ impl Document for UsdDocument {
                 name,
                 type_name,
                 reference,
+                reference_prim_path,
                 ..
             } => {
+                let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
                 // Parent must exist in either layer (root is implicit).
                 if parent_path != "/" && !parent_path.is_empty() {
                     self.require_prim_anywhere(&parent_path)?;
@@ -1591,9 +1598,19 @@ impl Document for UsdDocument {
                 let mut new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 // Author the asset reference (Stage has no `add_reference`, so this
                 // is set at the sdf level) — turns the prim into a runtime spawn.
+                if reference_prim_path.is_some() && reference.is_none() {
+                    return Err(DocumentError::ValidationFailed(
+                        "AddPrim: reference_prim_path requires a reference asset".into(),
+                    ));
+                }
                 if let Some(asset_path) = &reference {
-                    lunco_usd_bevy::author::author_reference(&mut new_data, &prim_sdf, asset_path)
-                        .map_err(author_err)?;
+                    lunco_usd_bevy::author::author_reference(
+                        &mut new_data,
+                        &prim_sdf,
+                        asset_path,
+                        reference_prim_path.as_deref(),
+                    )
+                    .map_err(author_err)?;
                 }
 
                 // A brand-new prim in this layer is exactly undone by removing

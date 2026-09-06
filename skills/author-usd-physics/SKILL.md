@@ -49,8 +49,9 @@ collision policy, and returns a standard `PhysicsFixedJoint` plan without
 mutating the document.
 
 For higher-level construction, use the dynamically reloadable
-`assembly_builder` Rhai library. Its `movable_cube_plan`,
-`existing_rigid_body_plan`, and `hinge_plan` compose the same explicit standard
+`assembly_builder` Rhai library. Its `frame_plan`, `cube_plan`,
+`cylinder_shape_plan`, `movable_cube_plan`, `existing_rigid_body_plan`, and
+`hinge_plan` compose the same explicit standard
 USD facts for new or referenced parts; it does not promote a completed body or
 reuse an occupied standard joint identity, while its placement and cube
 edge-alignment plans reject ambiguous parent/frame assumptions before the
@@ -89,11 +90,20 @@ unsupported frame stacks, malformed values, or non-unit scale.
 
 When a model is a reusable referenced assembly rather than a socket attachment,
 use `assembly_builder::referenced_instance_plan` or
-`assembly_builder::flip_rover_instance_plan` for the explicit identity and
-placement, then wait for its composed children before using
+`assembly_builder::referenced_instance_targeted_plan` when the source prim must
+be explicit, or `assembly_builder::flip_rover_instance_plan` for the explicit
+identity and placement. Then wait for its composed children before using
 `assembly_builder::select_variants_plan`. This keeps first-use asset loading
 separate from the variant recompose and makes missing wheel identities or
 variant targets fail in Rhai before review.
+
+For a new reusable FLIP asset, use the dynamic
+`griffin_flip_builder::flip_rover_asset_plan` recipe to compose the maintained
+skid-rover reference and local study shapes, then apply
+`flip_rover_asset_detail_plan` after the targeted `/SkidRover` subtree is
+queryable. Its production fixture is wholly Rhai and starts from an empty
+frame, so the construction policy and negative cases can change without a
+Rust-core authoring test or writer.
 
 Mission-level recipes may compose these generic helpers through the dynamic
 `griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two

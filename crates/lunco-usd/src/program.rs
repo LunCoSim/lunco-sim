@@ -105,6 +105,7 @@ pub fn program_attach_ops(spec: &ProgramAttachSpec) -> Result<Vec<UsdOp>, String
             name: spec.name.clone(),
             type_name: Some("Scope".into()),
             reference: None,
+            reference_prim_path: None,
         },
         UsdOp::SetApiSchemas {
             edit_target: edit_target.clone(),

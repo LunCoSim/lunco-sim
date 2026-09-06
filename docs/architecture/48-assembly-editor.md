@@ -372,9 +372,11 @@ the existing USD validators and `assembly_audit` reports remain authoritative.
 
 Semantic construction belongs one layer above these low-level planners in the
 hot-reloadable `assembly_builder` Rhai tool library. `place_plan` emits the
-standard local transform operations; `cube_plan` and `movable_cube_plan`
-compose ordinary `UsdGeom`/`UsdPhysics` shape, collider, body, mass, and
-placement facts; `existing_rigid_body_plan` defines one local over for an exact
+standard local transform operations; `frame_plan` emits a validated empty
+Xform; `cube_plan` and `cylinder_shape_plan` compose explicit standard shapes
+and collision APIs; `movable_cube_plan` composes ordinary `UsdGeom`/`UsdPhysics`
+shape, collider, body, mass, and placement facts; `existing_rigid_body_plan`
+defines one local over for an exact
 referenced Xform, then adds its body/mass opinion without copying its geometry;
 it rejects a repeat once the complete body contract is already authored;
 `hinge_plan` delegates to the framed revolute planner; and
@@ -460,15 +462,17 @@ until the caller chooses an explicit update plan.
 
 Referenced construction has one additional sequencing rule. Use
 `assembly_builder::referenced_instance_plan` or
-`flip_rover_instance_plan` to author the identity, reference, and local pose
-first; once the referenced asset closure is visible in the composed query,
-use `select_variants_plan` for variant selections. Variant selection is a
+`referenced_instance_targeted_plan` to author the identity, reference, and
+local pose first; use the targeted form when the source prim is not its
+default prim. Once the referenced asset closure is visible in the composed
+query, use `select_variants_plan` for variant selections. Variant selection is a
 composition-arc change and therefore triggers the existing coarse recompose;
 separating it from first-use reference loading keeps the dynamic recipe from
 creating a root with an uncomposed subtree. The production
-`assembly_component_builder` scenario proves this with an empty assembly and
-four composed FLIP wheel paths, while duplicate identities, missing parents,
-invalid references, and unavailable variant targets fail before proposal.
+`flip_rover_asset_builder` scenario proves the complete empty-frame FLIP asset
+construction with a targeted `/SkidRover` reference, while duplicate
+identities, missing parents, invalid references, invalid shapes, and unavailable
+variant targets fail before proposal.
 
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
@@ -490,6 +494,14 @@ fixture contains only the empty mission frame. Adding or changing a mission
 recipe therefore does not add a Rust command; the recipe still supplies exact
 paths and study inputs and submits only through the existing
 proposal/attach/journal owners.
+
+For a reusable FLIP asset itself, `flip_rover_asset_plan` builds the composition
+from the maintained skid-rover reference and local payload-deck, sensor-mast,
+and solar-proxy shapes. After the targeted reference is queryable,
+`flip_rover_asset_detail_plan` applies the FLIP identity, mass, wheel, solar,
+and study metadata as a second reviewed plan. The
+`flip_rover_asset_builder` fixture contains only an empty frame; its full
+construction, negative cases, and `TESTS_OK 10` verdict are authored in Rhai.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly

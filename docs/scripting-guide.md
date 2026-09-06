@@ -321,7 +321,8 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
   `value` are validated against that operation at the command boundary.
 - **Script-first authoring:** the dynamically reloadable `assembly_builder`
-  tool provides semantic placement, geometry, retrofit-body, and alignment plans above the
+  tool provides semantic frame/shape construction, placement, geometry,
+  retrofit-body, reference-target, and alignment plans above the
   namespaced `assembly_edit` tool, which owns
   explicit-document USD editing (`add_prim`, `transform`, `attribute`,
   `schema`, `variant`, `relationship`, `connection`, `batch`,
@@ -395,7 +396,7 @@ A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic placement, alignment, composed collision-clearance, geometry, retrofit bodies, and socket mating plans), [`griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) (paired Griffin ramps, validated FLIP wheel layouts, and complete mission manifests), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic frame/shape construction, placement, alignment, composed collision-clearance, geometry, retrofit bodies, and socket mating plans), [`griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) (paired Griffin ramps, validated FLIP wheel layouts, complete mission manifests, and Rhai-owned FLIP asset construction), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -495,7 +496,9 @@ let proposal = assembly_edit::propose(
 ```
 
 `place_plan` handles local translation, Euler XYZ rotation, and scale;
-`cube_plan` handles a standard `UsdGeom.Cube` and optional collider;
+`frame_plan` handles a validated empty Xform frame;
+`cube_plan` and `cylinder_shape_plan` handle standard geometry and explicit
+collision APIs;
 `hinge_plan` handles a fully framed revolute joint; and the alignment plans
 use explicit queried prim/shape paths. Center alignment requires one authored
 parent. Cube-edge alignment additionally requires axis-aligned cube extents,
@@ -508,14 +511,23 @@ ordinary `.rhai` under `assets/scripting/tools/`, so it can be replaced or
 registered at runtime without adding a Rust command or a second USD writer.
 
 For reusable referenced models, `referenced_instance_plan` authors one
-explicit identity, asset URI, parent, and local placement. The convenience
-`flip_rover_instance_plan` validates four unique wheel descendants for a
-FLIP-style rover. First-use reference loading and variant reconfiguration are
-separate reviewed plans: wait until the composed instance children are
-queryable, then use `select_variants_plan`. This is required because variant
-selection recomposes a subtree, while a newly referenced asset may still be
-loading. The `assembly_component_builder` production scenario demonstrates
-the complete empty-assembly flow and its pre-proposal rejection cases.
+explicit identity, asset URI, parent, and local placement using the source
+layer's `defaultPrim`. `referenced_instance_targeted_plan` accepts an explicit
+absolute source prim such as `/SkidRover` when the composition asset requires
+that identity. The convenience `flip_rover_instance_plan` validates four
+unique wheel descendants for an already-maintained FLIP wrapper. First-use
+reference loading and variant reconfiguration are separate reviewed plans:
+wait until the composed instance children are queryable, then use
+`select_variants_plan`.
+
+For building the FLIP asset rather than instancing the finished wrapper, use
+`griffin_flip_builder::flip_rover_asset_plan` to compose the maintained
+skid-rover reference plus local payload-deck, mast, and solar-proxy shapes.
+After the targeted reference is queryable, use
+`flip_rover_asset_detail_plan` for the explicit FLIP metadata and wheel/solar
+facts. The `flip_rover_asset_builder` production scenario is wholly Rhai and
+its USDA fixture is only an empty frame; it verifies both the positive
+composition and the pre-proposal rejection cases.
 
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
@@ -831,7 +843,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
 | [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
-| [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, and complete mission-manifest plans |
+| [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, complete mission-manifest plans, and Rhai-owned FLIP asset construction |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 
