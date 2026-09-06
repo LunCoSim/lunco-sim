@@ -88,16 +88,33 @@ fn emit_runtime_ui_surface_drag(
     }
 }
 
+/// Reset a draggable runtime surface from a primary-button double click.
+///
+/// This is global because the picked entity is usually a retained HUI child.
+/// Other global click observers may intentionally stop propagation at that leaf,
+/// so a root-scoped observer cannot reliably receive the event. The authored
+/// surface root remains the only entity that owns the reset message; this
+/// traversal only resolves that owner from the picked child.
 fn emit_runtime_ui_surface_reset(
     mut trigger: On<Pointer<Click>>,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    parents: Query<&ChildOf>,
     mut resets: MessageWriter<RuntimeUiSurfaceReset>,
 ) {
-    if trigger.button == PointerButton::Primary && trigger.count >= 2 {
-        resets.write(RuntimeUiSurfaceReset {
-            entity: trigger.entity,
-        });
-        trigger.propagate(false);
+    if trigger.button != PointerButton::Primary || trigger.count < 2 {
+        return;
     }
+    let Some(entity) = runtime_ui_surface_ancestor(trigger.entity, &roots, &parents) else {
+        return;
+    };
+    let Ok((_, surface)) = roots.get(entity) else {
+        return;
+    };
+    if !surface.draggable {
+        return;
+    }
+    resets.write(RuntimeUiSurfaceReset { entity });
+    trigger.propagate(false);
 }
 
 /// Bind one HUI callback name to a semantic runtime action.
@@ -364,7 +381,8 @@ impl Plugin for RuntimeUiManifestPlugin {
         app.init_asset::<RuntimeUiManifest>()
             .init_asset_loader::<RuntimeUiManifestLoader>()
             .add_message::<RuntimeUiSurfaceDragged>()
-            .add_message::<RuntimeUiSurfaceReset>();
+            .add_message::<RuntimeUiSurfaceReset>()
+            .add_observer(emit_runtime_ui_surface_reset);
     }
 }
 
@@ -827,9 +845,7 @@ fn spawn_runtime_ui_surface(
         Visibility::Hidden,
     ));
     if definition.draggable {
-        entity
-            .observe(emit_runtime_ui_surface_drag)
-            .observe(emit_runtime_ui_surface_reset);
+        entity.observe(emit_runtime_ui_surface_drag);
     }
 }
 
@@ -1459,20 +1475,15 @@ pub(crate) fn apply_runtime_ui_surface_interactions(
         let Some(current) = surface.applied_placement else {
             continue;
         };
-        let Some((scale, target_size)) = logical_target_dimensions(target, window) else {
+        let Some((_, target_size)) = logical_target_dimensions(target, window) else {
             continue;
         };
-        let size = Vec2::new(current.rect.width(), current.rect.height()).min(target_size);
-        let max_origin = (target_size - size).max(Vec2::ZERO);
-        let current_origin = Vec2::new(current.rect.min.x, current.rect.min.y);
-        let origin = (current_origin + drag.delta / scale).clamp(Vec2::ZERO, max_origin);
-        let rect =
-            egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y));
+        let rect = resolve_dragged_surface_rect(current.rect, drag.delta, target_size);
         layouts.set(
             surface.layout_id.clone(),
             RuntimeSurfaceLayout {
-                left: origin.x,
-                top: origin.y,
+                left: rect.min.x,
+                top: rect.min.y,
             },
         );
         apply_placement(&mut node, rect);
@@ -1494,6 +1505,36 @@ pub(crate) fn apply_runtime_ui_surface_interactions(
         apply_placement(&mut node, placement.rect);
         surface.applied_placement = Some(placement);
     }
+}
+
+/// Resolve one pointer drag in the surface's logical coordinate space.
+///
+/// Bevy's pointer events report `Drag::delta` in the same logical window
+/// pixels used by `ComputedUiRenderTargetInfo` and the authored placement. Do
+/// not divide it by the render-target scale factor: doing so applies the DPI
+/// conversion twice and makes a drag move only a fraction of the pointer
+/// distance on high-DPI windows.
+fn resolve_dragged_surface_rect(current: egui::Rect, delta: Vec2, target_size: Vec2) -> egui::Rect {
+    let size = Vec2::new(current.width(), current.height()).min(target_size);
+    let max_origin = (target_size - size).max(Vec2::ZERO);
+    let current_origin = Vec2::new(current.min.x, current.min.y);
+    let origin = (current_origin + delta).clamp(Vec2::ZERO, max_origin);
+    egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y))
+}
+
+fn runtime_ui_surface_ancestor(
+    hit: Entity,
+    roots: &Query<(Entity, &RuntimeUiSurface)>,
+    parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let mut current = hit;
+    for _ in 0..64 {
+        if roots.get(current).is_ok() {
+            return Some(current);
+        }
+        current = parents.get(current).ok()?.parent();
+    }
+    None
 }
 
 /// Add the visible interactive runtime controls to the existing workbench
@@ -1889,6 +1930,19 @@ mod tests {
         assert!(placement.rect.min.y >= 0.0);
         assert!(placement.rect.max.x <= window.width());
         assert!(placement.rect.max.y <= window.height());
+    }
+
+    #[test]
+    fn drag_delta_is_applied_once_in_logical_pixels() {
+        let current = egui::Rect::from_min_size(egui::pos2(16.0, 819.0), egui::vec2(224.0, 184.0));
+        let dragged = resolve_dragged_surface_rect(
+            current,
+            Vec2::new(500.0, -330.0),
+            Vec2::new(1707.0, 1035.0),
+        );
+
+        assert_eq!(dragged.min, egui::pos2(516.0, 489.0));
+        assert_eq!(dragged.size(), egui::vec2(224.0, 184.0));
     }
 
     #[test]
