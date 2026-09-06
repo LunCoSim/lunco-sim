@@ -274,6 +274,118 @@ pub struct PerspectiveDockSnapshot {
     pub bottom: Vec<PanelId>,
 }
 
+/// Persisted logical position of one runtime-authored surface.
+///
+/// The runtime UI owner supplies the surface's authored size and clamps this
+/// position to the current target. Workbench stores only the user override so
+/// an authored geometry change remains the default for surfaces that were not
+/// moved.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub struct RuntimeSurfaceLayout {
+    /// Logical x coordinate of the surface's top-left corner.
+    pub left: f32,
+    /// Logical y coordinate of the surface's top-left corner.
+    pub top: f32,
+}
+
+impl RuntimeSurfaceLayout {
+    /// Return whether this persisted position is safe to apply.
+    pub fn is_finite(self) -> bool {
+        self.left.is_finite() && self.top.is_finite()
+    }
+}
+
+/// Per-Twin persisted positions for runtime-authored draggable surfaces.
+///
+/// This is the single layout store for HUI/Flair runtime surfaces. The
+/// surface manifest remains the default/visibility authority; this resource
+/// contains only validated user overrides and participates in the existing
+/// workspace-state snapshot gate.
+#[derive(Resource, Default, Clone, PartialEq, Debug)]
+pub struct RuntimeSurfaceLayouts {
+    layouts: HashMap<String, RuntimeSurfaceLayout>,
+    revision: u64,
+}
+
+impl RuntimeSurfaceLayouts {
+    /// Look up a user override by stable authored surface identity.
+    pub fn get(&self, id: &str) -> Option<RuntimeSurfaceLayout> {
+        self.layouts.get(id).copied()
+    }
+
+    /// Return all currently retained overrides for workspace persistence.
+    pub fn as_map(&self) -> &HashMap<String, RuntimeSurfaceLayout> {
+        &self.layouts
+    }
+
+    /// Monotonic change signal used by workspace persistence.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Replace the active Twin's layout snapshot during workspace restore.
+    pub(crate) fn replace(&mut self, layouts: HashMap<String, RuntimeSurfaceLayout>) {
+        let layouts = layouts
+            .into_iter()
+            .filter(|(_, layout)| layout.is_finite())
+            .collect();
+        if self.layouts != layouts {
+            self.layouts = layouts;
+            self.bump_revision();
+        }
+    }
+
+    /// Store a finite user position. Returns whether the snapshot changed.
+    pub fn set(&mut self, id: impl Into<String>, layout: RuntimeSurfaceLayout) -> bool {
+        if !layout.is_finite() {
+            return false;
+        }
+        let id = id.into();
+        if self.layouts.get(&id).copied() == Some(layout) {
+            return false;
+        }
+        self.layouts.insert(id, layout);
+        self.bump_revision();
+        true
+    }
+
+    /// Remove a user override so the authored default is used again.
+    pub fn reset(&mut self, id: &str) -> bool {
+        if self.layouts.remove(id).is_some() {
+            self.bump_revision();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Drop entries for surfaces that are no longer authored, and invalid
+    /// entries that cannot be applied safely.
+    pub fn retain_ids(&mut self, ids: &std::collections::HashSet<String>) {
+        let before = self.layouts.len();
+        self.layouts
+            .retain(|id, layout| ids.contains(id) && layout.is_finite());
+        if self.layouts.len() != before {
+            self.bump_revision();
+        }
+    }
+
+    /// Clear all user overrides at the Twin lifecycle boundary.
+    pub(crate) fn clear(&mut self) {
+        if !self.layouts.is_empty() {
+            self.layouts.clear();
+            self.bump_revision();
+        }
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("runtime surface layout revision exhausted");
+    }
+}
+
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -305,6 +417,10 @@ pub struct WorkspaceState {
     /// a dock. The inverse of `WorkbenchLayout::capture_perspective_docks`.
     #[serde(default)]
     pub docks: HashMap<String, PerspectiveDockSnapshot>,
+    /// User positions of authored draggable runtime UI surfaces, keyed by
+    /// stable surface identity. Missing entries use manifest defaults.
+    #[serde(default)]
+    pub runtime_surface_layouts: HashMap<String, RuntimeSurfaceLayout>,
 }
 
 /// Current serialized workspace-state format.
@@ -319,6 +435,7 @@ impl Default for WorkspaceState {
             documents: Vec::new(),
             active_document: None,
             docks: HashMap::new(),
+            runtime_surface_layouts: HashMap::new(),
         }
     }
 }
@@ -588,10 +705,12 @@ fn gate_value(world: &mut World) -> u64 {
     } else {
         0
     };
+    let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().revision();
     docs.wrapping_add(persp)
         .wrapping_add(twin)
         .wrapping_add(active)
         .wrapping_add(dock)
+        .wrapping_add(runtime_surface_layouts)
 }
 
 /// Build the full hot-exit state from live resources.
@@ -639,6 +758,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
     } else {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
+    let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().as_map().clone();
     WorkspaceState {
         schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
         twin_root,
@@ -646,6 +766,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
         documents,
         active_document,
         docks,
+        runtime_surface_layouts,
     }
 }
 
@@ -697,7 +818,14 @@ fn restore_workspace_state(world: &mut World) {
     };
 
     let root = active_twin_root(world);
-    let Some(state) = WorkspaceState::load(&root) else {
+    let state = WorkspaceState::load(&root);
+    world.resource_mut::<RuntimeSurfaceLayouts>().replace(
+        state
+            .as_ref()
+            .map(|state| state.runtime_surface_layouts.clone())
+            .unwrap_or_default(),
+    );
+    let Some(state) = state else {
         return;
     };
 
@@ -875,12 +1003,21 @@ impl Plugin for WorkspaceStatePlugin {
         app.init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
             .init_resource::<WorkspaceStateRestorePolicy>()
+            .init_resource::<RuntimeSurfaceLayouts>()
             .init_resource::<DocumentSessionRegistry>()
+            .add_observer(clear_runtime_surface_layouts_on_twin_closed)
             .add_systems(
                 Update,
                 (restore_workspace_state, persist_workspace_state).chain(),
             );
     }
+}
+
+fn clear_runtime_surface_layouts_on_twin_closed(
+    _trigger: On<lunco_workspace::TwinClosed>,
+    mut layouts: ResMut<RuntimeSurfaceLayouts>,
+) {
+    layouts.clear();
 }
 
 // Test fixtures live on disk — the case `clippy.toml`'s allow-list already names
@@ -909,6 +1046,46 @@ mod tests {
     fn fnv1a64_is_stable() {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    }
+
+    #[test]
+    fn runtime_surface_layouts_accept_finite_positions_and_prune_stale_ids() {
+        let mut layouts = RuntimeSurfaceLayouts::default();
+        let initial_revision = layouts.revision();
+
+        assert!(!layouts.set(
+            "invalid",
+            RuntimeSurfaceLayout {
+                left: f32::NAN,
+                top: 0.0,
+            },
+        ));
+        assert_eq!(layouts.revision(), initial_revision);
+
+        let camera = RuntimeSurfaceLayout {
+            left: 120.0,
+            top: 48.0,
+        };
+        assert!(layouts.set("camera-status", camera));
+        assert!(!layouts.set("camera-status", camera));
+        assert_eq!(layouts.get("camera-status"), Some(camera));
+
+        assert!(layouts.set(
+            "stale-surface",
+            RuntimeSurfaceLayout {
+                left: 8.0,
+                top: 16.0,
+            },
+        ));
+        let live_ids: std::collections::HashSet<_> =
+            ["camera-status".to_owned()].into_iter().collect();
+        layouts.retain_ids(&live_ids);
+        assert_eq!(layouts.get("camera-status"), Some(camera));
+        assert_eq!(layouts.get("stale-surface"), None);
+
+        assert!(layouts.reset("camera-status"));
+        assert!(!layouts.reset("camera-status"));
+        assert_eq!(layouts.get("camera-status"), None);
     }
 
     /// Distinct Twin roots must land on distinct state files.
@@ -963,6 +1140,7 @@ mod tests {
             ],
             active_document: Some(0),
             docks: HashMap::new(),
+            runtime_surface_layouts: HashMap::new(),
         };
         state.save().unwrap();
 
@@ -1015,6 +1193,7 @@ mod tests {
                     },
                 ),
             ]),
+            runtime_surface_layouts: HashMap::new(),
         };
         let json = serde_json::to_string(&state).unwrap();
         let back: WorkspaceState = serde_json::from_str(&json).unwrap();
