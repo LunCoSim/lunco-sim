@@ -84,7 +84,12 @@ only visible HUI controls with an authored `on_press` action register their
 computed Bevy UI rectangles with the shared scene-pick gate. This keeps a
 full-window HUD transparent to camera and scene input outside its buttons.
 Placement is reapplied after HUI/Flair style changes through change detection,
-not by a per-frame correction loop.
+not by a per-frame correction loop. A `window` surface may additionally declare
+`"draggable": true`; its primary-button drag is clamped to the live target and
+persisted per Twin through the workbench workspace state. A primary-button
+double click removes that override and restores the authored anchor. Viewport
+and dock-panel roots cannot be draggable, and stale layout ids are dropped when
+the manifest is reconciled.
 
 ## Fonts and theme
 

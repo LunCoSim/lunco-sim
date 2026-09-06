@@ -98,6 +98,7 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
         bevy_flair::FlairPlugin,
         runtime_exposure::RuntimeUiManifestPlugin,
     ))
+    .init_resource::<lunco_workbench::RuntimeSurfaceLayouts>()
     .init_resource::<runtime_exposure::RuntimeUiRenderState>()
     .init_resource::<runtime_exposure::RuntimeUiPresentationGeneration>()
     .init_resource::<runtime_exposure::RuntimeUiGates>()
@@ -133,6 +134,9 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
                 // paints one frame of raw text before the authored panel is
                 // laid out and styled.
                 .after(bevy_hui::HuiSystems::Build)
+                .before(bevy_hui::HuiSystems::Style),
+            runtime_exposure::apply_runtime_ui_surface_interactions
+                .after(runtime_exposure::apply_runtime_ui_exposures)
                 .before(bevy_hui::HuiSystems::Style),
         ),
     )
