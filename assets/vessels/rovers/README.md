@@ -6,6 +6,21 @@ This directory contains the USD definitions for all surface rovers in LunCoSim. 
 
 **Live tuning.** All wheel params carry schema-level slider hints: select a rover, Alt+Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
 
+## Dedicated FLIP study asset
+
+[`flip_rover.usda`](flip_rover.usda) is the maintained Astrolab FLIP study
+contract. It is a thin composition over [`skid_rover.usda`](skid_rover.usda):
+the shared mobility, drivetrain, battery, solar, camera, and controller
+components remain authoritative, while the FLIP layer owns the mission
+identity, public envelope and mass assumptions, four wheel station opinions,
+payload deck, sensor mast, and body-mounted solar proxy.
+
+The asset is intentionally labelled a study proxy. It does not claim as-built
+CAD, all-wheel-steer fidelity, or an articulated solar deployment joint; those
+are separate authored contracts. Build instances with the dynamic
+`assembly_builder::flip_rover_instance_plan`/`select_variants_plan` tools and
+verify the composed paths with the Rhai production test before review.
+
 ---
 
 ## 🛠️ Editing Vehicle Parameters

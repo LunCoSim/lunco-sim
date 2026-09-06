@@ -40,6 +40,14 @@ explicitly. The complete mission path rejects wrong assets, duplicate wheel
 identities, unsafe placement, and occupied identities before authoring, and a
 completed body/joint identity must be updated explicitly rather than rebuilt.
 
+The maintained FLIP reference is
+`assets/vessels/rovers/flip_rover.usda`. It is a thin composition over
+`skid_rover.usda`, so shared mobility and power components remain authoritative;
+the FLIP layer supplies its identity, study envelope, wheel opinions, payload
+deck, sensor mast, and body-mounted solar proxy. Its metadata deliberately
+marks the asset as a study proxy. Do not turn that wrapper into copied geometry
+or claim articulated/as-built behavior that is not authored there.
+
 For a rover assembled from one reusable reference, use
 `assembly_builder::flip_rover_instance_plan` to validate the four explicit
 wheel descendants and author the identity, URI, and pose. Let the referenced
@@ -56,7 +64,8 @@ part and its recorded joint anchor atomically through the review boundary, and
 rejects invalid topology or non-rigid frame data before any USD edit.
 
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
-(4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
+(4-wheel skid), `assets/vessels/rovers/flip_rover.usda` (dedicated FLIP study
+proxy), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
 (per-wheel port wiring + `driveLaw` variant), `six_wheel_independent.usda`
 (fully authored per-wheel mix), `rocker_bogie.usda` (linkage + gear-joint
 differential), `rucheyok/` (Z-forward, Modelica electrical).

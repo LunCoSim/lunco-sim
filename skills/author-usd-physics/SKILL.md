@@ -99,12 +99,16 @@ Mission-level recipes may compose these generic helpers through the dynamic
 `griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two
 explicit Griffin ramp identities and `flip_four_wheel_layout_plan` for the
 four authored FLIP wheel stations. `griffin_mission_assembly_plan` builds
-maintained lander and four-wheel rover references with explicit placements;
+maintained lander and the dedicated `flip_rover.usda` composition with explicit
+placements;
 after the composed children are visible, `griffin_mission_adapter_plan`
 authors the fixed adapter. `griffin_mission_plan` remains the validation path
 for an already-authored mission topology. These functions return reviewed
 typed operations and reject missing, duplicated, swapped, or dimensionally
-inconsistent identities; they do not supply undocumented flight values.
+inconsistent identities; they do not supply undocumented flight values. The
+dedicated `flip_rover.usda` layer is intentionally a public-value study proxy
+over shared mobility/power components; it does not assert as-built CAD or
+articulated solar deployment.
 
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`

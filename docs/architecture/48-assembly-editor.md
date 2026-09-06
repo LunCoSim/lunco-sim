@@ -472,10 +472,15 @@ invalid references, and unavailable variant targets fail before proposal.
 
 Mission-specific recipes remain data-driven Rhai. The current
 `griffin_flip_builder` library composes the generic builder into a symmetric
-Griffin ramp plan and a validated FLIP four-wheel layout plan. Its
+Griffin ramp plan and a validated FLIP four-wheel layout plan. The maintained
+`assets/vessels/rovers/flip_rover.usda` asset is a thin composition over the
+shared skid-rover mobility/power components; it owns the FLIP identity, study
+envelope, wheel opinions, payload deck, sensor mast, and fixed solar proxy.
+Its metadata preserves the study-proxy boundary rather than implying as-built
+CAD or articulated solar deployment. Its
 `griffin_mission_plan` checks an already-authored mission topology before
 returning the combined ramp-and-wheel plan. For construction from maintained
-assets, `griffin_mission_assembly_plan` authors the lander and four-wheel
+assets, `griffin_mission_assembly_plan` authors the lander and dedicated FLIP
 rover references plus explicit root placement, then
 `griffin_mission_adapter_plan` adds the fixed payload adapter only after both
 reference closures are queryable. The production

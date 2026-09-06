@@ -6,8 +6,13 @@ const MISSION = ROOT + "/Mission";
 const LANDER = MISSION + "/Lander";
 const FLIP = MISSION + "/FLIP";
 const ADAPTER = MISSION + "/FLIPPayloadAdapterJoint";
+const PAYLOAD_DECK = FLIP + "/PayloadDeck";
+const SENSOR_MAST = FLIP + "/SensorMast";
+const SOLAR_PANEL = FLIP + "/SolarPanel";
+const CHASSIS = FLIP + "/Chassis";
+const FRONT_CAMERA = FLIP + "/FrontCamera";
 const LANDER_ASSET = "lunco://vessels/landers/descent_lander.usda";
-const FLIP_ASSET = "lunco://vessels/rovers/skid_rover.usda";
+const FLIP_ASSET = "lunco://vessels/rovers/flip_rover.usda";
 const WHEELS = [
     FLIP + "/Suspension_FL/Wheel_FL",
     FLIP + "/Suspension_FR/Wheel_FR",
@@ -186,7 +191,39 @@ fn on_tick(me) {
         let flip = query("QueryUsdPrim", #{
             doc: this.doc,
             path: FLIP,
+            attrs: [
+                "lunco:mission:payload", "lunco:mission:vehicle_family",
+                "lunco:configuration", "lunco:parameter_status",
+                "physics:mass",
+                "xformOp:translate", "xformOp:rotateXYZ",
+            ],
             children: true,
+        });
+        let payload_deck = query("QueryUsdPrim", #{
+            doc: this.doc,
+            path: PAYLOAD_DECK,
+            children: false,
+        });
+        let sensor_mast = query("QueryUsdPrim", #{
+            doc: this.doc,
+            path: SENSOR_MAST,
+            children: true,
+        });
+        let solar_panel = query("QueryUsdPrim", #{
+            doc: this.doc,
+            path: SOLAR_PANEL,
+            attrs: ["lunco:installation", "inputs:area", "inputs:efficiency"],
+            children: false,
+        });
+        let chassis = query("QueryUsdPrim", #{
+            doc: this.doc,
+            path: CHASSIS,
+            children: false,
+        });
+        let front_camera = query("QueryUsdPrim", #{
+            doc: this.doc,
+            path: FRONT_CAMERA,
+            children: false,
         });
         let adapter = query("QueryUsdPrim", #{
             doc: this.doc,
@@ -216,8 +253,8 @@ fn on_tick(me) {
             }
             if wheel.type_name != "Cylinder"
                 || wheel.attrs["physxVehicleWheelAttachment:index"] != i
-                || !close(wheel.attrs["physxVehicleWheel:radius"], 0.4, 0.001)
-                || !close(wheel.attrs["physxVehicleWheel:width"], 0.3, 0.001) {
+                || !close(wheel.attrs["physxVehicleWheel:radius"], 0.45, 0.001)
+                || !close(wheel.attrs["physxVehicleWheel:width"], 0.28, 0.001) {
                 wheel_contract = false;
             }
         }
@@ -227,6 +264,21 @@ fn on_tick(me) {
             }
             return;
         }
+        let flip_identity = query_ok(flip) && flip.attrs != ()
+            && flip.attrs["lunco:mission:payload"] == "Astrolab FLIP"
+            && flip.attrs["lunco:mission:vehicle_family"] == "FLEX Lunar Innovation Platform"
+            && flip.attrs["lunco:configuration"].contains("study proxy")
+            && flip.attrs["lunco:parameter_status"].contains("simulator assumptions")
+            && close(flip.attrs["physics:mass"], 450.0, 0.001);
+        let flip_topology = query_ok(payload_deck) && payload_deck.type_name == "Cube"
+            && query_ok(sensor_mast) && sensor_mast.type_name == "Xform"
+            && sensor_mast.children != () && sensor_mast.children.len() == 2
+            && query_ok(solar_panel) && solar_panel.attrs != ()
+            && close(solar_panel.attrs["inputs:area"], 4.8, 0.001)
+            && close(solar_panel.attrs["inputs:efficiency"], 0.30, 0.001)
+            && solar_panel.attrs["lunco:installation"].contains("body-mounted")
+            && query_ok(chassis) && chassis.type_name == "Cube"
+            && query_ok(front_camera) && front_camera.type_name == "Camera";
         this.done = true;
         report_verdict([
             t_true(query_ok(mission) && mission.children.contains(LANDER)
@@ -236,7 +288,11 @@ fn on_tick(me) {
             t_true(query_ok(lander) && lander.children.len() > 0,
                 "maintained descent_lander reference composes visible child structure"),
             t_true(query_ok(flip) && flip.children.len() > 0,
-                "maintained four-wheel rover reference composes visible child structure"),
+                "dedicated FLIP reference composes visible child structure"),
+            t_true(flip_identity,
+                "dedicated FLIP reference preserves its authored mission identity and study boundary"),
+            t_true(flip_topology,
+                "dedicated FLIP reference composes its payload deck, sensor mast, and solar proxy"),
             t_true(lander.attrs != ()
                 && vector_close(lander.attrs["xformOp:translate"], [0.0, 6.0, 0.0], 0.001)
                 && vector_close(lander.attrs["xformOp:rotateXYZ"], [0.0, 0.0, 0.0], 0.001)
@@ -290,7 +346,7 @@ fn on_tick(me) {
     );
     if !valid.ok || valid.kind != "griffin_mission_assembly"
         || valid.ops.len() != 6
-        || !invalid_asset.error.contains("maintained")
+        || !invalid_asset.error.contains("dedicated")
         || !invalid_overlap.error.contains("minimum separation")
         || !invalid_wheels.error.contains("unique")
         || !invalid_identity.error.contains("distinct") {
