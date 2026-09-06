@@ -130,8 +130,8 @@ pub use window_placement::WindowPlacement;
 pub use window_placement::wire_window_placement;
 pub use workspace_state::{
     AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot,
-    WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy, finalize_revision,
-    revision_term, workspace_state_path,
+    RuntimeSurfaceLayout, RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin,
+    WorkspaceStateRestorePolicy, finalize_revision, revision_term, workspace_state_path,
 };
 
 pub use menu::{MenuCtx, UndoProbeCtx};
@@ -5351,7 +5351,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             }
             + if !scene_name.is_empty() { 150.0 } else { 0.0 };
 
-        let status_width = (ui.available_width() - right_reserve).max(160.0);
+        let status_width = (ui.available_width() - right_reserve).max(1.0);
 
         // The status message scope on the left
         let latest_attention = latest
@@ -5402,7 +5402,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             }
                             ui.label(egui::RichText::new(l.source).small().strong());
                             let text = egui::RichText::new(&l.message).small();
-                            ui.add(egui::Label::new(text).truncate())
+                            let message_width = status_bar_message_width(
+                                ui.available_width(),
+                                l.progress_pct.is_some(),
+                                ui.spacing().item_spacing.x,
+                            );
+                            ui.add_sized([message_width, 18.0], egui::Label::new(text).truncate())
                                 .on_hover_text(&l.message);
                             if l.level == StatusLevel::Progress {
                                 if let Some(pct) = l.progress_pct {
@@ -5764,6 +5769,17 @@ fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f
 
 fn status_event_has_progress(level: status_bus::StatusLevel, progress: Option<(u64, u64)>) -> bool {
     progress.is_some() || level == status_bus::StatusLevel::Progress
+}
+
+const STATUS_BAR_PROGRESS_WIDTH: f32 = 120.0;
+
+fn status_bar_message_width(available_width: f32, has_progress: bool, item_spacing: f32) -> f32 {
+    let progress_reserve = if has_progress {
+        STATUS_BAR_PROGRESS_WIDTH + item_spacing
+    } else {
+        0.0
+    };
+    (available_width - progress_reserve).max(1.0)
 }
 
 fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
@@ -6924,6 +6940,13 @@ mod tests {
             status_event_action_width(status_bus::StatusLevel::Attention, false),
             STATUS_EVENT_ATTENTION_WIDTH
         );
+    }
+
+    #[test]
+    fn latest_status_message_width_is_bounded_by_remaining_space() {
+        assert_eq!(status_bar_message_width(500.0, false, 4.0), 500.0);
+        assert_eq!(status_bar_message_width(500.0, true, 4.0), 376.0);
+        assert_eq!(status_bar_message_width(80.0, true, 4.0), 1.0);
     }
 
     #[test]

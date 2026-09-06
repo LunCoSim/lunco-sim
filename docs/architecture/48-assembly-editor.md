@@ -521,6 +521,14 @@ names. `collision_bounds: true` exposes the shared composed aggregate envelope
 for placement and inspection; a null envelope means visual-only geometry,
 whereas malformed collision data is an error. Raycast wheels are not listed as
 rigid bodies: only actual movable bodies are checked for joint coverage.
+For a single asset-level physicality decision, `physicality_report` accepts an
+explicit manifest whose entries choose `physical` or `visual-only`. Physical
+entries delegate to the existing body/joint and collider/mass reports; a
+visual-only entry requires a reason and is rejected when the shared composed
+collision query returns an envelope. Duplicate paths, unknown roles, missing
+prims, and incomplete coverage are visible structured errors. This keeps the
+asset policy reloadable in Rhai without adding a second geometry reader or
+Rust-side intent registry.
 
 Preview-only visual projection does not attach generic Rhai or builtin programs.
 The `UsdPreviewOnly` scope guards the program attachment owner as well as the

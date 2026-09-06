@@ -524,12 +524,12 @@ restart:
   geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
 - **Per-project volatile UI state** (active perspective, open-document
-  list, and — in future — per-window layout) → **global storage keyed by
+  list, and positions of authored draggable runtime windows) → **global storage keyed by
   a hash of the project path**, *not* written into the Twin folder:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
   churn, and personal layout never leaks into a shared project.
-The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur.
+The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
 
 An explicit host launch may provide a one-shot
 `WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when

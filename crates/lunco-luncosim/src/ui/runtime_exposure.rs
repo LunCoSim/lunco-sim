@@ -7,6 +7,8 @@
 //! derived engine capability.
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::ecs::entity::EntityHashSet;
+use bevy::picking::events::{Click, Drag, Pointer};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
@@ -19,7 +21,9 @@ use bevy_hui::prelude::{
 use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
-use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
+use lunco_workbench::{
+    PanelId, PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate,
+};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -58,6 +62,42 @@ impl RuntimeUiActionKind {
 pub(crate) struct RuntimeUiAction {
     /// Closed semantic action authored by the surface adapter.
     pub action: RuntimeUiActionKind,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub(crate) struct RuntimeUiSurfaceDragged {
+    entity: Entity,
+    delta: Vec2,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub(crate) struct RuntimeUiSurfaceReset {
+    entity: Entity,
+}
+
+fn emit_runtime_ui_surface_drag(
+    mut trigger: On<Pointer<Drag>>,
+    mut drags: MessageWriter<RuntimeUiSurfaceDragged>,
+) {
+    if trigger.button == PointerButton::Primary {
+        drags.write(RuntimeUiSurfaceDragged {
+            entity: trigger.entity,
+            delta: trigger.delta,
+        });
+        trigger.propagate(false);
+    }
+}
+
+fn emit_runtime_ui_surface_reset(
+    mut trigger: On<Pointer<Click>>,
+    mut resets: MessageWriter<RuntimeUiSurfaceReset>,
+) {
+    if trigger.button == PointerButton::Primary && trigger.count >= 2 {
+        resets.write(RuntimeUiSurfaceReset {
+            entity: trigger.entity,
+        });
+        trigger.propagate(false);
+    }
 }
 
 /// Bind one HUI callback name to a semantic runtime action.
@@ -110,6 +150,11 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     pub setting_default: bool,
     #[serde(default)]
     pub interactive: bool,
+    /// Whether the surface root can be moved with a primary-button drag.
+    /// Only window surfaces may opt in; viewport and dock-panel roots own a
+    /// larger layout boundary and cannot be moved as a whole.
+    #[serde(default)]
+    pub draggable: bool,
     pub placement: RuntimeUiPlacementDefinition,
 }
 
@@ -195,6 +240,17 @@ impl RuntimeUiManifest {
             }
             if let Some(setting) = &surface.setting {
                 lunco_twin::TwinManifest::validate_setting_key(setting)?;
+            }
+            if surface.draggable
+                && !matches!(
+                    surface.placement,
+                    RuntimeUiPlacementDefinition::Window { .. }
+                )
+            {
+                return Err(format!(
+                    "draggable runtime UI surface `{}` must use window placement",
+                    surface.id
+                ));
             }
             validate_placement(&surface.placement)?;
 
@@ -306,7 +362,9 @@ pub(crate) struct RuntimeUiManifestPlugin;
 impl Plugin for RuntimeUiManifestPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<RuntimeUiManifest>()
-            .init_asset_loader::<RuntimeUiManifestLoader>();
+            .init_asset_loader::<RuntimeUiManifestLoader>()
+            .add_message::<RuntimeUiSurfaceDragged>()
+            .add_message::<RuntimeUiSurfaceReset>();
     }
 }
 
@@ -447,6 +505,7 @@ impl RuntimeUiSurfaceRects {
 /// the only contract between an engine exposure producer and a template.
 #[derive(Component, Debug)]
 pub(crate) struct RuntimeUiSurface {
+    layout_id: String,
     namespace: String,
     required_for_recording: bool,
     template: Handle<HtmlTemplate>,
@@ -457,6 +516,7 @@ pub(crate) struct RuntimeUiSurface {
     setting: Option<String>,
     setting_default: bool,
     interactive: bool,
+    draggable: bool,
     mounted: bool,
     /// For a surface required by offline recording, set after the retained tree
     /// has a camera target, a computed non-zero render target, a computed
@@ -484,6 +544,7 @@ impl RuntimeUiSurface {
         stylesheet: Handle<StyleSheet>,
     ) -> Self {
         Self {
+            layout_id: definition.id.clone(),
             namespace: definition.namespace.clone(),
             required_for_recording: definition.required_for_recording,
             template,
@@ -494,6 +555,7 @@ impl RuntimeUiSurface {
             setting: definition.setting.clone(),
             setting_default: definition.setting_default,
             interactive: definition.interactive,
+            draggable: definition.draggable,
             mounted: false,
             presentation_ready: false,
             presentation_visible: false,
@@ -759,11 +821,16 @@ fn spawn_runtime_ui_surface(
 ) {
     let template: Handle<HtmlTemplate> = server.load(definition.template.clone());
     let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
-    commands.spawn((
+    let mut entity = commands.spawn((
         Node::default(),
         RuntimeUiSurface::from_definition(definition, template, stylesheet),
         Visibility::Hidden,
     ));
+    if definition.draggable {
+        entity
+            .observe(emit_runtime_ui_surface_drag)
+            .observe(emit_runtime_ui_surface_reset);
+    }
 }
 
 pub(crate) fn sync_runtime_ui_manifest(
@@ -774,6 +841,7 @@ pub(crate) fn sync_runtime_ui_manifest(
     roots: Query<Entity, With<RuntimeUiSurface>>,
     server: Res<AssetServer>,
     mut functions: HtmlFunctions,
+    mut surface_layouts: ResMut<RuntimeSurfaceLayouts>,
 ) {
     let changed = state.applied.is_none()
         || events.read().any(|event| {
@@ -795,6 +863,13 @@ pub(crate) fn sync_runtime_ui_manifest(
         error!("runtime UI manifest rejected: {error}");
         return;
     }
+
+    let ids = manifest
+        .surfaces
+        .iter()
+        .map(|surface| surface.id.clone())
+        .collect::<HashSet<_>>();
+    surface_layouts.retain_ids(&ids);
 
     for surface in &manifest.surfaces {
         for action in &surface.actions {
@@ -834,6 +909,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
     exposures: Res<EngineExposures>,
     layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
     gates: Option<Res<RuntimeUiGates>>,
+    surface_layouts: Res<RuntimeSurfaceLayouts>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -881,7 +957,14 @@ pub(crate) fn mount_runtime_ui_surfaces(
                 gates.as_deref(),
                 workspace.as_deref(),
             )
-            || resolve_placement(&surface.placement, rects.as_deref(), target, window).is_none()
+            || resolve_surface_placement(
+                &surface,
+                &surface_layouts,
+                rects.as_deref(),
+                target,
+                window,
+            )
+            .is_none()
         {
             continue;
         }
@@ -1042,6 +1125,7 @@ pub(crate) fn apply_runtime_ui_exposures(
     mut manifest_state: ResMut<RuntimeUiManifestState>,
     layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
     gates: Option<Res<RuntimeUiGates>>,
+    surface_layouts: Res<RuntimeSurfaceLayouts>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -1067,6 +1151,7 @@ pub(crate) fn apply_runtime_ui_exposures(
 
     let layout_changed = layout.as_ref().is_some_and(|layout| layout.is_changed());
     let gates_changed = gates.as_ref().is_some_and(|gates| gates.is_changed());
+    let surface_layouts_changed = surface_layouts.is_changed();
     let workspace_changed = workspace
         .as_ref()
         .is_some_and(|workspace| workspace.is_changed());
@@ -1076,7 +1161,8 @@ pub(crate) fn apply_runtime_ui_exposures(
     for (entity, mut surface, mut node, mut visibility, properties, existing_style, target) in
         &mut roots
     {
-        let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
+        let placement =
+            resolve_surface_placement(&surface, &surface_layouts, rects.as_deref(), target, window);
         let placement_changed = surface.applied_placement != placement;
         let exposure = exposures.surfaces.get(&surface.namespace);
         let perspective_visible = surface
@@ -1144,6 +1230,7 @@ pub(crate) fn apply_runtime_ui_exposures(
         if surface.applied_revision == exposures.revision
             && !layout_changed
             && !gates_changed
+            && !surface_layouts_changed
             && !workspace_changed
             && !theme_changed
             && !placement_changed
@@ -1280,6 +1367,7 @@ fn css_color(color: egui::Color32) -> String {
 /// stylesheet owns the contents of that rectangle.
 pub(crate) fn apply_runtime_ui_placement_after_style(
     rects: Option<Res<PanelRects>>,
+    surface_layouts: Res<RuntimeSurfaceLayouts>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut roots: Query<
         (
@@ -1292,7 +1380,8 @@ pub(crate) fn apply_runtime_ui_placement_after_style(
 ) {
     let window = windows.iter().next();
     for (mut surface, mut node, target) in &mut roots {
-        let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
+        let placement =
+            resolve_surface_placement(&surface, &surface_layouts, rects.as_deref(), target, window);
         if surface.applied_placement != placement {
             surface.applied_placement = placement;
         }
@@ -1338,6 +1427,72 @@ fn apply_runtime_ui_property(
     } else if style.get(&css_name) != Some(rendered.as_str()) {
         style.set(css_name, rendered);
         *style_changed = true;
+    }
+}
+
+/// Apply pointer-driven movement to authored draggable window surfaces.
+///
+/// Picking events bubble from any HUI child to the surface root, so templates
+/// remain data-only. The persisted position is logical, clamped to the live
+/// target, and written through Workbench's per-Twin workspace state. A
+/// primary-button double click removes the override and restores the authored
+/// anchor/default.
+pub(crate) fn apply_runtime_ui_surface_interactions(
+    mut drags: MessageReader<RuntimeUiSurfaceDragged>,
+    mut resets: MessageReader<RuntimeUiSurfaceReset>,
+    mut layouts: ResMut<RuntimeSurfaceLayouts>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut roots: Query<(
+        &mut RuntimeUiSurface,
+        &mut Node,
+        Option<&ComputedUiRenderTargetInfo>,
+    )>,
+) {
+    let window = windows.iter().next();
+    for drag in drags.read() {
+        let Ok((mut surface, mut node, target)) = roots.get_mut(drag.entity) else {
+            continue;
+        };
+        if !surface.draggable {
+            continue;
+        }
+        let Some(current) = surface.applied_placement else {
+            continue;
+        };
+        let Some((scale, target_size)) = logical_target_dimensions(target, window) else {
+            continue;
+        };
+        let size = Vec2::new(current.rect.width(), current.rect.height()).min(target_size);
+        let max_origin = (target_size - size).max(Vec2::ZERO);
+        let current_origin = Vec2::new(current.rect.min.x, current.rect.min.y);
+        let origin = (current_origin + drag.delta / scale).clamp(Vec2::ZERO, max_origin);
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y));
+        layouts.set(
+            surface.layout_id.clone(),
+            RuntimeSurfaceLayout {
+                left: origin.x,
+                top: origin.y,
+            },
+        );
+        apply_placement(&mut node, rect);
+        surface.applied_placement = Some(ResolvedRuntimeUiPlacement { rect });
+    }
+
+    for reset in resets.read() {
+        let Ok((mut surface, mut node, target)) = roots.get_mut(reset.entity) else {
+            continue;
+        };
+        if !surface.draggable {
+            continue;
+        }
+        layouts.reset(&surface.layout_id);
+        let Some(placement) = resolve_surface_placement(&surface, &layouts, None, target, window)
+        else {
+            continue;
+        };
+        apply_placement(&mut node, placement.rect);
+        surface.applied_placement = Some(placement);
     }
 }
 
@@ -1460,17 +1615,37 @@ fn runtime_ui_input_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> 
         .then(|| egui::Rect::from_min_max(egui::pos2(min.x, min.y), egui::pos2(max.x, max.y)))
 }
 
-fn resolve_placement(
-    placement: &RuntimeUiPlacement,
+fn resolve_surface_placement(
+    surface: &RuntimeUiSurface,
+    layouts: &RuntimeSurfaceLayouts,
     rects: Option<&PanelRects>,
     target: Option<&ComputedUiRenderTargetInfo>,
     window: Option<&Window>,
 ) -> Option<ResolvedRuntimeUiPlacement> {
+    let placement = resolve_placement(&surface.placement, rects, target, window)?;
+    let Some(layout) = layouts.get(&surface.layout_id) else {
+        return Some(placement);
+    };
+    if !surface.draggable {
+        return Some(placement);
+    }
+    let (_, target_size) = logical_target_dimensions(target, window)?;
+    let size = Vec2::new(placement.rect.width(), placement.rect.height()).min(target_size);
+    let max_origin = (target_size - size).max(Vec2::ZERO);
+    let origin = Vec2::new(layout.left, layout.top).clamp(Vec2::ZERO, max_origin);
+    Some(ResolvedRuntimeUiPlacement {
+        rect: egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y)),
+    })
+}
+
+fn logical_target_dimensions(
+    target: Option<&ComputedUiRenderTargetInfo>,
+    window: Option<&Window>,
+) -> Option<(f32, Vec2)> {
     // The UI target component is propagated before the camera has a live
     // viewport on the first frame, so its default is a valid-looking 1.0 scale
     // paired with a 0x0 physical size. Do not let that placeholder shadow the
-    // already-valid window dimensions; doing so makes a top-center surface
-    // resolve to a negative x coordinate until the first resize event.
+    // already-valid window dimensions.
     let target_dimensions = target.and_then(|target| {
         let scale = target.scale_factor();
         let physical_size = target.physical_size();
@@ -1479,13 +1654,19 @@ fn resolve_placement(
     });
     let (scale, physical_size) = target_dimensions
         .or_else(|| window.map(|window| (window.scale_factor(), window.physical_size())))?;
-    if !scale.is_finite() || scale <= 0.0 {
+    if !scale.is_finite() || scale <= 0.0 || physical_size.x == 0 || physical_size.y == 0 {
         return None;
     }
-    if physical_size.x == 0 || physical_size.y == 0 {
-        return None;
-    }
-    let window_size = physical_size.as_vec2() / scale;
+    Some((scale, physical_size.as_vec2() / scale))
+}
+
+fn resolve_placement(
+    placement: &RuntimeUiPlacement,
+    rects: Option<&PanelRects>,
+    target: Option<&ComputedUiRenderTargetInfo>,
+    window: Option<&Window>,
+) -> Option<ResolvedRuntimeUiPlacement> {
+    let (scale, window_size) = logical_target_dimensions(target, window)?;
     let egui_vec2 = |value: Vec2| egui::vec2(value.x, value.y);
     let egui_pos2 = |value: Vec2| egui::pos2(value.x, value.y);
 
@@ -1604,6 +1785,7 @@ mod tests {
                         "namespace": "c",
                         "setting": "ui.camera_status",
                         "interactive": true,
+                        "draggable": true,
                         "placement": {
                             "mode": "window",
                             "anchor": "bottom_right",
@@ -1624,6 +1806,7 @@ mod tests {
             RuntimeUiPlacementDefinition::Viewport
         ));
         assert!(manifest.surfaces[2].interactive);
+        assert!(manifest.surfaces[2].draggable);
         assert_eq!(
             manifest.surfaces[2].setting.as_deref(),
             Some("ui.camera_status")
@@ -1638,6 +1821,74 @@ mod tests {
         manifest
             .validate()
             .expect("shipped runtime UI manifest should validate");
+    }
+
+    #[test]
+    fn draggable_surfaces_require_window_placement() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "full-screen",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "full-screen",
+                    "draggable": true,
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+
+        let error = manifest
+            .validate()
+            .expect_err("only window surfaces can be draggable");
+        assert!(error.contains("must use window placement"));
+    }
+
+    #[test]
+    fn draggable_window_layout_is_clamped_to_live_target() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "window",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "window",
+                    "draggable": true,
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "width": 240.0,
+                        "height": 120.0
+                    }
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        manifest.validate().expect("window should validate");
+
+        let surface = RuntimeUiSurface::from_definition(
+            &manifest.surfaces[0],
+            Handle::default(),
+            Handle::default(),
+        );
+        let mut layouts = RuntimeSurfaceLayouts::default();
+        layouts.set(
+            "window",
+            RuntimeSurfaceLayout {
+                left: 10_000.0,
+                top: 10_000.0,
+            },
+        );
+        let window = Window::default();
+        let placement = resolve_surface_placement(&surface, &layouts, None, None, Some(&window))
+            .expect("window placement should resolve");
+
+        assert_eq!(placement.rect.size(), egui::vec2(240.0, 120.0));
+        assert!(placement.rect.min.x >= 0.0);
+        assert!(placement.rect.min.y >= 0.0);
+        assert!(placement.rect.max.x <= window.width());
+        assert!(placement.rect.max.y <= window.height());
     }
 
     #[test]
@@ -1667,6 +1918,7 @@ mod tests {
             .spawn((
                 Node::default(),
                 RuntimeUiSurface {
+                    layout_id: "hud".to_owned(),
                     namespace: "hud".to_owned(),
                     required_for_recording: false,
                     template: Handle::default(),
@@ -1677,6 +1929,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: true,
+                    draggable: false,
                     mounted: true,
                     presentation_ready: false,
                     presentation_visible: false,
@@ -1730,6 +1983,7 @@ mod tests {
         }
         let initial_revision = exposures.revision;
         app.insert_resource(exposures)
+            .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
                 handle: Handle::default(),
                 applied: Some(AssetId::default()),
@@ -1745,6 +1999,7 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default().with("value", "initial"),
                 RuntimeUiSurface {
+                    layout_id: "control-hud".to_owned(),
                     namespace: "control-hud".to_owned(),
                     required_for_recording: false,
                     template: Handle::default(),
@@ -1755,6 +2010,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    draggable: false,
                     mounted: true,
                     // This surface is not part of the offline recording
                     // contract, so it must be visible before any render-world
@@ -1791,6 +2047,7 @@ mod tests {
     #[test]
     fn presentation_generation_tracks_visibility_lifecycle_not_value_updates() {
         let mut surface = RuntimeUiSurface {
+            layout_id: "recorded".to_owned(),
             namespace: "recorded".to_owned(),
             required_for_recording: true,
             template: Handle::default(),
@@ -1801,6 +2058,7 @@ mod tests {
             setting: None,
             setting_default: false,
             interactive: false,
+            draggable: false,
             mounted: true,
             presentation_ready: true,
             presentation_visible: false,
@@ -1836,6 +2094,7 @@ mod tests {
         }
         let revision = exposures.revision;
         app.insert_resource(exposures)
+            .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
                 handle: Handle::default(),
                 applied: Some(AssetId::default()),
@@ -1851,6 +2110,7 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default(),
                 RuntimeUiSurface {
+                    layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
                     required_for_recording: false,
                     template: Handle::default(),
@@ -1861,6 +2121,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    draggable: false,
                     mounted: true,
                     presentation_ready: false,
                     presentation_visible: false,
@@ -1896,6 +2157,7 @@ mod tests {
         }
         let revision = exposures.revision;
         app.insert_resource(exposures)
+            .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
                 handle: Handle::default(),
                 applied: Some(AssetId::default()),
@@ -1911,6 +2173,7 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default(),
                 RuntimeUiSurface {
+                    layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
                     required_for_recording: false,
                     template: Handle::default(),
@@ -1921,6 +2184,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    draggable: false,
                     mounted: false,
                     presentation_ready: false,
                     presentation_visible: false,

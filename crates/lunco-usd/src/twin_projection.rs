@@ -2594,6 +2594,7 @@ mod tests {
                 name: "rover_1".into(),
                 type_name: Some("Xform".into()),
                 reference: Some("lunco://vessels/rovers/skid_rover.usda".into()),
+                reference_prim_path: None,
             })
             .unwrap();
 

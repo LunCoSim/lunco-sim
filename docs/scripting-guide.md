@@ -621,6 +621,17 @@ actual movable rigid bodies have mass/inertia and explicit joint/collider
 coverage. Raycast wheels remain outside rigid-body/joint coverage because they
 are not jointed bodies.
 
+For one asset-level decision, use
+`assembly_audit::physicality_report(doc, manifest)`. Each manifest entry must
+declare `path` and `role: "physical"` or `role: "visual-only"`. Physical entries
+reuse the existing `mass`, `inertia`, `joints`, and `colliders` fields and
+delegate their checks to the two reports above. Visual-only entries require a
+non-empty `reason` and are rejected if the composed collision query finds an
+envelope. Duplicate paths, unknown roles, missing prims, and incomplete
+physical coverage fail closed. The result contains one structured `parts`
+record per decision plus exact `errors`, so generated authoring tools can show
+the failing part without parsing a diagnostic string.
+
 `explode_plan(parts, axis, spacing)` produces a structured, non-mutating set of
 preview deltas. Apply any reviewed edit through `assembly_edit` and its typed
 USD journal boundary; the audit library never writes transforms, chooses a

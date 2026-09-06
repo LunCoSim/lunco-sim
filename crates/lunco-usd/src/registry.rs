@@ -211,6 +211,7 @@ mod tests {
                 name: "SourceOnly".into(),
                 type_name: Some("Xform".into()),
                 reference: None,
+                reference_prim_path: None,
             },
         )
         .unwrap();
@@ -236,6 +237,7 @@ mod tests {
                 name: "ForkOnly".into(),
                 type_name: Some("Xform".into()),
                 reference: None,
+                reference_prim_path: None,
             },
         )
         .unwrap();

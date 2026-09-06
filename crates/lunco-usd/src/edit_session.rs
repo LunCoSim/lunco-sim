@@ -409,6 +409,7 @@ mod tests {
             name: name.to_owned(),
             type_name: Some("Xform".to_owned()),
             reference: None,
+            reference_prim_path: None,
         }
     }
 
@@ -446,6 +447,7 @@ mod tests {
             name: "RuntimeOnly".to_owned(),
             type_name: Some("Xform".to_owned()),
             reference: None,
+            reference_prim_path: None,
         };
         let runtime_plan = validate_proposal(&document, UsdEditScope::Assembly, 0, &[runtime]);
         assert!(!runtime_plan.is_valid());

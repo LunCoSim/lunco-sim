@@ -34,6 +34,13 @@ exact Editor document id first to each stage-reading helper; `()` explicitly
 selects the mounted live scene, not the focused preview. The
 tool does not infer a body from a name, turn a raycast wheel into a rigid body,
 or replace the standard USD physics owner.
+For a single explicit decision per maintained part, use
+`assembly_audit::physicality_report(doc, manifest)`. Entries choose
+`physical` or `visual-only`; physical entries reuse the existing body/joint and
+collider/mass fields, while visual-only entries require a non-empty reason and
+must have no composed collision envelope. Unknown roles, duplicate paths,
+missing prims, and incomplete coverage are errors. This is Rhai policy and
+orchestration; it does not add a second collider reader or Rust asset rule.
 
 When an Editor workflow creates a new moving part, use
 `assembly_edit::rigid_body_plan` for the explicit body schema and mass facts,

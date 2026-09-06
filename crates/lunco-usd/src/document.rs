@@ -2523,6 +2523,7 @@ mod tests {
             name: "RtProbe".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .is_ok()
     }
@@ -3088,6 +3089,7 @@ mod tests {
             name: "RuntimeOnly".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         assert!(left
@@ -3142,6 +3144,7 @@ mod tests {
             name: "EditableCopy".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
     }
@@ -3215,6 +3218,7 @@ mod tests {
             name: "Thing".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         let tail: Vec<_> = doc.changes_since(after_first).collect();
@@ -3234,6 +3238,7 @@ mod tests {
             name: "Box".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         let after_spawn = doc.generation();
@@ -3274,6 +3279,7 @@ mod tests {
             name: "X".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         });
         assert_eq!(doc.generation(), 0);
         assert_eq!(
@@ -3300,6 +3306,7 @@ mod tests {
             name: "a".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         doc.apply(UsdOp::SetTranslate {
@@ -3672,6 +3679,7 @@ mod tests {
             name: "Rover".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         }))
         .unwrap();
         assert_eq!(
@@ -3694,6 +3702,7 @@ mod tests {
                 name: "Body".into(),
                 type_name: Some("Cube".into()),
                 reference: None,
+                reference_prim_path: None,
             })
             .unwrap_err();
         assert!(matches!(err, DocumentError::ValidationFailed(_)));
@@ -3710,6 +3719,7 @@ mod tests {
             name: "Rover".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         }))
         .unwrap();
         host.apply(Mutation::local(UsdOp::AddPrim {
@@ -3718,6 +3728,7 @@ mod tests {
             name: "WheelFL".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         }))
         .unwrap();
         host.apply(Mutation::local(UsdOp::SetTranslate {
@@ -4316,6 +4327,7 @@ mod tests {
                 name: "X".into(),
                 type_name: Some("Xform".into()),
                 reference: None,
+                reference_prim_path: None,
             })
             .unwrap_err();
         assert!(matches!(err, DocumentError::ValidationFailed(_)));
@@ -4350,6 +4362,7 @@ mod tests {
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
 
@@ -4372,6 +4385,7 @@ mod tests {
             name: "SpawnedRock".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         // The saved source (base layer) must NOT contain the runtime prim.
@@ -4396,6 +4410,7 @@ mod tests {
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
             reference: None,
+            reference_prim_path: None,
         }))
         .unwrap();
         assert!(runtime_prim_exists(host.document(), "/World/Obstacle"));
@@ -4423,6 +4438,7 @@ mod tests {
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
 
@@ -4454,6 +4470,7 @@ mod tests {
             name: "rover_1".into(),
             type_name: None,
             reference: Some("vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
         }))
         .unwrap();
 
@@ -4573,6 +4590,7 @@ def Xform \"Traverse\" (\n\
             name: "Probe".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         let composed = doc.composed();
@@ -4595,6 +4613,7 @@ def Xform \"Traverse\" (\n\
             name: "Rover".into(),
             type_name: Some("Xform".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
         // Author into runtime.
@@ -4604,6 +4623,7 @@ def Xform \"Traverse\" (\n\
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
             reference: None,
+            reference_prim_path: None,
         })
         .unwrap();
 

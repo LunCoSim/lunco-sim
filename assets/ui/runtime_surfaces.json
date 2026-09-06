@@ -51,6 +51,7 @@
         "wire_7": { "source": "wire_7" },
         "wire_7_visible": { "source": "wire_7_visible", "map": { "true": "flex", "false": "none" } }
       },
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "top_center",
@@ -91,6 +92,7 @@
         "rcs_activity_width": { "source": "rcs_activity_width" },
         "rcs_axis": { "source": "rcs_axis" }
       },
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "bottom_left",
@@ -131,6 +133,7 @@
         "rcs_activity_width": { "source": "rcs_activity_width" },
         "rcs_axis": { "source": "rcs_axis" }
       },
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "bottom_right",
@@ -200,6 +203,7 @@
         }
       ],
       "visible_in_perspective": "sandbox_view",
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "top_right",
@@ -286,6 +290,7 @@
       "visible_in_perspective": "sandbox_view",
       "gate": "view_switcher",
       "interactive": true,
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "top_center",
@@ -306,6 +311,7 @@
         }
       ],
       "interactive": true,
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "top_center",
@@ -319,6 +325,7 @@
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",
       "namespace": "scenario-download",
+      "draggable": true,
       "placement": {
         "mode": "window",
         "anchor": "top_center",

@@ -191,6 +191,13 @@ Placement modes:
 - `dock_panel` uses the workbench's authoritative `PanelRects` plus an inset;
 - `window` uses logical-point width/height, a corner/center anchor, and an offset.
 
+Only a `window` surface may set `draggable: true`. The primary-button drag
+stores a finite logical top-left override by stable surface id, clamps it to
+the live target after resize/DPI changes, and persists it in the active Twin's
+existing workbench workspace state. A primary-button double click removes the
+override and restores the authored anchor. Manifest reconciliation prunes
+unknown surface ids, and `TwinClosed` clears the in-memory layout scope.
+
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime feeds each control's computed Bevy UI
 rectangle into the existing `ScenePickGate`; it never registers the surface root
