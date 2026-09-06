@@ -110,6 +110,24 @@ fn chassis_rocker_seat_ok() {
     ])
 }
 
+fn physicality_manifest() {
+    [
+        #{
+            path: ROOT, role: "physical", mass: 720.0,
+            joints: [
+                #{path: ROOT + "/HingeL", body0: ROOT, body1: ROOT + "/RockerL"},
+                #{path: ROOT + "/HingeR", body0: ROOT, body1: ROOT + "/RockerR"},
+            ],
+            colliders: [#{path: ROOT + "/Body"}],
+        },
+        #{
+            path: FEED_ROOT + "/LinkAperture/CommsIndicator",
+            role: "visual-only",
+            reason: "emissive link-state indicator is presentation-only",
+        },
+    ]
+}
+
 fn assembly_tool_contracts_ok() {
     let topology = assembly_audit::topology_report((), [
         #{
@@ -225,6 +243,23 @@ fn assembly_tool_negative_contracts_ok() {
             colliders: [#{path: ROOT + "/MissingCollider", enabled: true}],
         },
     ]);
+    let missing_reason = assembly_audit::physicality_report((), [#{
+        path: FEED_ROOT + "/LinkAperture/CommsIndicator",
+        role: "visual-only",
+    }]);
+    let visual_collision = assembly_audit::physicality_report((), [#{
+        path: ROOT + "/RockerL/Collider",
+        role: "visual-only",
+        reason: "incorrectly classified collision representative",
+    }]);
+    let unknown_role = assembly_audit::physicality_report((), [#{
+        path: ROOT,
+        role: "maybe",
+    }]);
+    let duplicate_path = assembly_audit::physicality_report((), [
+        #{path: ROOT, role: "physical", joints: [], colliders: []},
+        #{path: ROOT, role: "visual-only", reason: "duplicate identity"},
+    ]);
     let invalid_explode = assembly_audit::explode_plan([
         #{path: ROOT + "/RockerL"},
     ], "Q", 0.25);
@@ -232,6 +267,10 @@ fn assembly_tool_negative_contracts_ok() {
         && !wrong_axis.ok && wrong_axis.errors.len() > 0
         && !no_joints.ok && no_joints.errors.len() > 0
         && !missing_collider.ok && missing_collider.errors.len() > 0
+        && !missing_reason.ok && missing_reason.errors.len() > 0
+        && !visual_collision.ok && visual_collision.errors.len() > 0
+        && !unknown_role.ok && unknown_role.errors.len() > 0
+        && !duplicate_path.ok && duplicate_path.errors.len() > 0
         && invalid_explode.ok == false
 }
 
@@ -266,6 +305,19 @@ fn on_tick(me) {
     failures.push(t_true(
         assembly_tool_contracts_ok(),
         "the authored assembly topology, frame, body, collider, or explode-plan audit failed"));
+    let physicality = assembly_audit::physicality_report((), physicality_manifest());
+    let physicality_message = if physicality.ok {
+        "the physicality report returned an invalid decision set"
+    } else if physicality.errors.len() > 0 {
+        "physicality report failed: " + physicality.errors[0]
+    } else {
+        "physicality report failed without an error"
+    };
+    failures.push(t_true(
+        physicality.ok && physicality.parts.len() == 2
+            && physicality.parts[0].role == "physical"
+            && physicality.parts[1].role == "visual-only",
+        physicality_message));
     failures.push(t_true(
         assembly_tool_negative_contracts_ok(),
         "the authored assembly diagnostics did not reject invalid contracts"));

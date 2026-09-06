@@ -479,6 +479,96 @@ fn collider_mass_report(doc, bodies) {
     #{ ok: errors.len() == 0, reports: reports, errors: errors }
 }
 
+/// Audit one explicit physicality manifest. Every entry must choose exactly
+/// one role: `physical` delegates authored body/joint and collider/mass checks
+/// to the existing reports, while `visual-only` requires a reason and must have
+/// no composed collision envelope. Duplicate paths and unknown roles fail
+/// visibly; the tool never infers intent from names, schemas, or hierarchy.
+///
+/// The returned `parts` records keep the per-entry reports so an editor or
+/// generated authoring tool can show the failing part without parsing strings.
+fn physicality_report(doc, parts) {
+    let decisions = [];
+    let errors = [];
+    if parts == () || parts.len() == 0 {
+        return #{
+            ok: false,
+            parts: decisions,
+            errors: ["physicality manifest must contain at least one part"],
+        };
+    }
+
+    let seen = [];
+    for part in parts {
+        let path = part.path;
+        let role = part.role;
+        if path == () || type_of(path) != "string" || path == "" {
+            errors.push("physicality entry requires a non-empty path");
+            continue;
+        }
+        if seen.contains(path) {
+            errors.push(path + ": physicality path is declared more than once");
+            decisions.push(#{ path: path, role: role, ok: false, errors: [
+                "physicality path is declared more than once",
+            ]});
+            continue;
+        }
+        seen.push(path);
+
+        if role == "physical" {
+            let body = body_joint_coverage_report(doc, [part]);
+            let colliders = collider_mass_report(doc, [part]);
+            let part_errors = [];
+            for error in body.errors { part_errors.push(error); }
+            for error in colliders.errors { part_errors.push(error); }
+            for error in part_errors { errors.push(error); }
+            decisions.push(#{
+                path: path,
+                role: role,
+                ok: part_errors.len() == 0,
+                body: body,
+                colliders: colliders,
+                errors: part_errors,
+            });
+            continue;
+        }
+
+        if role == "visual-only" {
+            let part_errors = [];
+            let reason = part.reason;
+            if type_of(reason) != "string" || reason.len() == 0 {
+                part_errors.push(path + ": visual-only entry requires a non-empty reason");
+            }
+            let prim = query_prim(doc, path, (), (), false);
+            if !query_ok(prim) {
+                part_errors.push(path + ": visual-only prim is missing");
+            } else {
+                let bounds = collision_bounds_record(doc, path);
+                if !query_ok(bounds) {
+                    part_errors.push(path + ": visual-only collision query failed");
+                } else if bounds.collision_bounds != () {
+                    part_errors.push(path + ": visual-only part has composed collision geometry");
+                }
+            }
+            for error in part_errors { errors.push(error); }
+            decisions.push(#{
+                path: path,
+                role: role,
+                reason: reason,
+                ok: part_errors.len() == 0,
+                errors: part_errors,
+            });
+            continue;
+        }
+
+        let message = path + ": physicality role must be physical or visual-only";
+        errors.push(message);
+        decisions.push(#{ path: path, role: role, ok: false, errors: [message] });
+    }
+
+    #{ ok: errors.len() == 0, parts: decisions, errors: errors }
+}
+
 /// Build a non-mutating visual explode plan. The returned deltas are consumed
 /// by the existing USD preview/transform boundary; this helper never authors a
 /// transform and therefore cannot bypass the journal or selection owner.

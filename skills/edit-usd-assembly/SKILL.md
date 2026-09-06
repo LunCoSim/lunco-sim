@@ -271,6 +271,13 @@ only returns preview deltas; it does not write USD or bypass the journal. Do
 not list raycast wheels as rigid bodies or invent a joint to make that audit
 pass. Missing relationships, bodies, or colliders are defects to fix at their
 authored owner.
+Use `assembly_audit::physicality_report(doc, manifest)` when an asset needs one
+fail-closed physical/visual-only manifest. A `physical` entry delegates its
+explicit `mass`, `inertia`, `joints`, and `colliders` to the existing audits. A
+`visual-only` entry requires a non-empty reason and no composed collision
+envelope. Duplicate paths, unknown roles, missing prims, and incomplete
+coverage remain visible structured errors; the tool is dynamically reloadable
+Rhai policy and does not create a parallel geometry or USD writer.
 
 For `joint_frame_report`, supply `axis` only for revolute, prismatic or
 spherical joints (their standard omitted axis is X). Fixed payload adapters,
