@@ -358,8 +358,8 @@ fn griffin_mission_assembly_plan(doc, edit_target, manifest) {
         return plan_error("Griffin mission lander, FLIP, and adapter must be distinct direct children of the root");
     }
     if manifest.lander_asset != "lunco://vessels/landers/descent_lander.usda"
-        || manifest.flip_asset != "lunco://vessels/rovers/skid_rover.usda" {
-        return plan_error("Griffin mission assembly requires the maintained descent_lander and four-wheel skid_rover asset contracts");
+        || manifest.flip_asset != "lunco://vessels/rovers/flip_rover.usda" {
+        return plan_error("Griffin mission assembly requires the maintained descent_lander and dedicated FLIP rover asset contracts");
     }
     if manifest.wheel_paths.len() != 4 {
         return plan_error("Griffin mission assembly requires exactly four FLIP wheel paths");

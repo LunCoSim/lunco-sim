@@ -570,9 +570,13 @@ placement intents. The caller supplies study values and paths explicitly; the
 recipe does not turn assumptions into flight facts. `griffin_mission_plan`
 composes those two plans only after checking an already-authored root, lander,
 FLIP, and fixed payload-adapter relationship. For a build from maintained
-references, `griffin_mission_assembly_plan` creates the lander and four-wheel
-rover instances with explicit placements; after their composed children are
-queryable, `griffin_mission_adapter_plan` creates the explicit fixed adapter.
+references, `griffin_mission_assembly_plan` creates the lander and the
+dedicated `assets/vessels/rovers/flip_rover.usda` instance with explicit
+placements; after their composed children are queryable,
+`griffin_mission_adapter_plan` creates the explicit fixed adapter. The FLIP
+asset is a thin composition over shared rover components and is labelled a
+study proxy; the authored payload deck, sensor mast, and fixed solar proxy do
+not imply as-built CAD or articulated solar deployment.
 The `griffin_flip_production_builder` scene test exercises the complete
 reference/placement/joint lifecycle, including negative manifests and the
 reviewed commit, in Rhai. Its USDA fixture is only an empty mission frame, so

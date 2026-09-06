@@ -243,13 +243,17 @@ change while retaining the same authoritative attach validator.
 For the current Griffin/FLIP study package, the dynamic
 `griffin_flip_builder` library composes the same generic surface into paired
 ramp and four-wheel layout recipes. Use
-`griffin_mission_assembly_plan` to build the maintained lander and four-wheel
-rover references with explicit placement, then wait for their composed
-children and use `griffin_mission_adapter_plan` for the fixed payload
-adapter. `griffin_mission_plan` validates an already-authored mission before
-adding ramp and wheel layout edits. Treat mass, inertia, dimensions, and frame
-values as caller-supplied study inputs; inspect exact composed prims and
-proposal diagnostics before committing an authored edit. The
+`griffin_mission_assembly_plan` to build the maintained lander and dedicated
+`assets/vessels/rovers/flip_rover.usda` reference with explicit placement, then
+wait for their composed children and use `griffin_mission_adapter_plan` for the
+fixed payload adapter. The FLIP asset is a thin composition over shared rover
+components and is explicitly labelled a study proxy; its payload deck, sensor
+mast, and fixed solar proxy are authored facts, while articulated deployment
+and as-built fidelity remain separate contracts. `griffin_mission_plan`
+validates an already-authored mission before adding ramp and wheel layout
+edits. Treat mass, inertia, dimensions, and frame values as caller-supplied
+study inputs; inspect exact composed prims and proposal diagnostics before
+committing an authored edit. The
 `griffin_flip_production_builder` scene test keeps the complete observable
 construction and negative cases in Rhai; its USDA contains only the empty
 mission frame.
