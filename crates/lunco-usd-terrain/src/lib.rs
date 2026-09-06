@@ -190,8 +190,18 @@ struct DemBridged;
 /// the same authored prim resume through the normal projection path after an
 /// explicit download completes.
 #[derive(Component)]
-struct DemDatasetPending {
+pub struct DemDatasetPending {
     dataset_id: String,
+}
+
+impl DemDatasetPending {
+    /// Mark a composed DEM whose delivered artifact must be installed before
+    /// the physics world can admit dynamic bodies.
+    pub fn new(dataset_id: impl Into<String>) -> Self {
+        Self {
+            dataset_id: dataset_id.into(),
+        }
+    }
 }
 
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
@@ -1791,9 +1801,9 @@ fn bridge_dem_prim_read(
                     "Terrain data '{}' is not installed. Choose Download in Twin resources to continue.",
                     entry.name
                 );
-                commands.entity(entity).try_insert(DemDatasetPending {
-                    dataset_id: entry.id.clone(),
-                });
+                commands
+                    .entity(entity)
+                    .try_insert(DemDatasetPending::new(entry.id.clone()));
                 commands.trigger(lunco_core::TelemetryEvent {
                     name: "DEM_DATASET_REQUIRED".to_owned(),
                     source: 0,
