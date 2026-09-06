@@ -355,7 +355,7 @@ fn streamed_terrain_map_weights_use_only_fragment_footprint() {
     let kernel = code_only(&read("terrain_surface.wgsl"));
     assert!(
         code.contains("let map_footprint = pw / mat.map_texel_size_m;")
-            && code.contains("let derived_weights = map_weights(map_footprint);")
+            && code.contains("let map_weights = terrain_map_weights(")
             && code.contains("mat.derived_normal_on")
             && code.contains("mat.derived_surface_on"),
         "streamed terrain must derive engine-map detail from fragment footprint and explicit source contracts"
@@ -370,6 +370,35 @@ fn streamed_terrain_map_weights_use_only_fragment_footprint() {
         kernel.contains("return vec3(w_normal, 1.0, 1.0);"),
         "physical AO and tone must not change with camera distance"
     );
+}
+
+/// Both terrain material paths receive the same role selection from the CPU
+/// reconciler. The shared WGSL resolver is the shader-side owner of the
+/// footprint weighting; otherwise one path can silently ignore a derived map
+/// that the other path consumes.
+#[test]
+fn static_and_streamed_terrain_share_the_derived_source_contract() {
+    let kernel = code_only(&read("terrain_surface.wgsl"));
+    assert!(kernel.contains("fn terrain_map_weights("));
+    for file in ["terrain_geomorph.wgsl", "terrain_layered.wgsl"] {
+        let code = code_only(&read(file));
+        assert!(
+            code.contains("terrain_map_weights("),
+            "{file} must consume the shared terrain map source resolver"
+        );
+        for field in [
+            "map_texel_size_m",
+            "derived_surface_on",
+            "derived_normal_on",
+            "authored_surface_on",
+            "authored_normal_on",
+        ] {
+            assert!(
+                code.contains(&format!("{field}:")),
+                "{file} must declare the shared source-contract field `{field}`"
+            );
+        }
+    }
 }
 
 /// Terrain analysis is a tool material, not a production-shader branch. Keeping

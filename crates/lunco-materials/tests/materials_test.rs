@@ -162,7 +162,7 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
     }
 }
 
-/// Each production terrain render path must reflect the authored-layer weights
+/// Each production terrain render path must reflect the material contract
 /// that it actually consumes. `terrain_layered.wgsl` draws a static-mesh site;
 /// `terrain_geomorph.wgsl` draws a streamed (`lodViz = true`) one and deliberately
 /// has no mineral slot because mineral classification is not part of its physical
@@ -175,7 +175,7 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
 /// rendering procedural grey while its real orthophoto sat loaded in memory —
 /// which is exactly the bug step 4 existed to fix.
 #[test]
-fn both_terrain_paths_reflect_the_authored_layer_weights() {
+fn both_terrain_paths_reflect_the_material_contract() {
     for (name, fields) in [
         (
             "terrain_layered.wgsl",
@@ -185,6 +185,11 @@ fn both_terrain_paths_reflect_the_authored_layer_weights() {
                 "weight_rough",
                 "weight_ao",
                 "weight_normal",
+                "map_texel_size_m",
+                "derived_surface_on",
+                "derived_normal_on",
+                "authored_surface_on",
+                "authored_normal_on",
             ],
         ),
         (
@@ -194,6 +199,11 @@ fn both_terrain_paths_reflect_the_authored_layer_weights() {
                 "weight_rough",
                 "weight_ao",
                 "weight_normal",
+                "map_texel_size_m",
+                "derived_surface_on",
+                "derived_normal_on",
+                "authored_surface_on",
+                "authored_normal_on",
                 "",
             ],
         ),

@@ -37,7 +37,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -68,6 +68,14 @@
 //!@default weight_ao         0
 //!@ui      weight_normal     0 1         "Normal map weight"
 //!@default weight_normal     0
+// Derived-map weights are resolved from the screen-space surface footprint and
+// explicit CPU source bits. The same contract is used by streamed geomorph
+// tiles, so static and streamed terrain cannot shade the same site differently.
+//!@default map_texel_size_m 1.0
+//!@default derived_surface_on 0
+//!@default derived_normal_on  0
+//!@default authored_surface_on 0
+//!@default authored_normal_on  0
 // --- lunar photometry (lunco::lunar) ---------------------------------------
 // Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
 // MUST match `terrain_geomorph.wgsl`: the same site renders through whichever of
@@ -102,6 +110,11 @@ struct Material {
     weight_rough:      f32,
     weight_ao:         f32,
     weight_normal:     f32,
+    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
+    derived_surface_on: f32, // engine-filled: derived surface map is the selected source
+    derived_normal_on:  f32, // engine-filled: derived normal map is the selected source
+    authored_surface_on: f32, // engine-filled: USD surface map is the selected source
+    authored_normal_on:  f32, // engine-filled: USD normal map is the selected source
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
@@ -206,6 +219,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Guarded by VERTEX_UVS_A: with no UVs we stay pure procedural.
 #ifdef VERTEX_UVS_A
     let uv = in.uv;
+    var map_n = textureSample(normal_tex, normal_smp, uv);
+    var map_s = textureSample(surface_tex, surface_smp, uv);
+    let map_footprint = pw / mat.map_texel_size_m;
+    let map_weights = terrain_map_weights(
+        map_footprint,
+        mat.derived_surface_on,
+        mat.derived_normal_on,
+        mat.authored_surface_on,
+        mat.authored_normal_on,
+        mat.weight_rough,
+        mat.weight_ao,
+        mat.weight_normal,
+    );
+    let map_weight_normal = map_weights.x;
+    let map_weight_rough = map_weights.y;
+    let map_weight_ao = map_weights.z;
+    let map_weight_tone = map_weights.w;
     // Albedo: real colour mosaic mixed over the procedural albedo. `ORTHO_GAIN`
     // undoes the bake's 1–99 percentile stretch (mean ≈ 1/3, not 1) so the
     // multiply modulates the regolith instead of dimming it — see the constant's
@@ -221,21 +251,27 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // albedo here would multiply it through sun, CSM and the shadow march —
     // the exact bug doc 18 §4 removes.)
     // Surface pack: R=roughness, G=AO (B=rockDens, A=hazard consumed elsewhere).
-    if (mat.weight_rough > 0.0 || mat.weight_ao > 0.0) {
-        let s = textureSample(surface_tex, surface_smp, uv);
-        roughness = clamp(mix(roughness, s.r, mat.weight_rough), 0.05, 1.0);
-        albedo *= mix(1.0, s.g, mat.weight_ao);
+    if (map_weight_rough > 0.0 || map_weight_ao > 0.0) {
+        roughness = clamp(mix(roughness, map_s.r, map_weight_rough), 0.05, 1.0);
+        var map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, map_weight_ao);
+        if (mat.authored_surface_on > 0.5) {
+            map_ao = mix(1.0, map_s.g, map_weight_ao);
+        }
+        albedo *= map_ao;
     }
     // Normal: perturb the procedural WORLD normal toward the map's baked
     // DEM-local ENU normal.  The mesh instance is the authoritative
     // local->render transform (including the active BigSpace frame); treating
     // the map bytes as world-space made a rotated terrain use a different light
     // direction from its own geometry.
-    if (mat.weight_normal > 0.0) {
+    if (map_weight_normal > 0.0) {
         let n_baked = dem_normal_to_world(
-            textureSample(normal_tex, normal_smp, uv).xyz, in.instance_index);
-        n = normalize(mix(n, n_baked, mat.weight_normal));
+            map_n.xyz, in.instance_index);
+        n = normalize(mix(n, n_baked, map_weight_normal));
     }
+    // The derived normal's alpha carries the same DEM-anchored relief tone as
+    // the streamed path. Authored normal maps intentionally do not supply it.
+    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
 #endif
 
     var pbr_input = pbr_types::pbr_input_new();

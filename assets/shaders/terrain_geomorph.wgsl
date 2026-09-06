@@ -30,7 +30,7 @@
     mesh_view_bindings::view,
 }
 #import lunco::pbr_lit::lit_n
-#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, map_weights, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
+#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights}
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
 
 //!@ui      albedo            color  "Albedo"
@@ -264,19 +264,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Optional GPU bindings are always populated by the material binder, but
     // their fallback texels are not terrain data. The CPU source bits are the
     // authoritative boundary between authored, derived, and procedural terms.
-    let derived_weights = map_weights(map_footprint);
-    var weight_normal = derived_weights.x * mat.derived_normal_on;
-    var weight_ao = derived_weights.y * mat.derived_surface_on;
-    var weight_rough = 0.35 * derived_weights.y * mat.derived_surface_on;
-    var weight_tone = derived_weights.z * mat.derived_normal_on;
-    if (mat.authored_normal_on > 0.5) {
-        weight_normal = mat.weight_normal;
-        weight_tone = 0.0;
-    }
-    if (mat.authored_surface_on > 0.5) {
-        weight_rough = mat.weight_rough;
-        weight_ao = mat.weight_ao;
-    }
+    let map_weights = terrain_map_weights(
+        map_footprint,
+        mat.derived_surface_on,
+        mat.derived_normal_on,
+        mat.authored_surface_on,
+        mat.authored_normal_on,
+        mat.weight_rough,
+        mat.weight_ao,
+        mat.weight_normal,
+    );
+    let weight_normal = map_weights.x;
+    let weight_rough = map_weights.y;
+    let weight_ao = map_weights.z;
+    let weight_tone = map_weights.w;
 
     // Baked meso normal: once a screen pixel covers roughly a map texel, the map
     // carries stable filtered crater slopes. Below that physical scale the mesh

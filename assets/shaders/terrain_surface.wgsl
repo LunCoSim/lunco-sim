@@ -78,6 +78,39 @@ fn map_weights(r: f32) -> vec3<f32> {
     return vec3(w_normal, 1.0, 1.0);
 }
 
+/// Resolve one terrain material's map roles from the shared CPU source contract.
+///
+/// The streamed CDLOD and static-mesh paths must make the same decision when a
+/// role is authored by USD versus supplied by the DEM bake. Keeping this in the
+/// shared surface module prevents a path from silently treating a bound derived
+/// texture as authored (or ignoring it altogether). The returned lanes are
+/// `(normal, roughness, AO, relief-tone)` weights.
+fn terrain_map_weights(
+    map_footprint: f32,
+    derived_surface_on: f32,
+    derived_normal_on: f32,
+    authored_surface_on: f32,
+    authored_normal_on: f32,
+    authored_rough: f32,
+    authored_ao: f32,
+    authored_normal: f32,
+) -> vec4<f32> {
+    let derived = map_weights(map_footprint);
+    var weight_normal = derived.x * derived_normal_on;
+    var weight_ao = derived.y * derived_surface_on;
+    var weight_rough = 0.35 * derived.y * derived_surface_on;
+    var weight_tone = derived.z * derived_normal_on;
+    if (authored_normal_on > 0.5) {
+        weight_normal = authored_normal;
+        weight_tone = 0.0;
+    }
+    if (authored_surface_on > 0.5) {
+        weight_rough = authored_rough;
+        weight_ao = authored_ao;
+    }
+    return vec4(weight_normal, weight_rough, weight_ao, weight_tone);
+}
+
 /// Decode the normal-map convention shared by the DEM baker and terrain
 /// shaders.  The result is in the DEM's local ENU frame, not in whichever
 /// floating render frame is active for the current camera.
