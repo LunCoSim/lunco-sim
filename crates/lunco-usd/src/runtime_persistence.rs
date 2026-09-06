@@ -389,6 +389,7 @@ mod tests {
                 name: "rover_1".into(),
                 type_name: None,
                 reference: Some("vessels/rovers/skid_rover.usda".into()),
+                reference_prim_path: None,
             })
             .unwrap();
         let text = lunco_usd_bevy::author::data_to_usda(source.runtime_data()).unwrap();
@@ -440,6 +441,7 @@ mod tests {
             name: "rover_1".into(),
             type_name: None,
             reference: Some("vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
         })
         .unwrap();
         assert!(runtime_has_content(src.runtime_data()));
@@ -512,6 +514,7 @@ mod tests {
             name: "rover_1".into(),
             type_name: None,
             reference: Some("vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
         })
         .unwrap();
         let text = lunco_usd_bevy::author::data_to_usda(src.runtime_data()).unwrap();
