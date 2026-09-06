@@ -5340,16 +5340,17 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
 
     ui.horizontal(|ui| {
-        // Calculate the reserved width for all elements to the right of the status scope
-        let right_reserve = 16.0
-            + if perf_enabled { 300.0 } else { 0.0 }
-            + if net_active { 220.0 } else { 0.0 }
-            + if !tutorial_title.is_empty() {
-                190.0
-            } else {
-                0.0
-            }
-            + if !scene_name.is_empty() { 150.0 } else { 0.0 };
+        // Reserve the exact bounded footprint of every control to the right of
+        // the status scope. The controls shrink together on compact windows;
+        // the left scope never competes with an unbounded label.
+        let right_widths = status_bar_right_widths(
+            ui.available_width(),
+            perf_enabled,
+            net_active,
+            !tutorial_title.is_empty(),
+            !scene_name.is_empty(),
+        );
+        let right_reserve = right_widths.total();
 
         let status_width = (ui.available_width() - right_reserve).max(1.0);
 
@@ -5449,20 +5450,42 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
 
         if !tutorial_title.is_empty() {
             ui.separator();
-            ui.label(
-                egui::RichText::new(format!("Tutorial: {tutorial_title}"))
-                    .small()
-                    .strong(),
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_widths.tutorial, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add_sized(
+                        [right_widths.tutorial, 18.0],
+                        egui::Label::new(
+                            egui::RichText::new(format!("Tutorial: {tutorial_title}"))
+                                .small()
+                                .strong(),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(format!("Tutorial: {tutorial_title}"));
+                },
             );
         }
 
         if !scene_name.is_empty() {
             ui.separator();
             let scene_response = ui
-                .add(
-                    egui::Label::new(egui::RichText::new(format!("Scene: {}", scene_name)).small())
-                        .sense(egui::Sense::click()),
+                .allocate_ui_with_layout(
+                    egui::vec2(right_widths.scene, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add_sized(
+                            [right_widths.scene, 18.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("Scene: {}", scene_name)).small(),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                        )
+                    },
                 )
+                .inner
                 .on_hover_text("Click to show the full path of the loaded USD file");
             if scene_response.clicked() {
                 egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
@@ -5486,13 +5509,13 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
 
         ui.separator();
 
-        render_net_chip(ui, world, theme);
+        render_net_chip(ui, world, theme, right_widths.net);
 
         // Right-aligned perf segment. Hidden when the HUD is off so
         // we don't show stale zeroes; toggled via `TogglePerfHud` or
         // the Settings menu.
         if perf_enabled {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let perf_text = {
                 let phys = perf_stats
                     .physics_ms
                     .map(|ms| format!(" · phys {:>4.1}ms", ms))
@@ -5505,16 +5528,28 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 // are right-justified inside their fields by the
                 // padding spec; monospace alone isn't enough because
                 // the *number of characters* changes.
-                ui.label(
-                    egui::RichText::new(format!(
-                        "FPS {:>5.1} · {:>5.1}ms{}{}",
-                        perf_stats.fps, perf_stats.frame_ms, p99, phys,
-                    ))
-                    .small()
-                    .monospace(),
-                );
-                draw_frame_time_sparkline(ui, &frame_history, theme);
-            });
+                format!(
+                    "FPS {:>5.1} · {:>5.1}ms{}{}",
+                    perf_stats.fps, perf_stats.frame_ms, p99, phys,
+                )
+            };
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_widths.perf, 18.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    let sparkline_width = if frame_history.is_empty() { 0.0 } else { 120.0 };
+                    let label_width =
+                        (ui.available_width() - sparkline_width - ui.spacing().item_spacing.x)
+                            .max(1.0);
+                    ui.add_sized(
+                        [label_width, 18.0],
+                        egui::Label::new(egui::RichText::new(&perf_text).small().monospace())
+                            .truncate(),
+                    )
+                    .on_hover_text(&perf_text);
+                    draw_frame_time_sparkline(ui, &frame_history, theme);
+                },
+            );
         }
 
         // egui::Popup is the post-0.31 API. `open_memory(None)` ties
@@ -5858,6 +5893,81 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
     menu_popup_max_width(content_width, SETTINGS_SUBMENU_MAX_WIDTH)
 }
 
+const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
+const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
+const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
+const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
+const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
+const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
+const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct StatusBarRightWidths {
+    tutorial: f32,
+    scene: f32,
+    net: f32,
+    perf: f32,
+    overhead: f32,
+}
+
+impl StatusBarRightWidths {
+    fn total(self) -> f32 {
+        self.tutorial + self.scene + self.net + self.perf + self.overhead
+    }
+}
+
+/// Keep every right-hand status control inside the width reserved from the
+/// left status scope. On compact windows the controls shrink together and
+/// truncate their low-priority text instead of colliding with one another.
+fn status_bar_right_widths(
+    available_width: f32,
+    perf_enabled: bool,
+    net_active: bool,
+    tutorial_visible: bool,
+    scene_visible: bool,
+) -> StatusBarRightWidths {
+    let separator_count = 1.0
+        + if tutorial_visible { 1.0 } else { 0.0 }
+        + if scene_visible { 1.0 } else { 0.0 }
+        + if net_active { 1.0 } else { 0.0 };
+    let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
+    let tutorial = if tutorial_visible {
+        STATUS_BAR_TUTORIAL_MAX_WIDTH
+    } else {
+        0.0
+    };
+    let scene = if scene_visible {
+        STATUS_BAR_SCENE_MAX_WIDTH
+    } else {
+        0.0
+    };
+    let net = if net_active {
+        STATUS_BAR_NET_MAX_WIDTH
+    } else {
+        0.0
+    };
+    let perf = if perf_enabled {
+        STATUS_BAR_PERF_MAX_WIDTH
+    } else {
+        0.0
+    };
+    let max_controls = tutorial + scene + net + perf;
+    let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH).max(1.0);
+    let scale = if max_controls > 0.0 {
+        ((budget - overhead).max(1.0) / max_controls).min(1.0)
+    } else {
+        0.0
+    };
+
+    StatusBarRightWidths {
+        tutorial: tutorial * scale,
+        scene: scene * scale,
+        net: net * scale,
+        perf: perf * scale,
+        overhead,
+    }
+}
+
 /// Render the always-visible networking chip in the status bar.
 /// Reads `lunco_core::NetStatus` (always present; populated by the
 /// optional `lunco-networking` adapter when it's wired). Silent (zero pixels)
@@ -5866,7 +5976,7 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 /// - **Host**: green dot, `HOST :PORT · N peers` (this window's listen port).
 /// - **Client (connected)**: green dot, `CLIENT → host:port`.
 /// - **Client (connecting)**: amber dot, `connecting → host:port`.
-fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
+fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme, width: f32) {
     use lunco_core::{NetStatus, NetworkRole};
     let Some(status) = world.get_resource::<NetStatus>().cloned() else {
         return;
@@ -5890,10 +6000,20 @@ fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Th
             format!("connecting → {}", status.endpoint),
         ),
     };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, dot);
-    ui.label(egui::RichText::new(label).small())
-        .on_hover_text("LunCoSim networking");
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 18.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 4.0, dot);
+            let label_width = (ui.available_width() - ui.spacing().item_spacing.x).max(1.0);
+            ui.add_sized(
+                [label_width, 18.0],
+                egui::Label::new(egui::RichText::new(label).small()).truncate(),
+            )
+            .on_hover_text("LunCoSim networking");
+        },
+    );
     ui.separator();
 }
 
@@ -6947,6 +7067,22 @@ mod tests {
         assert_eq!(status_bar_message_width(500.0, false, 4.0), 500.0);
         assert_eq!(status_bar_message_width(500.0, true, 4.0), 376.0);
         assert_eq!(status_bar_message_width(80.0, true, 4.0), 1.0);
+    }
+
+    #[test]
+    fn status_bar_right_controls_fit_the_reserved_compact_width() {
+        let compact = status_bar_right_widths(960.0, true, true, true, true);
+        assert!(compact.total() <= 800.0);
+        assert!(compact.tutorial <= STATUS_BAR_TUTORIAL_MAX_WIDTH);
+        assert!(compact.scene <= STATUS_BAR_SCENE_MAX_WIDTH);
+        assert!(compact.net <= STATUS_BAR_NET_MAX_WIDTH);
+        assert!(compact.perf <= STATUS_BAR_PERF_MAX_WIDTH);
+
+        let wide = status_bar_right_widths(1600.0, true, true, true, true);
+        assert_eq!(wide.tutorial, STATUS_BAR_TUTORIAL_MAX_WIDTH);
+        assert_eq!(wide.scene, STATUS_BAR_SCENE_MAX_WIDTH);
+        assert_eq!(wide.net, STATUS_BAR_NET_MAX_WIDTH);
+        assert_eq!(wide.perf, STATUS_BAR_PERF_MAX_WIDTH);
     }
 
     #[test]
