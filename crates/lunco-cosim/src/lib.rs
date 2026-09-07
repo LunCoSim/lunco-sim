@@ -788,15 +788,19 @@ fn on_set_ports(
         {
             return;
         }
-        // A paused causal scene rejects deferred writes to scene entities. The
-        // local free avatar has no GlobalEntityId and remains an interaction-
-        // cadence endpoint, so pausing the simulation does not freeze the
-        // user's presentation controls.
-        if world
-            .get_resource::<Time<Virtual>>()
-            .is_some_and(|time| time.is_paused())
-            && world.get::<lunco_core::GlobalEntityId>(target).is_some()
-        {
+        // A user-paused causal scene rejects deferred writes to scene entities.
+        // `Time<Virtual>` is also paused by the Modelica coupling barrier while
+        // a shared solver result is in flight, though; treating that internal
+        // synchronization pause as user intent drops legitimate keyboard,
+        // autopilot, API, and Rhai commands nondeterministically under load.
+        // TimeTransport is the authoritative user play/pause owner. The local
+        // free avatar has no GlobalEntityId and remains an interaction-cadence
+        // endpoint, so an explicit pause does not freeze its presentation
+        // controls.
+        let user_paused = world
+            .get_resource::<lunco_time::TimeTransport>()
+            .is_some_and(|transport| !transport.is_running());
+        if user_paused && world.get::<lunco_core::GlobalEntityId>(target).is_some() {
             return;
         }
         // A setpoint on a WIRED input has to outrank the wire, or the next
@@ -1076,6 +1080,62 @@ mod control_intent_tests {
                 .unwrap()
                 .cmd("throttle"),
             0.5
+        );
+    }
+
+    #[test]
+    fn set_ports_allows_solver_barrier_but_rejects_user_pause() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        let target = app
+            .world_mut()
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(7),
+                lunco_core::InputPorts::new(&["headlights"]),
+            ))
+            .id();
+        app.insert_resource(lunco_time::TimeTransport {
+            mode: lunco_time::TransportMode::Paused,
+            rate: 1.0,
+        });
+
+        app.world_mut().trigger(SetPorts {
+            target,
+            writes: vec![("headlights".into(), 1.0)],
+            seq: 0,
+            tick: 1,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::InputPorts>(target)
+                .unwrap()
+                .cmd("headlights"),
+            0.0,
+            "an explicit user pause must reject scene control writes"
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_time::TimeTransport>()
+            .mode = lunco_time::TransportMode::Playing;
+        app.init_resource::<lunco_core::SimulationBarrier>();
+        app.world_mut()
+            .resource_mut::<lunco_core::SimulationBarrier>()
+            .held = true;
+        app.world_mut().trigger(SetPorts {
+            target,
+            writes: vec![("headlights".into(), 1.0)],
+            seq: 0,
+            tick: 2,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world()
+                .get::<lunco_core::InputPorts>(target)
+                .unwrap()
+                .cmd("headlights"),
+            1.0,
+            "a solver synchronization barrier must not discard a control intent"
         );
     }
 }

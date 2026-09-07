@@ -47,6 +47,11 @@ fn on_start(me) {
     this.t = 0.0;
     this.readiness_elapsed = 0.0;
     this.readiness_timeout = 10.0;
+    // The authored Modelica worker is asynchronous and the full scene gate
+    // intentionally runs several workers concurrently.  Bound liveness in
+    // simulation time, but leave enough budget for a loaded worker to publish
+    // its output rather than turning scheduler contention into a false fail.
+    this.command_timeout = 30.0;
     this.phase_start = 0.0;
     this.settle_s = 2.0;    // let it sit down on its wheels
     this.drive_s = 8.0;     // straight leg
@@ -188,20 +193,23 @@ fn on_tick(me) {
             print("[6w] LIGHTS ON: Rhai command -> Modelica photometry/load");
         }
     } else if this.phase == "lights_on" {
-        if leg >= 0.5 {
-            this.lights_on = port_value(this.rover, "headlight_left_intensity", "out");
-            this.lights_on_right = port_value(this.rover, "headlight_right_intensity", "out");
-            this.power_on = port_value(this.rover, "headlight_left_power_w", "out");
-            this.power_on_right = port_value(this.rover, "headlight_right_power_w", "out");
-            this.render_on = port_value(this.light, "light_intensity", "in");
-            this.render_on_right = port_value(this.light_right, "light_intensity", "in");
-            if this.lights_on == () || this.lights_on_right == () || this.power_on == () ||
-               this.power_on_right == () || this.render_on == () || this.render_on_right == () {
-                fail_fast("headlight on-state did not expose Modelica and scene-property ports",
-                          "SIX WHEEL", "SIX_WHEEL");
-                this.phase = "done";
-                return;
-            }
+        this.headlights_input = port_value(this.rover, "headlights", "in");
+        if this.headlights_input == () { this.headlights_input = 0.0; }
+        this.lights_on = port_value(this.rover, "headlight_left_intensity", "out");
+        this.lights_on_right = port_value(this.rover, "headlight_right_intensity", "out");
+        this.power_on = port_value(this.rover, "headlight_left_power_w", "out");
+        this.power_on_right = port_value(this.rover, "headlight_right_power_w", "out");
+        this.render_on = port_value(this.light, "light_intensity", "in");
+        this.render_on_right = port_value(this.light_right, "light_intensity", "in");
+        // The Modelica worker is asynchronous.  Advance only after the
+        // authored output state proves the command, rather than treating a
+        // fixed simulation delay as an acknowledgement.  A bounded timeout
+        // still turns a genuinely stuck command into a named failure.
+        if this.lights_on != () && this.lights_on_right != () && this.power_on != () &&
+           this.power_on_right != () && this.render_on != () && this.render_on_right != () &&
+           this.lights_on > 1000.0 && this.lights_on_right > 1000.0 &&
+           this.power_on > 0.1 && this.power_on_right > 0.1 &&
+           this.render_on > 1000.0 && this.render_on_right > 1000.0 {
             if !set_headlights(this.rover, 0.0) {
                 fail_fast("Rhai could not issue the semantic headlights=0 command",
                           "SIX WHEEL", "SIX_WHEEL");
@@ -211,15 +219,27 @@ fn on_tick(me) {
             this.phase = "lights_off";
             this.phase_start = this.t;
             print("[6w] LIGHTS OFF: Modelica output must return to zero");
+        } else if leg >= this.command_timeout {
+            fail_fast("headlight on command did not reach the authored Modelica/USD outputs within " +
+                      r2(this.command_timeout) + " s (rover headlights input=" +
+                      r2(this.headlights_input) + ")",
+                      "SIX WHEEL", "SIX_WHEEL");
+            this.phase = "done";
         }
     } else if this.phase == "lights_off" {
-        if leg >= 0.5 {
-            this.lights_off = port_value(this.rover, "headlight_left_intensity", "out");
-            this.lights_off_right = port_value(this.rover, "headlight_right_intensity", "out");
-            this.power_off = port_value(this.rover, "headlight_left_power_w", "out");
-            this.power_off_right = port_value(this.rover, "headlight_right_power_w", "out");
-            this.render_off = port_value(this.light, "light_intensity", "in");
-            this.render_off_right = port_value(this.light_right, "light_intensity", "in");
+        this.headlights_input = port_value(this.rover, "headlights", "in");
+        if this.headlights_input == () { this.headlights_input = 0.0; }
+        this.lights_off = port_value(this.rover, "headlight_left_intensity", "out");
+        this.lights_off_right = port_value(this.rover, "headlight_right_intensity", "out");
+        this.power_off = port_value(this.rover, "headlight_left_power_w", "out");
+        this.power_off_right = port_value(this.rover, "headlight_right_power_w", "out");
+        this.render_off = port_value(this.light, "light_intensity", "in");
+        this.render_off_right = port_value(this.light_right, "light_intensity", "in");
+        if this.lights_off != () && this.lights_off_right != () && this.power_off != () &&
+           this.power_off_right != () && this.render_off != () && this.render_off_right != () &&
+           this.lights_off.abs() < 0.001 && this.lights_off_right.abs() < 0.001 &&
+           this.power_off.abs() < 0.001 && this.power_off_right.abs() < 0.001 &&
+           this.render_off.abs() < 0.001 && this.render_off_right.abs() < 0.001 {
             this.phase = "done";
             verdict(#{
                 dist: this.dist_straight,
@@ -245,6 +265,12 @@ fn on_tick(me) {
                 render_off_right: this.render_off_right,
             });
             return;
+        } else if leg >= this.command_timeout {
+            fail_fast("headlight off command did not reach the authored Modelica/USD outputs within " +
+                      r2(this.command_timeout) + " s (rover headlights input=" +
+                      r2(this.headlights_input) + ")",
+                      "SIX WHEEL", "SIX_WHEEL");
+            this.phase = "done";
         }
     }
 
