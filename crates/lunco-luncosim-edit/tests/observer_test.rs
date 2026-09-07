@@ -1,9 +1,8 @@
 //! Documents the load-bearing fact behind the click-routing fix: two *global*
 //! observers watching the same event BOTH run for a single trigger. That's why
 //! selection (`on_scene_click_select`) and possession (`avatar_raycast_possession`)
-//! must share the editor-owned selection boundary — modifier clicks extend or
-//! remove while plain clicks on editor roots select — rather than relying on one
-//! swallowing the click from the other.
+//! must therefore consult the shared scene-interaction mode and key intent
+//! rather than relying on one observer swallowing the click from the other.
 
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
