@@ -1270,24 +1270,24 @@ pub fn resolve_joint_body_path(
 #[derive(Component)]
 struct PendingTerrainCollider;
 
-/// Select the collider owner from the authored terrain mode. Mesh-backed
-/// terrain waits for its async `Mesh3d`; DEM/layered terrain is built by
-/// `lunco-terrain-surface` from its retained height oracle and must not be
-/// replaced by the generic mesh bridge.
-fn terrain_uses_mesh_collider(asset_mode: Option<&str>) -> bool {
-    asset_mode == Some("mesh")
+/// Select the collider owner from the authored terrain mode. DEM/layered
+/// terrain is built by `lunco-terrain-surface` from its retained height oracle;
+/// every other terrain prim owns its standard USD geometry collider here. Mesh
+/// terrain may still defer that same collider until its mesh asset is ready.
+fn terrain_uses_authored_collider(asset_mode: Option<&str>) -> bool {
+    !matches!(asset_mode, Some("dem") | Some("layered"))
 }
 
 #[cfg(test)]
 mod terrain_collider_owner_tests {
-    use super::terrain_uses_mesh_collider;
+    use super::terrain_uses_authored_collider;
 
     #[test]
-    fn only_mesh_mode_uses_the_generic_mesh_collider() {
-        assert!(terrain_uses_mesh_collider(Some("mesh")));
-        assert!(!terrain_uses_mesh_collider(Some("dem")));
-        assert!(!terrain_uses_mesh_collider(Some("layered")));
-        assert!(!terrain_uses_mesh_collider(None));
+    fn only_dem_modes_delegate_collider_ownership_to_the_surface_stream() {
+        assert!(terrain_uses_authored_collider(Some("mesh")));
+        assert!(!terrain_uses_authored_collider(Some("dem")));
+        assert!(!terrain_uses_authored_collider(Some("layered")));
+        assert!(terrain_uses_authored_collider(None));
     }
 }
 
@@ -1757,14 +1757,12 @@ fn extract_avian_prim(
         // on the classification branch avoids a scene-specific ground override.
         //
         // `dem`/`layered` terrain has a native collider built from the retained
-        // `SurfaceOracle` by `lunco-terrain-surface`. Only `mesh` terrain waits
-        // for the generic mesh bridge; otherwise a loaded visual mesh would
-        // replace the authoritative DEM collider on the same ECS entity.
-        if terrain_uses_mesh_collider(
-            reader
-                .text(sdf_path, "lunco:assetMode")
-                .as_deref(),
-        ) {
+        // `SurfaceOracle` by `lunco-terrain-surface`. Every other terrain prim
+        // is ordinary authored USD collision geometry and must be projected
+        // here. Mesh terrain may wait for its async mesh asset; a flat site,
+        // ramp, or authored obstacle is available directly from the composed
+        // USD stage and must not be admitted without its collider.
+        if terrain_uses_authored_collider(reader.text(sdf_path, "lunco:assetMode").as_deref()) {
             match build_collider_from_usd(reader, sdf_path) {
                 Ok(Some(collider)) => {
                     commands.entity(entity).try_insert(collider);
@@ -4548,6 +4546,8 @@ mod extract_parity_tests {
     // (CollisionAPI) offset by an authored xformOp:translate — the compound path.
     const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Rover\" (\n    prepend apiSchemas = [\"PhysicsRigidBodyAPI\"]\n)\n{\n    double physics:mass = 500\n    def Cube \"Body\" (\n        prepend apiSchemas = [\"PhysicsCollisionAPI\"]\n    )\n    {\n        double size = 2\n        double3 xformOp:translate = (0, 1, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
+    const FLAT_TERRAIN_FIXTURE: &str = "#usda 1.0\n\ndef Plane \"Ground\" (\n    prepend apiSchemas = [\"PhysicsCollisionAPI\", \"LunCoTerrainAPI\"]\n)\n{\n    double width = 100\n    double length = 100\n    token axis = \"Y\"\n    bool physics:collisionEnabled = true\n}\n";
+
     const MATERIAL_FIXTURE: &str = r#"#usda 1.0
 (
     upAxis = "Y"
@@ -4631,6 +4631,25 @@ def Xform "World"
             "live: authored mass read off the stage"
         );
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
+    }
+
+    #[test]
+    fn authored_flat_terrain_keeps_its_standard_support_collider() {
+        let dir = std::env::temp_dir().join("lunco_extract_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("flat_terrain.usda");
+        std::fs::write(&f, FLAT_TERRAIN_FIXTURE).unwrap();
+
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let view = StageView::new(&stage);
+        let live = run_extract(&view, &SdfPath::new("/Ground").unwrap());
+
+        assert_eq!(live.0, Some(RigidBody::Static));
+        assert!(
+            live.1.is_some(),
+            "a non-DEM terrain prim must enter Avian with its authored support collider"
+        );
+        assert!(!live.3, "static terrain is not dynamic admission work");
     }
 
     #[test]
