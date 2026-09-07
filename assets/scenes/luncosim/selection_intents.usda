@@ -12,6 +12,7 @@
 # The two static rigid bodies remain independently selectable in the editor.
 def Xform "SelectionIntentReview" (
     kind = "assembly"
+    doc = "Interactive editor review scene for replacing and extending selected USD targets."
 )
 {
     def DistantLight "TestLight"
