@@ -344,9 +344,11 @@ fn bind_pbr_look(
     ec.try_insert(PbrLookBinding {
         private: look.unshared,
     });
-    if look.no_shadow_cast {
-        ec.try_insert(NotShadowCaster);
-    }
+    // Reconcile both sides of the authored intent. An entity can be reused by
+    // a scene reload after previously carrying `NotShadowCaster`; leaving that
+    // marker in place would silently exclude a normal surface from every
+    // shadow map, even though its new `PbrLook` allows casting.
+    apply_shadow_flag(&mut commands, e, look);
 }
 
 /// Re-bind when a look is edited in place (the Inspector, a script, a USD reload).
@@ -578,6 +580,27 @@ mod tests {
         let e = app.world_mut().spawn(PbrLook::default().no_shadows()).id();
         app.update();
         assert!(app.world().entity(e).contains::<NotShadowCaster>());
+    }
+
+    /// A reused entity must not retain a previous surface's shadow opt-out when
+    /// its replacement look is an ordinary caster.
+    #[test]
+    fn shadow_casting_look_removes_stale_not_shadow_caster() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .add_plugins(LuncoRenderPlugin);
+
+        let e = app
+            .world_mut()
+            .spawn((NotShadowCaster, PbrLook::default()))
+            .id();
+        app.update();
+
+        assert!(
+            !app.world().entity(e).contains::<NotShadowCaster>(),
+            "a normal PBR look must restore shadow casting on reused entities"
+        );
     }
 
     /// A late PBR projection supersedes an existing WGSL material instead of
