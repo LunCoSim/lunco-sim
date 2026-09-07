@@ -3901,20 +3901,20 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
-    // Editor perspectives reserve plain scene clicks for selection and gizmos.
-    // View mode leaves the same gesture available for possession/follow.
-    if !scene_interaction.mode.possession_owns_primary_click() {
-        return;
-    }
     // Left button only.
     if click.button != PointerButton::Primary {
         return;
     }
-    // Shift/Ctrl clicks are editor selection/removal in
-    // lunco-luncosim-edit (`on_scene_click_select`, the other global
-    // `Pointer<Click>` observer). View plain clicks remain possession intents;
-    // Editor perspectives already returned at the shared mode gate above.
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+    // The editor selection observer receives the same global click. Both
+    // observers consult the shared mode and modifier intent so one gesture has
+    // one owner: View plain clicks possess, while modifiers select/remove.
+    let modified = keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]);
+    if !scene_interaction.mode.possession_owns_click(modified) {
         return;
     }
     // Waypoint placement is a semantic intent, not an Alt-key convention. The
@@ -3924,14 +3924,6 @@ pub fn avatar_raycast_possession(
         return;
     };
     if intents.pressed(&UserIntent::PlaceWaypoint) {
-        return;
-    }
-    // Ctrl-click appends a patrol waypoint (`on_scene_click_waypoint`, the
-    // third global `Pointer<Click>` observer). Both observers see the same click
-    // — `propagate(false)` stops bubbling, not sibling observers — so without
-    // this guard every waypoint placement would ALSO possess/follow whatever
-    // the ray hit, yanking the camera onto the terrain.
-    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
         return;
     }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
