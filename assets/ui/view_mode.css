@@ -18,8 +18,8 @@
 
 #runtime-view-mode-root {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
 }
 
 #runtime-view-mode-card {
@@ -42,7 +42,7 @@
   display: var(--ui-map-display);
   position: absolute;
   top: 62px;
-  left: 36px;
+  left: 96px;
   width: 348px;
   height: 196px;
   flex-direction: column;

@@ -3788,36 +3788,6 @@ fn find_control_owner_from_hit(
     None
 }
 
-/// Return whether a picked entity belongs to an editor-owned selection root.
-///
-/// This is the cross-observer boundary for a plain left click: the editor
-/// selection observer owns the gesture for these entities, while avatar
-/// possession remains available for analytic spacecraft hits and unmarked
-/// control surfaces. The marker walk mirrors the editor's semantic selection
-/// ownership without importing the editor crate.
-fn has_editor_selection_owner(
-    mut entity: Entity,
-    q_selection_roots: &Query<
-        (),
-        Or<(
-            With<lunco_core::SelectableRoot>,
-            With<lunco_core::MobilityRoot>,
-        )>,
-    >,
-    q_parents: &Query<&ChildOf>,
-) -> bool {
-    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-        if q_selection_roots.get(entity).is_ok() {
-            return true;
-        }
-        let Ok(parent) = q_parents.get(entity) else {
-            break;
-        };
-        entity = parent.parent();
-    }
-    false
-}
-
 /// The possession boundary is a writable command surface owned by a domain
 /// entity, not a presentation marker. The local avatar has an `InputPorts`
 /// surface too, but that surface drives its free-flight embodiment and must
@@ -3927,13 +3897,6 @@ pub fn avatar_raycast_possession(
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
-    q_selection_roots: Query<
-        (),
-        Or<(
-            With<lunco_core::SelectableRoot>,
-            With<lunco_core::MobilityRoot>,
-        )>,
-    >,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -3947,11 +3910,10 @@ pub fn avatar_raycast_possession(
     if click.button != PointerButton::Primary {
         return;
     }
-    // Shift+click is editor selection and Ctrl+click is editor removal in
+    // Shift/Ctrl clicks are editor selection/removal in
     // lunco-luncosim-edit (`on_scene_click_select`, the other global
-    // `Pointer<Click>` observer). Plain clicks on an editor-owned scene entity
-    // are also claimed by that observer; this boundary keeps possession from
-    // acting on the same gesture. Unmarked control surfaces retain possession.
+    // `Pointer<Click>` observer). View plain clicks remain possession intents;
+    // Editor perspectives already returned at the shared mode gate above.
     if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
         return;
     }
@@ -3970,9 +3932,6 @@ pub fn avatar_raycast_possession(
     // this guard every waypoint placement would ALSO possess/follow whatever
     // the ray hit, yanking the camera onto the terrain.
     if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
-        return;
-    }
-    if has_editor_selection_owner(click.entity, &q_selection_roots, &q_parents) {
         return;
     }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
@@ -6169,7 +6128,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_selection_boundary_shadows_plain_possession_on_nested_hit() {
+    fn selectable_vehicle_root_remains_a_possession_target() {
         let mut world = World::new();
         let rover = world
             .spawn((
@@ -6180,22 +6139,55 @@ mod tests {
         let mesh = world.spawn(ChildOf(rover)).id();
 
         let mut state: SystemState<(
-            Query<
-                (),
-                Or<(
-                    With<lunco_core::SelectableRoot>,
-                    With<lunco_core::MobilityRoot>,
-                )>,
-            >,
             Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
+            Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_selection_roots, q_parents) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
 
-        assert!(has_editor_selection_owner(
-            mesh,
-            &q_selection_roots,
-            &q_parents
-        ));
+        assert_eq!(
+            find_control_owner_from_hit(
+                mesh,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
+            Some(rover)
+        );
+    }
+
+    #[test]
+    fn preview_selection_root_stays_out_of_possession() {
+        let mut world = World::new();
+        let preview = world
+            .spawn((
+                UsdPreviewOnly,
+                lunco_core::SelectableRoot,
+                lunco_core::InputPorts::new(&["drive"]),
+            ))
+            .id();
+        let mesh = world.spawn(ChildOf(preview)).id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<(), With<UsdPreviewOnly>>,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+
+        assert_eq!(
+            find_control_owner_from_hit(
+                mesh,
+                &q_parents,
+                &q_input_ports,
+                &q_preview_only,
+                &q_ground,
+            ),
+            None
+        );
     }
 
     #[test]

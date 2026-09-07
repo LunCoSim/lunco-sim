@@ -293,9 +293,9 @@
       "draggable": true,
       "placement": {
         "mode": "window",
-        "anchor": "top_center",
-        "offset": [0.0, 50.0],
-        "width": 420.0,
+        "anchor": "top_right",
+        "offset": [-12.0, 34.0],
+        "width": 444.0,
         "height": 276.0
       }
     },

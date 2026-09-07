@@ -135,10 +135,11 @@ For path-based editor selection, use `SelectUsdPrim` with the focused preview;
 never resolve a USD path globally across live and preview projections.
 
 Scene click ownership is perspective-scoped. Read the shared
-`lunco_core::SceneInteractionMode` contract: View/simulation owns plain clicks
-for possession, while editor-facing perspectives own them for selection and
-gizmos. Do not add a second per-crate mode flag or let global pointer observers
-infer ownership from the hit entity.
+`lunco_core::SceneInteractionMode` contract: View/simulation owns unmodified
+clicks for possession, while Shift/Ctrl clicks remain explicit selection or
+removal intents; editor-facing perspectives own unmodified clicks for
+selection and gizmos. Do not add a second per-crate mode flag or let global
+pointer observers infer ownership from the hit entity.
 
 For interactive reusable-assembly authoring, follow the
 [edit-usd-assembly runbook](../edit-usd-assembly/SKILL.md): the production

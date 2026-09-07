@@ -1862,6 +1862,26 @@ mod tests {
         manifest
             .validate()
             .expect("shipped runtime UI manifest should validate");
+
+        let celestial_view = manifest
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == "celestial-view")
+            .expect("shipped manifest should contain the celestial-view surface");
+        match &celestial_view.placement {
+            RuntimeUiPlacementDefinition::Window {
+                anchor,
+                offset,
+                width,
+                height,
+            } => {
+                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopRight);
+                assert_eq!(*offset, [-12.0, 34.0]);
+                assert_eq!(*width, 444.0);
+                assert_eq!(*height, 276.0);
+            }
+            _ => panic!("celestial-view must keep its authored top-right window placement"),
+        }
     }
 
     #[test]
