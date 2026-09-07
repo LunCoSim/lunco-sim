@@ -191,9 +191,9 @@ pub struct SelectUsdPrim {
 /// the object) and maintains [`SelectedEntities`].
 ///
 /// It deliberately does **not** touch [`lunco_core::DragModeActive`]: selecting
-/// only highlights. Plain clicks on editor-owned roots are claimed by the
-/// selection observer; possession is suppressed only for that boundary or
-/// while a gizmo handle is actively dragged.
+/// only highlights. The shared scene-interaction mode reserves plain clicks
+/// for selection in Editor and modifier clicks for selection/removal in View;
+/// possession is independently gated by that same mode and key intent.
 ///
 /// - [`SelectionIntent::Replace`] → replace the selection with `target`.
 /// - [`SelectionIntent::Extend`] → add `target` while retaining the old set.
@@ -547,8 +547,8 @@ fn find_prim_part(
 /// - **Shift+left-click** extends the selection without toggling an existing
 ///   member off.
 /// - **Ctrl+left-click** removes only the clicked entity and never adds it.
-///   The avatar possession observer stands down for the same editor-owned hit,
-///   so the two global click observers cannot both act on one gesture.
+///   In View, Shift/Ctrl are explicit selection intents; the avatar possession
+///   observer stands down on those modifiers before it resolves the hit.
 /// - **Alt+Shift+click on a sub-part** of the already-selected primary DRILLS the
 ///   Inspector to that part. Ctrl takes precedence, so Ctrl+Alt+Shift remains
 ///   removal rather than an Inspector drill.
@@ -573,9 +573,11 @@ pub fn on_scene_click_select(
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
-    // View mode reserves plain clicks for avatar possession. Selection owns
-    // the same pointer only in an editor-facing perspective.
-    if !scene_interaction.selection_owns_primary_click() {
+    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl_held = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    // View reserves plain clicks for avatar possession, but modifier clicks
+    // remain explicit selection/removal intents in every perspective.
+    if !scene_interaction.selection_owns_click(shift_held || ctrl_held) {
         return;
     }
     // Left button only.
@@ -611,8 +613,6 @@ pub fn on_scene_click_select(
         return;
     }
 
-    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let ctrl_held = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let intent = selection_intent(shift_held, ctrl_held);
 
     // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer

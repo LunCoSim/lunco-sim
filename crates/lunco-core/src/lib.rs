@@ -657,9 +657,12 @@ pub enum SceneInteractionMode {
 }
 
 impl SceneInteractionMode {
-    /// Whether the editor selection observer owns a plain primary scene click.
-    pub const fn selection_owns_primary_click(self) -> bool {
-        matches!(self, Self::Editor)
+    /// Whether the editor selection observer owns this primary scene click.
+    ///
+    /// Simulation keeps plain clicks for possession, while explicit modifier
+    /// clicks remain selection/removal intents in every perspective.
+    pub const fn selection_owns_click(self, modified: bool) -> bool {
+        modified || matches!(self, Self::Editor)
     }
 
     /// Whether the avatar possession observer owns a plain primary scene click.
@@ -675,8 +678,9 @@ mod scene_interaction_mode_tests {
     #[test]
     fn primary_click_has_one_owner_per_mode() {
         assert!(SceneInteractionMode::Simulation.possession_owns_primary_click());
-        assert!(!SceneInteractionMode::Simulation.selection_owns_primary_click());
-        assert!(SceneInteractionMode::Editor.selection_owns_primary_click());
+        assert!(!SceneInteractionMode::Simulation.selection_owns_click(false));
+        assert!(SceneInteractionMode::Simulation.selection_owns_click(true));
+        assert!(SceneInteractionMode::Editor.selection_owns_click(false));
         assert!(!SceneInteractionMode::Editor.possession_owns_primary_click());
     }
 }
