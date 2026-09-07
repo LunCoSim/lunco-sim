@@ -39,6 +39,11 @@ def Xform "PartsAttachedVisual" (
         # The four visual lanes are compacted below, so use a longer lens to
         # make wheels, suspension, and antenna mounts legible in one frame.
         float focalLength = 32.0
+        # Match the scene's authored 15 klx Sun: f/16 at 33.4929 ms is
+        # EV100 ~= 12.9, the readable calibration established by the visual
+        # A/B. Keep this local to the review scene; the shared lunar camera
+        # remains calibrated for the 128 klx lunar Sun.
+        float exposure:time = 0.0334929
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "SkidRaycast"
