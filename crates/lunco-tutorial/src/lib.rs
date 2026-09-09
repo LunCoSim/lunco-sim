@@ -1674,8 +1674,19 @@ fn paint_completion_status(
 }
 
 #[cfg(feature = "ui")]
-fn tutorial_menu_width(ui: &egui::Ui, requested_max_width: f32) -> f32 {
-    lunco_workbench::menu_popup_max_width(ui.ctx().content_rect().width(), requested_max_width)
+fn measured_tutorial_text_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font, ui.visuals().text_color())
+        .size()
+        .x
+}
+
+#[cfg(feature = "ui")]
+fn tutorial_menu_width(ui: &egui::Ui, requested_max_width: f32, content_width: f32) -> f32 {
+    let bounded =
+        lunco_workbench::menu_popup_max_width(ui.ctx().content_rect().width(), requested_max_width);
+    content_width.clamp(1.0, bounded)
 }
 
 /// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
@@ -1702,7 +1713,6 @@ fn register_tutorials_menu(world: &mut World) {
         }
     });
     layout.register_custom_menu("Tutorials", |ui, ctx| {
-        ui.set_width(tutorial_menu_width(ui, MENU_MAX_WIDTH));
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1755,6 +1765,22 @@ fn register_tutorials_menu(world: &mut World) {
             )
         });
 
+        let mut content_width =
+            measured_tutorial_text_width(ui, "Tours · simulator exercises · completed")
+                + 2.0 * ui.spacing().button_padding.x;
+        for (app_key, _) in &groups {
+            let label = registry
+                .tracks
+                .get(app_key.as_str())
+                .map(|t| t.label.clone())
+                .unwrap_or_else(|| app_key.to_string());
+            let group_width = measured_tutorial_text_width(ui, label.as_str())
+                + 2.0 * ui.spacing().button_padding.x
+                + ui.spacing().icon_width;
+            content_width = content_width.max(group_width);
+        }
+        ui.set_width(tutorial_menu_width(ui, MENU_MAX_WIDTH, content_width));
+
         for (app_key, metas) in groups {
             let label = registry
                 .tracks
@@ -1762,13 +1788,25 @@ fn register_tutorials_menu(world: &mut World) {
                 .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
-                let menu_max_width = tutorial_menu_width(ui, MENU_MAX_WIDTH);
+                let lesson_width = metas
+                    .iter()
+                    .map(|meta| {
+                        measured_tutorial_text_width(
+                            ui,
+                            &format!("{} · {}", meta.title, meta.format.label()),
+                        )
+                    })
+                    .fold(0.0, f32::max)
+                    + 18.0
+                    + ui.spacing().item_spacing.x
+                    + 2.0 * ui.spacing().button_padding.x;
+                let menu_width = tutorial_menu_width(ui, MENU_MAX_WIDTH, lesson_width);
                 let menu_max_height =
                     (ui.ctx().content_rect().height() - 96.0).clamp(160.0, MENU_MAX_HEIGHT);
-                ui.set_width(menu_max_width);
+                ui.set_width(menu_width);
                 egui::ScrollArea::vertical()
                     .max_height(menu_max_height)
-                    .auto_shrink([false, false])
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
