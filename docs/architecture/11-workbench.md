@@ -560,6 +560,20 @@ write via temp-file + rename — a kill mid-write can't corrupt the
 file. A corrupt file silently falls back to empty recents on next
 boot.
 
+### 9a.1 Scenario registry failure presentation
+
+The Scenarios menu owns only presentation. If `TwinRoots`, the shared asset
+manifest, or scene discovery is unavailable, it renders the concise
+`Scenarios unavailable` state and sends the full cause through the existing
+`StatusBus` Recent-status reader. The UI does not remove or replace the active
+Twin to manufacture that failure.
+
+The windowed production harness exposes the explicit typed
+`SetScenarioRegistryFixture { unavailable }` command. It toggles a transient
+UI-owned fixture resource, so acceptance can exercise the real menu and status
+path without mutating `TwinRoots` or scene data. Its default is disabled and
+`unavailable: false` restores normal discovery.
+
 ### 9b. Settings (`lunco-settings`)
 
 User preferences (perf HUD on/off, editor word-wrap, palette filters,

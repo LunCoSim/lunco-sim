@@ -97,6 +97,12 @@ as separate owners that consume that snapshot. Stable frames must do no route pa
 binding lookup, terrain sampling, mesh generation, or marker writes; camera-dependent
 label projection is the only remaining per-frame presentation work.
 
+Failure-path acceptance must use an owner-local, transient fixture or typed test
+command. For example, the Scenarios menu may inject its unavailable presentation
+state without removing or replacing `TwinRoots`, the active Twin, or scene data;
+the default production path remains unchanged and the detailed cause still flows
+through the shared `StatusBus`.
+
 Repeated presentation solvers must also be value-idempotent: compare derived
 `Transform`/`CellCoord` values before assignment. Bevy marks mutable component
 access as changed even when the value is equal, and BigSpace consumes those
