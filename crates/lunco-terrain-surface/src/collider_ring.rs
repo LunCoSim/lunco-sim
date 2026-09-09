@@ -1438,9 +1438,9 @@ impl JointGraph<'_, '_> {
     }
 
     /// Whether USD has a joint whose endpoints have not reached the live
-    /// entity graph yet. Initial placement must wait for this phase: moving a
-    /// root before its authored child body exists in `PhysicsJointLink` leaves
-    /// the child behind and makes admission perform a metre-scale correction.
+    /// entity graph yet. Initial-state validation must wait for this phase:
+    /// judging a root before its authored child body exists in `PhysicsJointLink`
+    /// would report an incomplete assembly instead of the authored pose.
     fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -1462,18 +1462,15 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
     members
 }
 
-/// Clearance left between the lowest authored collider point and the terrain
-/// when an articulated assembly is initially placed. The collider AABB is
-/// authoritative; using a body-centre clearance here lifts small wheels and
-/// long landing assemblies by different, arbitrary amounts.
-const SETTLE_CLEARANCE: f64 = 0.05;
+/// Numerical tolerance for the authored initial-pose contract. This is not a
+/// placement clearance: a body at the surface is valid, while any measurable
+/// penetration remains an authoring error.
+const INITIAL_POSE_TOLERANCE: f64 = 1.0e-6;
 
-/// Cast an initial-placement probe against Avian's authored collider geometry.
-/// The activation hold intentionally pauses Avian's broad-phase schedule, so a
-/// one-shot placement transaction cannot depend on its acceleration tree being
-/// built. `Collider::cast_ray` remains the same maintained shape-intersection
-/// kernel used by Avian's normal spatial query; this pass only supplies the
-/// pre-step admission boundary and never runs during ordinary movement.
+/// Cast an initial-state probe against Avian's authored collider geometry.
+/// `Collider::cast_ray` is the same maintained shape-intersection kernel used
+/// by Avian's normal spatial query; this pass only supplies the pre-step
+/// admission boundary and never runs during ordinary movement.
 fn cast_initial_support_ray(
     colliders: &Query<
         '_,
@@ -1533,53 +1530,57 @@ fn cast_initial_support_ray(
     closest
 }
 
-fn static_support_lift(
+fn static_support_penetration(
     body_bounds: (DVec3, DVec3),
     support_bounds: &[(DVec3, DVec3)],
 ) -> Option<f64> {
     let (body_min, body_max) = body_bounds;
-    let mut lift = None;
+    let mut penetration = None;
     for &(support_min, support_max) in support_bounds {
         let overlaps_x = body_min.x <= support_max.x && body_max.x >= support_min.x;
         let overlaps_z = body_min.z <= support_max.z && body_max.z >= support_min.z;
         if !overlaps_x || !overlaps_z {
             continue;
         }
-        let required = support_max.y + SETTLE_CLEARANCE - body_min.y;
-        lift = Some(lift.map_or(required, |previous: f64| previous.max(required)));
+        let required = support_max.y - body_min.y;
+        penetration = Some(penetration.map_or(required, |previous: f64| previous.max(required)));
     }
-    lift
+    penetration
 }
 
-// A raycast contact is the *wheel axle*, not a rigid tyre volume. At the
-// authored suspension rest length the strut top is exactly one cast length
-// above the DEM, so placement must put the tyre tangent to the surface: zero
-// spring compression and zero startup impulse. The mobility ray uses a
-// micrometre query tolerance because Avian's endpoint comparison is strict;
-// forcing an artificial compression here makes every freshly placed rover hop.
-/// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
-/// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
+// A raycast contact is the *wheel axle*, not a rigid tyre volume. Validation
+// only rejects an authored probe that is already below a live support surface;
+// an airborne probe is a valid initial condition and is left to the model's
+// normal suspension law after admission.
+/// Validate freshly projected dynamic bodies before physics admission.
 ///
-/// Place a freshly activated joint-connected assembly at its authored support
-/// condition in the grid-absolute frame used by Avian `Position`, then consume
-/// the marker. Probe-based assemblies use their authored probe distance; rigid
-/// assemblies use the deepest live support clearance. This is a one-time
-/// activation transaction, not a per-frame correction.
-pub fn settle_grounded_assemblies(
+/// The composed USD pose is the initial-state authority. This system may read
+/// the same terrain/collider facts used by live support queries and report an
+/// authored penetration, but it never translates a body, zeroes velocity, or
+/// clears contact state. A body remains kinematic and pending until the pose is
+/// valid or an explicitly authored policy accepts it.
+pub fn validate_initial_physics_poses(
     terrains: Query<(Entity, &DemHeightField, &TerrainColliderRing)>,
-    q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    q_needs: Query<
+        (
+            Entity,
+            Option<&lunco_physics::PhysicsInitializationPolicy>,
+            Option<&lunco_physics::PhysicsInitializationSubject>,
+            Option<&lunco_physics::PhysicsInitializationInvalid>,
+        ),
+        With<lunco_physics::PhysicsInitializationPending>,
+    >,
     footprints: Query<Option<&lunco_physics::PhysicsSupportFootprint>>,
     pose_seeded: Query<(), With<lunco_physics::PhysicsPoseSeeded>>,
-    pose_authoritative: Query<(), With<lunco_core::PhysicsPoseAuthoritative>>,
     mut avian: ParamSet<(
         Query<(
             Entity,
-            &mut avian3d::prelude::Position,
+            &avian3d::prelude::Position,
             &avian3d::prelude::Rotation,
             Option<&RigidBody>,
-            Option<&mut avian3d::prelude::LinearVelocity>,
-            Option<&mut avian3d::prelude::AngularVelocity>,
-            Option<&mut RayHits>,
+            Option<&avian3d::prelude::LinearVelocity>,
+            Option<&avian3d::prelude::AngularVelocity>,
+            Option<&RayHits>,
         )>,
         Query<(
             Entity,
@@ -1593,7 +1594,7 @@ pub fn settle_grounded_assemblies(
             Option<&ColliderDisabled>,
         )>,
     )>,
-    dynamics: Query<&RigidBody>,
+    dynamics: Query<(&RigidBody, Option<&lunco_core::PhysicsStatePending>)>,
     joints: JointGraph,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
@@ -1603,24 +1604,23 @@ pub fn settle_grounded_assemblies(
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
+    mut diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
+    let mut findings = Vec::new();
     if q_needs.is_empty() {
+        diagnostics.replace_producer("physics-initialization", findings);
         return;
     }
-    // Joint entities are projected asynchronously from USD. Do not consume a
-    // one-shot placement request while any authored joint is still waiting for
-    // its body endpoints: the root would move without the not-yet-linked
-    // child, and the later admission seat would recreate the startup impulse
-    // this transaction exists to avoid.
+    // Joint entities are projected asynchronously from USD. Do not validate an
+    // incomplete assembly: the authored topology is part of the initial-state
+    // contract and the diagnostic must describe the complete body set.
     if joints.has_pending() {
         return;
     }
-    // The marker is an initial-placement request, not an estimate.  The DEM
-    // height oracle and its collider ring become usable in different frames;
-    // consuming it while the terrain-ready hold is active samples the
-    // pre-residency pose and leaves raycast wheels outside their cast range.
-    // Keep it armed until the same readiness gate that releases physics has
-    // confirmed a live surface under every dynamic body.
+    // The terrain oracle and its collider ring become usable in different
+    // frames. Validate only after the terrain readiness gate has confirmed the
+    // live surface; otherwise the diagnostic would be based on a transient,
+    // incomplete terrain product.
     if holds.is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY)) {
         return;
     }
@@ -1641,7 +1641,7 @@ pub fn settle_grounded_assemblies(
         let half = hf.0.half_extent() as f64;
         let terrain_from_physics = terrain_rotation.0.inverse();
         let terrain_up = terrain_rotation.0 * DVec3::Y;
-        // Initial placement must query the same surface product that the
+        // Initial-state validation must query the same surface product that the
         // streamed heightfield collider contains. The collider is intentionally
         // sampled through the terrain's physics band; using the raw DEM here
         // places wheel axles against a different surface and creates startup
@@ -1657,8 +1657,8 @@ pub fn settle_grounded_assemblies(
     });
     if terrains.iter().next().is_some() && terrain_context.is_none() {
         // A DEM provider exists but its composed pose is not available in the
-        // active physics frame yet. Do not sample an arbitrary frame or release
-        // the placement transaction early.
+        // active physics frame yet. Do not sample an arbitrary frame or make
+        // an initialization decision early.
         return;
     }
     let terrain_up = terrain_context
@@ -1708,10 +1708,15 @@ pub fn settle_grounded_assemblies(
         };
         let aabb = collider.aabb(shape_position, shape_rotation);
         let bounds_live = aabb.min.is_finite() && aabb.max.is_finite();
-        if dynamics
+        let is_authored_support = dynamics
             .get(body)
-            .is_ok_and(|rb| matches!(rb, RigidBody::Static | RigidBody::Kinematic))
-        {
+            .is_ok_and(|(rb, state_pending)| {
+                matches!(rb, RigidBody::Static)
+                    || (matches!(rb, RigidBody::Kinematic)
+                        && state_pending.is_none()
+                        && q_needs.get(body).is_err())
+            });
+        if is_authored_support {
             static_support_present = true;
             static_support_live |= bounds_live;
             if bounds_live {
@@ -1730,48 +1735,90 @@ pub fn settle_grounded_assemblies(
             .or_insert((aabb.min, aabb.max));
     }
     let adj = joints.adjacency(|e| {
-        dynamics
-            .get(e)
-            .is_ok_and(|rb| matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic))
+        dynamics.get(e).is_ok_and(|(rb, _)| {
+            matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic)
+        })
     });
 
     let mut done: HashSet<Entity> = HashSet::new();
-    for seed in &q_needs {
+    for (seed, policy, subject, invalid) in &q_needs {
+        if invalid.is_some() {
+            continue;
+        }
         if !done.insert(seed) {
             continue;
         }
         let members = joint_component(seed, &adj);
-        // `Position` is not an authored-pose readiness signal. The USD bridge
-        // seeds it from the composed grid frame after activation; before that
-        // point Avian may expose its zero value while child bodies already have
-        // their authored local offsets. Consuming placement in that interval
-        // permanently marks the root as authoritative at the wrong position,
-        // and the bridge then writes the root to the origin while articulated
-        // children retain their authored offsets. Wait for the shared pose
-        // contract for every dynamic member. A member already settled by this
-        // transaction is authoritative and does not need another bridge seed.
-        if members
-            .iter()
-            .any(|member| !pose_seeded.contains(*member) && !pose_authoritative.contains(*member))
-        {
+        // The USD bridge owns the conversion from composed grid pose to Avian's
+        // Position. Validate only after every member has crossed that pose
+        // bridge; reading Avian's temporary zero value would diagnose the
+        // bridge itself rather than the authored USD.
+        if members.iter().any(|member| !pose_seeded.contains(*member)) {
             continue;
         }
         done.extend(members.iter().copied());
-        let mut rigid_lift = 0.0_f64;
+
+        let policy = policy.cloned().unwrap_or_default();
+        let subject = subject
+            .map(|subject| subject.0.as_str())
+            .unwrap_or("<unidentified physics body>");
+        if !policy.is_strict_authored() {
+            let position = pos_of
+                .get(&seed)
+                .map(|position| position.0)
+                .unwrap_or(DVec3::ZERO);
+            let facts = lunco_hooks::HookValue::map([
+                ("subject", lunco_hooks::HookValue::str(subject)),
+                ("policy", lunco_hooks::HookValue::str(policy.0.clone())),
+                ("entity", lunco_hooks::HookValue::Int(seed.to_bits() as i64)),
+                (
+                    "position",
+                    lunco_hooks::HookValue::Array(
+                        [position.x, position.y, position.z]
+                            .into_iter()
+                            .map(lunco_hooks::HookValue::Float)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "members",
+                    lunco_hooks::HookValue::Array(
+                        members
+                            .iter()
+                            .map(|member| {
+                                lunco_hooks::HookValue::Int(member.to_bits() as i64)
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]);
+            let decision = lunco_physics::evaluate_initialization_policy(&policy, facts);
+            match decision {
+                Ok(()) => {
+                    for &member in &members {
+                        commands
+                            .entity(member)
+                            .try_remove::<lunco_physics::PhysicsInitializationPending>();
+                    }
+                }
+                Err(message) => findings.push(lunco_core::RuntimeDiagnostic {
+                    code: "physics-initialization-policy".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "physics-initialization".to_string(),
+                    subject: subject.to_string(),
+                    message,
+                }),
+            }
+            continue;
+        }
+        let mut rigid_penetration = 0.0_f64;
         let mut probe_displacement: Option<f64> = None;
         let mut over_terrain = false;
-        let mut placement_axis = terrain_up;
-        // Probe-only contact geometry belongs to the same
-        // placement pass as rigid members. It is authored in the vehicle frame,
-        // transformed once by the solved root pose, and sampled from the same
-        // oracle as every other terrain consumer.
-        // A dynamic physical wheel can be the first `NeedsGroundSettle` seed
-        // encountered for a jointed vehicle. The raycast contact footprint,
-        // however, belongs to the vehicle root. Resolve it from the seed and
-        // then across the whole assembly instead of assuming the arbitrary
-        // dynamic member owns it. Probe-based vehicles MUST use only this geometry:
-        // their high chassis has no terrain contact, so its generic collider
-        // clearance is not the support condition for this transaction.
+        // Probe-only contact geometry belongs to the same validation pass as
+        // rigid members. It is authored in the vehicle frame, transformed once
+        // by the solved root pose, and sampled from the same live support query.
+        // A dynamic physical wheel can be the first pending seed for a jointed
+        // vehicle; resolve its root footprint across the complete assembly.
         let raycast_footprint = footprints
             .get(seed)
             .ok()
@@ -1789,23 +1836,21 @@ pub fn settle_grounded_assemblies(
         if let Some((footprint_owner, footprint)) = raycast_footprint {
             // A static/kinematic collider is the authoritative readiness
             // boundary for a flat authored support surface. Avian exposes the
-            // collider entity before its broad-phase AABB; do not consume the
-            // one-shot placement request in that interval. If no such support
-            // provider exists, the normal unsupported-body path below may
-            // retire the request immediately.
+            // collider entity before its broad-phase AABB; defer validation
+            // until that geometry is live.
             if terrain_context.is_none() && static_support_present && !static_support_live {
                 continue;
             }
             let Some(root_pos) = pos_of.get(&footprint_owner) else {
                 continue;
             };
-            let placement_up = if let Some(terrain_up) = terrain_up {
+            let support_up = if let Some(terrain_up) = terrain_up {
                 terrain_up
             } else if !flat_sites.is_empty() {
                 // `FlatSiteSurface` is an authored ENU-aligned Plane, so its
                 // support normal is the scene +Y axis. This is the surface
                 // contract for static flat ground; the rover need not carry a
-                // per-body LocalGravity component for initial placement.
+                // per-body LocalGravity component for initial-state validation.
                 DVec3::Y
             } else {
                 let Ok(gravity) = local_gravity.get(footprint_owner) else {
@@ -1816,7 +1861,6 @@ pub fn settle_grounded_assemblies(
                 }
                 -gravity.0.normalize()
             };
-            placement_axis = Some(placement_up);
             let root_rot = avian
                 .p1()
                 .get(footprint_owner)
@@ -1842,8 +1886,8 @@ pub fn settle_grounded_assemblies(
                 // Use Avian's exact collider geometry, not the analytic oracle.
                 // The streamed collider is a sampled heightfield, so its exact
                 // surface can differ from the oracle between lattice points.
-                // This direct query is limited to one-time placement; its target
-                // remains the authored probe rest distance.
+                // This direct query measures the authored probe against the
+                // same live collider that will serve normal physics.
                 let max_distance = terrain_context.as_ref().map_or_else(
                     || {
                         static_support_bounds
@@ -1870,27 +1914,22 @@ pub fn settle_grounded_assemblies(
                 else {
                     continue;
                 };
-                // Translate along the physical support axis, not an assumed
-                // global Y. The projection keeps arbitrary gravity/terrain
-                // orientation and authored probe directions in one contract.
-                let alignment = -direction.as_dvec3().dot(placement_up);
+                // Measure along the physical support axis, not an assumed global
+                // Y. Airborne probes are valid initial conditions.
+                let alignment = -direction.as_dvec3().dot(support_up);
                 if !alignment.is_finite() || alignment <= f64::EPSILON {
                     continue;
                 }
                 let required = (contact.probe_length - hit.distance) / alignment;
-                // A support probe describes a target distance, not a one-sided
-                // clearance. Positive displacement lifts an embedded probe;
-                // negative displacement lowers a probe that starts above its
-                // authored travel range. Clamping this to zero leaves the
-                // assembly "settled" while its actual suspension has no
-                // contact, after which a rigid hull can fall onto the terrain
-                // and corrupt the articulated solve.
+                // Positive displacement means the authored probe is below the
+                // support surface. Negative displacement means it starts above
+                // the surface, which is a valid airborne state.
                 probe_displacement =
                     Some(probe_displacement.map_or(required, |previous| previous.max(required)));
                 over_terrain = true;
             }
         } else {
-            // Physical wheels are real bodies, so lift from the deepest dynamic
+            // Physical wheels are real bodies, so measure the deepest dynamic
             // member. Prefer a live terrain oracle; otherwise use the live
             // static support AABB that Avian will use for contact admission.
             for &m in &members {
@@ -1901,11 +1940,11 @@ pub fn settle_grounded_assemblies(
                     if static_support_present && !static_support_live {
                         continue;
                     }
-                    if let Some(lift) =
-                        static_support_lift((aabb_min, aabb_max), &static_support_bounds)
+                    if let Some(penetration) =
+                        static_support_penetration((aabb_min, aabb_max), &static_support_bounds)
                     {
                         over_terrain = true;
-                        rigid_lift = rigid_lift.max(lift);
+                        rigid_penetration = rigid_penetration.max(penetration);
                     }
                     continue;
                 }
@@ -1919,107 +1958,55 @@ pub fn settle_grounded_assemblies(
                                 continue;
                             };
                             over_terrain = true;
-                            rigid_lift = rigid_lift.max(surface + SETTLE_CLEARANCE - local.y);
+                            rigid_penetration = rigid_penetration.max(surface - local.y);
                         }
                     }
                 }
             }
         }
-        // A ground-settle request is a placement transaction. Probe-owned
-        // assemblies use the signed displacement that establishes the authored
-        // rest distance; collider-only assemblies use their non-negative
-        // clearance lift. Once the live surface has been sampled, zero is a
-        // valid result and consumes the request without holding physics.
+        // This is validation only. A body outside the finite terrain window or
+        // above the surface has no penetration finding and may proceed under
+        // the authored pose.
         if !over_terrain {
-            if terrain_context.is_none() {
-                // No DEM transaction exists and no static support collider was
-                // found under this footprint. Consume the request so normal
-                // physics establishes the unsupported state; an activation hold
-                // must never become a permanent substitute for missing support.
-                for &member in &members {
-                    commands
-                        .entity(member)
-                        .try_remove::<lunco_core::NeedsGroundSettle>();
-                }
+            for &member in &members {
+                commands
+                    .entity(member)
+                    .try_remove::<lunco_physics::PhysicsInitializationPending>();
             }
             continue;
         }
-        let displacement = probe_displacement.unwrap_or_else(|| rigid_lift.max(0.0));
-        if !displacement.is_finite() {
+        let penetration = probe_displacement
+            .unwrap_or(rigid_penetration)
+            .max(0.0);
+        if !penetration.is_finite() {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-non-finite".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "physics-initialization".to_string(),
+                subject: subject.to_string(),
+                message: "terrain support validation produced a non-finite penetration; authored pose remains held".to_string(),
+            });
             continue;
         }
-        // Consume only after the live surface has been observed. During
-        // terrain/celestial startup the same assembly can be observed before
-        // its final grid-absolute pose exists; the terrain-ready hold prevents
-        // this branch until the collider ring is live beneath the assembly.
-        for &m in &members {
-            let mut entity = commands.entity(m);
-            entity.try_remove::<lunco_core::NeedsGroundSettle>();
-            if displacement != 0.0 {
-                entity.try_insert((
-                    lunco_core::PhysicsPoseAuthoritative,
-                    lunco_physics::PhysicsPoseSeeded,
-                ));
+        if penetration <= INITIAL_POSE_TOLERANCE {
+            for &member in &members {
+                commands
+                    .entity(member)
+                    .try_remove::<lunco_physics::PhysicsInitializationPending>();
             }
-        }
-        if displacement == 0.0 {
             continue;
         }
-        let Some(placement_up) = placement_axis else {
-            continue;
-        };
-        let placement_vector = placement_up * displacement;
-        for &m in &members {
-            if let Ok((_, mut pos, _, _, lin, ang, hits)) = avian.p0().get_mut(m) {
-                pos.0 += placement_vector;
-                if let Some(mut v) = lin {
-                    v.0 = DVec3::ZERO;
-                }
-                if let Some(mut w) = ang {
-                    w.0 = DVec3::ZERO;
-                }
-                // RayHits is a cached result from the previous spatial-query
-                // pass. The placement transaction changed the ray origin, so
-                // retaining it would feed a pre-placement compression into
-                // the first live suspension tick. The next FixedPostUpdate
-                // recasts from the moved pose.
-                if let Some(mut hits) = hits {
-                    hits.clear();
-                }
-            }
-        }
-        // Raycast wheels are physics probes rather than rigid bodies. Their
-        // absolute Position is refreshed from the chassis in FixedPostUpdate,
-        // but that schedule is intentionally skipped while this activation hold
-        // is up. Move descendant probes in the same placement transaction so the
-        // first released raycast cannot use the pre-lift, embedded pose.
-        let members_set: HashSet<Entity> = members.iter().copied().collect();
-        for (entity, mut pos, _, rigid_body, _, _, hits) in avian.p0().iter_mut() {
-            if let Some(mut hits) = hits {
-                hits.clear();
-            }
-            if rigid_body.is_some() || members_set.contains(&entity) {
-                continue;
-            }
-            let mut cursor = entity;
-            let mut descendant = false;
-            while let Ok(child_of) = parents.get(cursor) {
-                cursor = child_of.parent();
-                if members_set.contains(&cursor) {
-                    descendant = true;
-                    break;
-                }
-            }
-            if descendant {
-                pos.0 += placement_vector;
-            }
-        }
-        warn!(
-            "[ground-settle] dropped assembly (seed {seed:?}, {} bodies) onto the terrain: \
-             translated {displacement:.2} m so authored supports meet the one-sided heightfield",
-            members.len(),
-        );
+        findings.push(lunco_core::RuntimeDiagnostic {
+            code: "physics-initialization-terrain-penetration".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "physics-initialization".to_string(),
+            subject: subject.to_string(),
+            message: format!(
+                "authored initial pose penetrates the support surface by {penetration:.6} m; author the body above terrain or provide an explicit initialization policy"
+            ),
+        });
     }
+    diagnostics.replace_producer("physics-initialization", findings);
 }
 
 /// Right one overturned vessel, NOW — the primitive behind the Recover tool and
@@ -2388,14 +2375,14 @@ mod tests {
     }
 
     #[test]
-    fn static_support_lift_uses_only_overlapping_support_bounds() {
+    fn static_support_penetration_uses_only_overlapping_support_bounds() {
         let body = (DVec3::new(-0.4, -0.05, -0.4), DVec3::new(0.4, 0.75, 0.4));
         let supports = [
             (DVec3::new(-2.0, -1.0, -2.0), DVec3::new(2.0, 0.0, 2.0)),
             (DVec3::new(10.0, -1.0, 10.0), DVec3::new(12.0, 0.0, 12.0)),
         ];
 
-        assert_eq!(static_support_lift(body, &supports), Some(0.1));
+        assert_eq!(static_support_penetration(body, &supports), Some(0.05));
     }
 
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at

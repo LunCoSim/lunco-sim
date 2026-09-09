@@ -98,24 +98,6 @@ pub struct UsdPrimKind(pub String);
 #[reflect(Component)]
 pub struct CinematicCameraLock;
 
-/// A freshly-activated physics body that needs a ONE-TIME drop-onto-terrain
-/// placement before it settles.
-///
-/// Added when a body flips to `RigidBody::Dynamic` (`activate_dynamic_bodies`),
-/// consumed by the terrain ground-settle system, which lifts the whole
-/// joint-connected assembly so its lowest member clears the terrain surface, then
-/// removes the marker.
-///
-/// **Why**: authored physical assemblies can put their body origins at the
-/// surface while a support probe hangs below them. Avian terrain colliders are
-/// one-sided parry heightfields — a body that starts even slightly below the
-/// surface gets no upward contact and sinks forever. This is correct initial
-/// PLACEMENT — not a per-frame rescue. Non-collider support geometry is supplied
-/// through `lunco_physics::PhysicsSupportFootprint`.
-#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct NeedsGroundSettle;
-
 /// The physics pose was authoritatively changed outside Avian's solver and
 /// must be written back to the cell-local representation before the bridge
 /// reads ancestor-frame changes again.

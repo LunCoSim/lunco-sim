@@ -1889,7 +1889,13 @@ fn extract_avian_prim(
         } else {
             commands
                 .entity(entity)
-                .try_insert((ShouldBeDynamic, lunco_core::PhysicsStatePending));
+                .try_insert((
+                    ShouldBeDynamic,
+                    lunco_core::PhysicsStatePending,
+                    lunco_physics::PhysicsInitializationPending,
+                    lunco_physics::PhysicsInitializationPolicy::default(),
+                    lunco_physics::PhysicsInitializationSubject(sdf_path.to_string()),
+                ));
             (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
         };
         commands

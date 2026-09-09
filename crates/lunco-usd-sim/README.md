@@ -29,6 +29,38 @@ contracts. It does not infer a wheel from a stray attribute.
 ### 3. Priority & Overrides
 Simulation-specific behaviors applied by this crate are intended to take priority over standard collision physics. If an object is marked as a Wheel, its standard collider logic should be bypassed in favor of raycast-based ground interaction.
 
+### 4. Physics initialization is an authored contract
+
+Every USD dynamic rigid body starts kinematic and crosses into Avian only after
+its composed pose has been read in the active physics frame. The default
+`strict-authored` policy accepts a finite pose without changing it. On a scene
+with terrain, an authored body or support probe that penetrates the live
+surface produces a persistent `physics-initialization-terrain-penetration`
+error and stays held; the runtime does not lift, reseat, zero, or otherwise
+repair the body.
+
+The default needs no custom USD property. A Twin that genuinely needs a
+different initialization rule names it explicitly on the rigid-body prim and
+provides a deterministic `LunCoPolicy` hook:
+
+```usda
+token lunco:physics:initializationPolicy = "my-policy"
+
+def LunCoPolicy "MyInitializationPolicy"
+{
+    string lunco:policy:seam = "physics.initialization.my-policy"
+    string lunco:policy:entry = "initialize"
+    string info:sourceCode = "fn initialize(facts) { \"accept\" }"
+    bool lunco:policy:deterministic = true
+}
+```
+
+The hook receives the authored subject, policy name, entity, position, and
+joint-connected members, and must return exactly `"accept"` or `"reject"`.
+Missing, malformed, non-deterministic, or rejected policies are errors, not
+requests for an engine fallback. Inspect them through the runtime diagnostics
+surface; static USD schema errors remain the responsibility of USD linting.
+
 ## Implementation Status
 *   [x] Basic `PhysxVehicleWheelAPI` intercept.
 *   [x] `PhysxVehicleTireAPI` mapping.

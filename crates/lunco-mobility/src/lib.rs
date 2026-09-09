@@ -398,14 +398,9 @@ fn publish_raycast_support_footprints(
             })
             .collect::<Vec<_>>();
         if !contacts.is_empty() {
-            commands.entity(root).try_insert((
-                lunco_physics::PhysicsSupportFootprint(contacts),
-                // A probe-only support model has no low rigid body for the
-                // generic activation path to place. Request the shared
-                // one-shot initial placement; this is not part of per-frame
-                // ring selection and is consumed by terrain after readiness.
-                lunco_core::NeedsGroundSettle,
-            ));
+            commands
+                .entity(root)
+                .try_insert(lunco_physics::PhysicsSupportFootprint(contacts));
         }
     }
 }

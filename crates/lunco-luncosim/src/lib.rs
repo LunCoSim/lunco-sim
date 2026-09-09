@@ -3210,15 +3210,6 @@ impl Plugin for SandboxCorePlugin {
             Update,
             project_usd_policies.after(lunco_scripting::source_asset::RhaiSourceAssetSet),
         );
-        // A just-promoted Dynamic body is not visible to the terrain ring until
-        // deferred commands flush. Keep physics held across that fixed-loop
-        // boundary, then let the terrain's own liveness gate take sole ownership.
-        app.add_systems(
-            Update,
-            release_ground_activation_hold
-                .after(lunco_terrain_surface::collider_ring::hold_physics_until_dem_ready)
-                .after(lunco_terrain_surface::collider_ring::settle_grounded_assemblies),
-        );
         // Terrain visual progress → status bar: stream residency and optional
         // derived-map preparation use separate bus sources, so one cannot hide
         // or complete the other. Pure derived reads of terrain resources.
@@ -3455,111 +3446,6 @@ mod ground_collider_gate_tests {
         assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
 
-    #[test]
-    fn activation_does_not_wait_for_a_terrain_service_that_is_not_present() {
-        let mut app = App::new();
-        app.init_resource::<lunco_usd_sim::GroundActivationInFlight>()
-            .init_resource::<lunco_physics::PhysicsHolds>()
-            .add_systems(Update, release_ground_activation_hold);
-        app.world_mut()
-            .resource_mut::<lunco_usd_sim::GroundActivationInFlight>()
-            .0 = 1;
-        app.world_mut()
-            .resource_mut::<lunco_physics::PhysicsHolds>()
-            .set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
-        let body = app.world_mut().spawn(lunco_core::NeedsGroundSettle).id();
-
-        app.update();
-
-        assert_eq!(
-            app.world()
-                .resource::<lunco_usd_sim::GroundActivationInFlight>()
-                .0,
-            0
-        );
-        assert!(!app
-            .world()
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::GROUND_ACTIVATION));
-        assert!(
-            app.world()
-                .get::<lunco_core::NeedsGroundSettle>(body)
-                .is_none(),
-            "an unclaimed terrain-placement request must be retired"
-        );
-    }
-}
-
-/// Close the activation bridge after the one-time terrain placement has consumed
-/// every `NeedsGroundSettle` marker. A DEM terrain provider makes those markers
-/// the authoritative boundary; without one, they are unclaimed and retired.
-/// This keeps physics held across an actual terrain placement without turning an
-/// optional service into a permanent prerequisite for authored-collision scenes.
-fn release_ground_activation_hold(
-    mut activation: ResMut<lunco_usd_sim::GroundActivationInFlight>,
-    mut holds: ResMut<lunco_physics::PhysicsHolds>,
-    terrain_providers: Query<(), With<lunco_terrain_surface::TerrainColliderRing>>,
-    needs_ground_settle: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
-    support_footprints: Query<
-        (),
-        (
-            With<lunco_core::NeedsGroundSettle>,
-            With<lunco_physics::PhysicsSupportFootprint>,
-        ),
-    >,
-    support_colliders: Query<
-        (
-            Option<&avian3d::prelude::RigidBody>,
-            Option<&avian3d::prelude::ColliderOf>,
-        ),
-        With<avian3d::prelude::Collider>,
-    >,
-    bodies: Query<&avian3d::prelude::RigidBody>,
-    mut commands: Commands,
-) {
-    let has_static_support = support_colliders.iter().any(|(body, owner)| {
-        body.is_some_and(|body| {
-            matches!(
-                body,
-                avian3d::prelude::RigidBody::Static | avian3d::prelude::RigidBody::Kinematic
-            )
-        }) || owner.is_some_and(|owner| {
-            bodies.get(owner.body).is_ok_and(|body| {
-                matches!(
-                    body,
-                    avian3d::prelude::RigidBody::Static | avian3d::prelude::RigidBody::Kinematic
-                )
-            })
-        })
-    });
-    match activation.0 {
-        2 => {
-            activation.0 = 1;
-            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
-        }
-        // A flat authored/static scene has no DEM provider, but a published
-        // support footprint still owns a one-shot placement transaction. Keep
-        // the activation hold until that generic physics contract consumes its
-        // marker. Only requests with no support contract are unclaimed and may
-        // be retired here.
-        1 if terrain_providers.is_empty()
-            && support_footprints.is_empty()
-            && !has_static_support =>
-        {
-            for entity in &needs_ground_settle {
-                commands
-                    .entity(entity)
-                    .try_remove::<lunco_core::NeedsGroundSettle>();
-            }
-            activation.0 = 0;
-            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, false);
-        }
-        1 if needs_ground_settle.is_empty() => {
-            activation.0 = 0;
-            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, false);
-        }
-        _ => {}
-    }
 }
 
 /// **Start each camera path when the RECORDER starts.** A shot begins when the

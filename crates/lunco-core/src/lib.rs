@@ -102,7 +102,7 @@ pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
     CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
-    HorizonShadowTerrain, NeedsGroundSettle, NextScene, PhysicsPoseAuthoritative,
+    HorizonShadowTerrain, NextScene, PhysicsPoseAuthoritative,
     ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind,
     CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
     TRIGGER_COLLISION_LAYER,
@@ -1009,7 +1009,6 @@ impl Plugin for LunCoCorePlugin {
         app.init_resource::<SceneMountState>();
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
-            .register_type::<NeedsGroundSettle>()
             .register_type::<PhysicsPoseAuthoritative>()
             .register_type::<SoiMigrant>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
