@@ -111,7 +111,7 @@ The fields are:
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
-| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. |
+| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. Fixed controls such as the shipped `view-mode` switcher leave this false so their authored anchor remains stable across reloads. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
