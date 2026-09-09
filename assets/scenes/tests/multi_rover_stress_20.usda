@@ -1,0 +1,62 @@
+#usda 1.0
+(
+    defaultPrim = "MultiRoverStress"
+    upAxis = "Y"
+    metersPerUnit = 1
+    doc = "Twenty identical maintained rover assemblies on independent lanes for the supported multi-rover stress matrix."
+)
+
+def Xform "MultiRoverStress" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    custom int lunco:roverCount = 20
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, -10)
+        double3 xformOp:scale = (55, 1, 35)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.24, 0.22, 0.19)]
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Rovers"
+    {
+        def Xform "Rover01" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-47.5, 1.6, 0) }
+        def Xform "Rover02" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-42.5, 1.6, 0) }
+        def Xform "Rover03" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-37.5, 1.6, 0) }
+        def Xform "Rover04" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-32.5, 1.6, 0) }
+        def Xform "Rover05" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-27.5, 1.6, 0) }
+        def Xform "Rover06" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-22.5, 1.6, 0) }
+        def Xform "Rover07" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-17.5, 1.6, 0) }
+        def Xform "Rover08" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-12.5, 1.6, 0) }
+        def Xform "Rover09" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-7.5, 1.6, 0) }
+        def Xform "Rover10" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (-2.5, 1.6, 0) }
+        def Xform "Rover11" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (2.5, 1.6, 0) }
+        def Xform "Rover12" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (7.5, 1.6, 0) }
+        def Xform "Rover13" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (12.5, 1.6, 0) }
+        def Xform "Rover14" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (17.5, 1.6, 0) }
+        def Xform "Rover15" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (22.5, 1.6, 0) }
+        def Xform "Rover16" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (27.5, 1.6, 0) }
+        def Xform "Rover17" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (32.5, 1.6, 0) }
+        def Xform "Rover18" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (37.5, 1.6, 0) }
+        def Xform "Rover19" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (42.5, 1.6, 0) }
+        def Xform "Rover20" (prepend references = @lunco://vessels/rovers/variants/rover_stress.usda@</RoverStress>) { double3 xformOp:translate = (47.5, 1.6, 0) }
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/multi_rover_stress.rhai@
+        }
+    }
+}
