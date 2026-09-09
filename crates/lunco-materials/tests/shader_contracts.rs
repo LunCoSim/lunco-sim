@@ -9,11 +9,12 @@
 //!
 //! | contract | what it shipped as |
 //! |---|---|
-//! | `ORTHO_GAIN` on every albedo-map multiply | ground rendered at 41% albedo; a comment specified the gain "character-for-character" while the code did a plain multiply, and the web twin stayed wrong after the native was fixed |
+//! | one shared bounded orthophoto transfer | the percentile-stretched albedo map drove terrain to near-black and washed-out extrema when multiplied as reflectance |
 //! | shared surface kernel, no local copies | `aa_fade` retuned in one file of six; the other four kept the old constants |
 //! | full-arity `regolith_factor` | the opposition surge was dead code with zero call sites |
 //! | every `lunco::` import has a keep-alive | terrain drew with NO material at all — flat grey, reported as "the ground went transparent" |
 //! | photometry defaults agree | the same site would read differently depending on whether its terrain streamed |
+//! | linked terrain stages share one `Material` ABI | the fragment packed values at offsets the geomorph vertex interpreted as unrelated controls |
 //! | DEM normals cross one local-to-world boundary | coarse LODs became dark/black when a body-fixed site rotated relative to the render frame |
 //!
 //! Source-level on purpose: this crate deliberately carries no `wgpu`/`naga` (see
@@ -23,6 +24,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use lunco_materials::dyn_params::ParamSchema;
 
 fn shaders_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders")
@@ -64,20 +67,17 @@ fn code_only(src: &str) -> String {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A baked orthophoto is a 1–99 PERCENTILE STRETCH (mean ≈ 1/3), not a
-/// reflectance map — so `albedo * map` DIMS the regolith by that mean instead of
-/// tinting it. Measured on the shipped Apollo 15 ortho: mean 0.412, rendering the
-/// authored 0.13 lunar albedo at 0.054.
-///
-/// Any shader that multiplies albedo by the authored map must apply `ORTHO_GAIN`.
+/// A baked orthophoto is a 1–99 PERCENTILE STRETCH, not a reflectance map. Every
+/// consumer must use the shared bounded transfer in `lunco::lunar`; a direct
+/// `albedo * map` multiply makes the map's extrema become black/white terrain.
 #[test]
-fn every_albedo_map_multiply_applies_ortho_gain() {
+fn every_albedo_map_uses_shared_bounded_transfer() {
     for (name, src) in all_shaders() {
         let code = code_only(&src);
         if !code.contains("weight_albedo") {
             continue;
         }
-        // The composite line: `mix(albedo, albedo * <map> ..., weight_albedo)`.
+        // The composite line must route the map through the shared transfer.
         let line = code
             .lines()
             .find(|l| l.contains("mix(albedo") && l.contains("weight_albedo"))
@@ -85,17 +85,14 @@ fn every_albedo_map_multiply_applies_ortho_gain() {
                 panic!("{name} declares weight_albedo but never composites it into albedo")
             });
         assert!(
-            line.contains("ORTHO_GAIN"),
-            "{name} multiplies albedo by the authored map WITHOUT ORTHO_GAIN — that renders \
-             the site's real photograph as near-black mud (see lunar_brdf.wgsl). Line: {}",
+            line.contains("orthophoto_factor"),
+            "{name} applies the authored map without the shared bounded orthophoto transfer. Line: {}",
             line.trim()
         );
         assert!(
-            code.contains("ORTHO_GAIN")
-                && src.contains("lunco::lunar::")
-                && src.contains("ORTHO_GAIN"),
-            "{name} must IMPORT ORTHO_GAIN from lunco::lunar, not redefine it — two copies \
-             of that constant is how the native and web paths drifted apart"
+            code.contains("orthophoto_factor") && src.contains("lunco::lunar::"),
+            "{name} must IMPORT orthophoto_factor from lunco::lunar, not redefine the \
+             transfer — two copies are how terrain paths drift apart"
         );
     }
 }
@@ -251,8 +248,8 @@ fn every_imported_lunco_module_has_a_keepalive_in_the_plugin() {
 /// The streamed (`terrain_geomorph`) and static-mesh (`terrain_layered`,
 /// `regolith`) paths shade the same authored site. If their photometry defaults
 /// differ, the Moon looks different depending on whether the terrain streams —
-/// which is exactly the divergence that let `ORTHO_GAIN` be right in one path and
-/// missing in the other.
+/// which is exactly the kind of path divergence the shared shader contracts must
+/// prevent.
 #[test]
 fn photometry_defaults_agree_across_every_terrain_path() {
     const FILES: [&str; 4] = [
@@ -291,6 +288,33 @@ fn photometry_defaults_agree_across_every_terrain_path() {
             }
         }
     }
+}
+
+/// A custom vertex stage and fragment stage share the same material uniform
+/// binding. The Apollo USD look uses `terrain_layered` for the fragment and
+/// `terrain_geomorph` for the vertex stage, so their reflected field order and
+/// types are an ABI contract, not two independent shader schemas.
+#[test]
+fn streamed_terrain_vertex_and_fragment_uniform_abis_agree() {
+    let fragment = ParamSchema::parse(&read("terrain_layered.wgsl"))
+        .expect("terrain_layered declares a Material schema");
+    let vertex = ParamSchema::parse(&read("terrain_geomorph.wgsl"))
+        .expect("terrain_geomorph declares a Material schema");
+
+    let fragment_fields: Vec<_> = fragment
+        .fields
+        .iter()
+        .map(|field| (&field.name, field.ty, field.offset))
+        .collect();
+    let vertex_fields: Vec<_> = vertex
+        .fields
+        .iter()
+        .map(|field| (&field.name, field.ty, field.offset))
+        .collect();
+    assert_eq!(
+        fragment_fields, vertex_fields,
+        "terrain_layered fragment and terrain_geomorph vertex stages must read the same Material ABI"
+    );
 }
 
 /// Derived terrain maps are baked in the DEM's local ENU coordinates. Both
@@ -402,18 +426,14 @@ fn static_and_streamed_terrain_share_the_derived_source_contract() {
 }
 
 /// Terrain analysis is a tool material, not a production-shader branch. Keeping
-/// its source separate means adding a diagnostic mode cannot add uniforms,
-/// texture bindings, or divergent topology to every lunar terrain draw.
+/// its source separate means adding a diagnostic mode cannot add diagnostic
+/// uniforms, texture bindings, or divergent topology to every lunar terrain
+/// draw. `weight_mineral` is a production layer field shared by linked material
+/// stages, even when the geomorph stage does not consume its texture.
 #[test]
 fn terrain_diagnostic_material_is_separate_from_production_material() {
     let production = code_only(&read("terrain_geomorph.wgsl"));
-    for forbidden in [
-        "overlay_",
-        "lod_depth",
-        "weight_mineral",
-        "mineral_tex",
-        "slope_hazard_color",
-    ] {
+    for forbidden in ["overlay_", "lod_depth", "mineral_tex", "slope_hazard_color"] {
         assert!(
             !production.contains(forbidden),
             "production terrain material contains diagnostic contract `{forbidden}`"

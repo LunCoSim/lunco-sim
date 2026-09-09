@@ -36,6 +36,18 @@ dependency cycle, put the provider in a small `*-api` adapter crate and have
 each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
+For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
+one linked material contract: both stages read the same `@binding(0)` uniform
+block, so their `Material` fields, order, and WGSL types must agree. The
+fragment schema is the packed layout; do not invent a second vertex schema or
+silently select a replacement shader. Add a cross-file ABI test when maintaining
+a multi-stage shader pair. See
+[`shader-layers-and-params.md`](../../docs/architecture/shader-layers-and-params.md).
+
+Keep authored grayscale orthophoto handling in the shared
+`lunco::lunar::orthophoto_factor` transfer: percentile-stretched maps are contrast
+signals, not linear reflectance, and must not be multiplied directly into albedo.
+
 Project-owned persistence policy belongs to the active Twin manifest's generic
 settings boundary. A domain may define one namespaced scalar key and expose it
 through the existing `SetTwinSetting` path; it must not add a global settings

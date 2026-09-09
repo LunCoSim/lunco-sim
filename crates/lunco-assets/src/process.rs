@@ -1253,10 +1253,10 @@ fn resolve_roi(
     //
     // Measured on the shipped bake before this fix: `ortho.png` and `normal.png`
     // both went dead at exactly x=2100/2500 for every row — the ortho baked to
-    // flat white (which `ORTHO_GAIN` then rendered at 3x the authored albedo) and
-    // the normal map to a zero-relief plane. A smooth, 3x-bright, straight-edged
-    // band along the site boundary, in an engine where nothing downstream can tell
-    // "no data" from "flat bright ground".
+    // flat white (which the orthophoto transfer then rendered at its brightest
+    // bounded tone) and the normal map to a zero-relief plane. A smooth,
+    // straight-edged band along the site boundary, in an engine where nothing
+    // downstream can tell "no data" from "flat bright ground".
     let (vx0, vy0, vx1, vy1) = valid_data_bounds(&src.samples, src_w, src_h)
         .ok_or_else(|| io_err(format!("{kind} pipeline: source has no finite samples")))?;
     let (vx0, vy0) = (vx0 as isize, vy0 as isize);
@@ -1444,9 +1444,9 @@ fn process_map(
         png.save(output_path)
             .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
         // RGB source maps preserve their authored channels. They do not use the
-        // grayscale percentile stretch, so their multiplicative normaliser is
-        // the identity. Write the same completion sidecar as the grayscale path
-        // so every `map` artifact has one unambiguous installed-state contract.
+        // grayscale percentile stretch, so the sidecar records that no bake-time
+        // stretch was applied. Runtime albedo transfer remains the shared shader
+        // contract; this sidecar is for bake inspection, not a hidden setting.
         std::fs::write(output_path.with_extension("mean"), "1.000000\n")?;
         return Ok(());
     }
@@ -1535,29 +1535,15 @@ fn process_map(
     png.save(output_path)
         .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
 
-    // ── The gain this map needs to be consumed multiplicatively ──────────────
-    // A 1–99 percentile stretch spends the full 0..255 range on the site's own
-    // brightness spread, so what lands on disk is a CONTRAST map with mean near
-    // 1/3 — NOT a reflectance map with mean 1. `albedo * map` therefore does not
-    // tint the regolith, it DIMS it by that mean.
-    //
-    // The shader compensated with a hardcoded `ORTHO_GAIN = 3.0`, derived by
-    // measuring THIS site by hand (mean 0.412 ⇒ 1/mean ≈ 2.43, rounded up). That
-    // makes exactly one site correct and every other one approximately correct,
-    // and it puts a texture-bake concern inside `lunar_brdf.wgsl`.
-    //
-    // The mean is known HERE, for free, at the moment the stretch is applied. Write
-    // it beside the map so the engine can fill `ortho_gain = 1/mean` per site and
-    // the shader constant can go to 1.0. `bake_names_not_values`: the sidecar
-    // records the measurement, not a tuned multiplier.
+    // Keep the measured mean beside the map for bake inspection. The PNG is a
+    // percentile-stretched contrast map; the runtime's shared
+    // `orthophoto_factor` maps it to bounded albedo tone and does not consume a
+    // per-site gain from this sidecar.
     if n_measured > 0.0 {
         let mean = sum_measured / n_measured;
         let sidecar = output_path.with_extension("mean");
         std::fs::write(&sidecar, format!("{mean:.6}\n"))?;
-        println!(
-            "    map mean {mean:.4} → suggested ortho_gain {:.3}",
-            1.0 / mean.max(1e-6)
-        );
+        println!("    map mean {mean:.4} (encoded; runtime uses bounded orthophoto tone)",);
     }
     Ok(())
 }
