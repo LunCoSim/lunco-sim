@@ -435,6 +435,75 @@ mod camera_input_settings_tests {
 pub struct CameraZoomInput {
     /// Accumulated scroll delta since the last camera system consumed it.
     pub delta: f32,
+    /// A mode transition owns the current wheel gesture until the source has
+    /// been idle for the handoff window. Bevy exposes accumulated wheel input,
+    /// not a wheel-release event, so one neutral frame is not a gesture end.
+    transition_barrier: bool,
+    transition_direction: Option<i8>,
+    neutral_seconds: f32,
+}
+
+impl CameraZoomInput {
+    /// Start a semantic camera-mode handoff. The mode that consumed the
+    /// current gesture must not leak that gesture into its successor.
+    fn begin_mode_transition(&mut self, direction: Option<f32>) {
+        let already_barriered = self.transition_barrier;
+        self.delta = 0.0;
+        self.transition_barrier = true;
+        // A scroll-through requests the directional barrier before its
+        // ReturnFromOrbit observer runs. The observer still performs a mode
+        // handoff, but must not erase the direction that identifies the
+        // gesture being consumed.
+        if !already_barriered || direction.is_some() {
+            self.transition_direction = direction
+                .filter(|delta| delta.abs() > f32::EPSILON)
+                .map(|delta| delta.signum() as i8);
+        }
+        self.neutral_seconds = 0.0;
+    }
+
+    /// Ingest one frame of normalized wheel input. The barrier recognizes a
+    /// new gesture after a real idle window, while an opposite-direction
+    /// gesture can take ownership immediately. This is necessary because the
+    /// accumulated wheel resource has no begin/end event to delimit a gesture.
+    fn ingest(&mut self, delta: f32, accepted: bool, idle_seconds: f32) {
+        if self.transition_barrier {
+            if delta.abs() <= f32::EPSILON {
+                self.neutral_seconds += idle_seconds.max(0.0);
+                if self.neutral_seconds < CAMERA_ZOOM_HANDOFF_IDLE_SECS {
+                    return;
+                }
+                self.transition_barrier = false;
+                self.transition_direction = None;
+            } else {
+                self.neutral_seconds = 0.0;
+                if !accepted {
+                    return;
+                }
+                let direction = delta.signum() as i8;
+                match self.transition_direction {
+                    // A known same-direction packet is still part of the
+                    // gesture that the previous mode consumed.
+                    Some(previous) if previous == direction => return,
+                    // A known opposite-direction packet is an explicit new
+                    // gesture and may take ownership immediately.
+                    Some(_) => {}
+                    // A command-driven handoff has no direction to compare.
+                    // It must therefore wait for the neutral interval instead
+                    // of guessing that the first packet is a new gesture.
+                    None => return,
+                }
+                self.transition_barrier = false;
+                self.transition_direction = None;
+            }
+        }
+        if delta.abs() <= f32::EPSILON {
+            return;
+        }
+        if accepted {
+            self.delta += delta;
+        }
+    }
 }
 
 /// Scroll→zoom sensitivity (unitless; feeds the exponential in
@@ -446,6 +515,10 @@ pub struct CameraZoomInput {
 const ZOOM_SENSITIVITY: f32 = 5.0;
 const ZOOM_FACTOR_MIN: f64 = 0.75;
 const ZOOM_FACTOR_MAX: f64 = 1.25;
+/// Minimum no-wheel interval that closes a mode-transition handoff. The
+/// accumulated Bevy wheel resource has no release event, so this idle window
+/// is the shared boundary between one physical gesture and the next.
+const CAMERA_ZOOM_HANDOFF_IDLE_SECS: f32 = 0.12;
 
 /// Altitude of the orbital zoom's min-distance floor above a celestial body's
 /// surface. Doubles as the scroll-through threshold: one more inward detent
@@ -2827,7 +2900,12 @@ fn orbit_system(
                     && current_len <= min_dist * 1.02
             });
         if surface_exit {
-            zoom.delta = 0.0;
+            // The threshold-crossing wheel gesture is consumed by the orbit
+            // owner. The restored surface owner starts only after the source
+            // has returned to neutral, so residual packets cannot dolly it
+            // away from the authoritative saved pose.
+            let transition_direction = zoom.delta;
+            zoom.begin_mode_transition(Some(transition_direction));
             commands.trigger(ReturnFromOrbit { target: avatar_ent });
             info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
             continue;
@@ -3086,6 +3164,7 @@ fn freeflight_scroll_transit_system(
         let factor = (-zoom.delta as f64 * ZOOM_SENSITIVITY as f64 * 0.01)
             .exp()
             .clamp(ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX);
+        let transition_direction = zoom.delta;
         let scroll_out = zoom.delta < 0.0;
         zoom.delta = 0.0;
         // Signed dolly step: negative (forward) on scroll-in. The 50 m floor
@@ -3170,6 +3249,10 @@ fn freeflight_scroll_transit_system(
                 // derive its arm from the live surface region for continuity.
                 entity.try_insert(RadialArrival);
             }
+            // The scroll that crossed the surface/orbit threshold belongs to
+            // the surface owner. Do not let later packets from that same
+            // wheel gesture reach the newly inserted orbit owner.
+            zoom.begin_mode_transition(Some(transition_direction));
             info!(
                 restored = !needs_radial_arrival,
                 "SURFACE SCROLL-OUT: entering orbital view"
@@ -3567,20 +3650,19 @@ fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
 /// unit-preserving Bevy input at this boundary, then accumulates it per avatar for
 /// the active camera behavior to consume + reset.
 fn collect_camera_zoom(
+    time: Res<Time<Real>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
     mut q_avatar: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
 ) {
-    if egui_focus.wants_pointer || drag_mode.is_some_and(|drag| drag.active) {
-        return;
-    }
     let d = normalized_scroll_delta(&scroll);
-    if d.abs() <= f32::EPSILON {
-        return;
-    }
+    let accepted = !egui_focus.wants_pointer && !drag_mode.is_some_and(|drag| drag.active);
     for mut zoom in q_avatar.iter_mut() {
-        zoom.delta += d;
+        // A neutral source frame is meaningful even while the pointer is
+        // captured by UI: it completes the previous camera gesture without
+        // routing UI-owned wheel input into the scene.
+        zoom.ingest(d, accepted, time.delta_secs());
     }
 }
 
@@ -4144,6 +4226,7 @@ fn on_return_from_orbit(
         (
             &mut Transform,
             &mut CellCoord,
+            &mut CameraZoomInput,
             &ChildOf,
             &OrbitViewReturn,
             Option<&OrbitCamera>,
@@ -4160,6 +4243,7 @@ fn on_return_from_orbit(
     let Ok((
         mut transform,
         mut cell,
+        mut zoom,
         child_of,
         return_state,
         current_orbit,
@@ -4173,6 +4257,10 @@ fn on_return_from_orbit(
     if cinematic_lock {
         return;
     }
+    // Returning is a camera-mode handoff even when initiated by a typed
+    // command rather than the wheel. Keep the restored mode from inheriting
+    // any input that was already in flight at the handoff boundary.
+    zoom.begin_mode_transition(None);
     if orbit_user_input {
         if let (Some(camera), Some(history)) = (current_orbit, orbit_history.as_deref_mut()) {
             remember_user_orbit_pose(history, camera, &q_bodies);
@@ -5070,6 +5158,7 @@ fn on_focus_command(
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
+    mut q_zoom: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
     q_bodies: Query<&CelestialBody>,
     q_body_decls: Query<&lunco_celestial::CelestialBodyDecl>,
     q_body_entities: Query<(Entity, &CelestialBody)>,
@@ -5135,6 +5224,12 @@ fn on_focus_command(
         {
             return;
         }
+    }
+
+    // Focus is also a camera-mode handoff. Any wheel delta accumulated before
+    // the target switch must not be consumed by the newly focused orbit.
+    if let Ok(mut zoom) = q_zoom.get_mut(avatar_ent) {
+        zoom.begin_mode_transition(None);
     }
     if let Ok(body) = q_bodies.get(physical_target) {
         distance = body.radius_m * 3.0;
@@ -6296,6 +6391,66 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn camera_zoom_mode_transition_consumes_until_neutral() {
+        let mut input = CameraZoomInput::default();
+
+        input.ingest(-1.0, true, 1.0 / 60.0);
+        assert_eq!(input.delta, -1.0);
+
+        input.begin_mode_transition(Some(-1.0));
+        input.ingest(-1.0, true, 1.0 / 60.0);
+        assert_eq!(input.delta, 0.0);
+
+        input.ingest(0.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
+        input.ingest(1.0, true, 1.0 / 60.0);
+        assert_eq!(input.delta, 1.0);
+    }
+
+    #[test]
+    fn camera_zoom_transition_neutralizes_while_pointer_is_captured() {
+        let mut input = CameraZoomInput::default();
+        input.begin_mode_transition(None);
+
+        input.ingest(1.0, false, 1.0 / 60.0);
+        assert!(input.transition_barrier);
+
+        input.ingest(0.0, false, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
+        input.ingest(1.0, false, 1.0 / 60.0);
+
+        assert_eq!(input.delta, 0.0);
+        assert!(!input.transition_barrier);
+    }
+
+    #[test]
+    fn camera_zoom_undirected_transition_consumes_until_neutral() {
+        let mut input = CameraZoomInput::default();
+        input.begin_mode_transition(None);
+
+        input.ingest(1.0, true, 1.0 / 60.0);
+        assert_eq!(input.delta, 0.0);
+        assert!(input.transition_barrier);
+
+        input.ingest(0.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
+        input.ingest(1.0, true, 1.0 / 60.0);
+
+        assert_eq!(input.delta, 1.0);
+        assert!(!input.transition_barrier);
+    }
+
+    #[test]
+    fn camera_zoom_return_observer_keeps_scroll_through_direction() {
+        let mut input = CameraZoomInput::default();
+        input.begin_mode_transition(Some(1.0));
+        input.begin_mode_transition(None);
+
+        input.ingest(1.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
+
+        assert_eq!(input.delta, 0.0);
+        assert!(input.transition_barrier);
+        assert_eq!(input.transition_direction, Some(1));
     }
 
     #[test]
