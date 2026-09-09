@@ -61,8 +61,12 @@ projects that vessel's canonical `SurfacePose.geodetic` into the map's
 equirectangular marker coordinates, and publishes only typed status and marker
 properties. The HUI/Flair template owns the map, grid, marker, and no-fix
 states; it does not reconstruct coordinates or retain a second location model.
-When there is no complete lunar surface pose, the exposure deliberately hides
-the marker and reports the authored no-fix state.
+The map is opt-in per Twin through the boolean `[settings] ui.lunar_map` key;
+an absent key is the hidden default. The existing `RuntimeSurfaceLayouts`
+workspace state owns the draggable window override per Twin and clears it on
+`TwinClosed`, so camera/world movement cannot move the map. When there is no
+complete lunar surface pose, the exposure deliberately hides the marker and
+reports the authored no-fix state.
 
 ## Performance and placement
 

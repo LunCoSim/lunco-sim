@@ -175,8 +175,12 @@ engine resolves the authoritative local avatar and driven vessel, reads the
 canonical `SurfacePose.geodetic`, and publishes a pure equirectangular
 projection plus explicit loading, no-fix, and valid-fix properties through the
 existing `celestial-view` namespace. HUI/Flair owns the map grid and marker
-presentation. It must not derive coordinates from transforms, duplicate pose
-state, or keep a stale marker across avatar, Twin, or scene lifecycle changes.
+presentation. Twin policy owns only the boolean `[settings] ui.lunar_map`
+setting; omission means hidden. The workbench's existing Twin-scoped
+`RuntimeSurfaceLayouts` owns the map window override and clears it on
+`TwinClosed`, so camera/world transforms cannot alter its rectangle. The map
+must not derive coordinates from transforms, duplicate pose state, or keep a
+stale marker across avatar, Twin, or scene lifecycle changes.
 
 ### Overlay ownership audit
 
@@ -189,7 +193,7 @@ transient session state. The correct split for the shipped surfaces is:
 | `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
 | lander control cards | authored USD `lunco:ui:controlHud` metadata, scoped to the active `SceneMountState` root | Already scene/Twin-authored opt-in |
 | `lunica-schema` | selected authored USD schema root | No; selection-derived |
-| `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in the Camera menu | Not migrated; it is an application view control |
+| `celestial-view` | runtime exposure plus global view-switcher host gate; the lunar map is additionally controlled by active Twin `[settings].ui_lunar_map` | Map policy is Twin-authored; the view-selector host gate remains application chrome |
 | terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
 | tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
 | notifications, blackout, perf/input overlays, theme, window geometry | runtime or user-global settings | No; session/diagnostic/application scope |
