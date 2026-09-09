@@ -216,6 +216,52 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" == "terrain_shader_appearance" ]]; then
+        # The terrain fixture is an authored appearance review, not merely a
+        # tile-streaming smoke test. Check the full image and three horizontal
+        # depth bands for real tonal structure so a black/flat or single-band
+        # capture cannot pass on PNG existence alone.
+        band_height=$((RENDER_HEIGHT / 3))
+        [[ "$band_height" -gt 0 ]] || band_height=1
+        near_y=$((RENDER_HEIGHT - band_height))
+        read -r terrain_mean terrain_std < <(
+            convert "$last" -colorspace Gray \
+                -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        read -r far_mean far_std < <(
+            convert "$last" -crop "${RENDER_WIDTH}x${band_height}+0+0" \
+                -colorspace Gray -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        read -r middle_mean middle_std < <(
+            convert "$last" -crop "${RENDER_WIDTH}x${band_height}+0+${band_height}" \
+                -colorspace Gray -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        read -r near_mean near_std < <(
+            convert "$last" -crop "${RENDER_WIDTH}x${band_height}+0+${near_y}" \
+                -colorspace Gray -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null
+        )
+        if ! awk \
+            -v mean="${terrain_mean:-0}" -v std="${terrain_std:-0}" \
+            -v far_std="${far_std:-0}" -v middle_std="${middle_std:-0}" \
+            -v near_std="${near_std:-0}" \
+            -v far_mean="${far_mean:-0}" -v middle_mean="${middle_mean:-0}" \
+            -v near_mean="${near_mean:-0}" \
+            'BEGIN {
+                max = far_mean; min = far_mean;
+                if (middle_mean > max) max = middle_mean;
+                if (near_mean > max) max = near_mean;
+                if (middle_mean < min) min = middle_mean;
+                if (near_mean < min) min = near_mean;
+                exit !(mean > 0.08 && std > 0.015 &&
+                       far_std > 0.01 && middle_std > 0.01 && near_std > 0.01 &&
+                       max - min > 0.01)
+            }'; then
+            reason="terrain relief bands are black, flat, or tonally indistinguishable (mean=${terrain_mean:-unavailable} std=${terrain_std:-unavailable} far=${far_std:-unavailable} middle=${middle_std:-unavailable} near=${near_std:-unavailable})"
+        else
+            echo "    pixels — terrain mean=${terrain_mean} std=${terrain_std} far=${far_mean}/${far_std} middle=${middle_mean}/${middle_std} near=${near_mean}/${near_std}"
+        fi
+    fi
+
     if [[ -n "$reason" ]]; then
         overall=1
         echo "    FAIL — $reason"

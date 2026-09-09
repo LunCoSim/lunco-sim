@@ -88,6 +88,16 @@ order. A scene with no valid presentation camera fails the recording readiness c
 and reports the exact camera diagnostic instead of producing an incorrectly framed or
 graded take.
 
+### Terrain appearance fixtures
+
+Graphics fixtures that review lunar terrain use the production DEM and shader path. The
+repository-owned `assets/scenes/tests/terrain_shader_appearance.usda` fixture keeps the
+DEM's absolute elevation datum and authors its camera at that same datum; a camera aimed
+at elevation zero would validly produce a black, fully culled capture. The render runner
+checks the resulting PNG's full-frame mean and standard deviation plus three horizontal
+far/middle/near bands for independent tonal structure. This is a visual contract for
+relief, not a substitute for `TerrainLodStatus` or a tile-residency diagnostic.
+
 ---
 
 ## 2. The three knobs — one writer each
