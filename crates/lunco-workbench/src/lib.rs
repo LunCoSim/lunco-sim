@@ -53,18 +53,18 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{
-    DockArea, DockState, NodeIndex, Style, TabViewer, widgets::tab_viewer::OnCloseResponse,
+    widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod icons;
-pub use icons::{UiIcon, icon_button, icon_button_sized, icon_text_button, paint_icon};
+pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
 
 mod editor_tabs;
 mod menu;
@@ -119,19 +119,19 @@ pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
     app.add_systems(schedule, render_robustness::reset_render_recovery);
 }
 pub use window_command::{
-    CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized, merged_titlebar_window,
+    merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };
 pub use window_persistence::{
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, SkipWindowGeometrySave, WindowGeometry,
-    WindowPersistencePlugin, load_window_geometry, restored_window,
+    load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
+    WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
+pub use window_placement::wire_window_placement;
 #[cfg(not(target_arch = "wasm32"))]
 pub use window_placement::WindowPlacement;
-pub use window_placement::wire_window_placement;
 pub use workspace_state::{
-    AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot,
-    RuntimeSurfaceLayout, RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin,
-    WorkspaceStateRestorePolicy, finalize_revision, revision_term, workspace_state_path,
+    finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
+    DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
+    RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
 };
 
 pub use menu::{MenuCtx, UndoProbeCtx};
@@ -278,11 +278,11 @@ impl HelpAnchors {
     }
 }
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
-pub use files_panel::{FILES_PANEL_ID, FilesPanel};
+pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
-    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
-    TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
+    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
+    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
 };
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
@@ -719,8 +719,8 @@ pub use perspective::{Perspective, PerspectiveId};
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, VIEWPORT_PANEL_ID,
-    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin,
+    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
+    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -4913,10 +4913,10 @@ fn render_layout(
             .translucent_tab_content,
     );
     egui::Panel::bottom("lunco_workbench_status_bar")
-        .frame(egui::Frame::NONE)
+        .frame(egui::Frame::NONE.fill(status_surface_fill))
         .show_separator_line(false)
         .show(&mut viewport_ui, |ui| {
-            render_status_bar_inner(ui, world, theme, status_surface_fill);
+            render_status_bar_inner(ui, world, theme);
         });
 
     // ── Activity bar ────────────────────────────────────────────────
@@ -5276,12 +5276,7 @@ fn perspective_help_anchor(id: PerspectiveId) -> String {
 /// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
-fn render_status_bar_inner(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    theme: &lunco_theme::Theme,
-    surface_fill: egui::Color32,
-) {
+fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
@@ -5355,299 +5350,266 @@ fn render_status_bar_inner(
         .unwrap_or_default();
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
 
-    let surface_width = status_bar_surface_width(ui.available_width());
     ui.horizontal(|ui| {
-        ui.add_space(STATUS_BAR_SURFACE_MARGIN);
-        egui::Frame::new()
-            .fill(surface_fill)
-            .stroke(egui::Stroke::new(
-                STATUS_BAR_SURFACE_STROKE_WIDTH,
-                theme.tokens.overlay_border,
-            ))
-            .corner_radius(theme.rounding.button)
-            .inner_margin(egui::Margin::symmetric(STATUS_BAR_SURFACE_INNER_MARGIN, 2))
-            .show(ui, |ui| {
-                ui.set_width(status_bar_surface_content_width(surface_width));
-                ui.horizontal(|ui| {
-                    // Reserve the exact bounded footprint of every control to the right of
-                    // the status scope. The controls shrink together on compact windows;
-                    // the left scope never competes with an unbounded label.
-                    let right_widths = status_bar_right_widths(
-                        ui.available_width(),
-                        perf_enabled,
-                        net_active,
-                        !tutorial_title.is_empty(),
-                        !scene_name.is_empty(),
-                    );
-                    let right_reserve = right_widths.total();
+        // Reserve the exact bounded footprint of every control to the right of
+        // the status scope. The controls shrink together on compact windows;
+        // the left scope never competes with an unbounded label.
+        let right_widths = status_bar_right_widths(
+            ui.available_width(),
+            perf_enabled,
+            net_active,
+            !tutorial_title.is_empty(),
+            !scene_name.is_empty(),
+        );
+        let right_reserve = right_widths.total();
 
-                    let status_width = (ui.available_width() - right_reserve).max(1.0);
+        let status_width = (ui.available_width() - right_reserve).max(1.0);
 
-                    // The status message scope on the left
-                    let latest_attention = latest
-                        .as_ref()
-                        .is_some_and(|event| event.level == StatusLevel::Attention);
-                    let mut attention_clicked = false;
-                    let response = ui
-                        .allocate_ui_with_layout(
-                            egui::vec2(status_width, 18.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                if let Some(l) = latest.as_ref() {
-                                    let dot_color = match l.level {
-                                        StatusLevel::Error => theme.tokens.error,
-                                        StatusLevel::Attention => theme.tokens.error,
-                                        StatusLevel::Warn => theme.tokens.warning,
-                                        StatusLevel::Progress | StatusLevel::Info => {
-                                            theme.tokens.success
-                                        }
-                                    };
-                                    let attention = l.level == StatusLevel::Attention;
-                                    if attention {
-                                        attention_clicked = ui
-                                            .add_sized(
-                                                [ui.available_width(), 18.0],
-                                                egui::Button::new(
-                                                    egui::RichText::new(&l.message)
-                                                        .small()
-                                                        .strong()
-                                                        .color(theme.tokens.error),
-                                                ),
-                                            )
-                                            .on_hover_text("Click to continue")
-                                            .clicked();
-                                    } else {
-                                        // Painted circle instead of `●` so we don't depend
-                                        // on a font that ships U+25CF (the wasm build's
-                                        // egui font fallback chain doesn't, hence "tofu"
-                                        // boxes for that glyph).
-                                        let (rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(10.0, 10.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                                        if matches!(l.level, StatusLevel::Warn | StatusLevel::Error)
-                                        {
-                                            ui.label(
-                                                egui::RichText::new(status_level_label(l.level))
-                                                    .small()
-                                                    .strong()
-                                                    .color(dot_color),
-                                            );
-                                        }
-                                        ui.label(egui::RichText::new(l.source).small().strong());
-                                        let text = egui::RichText::new(&l.message).small();
-                                        let message_width = status_bar_message_width(
-                                            ui.available_width(),
-                                            l.progress_pct.is_some(),
-                                            ui.spacing().item_spacing.x,
-                                        );
-                                        ui.add_sized(
-                                            [message_width, 18.0],
-                                            egui::Label::new(text).truncate(),
-                                        )
-                                        .on_hover_text(&l.message);
-                                        if l.level == StatusLevel::Progress {
-                                            if let Some(pct) = l.progress_pct {
-                                                ui.add(
-                                                    egui::ProgressBar::new((pct as f32) / 100.0)
-                                                        .desired_width(120.0)
-                                                        .desired_height(6.0),
-                                                );
-                                            } else {
-                                                ui.spinner();
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    ui.label(egui::RichText::new("ready").small().weak());
-                                }
-                            },
-                        )
-                        .response;
-
-                    if attention_clicked {
-                        if let Some(source) = latest
-                            .as_ref()
-                            .filter(|event| event.level == StatusLevel::Attention)
-                            .map(|event| event.source)
-                        {
-                            world.trigger(StatusBarAction { source });
-                        } else {
-                            unreachable!(
-                                "attention status button rendered without an attention event"
-                            );
-                        }
-                    } else if !latest_attention
-                        && response
-                            .interact(egui::Sense::click())
-                            .on_hover_text("Click to view recent status events")
-                            .clicked()
-                    {
-                        egui::Popup::toggle_id(ui.ctx(), popup_id);
-                    }
-
-                    if !tutorial_title.is_empty() {
-                        ui.separator();
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(right_widths.tutorial, 18.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.add_sized(
-                                    [right_widths.tutorial, 18.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(format!("Tutorial: {tutorial_title}"))
-                                            .small()
-                                            .strong(),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(format!("Tutorial: {tutorial_title}"));
-                            },
-                        );
-                    }
-
-                    if !scene_name.is_empty() {
-                        ui.separator();
-                        let scene_response = ui
-                            .allocate_ui_with_layout(
-                                egui::vec2(right_widths.scene, 18.0),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.add_sized(
-                                        [right_widths.scene, 18.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(format!("Scene: {}", scene_name))
-                                                .small(),
-                                        )
-                                        .truncate()
-                                        .sense(egui::Sense::click()),
-                                    )
-                                },
-                            )
-                            .inner
-                            .on_hover_text("Click to show the full path of the loaded USD file");
-                        if scene_response.clicked() {
-                            egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
-                        }
-                        if !scene_path.is_empty() {
-                            egui::Popup::from_response(&scene_response)
-                                .id(scene_popup_id)
-                                .align(egui::RectAlign::BOTTOM_START)
-                                .open_memory(None)
-                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                                .show(|ui| {
-                                    ui.set_min_width(520.0);
-                                    ui.heading("Loaded USD file");
-                                    ui.separator();
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&scene_path).monospace(),
-                                        )
-                                        .wrap(),
-                                    );
-                                });
-                        }
-                    }
-
-                    ui.separator();
-
-                    render_net_chip(ui, world, theme, right_widths.net);
-
-                    // Right-aligned perf segment. Hidden when the HUD is off so
-                    // we don't show stale zeroes; toggled via `TogglePerfHud` or
-                    // the Settings menu.
-                    if perf_enabled {
-                        let perf_text = {
-                            let phys = perf_stats
-                                .physics_ms
-                                .map(|ms| format!(" · phys {:>4.1}ms", ms))
-                                .unwrap_or_default();
-                            let p99 = perf_hud::frame_ms_stats(&frame_history)
-                                .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
-                                .unwrap_or_default();
-                            // Fixed-width fields so the HUD doesn't shift when
-                            // FPS crosses 99→100 or frame_ms crosses 9→10. Values
-                            // are right-justified inside their fields by the
-                            // padding spec; monospace alone isn't enough because
-                            // the *number of characters* changes.
-                            format!(
-                                "FPS {:>5.1} · {:>5.1}ms{}{}",
-                                perf_stats.fps, perf_stats.frame_ms, p99, phys,
-                            )
+        // The status message scope on the left
+        let latest_attention = latest
+            .as_ref()
+            .is_some_and(|event| event.level == StatusLevel::Attention);
+        let mut attention_clicked = false;
+        let response = ui
+            .allocate_ui_with_layout(
+                egui::vec2(status_width, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if let Some(l) = latest.as_ref() {
+                        let dot_color = match l.level {
+                            StatusLevel::Error => theme.tokens.error,
+                            StatusLevel::Attention => theme.tokens.error,
+                            StatusLevel::Warn => theme.tokens.warning,
+                            StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
                         };
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(right_widths.perf, 18.0),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                let sparkline_width =
-                                    if frame_history.is_empty() { 0.0 } else { 120.0 };
-                                let label_width = (ui.available_width()
-                                    - sparkline_width
-                                    - ui.spacing().item_spacing.x)
-                                    .max(1.0);
-                                ui.add_sized(
-                                    [label_width, 18.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(&perf_text).small().monospace(),
-                                    )
-                                    .truncate(),
+                        let attention = l.level == StatusLevel::Attention;
+                        if attention {
+                            attention_clicked = ui
+                                .add_sized(
+                                    [ui.available_width(), 18.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(&l.message)
+                                            .small()
+                                            .strong()
+                                            .color(theme.tokens.error),
+                                    ),
                                 )
-                                .on_hover_text(&perf_text);
-                                draw_frame_time_sparkline(ui, &frame_history, theme);
-                            },
-                        );
-                    }
-
-                    // egui::Popup is the post-0.31 API. `open_memory(None)` ties
-                    // the open state to egui's memory keyed by `popup_id`, so the
-                    // `toggle_popup` call above flips it.
-                    let popup_width = status_popup_width(ui.ctx().content_rect().width());
-                    egui::Popup::from_response(&response)
-                        .id(popup_id)
-                        .width(popup_width)
-                        .align(egui::RectAlign::TOP_START)
-                        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
-                        .open_memory(None)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .frame(
-                            egui::Frame::new()
-                                .fill(theme.tokens.overlay_backdrop)
-                                .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
-                                .corner_radius(6.0)
-                                .inner_margin(egui::Margin::same(8)),
-                        )
-                        .show(|ui| {
-                            ui.set_min_width(popup_width);
-                            ui.set_max_width(popup_width);
-                            ui.set_max_height(360.0);
-                            ui.heading("Recent status events");
-                            ui.separator();
-                            let mut popup_attention_source = None;
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, true])
-                                .show(ui, |ui| {
-                                    if history.is_empty() {
-                                        ui.label(egui::RichText::new("(no events yet)").weak());
-                                        return;
-                                    }
-                                    // Newest first.
-                                    for (key, ev) in history.iter().rev() {
-                                        if render_status_event_row(
-                                            ui,
-                                            ev,
-                                            theme,
-                                            ui.make_persistent_id(("workbench_status_event", key)),
-                                        ) {
-                                            popup_attention_source = Some(ev.source);
-                                        }
-                                    }
-                                });
-                            if let Some(source) = popup_attention_source {
-                                world.trigger(StatusBarAction { source });
+                                .on_hover_text("Click to continue")
+                                .clicked();
+                        } else {
+                            // Painted circle instead of `●` so we don't depend
+                            // on a font that ships U+25CF (the wasm build's
+                            // egui font fallback chain doesn't, hence "tofu"
+                            // boxes for that glyph).
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                            if matches!(l.level, StatusLevel::Warn | StatusLevel::Error) {
+                                ui.label(
+                                    egui::RichText::new(status_level_label(l.level))
+                                        .small()
+                                        .strong()
+                                        .color(dot_color),
+                                );
                             }
-                        });
-                });
+                            ui.label(egui::RichText::new(l.source).small().strong());
+                            let text = egui::RichText::new(&l.message).small();
+                            let message_width = status_bar_message_width(
+                                ui.available_width(),
+                                l.progress_pct.is_some(),
+                                ui.spacing().item_spacing.x,
+                            );
+                            ui.add_sized([message_width, 18.0], egui::Label::new(text).truncate())
+                                .on_hover_text(&l.message);
+                            if l.level == StatusLevel::Progress {
+                                if let Some(pct) = l.progress_pct {
+                                    ui.add(
+                                        egui::ProgressBar::new((pct as f32) / 100.0)
+                                            .desired_width(120.0)
+                                            .desired_height(6.0),
+                                    );
+                                } else {
+                                    ui.spinner();
+                                }
+                            }
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("ready").small().weak());
+                    }
+                },
+            )
+            .response;
+
+        if attention_clicked {
+            if let Some(source) = latest
+                .as_ref()
+                .filter(|event| event.level == StatusLevel::Attention)
+                .map(|event| event.source)
+            {
+                world.trigger(StatusBarAction { source });
+            } else {
+                unreachable!("attention status button rendered without an attention event");
+            }
+        } else if !latest_attention
+            && response
+                .interact(egui::Sense::click())
+                .on_hover_text("Click to view recent status events")
+                .clicked()
+        {
+            egui::Popup::toggle_id(ui.ctx(), popup_id);
+        }
+
+        if !tutorial_title.is_empty() {
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_widths.tutorial, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add_sized(
+                        [right_widths.tutorial, 18.0],
+                        egui::Label::new(
+                            egui::RichText::new(format!("Tutorial: {tutorial_title}"))
+                                .small()
+                                .strong(),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(format!("Tutorial: {tutorial_title}"));
+                },
+            );
+        }
+
+        if !scene_name.is_empty() {
+            ui.separator();
+            let scene_response = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(right_widths.scene, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add_sized(
+                            [right_widths.scene, 18.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("Scene: {}", scene_name)).small(),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                        )
+                    },
+                )
+                .inner
+                .on_hover_text("Click to show the full path of the loaded USD file");
+            if scene_response.clicked() {
+                egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
+            }
+            if !scene_path.is_empty() {
+                egui::Popup::from_response(&scene_response)
+                    .id(scene_popup_id)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .open_memory(None)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.set_min_width(520.0);
+                        ui.heading("Loaded USD file");
+                        ui.separator();
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&scene_path).monospace()).wrap(),
+                        );
+                    });
+            }
+        }
+
+        ui.separator();
+
+        render_net_chip(ui, world, theme, right_widths.net);
+
+        // Right-aligned perf segment. Hidden when the HUD is off so
+        // we don't show stale zeroes; toggled via `TogglePerfHud` or
+        // the Settings menu.
+        if perf_enabled {
+            let perf_text = {
+                let phys = perf_stats
+                    .physics_ms
+                    .map(|ms| format!(" · phys {:>4.1}ms", ms))
+                    .unwrap_or_default();
+                let p99 = perf_hud::frame_ms_stats(&frame_history)
+                    .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
+                    .unwrap_or_default();
+                // Fixed-width fields so the HUD doesn't shift when
+                // FPS crosses 99→100 or frame_ms crosses 9→10. Values
+                // are right-justified inside their fields by the
+                // padding spec; monospace alone isn't enough because
+                // the *number of characters* changes.
+                format!(
+                    "FPS {:>5.1} · {:>5.1}ms{}{}",
+                    perf_stats.fps, perf_stats.frame_ms, p99, phys,
+                )
+            };
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_widths.perf, 18.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    let sparkline_width = if frame_history.is_empty() { 0.0 } else { 120.0 };
+                    let label_width =
+                        (ui.available_width() - sparkline_width - ui.spacing().item_spacing.x)
+                            .max(1.0);
+                    ui.add_sized(
+                        [label_width, 18.0],
+                        egui::Label::new(egui::RichText::new(&perf_text).small().monospace())
+                            .truncate(),
+                    )
+                    .on_hover_text(&perf_text);
+                    draw_frame_time_sparkline(ui, &frame_history, theme);
+                },
+            );
+        }
+
+        // egui::Popup is the post-0.31 API. `open_memory(None)` ties
+        // the open state to egui's memory keyed by `popup_id`, so the
+        // `toggle_popup` call above flips it.
+        let popup_width = status_popup_width(ui.ctx().content_rect().width());
+        egui::Popup::from_response(&response)
+            .id(popup_id)
+            .width(popup_width)
+            .align(egui::RectAlign::TOP_START)
+            .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+            .open_memory(None)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme.tokens.overlay_backdrop)
+                    .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(8)),
+            )
+            .show(|ui| {
+                ui.set_min_width(popup_width);
+                ui.set_max_width(popup_width);
+                ui.set_max_height(360.0);
+                ui.heading("Recent status events");
+                ui.separator();
+                let mut popup_attention_source = None;
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if history.is_empty() {
+                            ui.label(egui::RichText::new("(no events yet)").weak());
+                            return;
+                        }
+                        // Newest first.
+                        for (key, ev) in history.iter().rev() {
+                            if render_status_event_row(
+                                ui,
+                                ev,
+                                theme,
+                                ui.make_persistent_id(("workbench_status_event", key)),
+                            ) {
+                                popup_attention_source = Some(ev.source);
+                            }
+                        }
+                    });
+                if let Some(source) = popup_attention_source {
+                    world.trigger(StatusBarAction { source });
+                }
             });
     });
 }
@@ -5856,10 +5818,6 @@ fn status_event_has_progress(level: status_bus::StatusLevel, progress: Option<(u
 }
 
 const STATUS_BAR_PROGRESS_WIDTH: f32 = 120.0;
-const STATUS_BAR_SURFACE_MAX_WIDTH: f32 = 960.0;
-const STATUS_BAR_SURFACE_MARGIN: f32 = 12.0;
-const STATUS_BAR_SURFACE_INNER_MARGIN: i8 = 8;
-const STATUS_BAR_SURFACE_STROKE_WIDTH: f32 = 1.0;
 
 fn status_bar_message_width(available_width: f32, has_progress: bool, item_spacing: f32) -> f32 {
     let progress_reserve = if has_progress {
@@ -5868,21 +5826,6 @@ fn status_bar_message_width(available_width: f32, has_progress: bool, item_spaci
         0.0
     };
     (available_width - progress_reserve).max(1.0)
-}
-
-/// Cap the visible status surface while leaving a small margin at the window edge.
-/// The outer bottom panel still reserves the strip height; only this inner frame
-/// paints and receives status-bar interaction.
-fn status_bar_surface_width(available_width: f32) -> f32 {
-    (available_width - 2.0 * STATUS_BAR_SURFACE_MARGIN)
-        .max(1.0)
-        .min(STATUS_BAR_SURFACE_MAX_WIDTH)
-}
-
-fn status_bar_surface_content_width(surface_width: f32) -> f32 {
-    (surface_width
-        - 2.0 * (f32::from(STATUS_BAR_SURFACE_INNER_MARGIN) + STATUS_BAR_SURFACE_STROKE_WIDTH))
-        .max(1.0)
 }
 
 fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
@@ -7138,17 +7081,6 @@ mod tests {
     }
 
     #[test]
-    fn status_surface_is_bounded_with_edge_margin() {
-        assert_eq!(
-            status_bar_surface_width(2048.0),
-            STATUS_BAR_SURFACE_MAX_WIDTH
-        );
-        assert_eq!(status_bar_surface_width(960.0), 936.0);
-        assert_eq!(status_bar_surface_width(10.0), 1.0);
-        assert_eq!(status_bar_surface_content_width(960.0), 942.0);
-    }
-
-    #[test]
     fn status_bar_right_controls_fit_the_reserved_compact_width() {
         let compact = status_bar_right_widths(960.0, true, true, true, true);
         assert!(compact.total() <= 800.0);
@@ -7301,7 +7233,7 @@ mod tests {
         }
 
         fn title(&self) -> String {
-            self.0.0.to_string()
+            self.0 .0.to_string()
         }
 
         fn default_slot(&self) -> PanelSlot {
@@ -7376,12 +7308,10 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
         assert!(layout.center.is_empty());
-        assert!(
-            !layout
-                .dock
-                .iter_all_tabs()
-                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center")))
-        );
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center"))));
         assert!(layout.panels.contains_key(&PanelId("late_center")));
     }
 
@@ -7639,12 +7569,10 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert!(layout.dock_cache.is_empty());
-        assert!(
-            !layout
-                .dock
-                .iter_all_tabs()
-                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale")))
-        );
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
