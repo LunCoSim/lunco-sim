@@ -243,7 +243,10 @@ def Xform "CommsAntenna" (
                 double radius = 0.055
                 double3 xformOp:translate = (0.0, 0.085, 0.0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
-                rel material:binding = <CommsIndicatorMaterial>
+                # This is an absolute path within the component asset. A
+                # relative target would resolve below CommsIndicator itself,
+                # while the shared material is its sibling under LinkAperture.
+                rel material:binding = </CommsAntenna/YawHead/DishGimbal/DishHead/LinkAperture/CommsIndicatorMaterial>
                 bool physics:collisionEnabled = false
                     }
 

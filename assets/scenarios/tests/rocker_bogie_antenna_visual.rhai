@@ -73,6 +73,28 @@ fn authored_feed_pose_ok() {
         && close_vec(indicator.attrs["xformOp:translate"], [0.0, 0.085, 0.0])
 }
 
+fn authored_feed_material_ok() {
+    let indicator = query("QueryUsdPrim", #{
+        path: FEED_ROOT + "/LinkAperture/CommsIndicator",
+        rels: ["material:binding"],
+    });
+    let shader = query("QueryUsdPrim", #{
+        path: FEED_ROOT + "/LinkAperture/CommsIndicatorMaterial/PreviewSurface",
+        attrs: ["inputs:diffuseColor", "inputs:emissiveColor", "inputs:metallic", "inputs:roughness"],
+    });
+    if indicator == () || indicator.ok == false || indicator.relationships == ()
+        || shader == () || shader.ok == false || shader.attrs == () {
+        return false;
+    }
+    let bindings = indicator.relationships["material:binding"];
+    bindings != () && bindings.len() == 1
+        && bindings[0] == FEED_ROOT + "/LinkAperture/CommsIndicatorMaterial"
+        && shader.attrs["inputs:diffuseColor"] == [0.005, 0.05, 0.012]
+        && shader.attrs["inputs:emissiveColor"] == [0.04, 2.6, 0.3]
+        && shader.attrs["inputs:metallic"] == 0.0
+        && shader.attrs["inputs:roughness"] == 0.26
+}
+
 fn wheel_shader_contract_ok(path) {
     let record = query("QueryUsdPrim", #{
         path: path + "/TireLook/Shader",
@@ -299,6 +321,9 @@ fn on_tick(me) {
     failures.push(t_true(
         authored_feed_pose_ok(),
         "the shared feed indicator is not centered on the LinkAperture bore axis"));
+    failures.push(t_true(
+        authored_feed_material_ok(),
+        "the composed feed indicator does not resolve its authored green material"));
     failures.push(t_true(
         chassis_rocker_seat_ok(),
         "the composed chassis envelope does not seat both rocker pivots"));
