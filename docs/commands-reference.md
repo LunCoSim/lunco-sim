@@ -2247,6 +2247,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `twin_root` | `String` |  Absolute root of the already-open Twin. |
 | `relative_path` | `String` |  File path relative to that root. |
 | `pinned` | `bool` |  Keep the file open when another preview is selected. |
+| `focus` | `Option<bool>` |  Whether to focus the source tab; omitted keeps the normal focused-source behavior. USD's paired text companion passes `false` so Visual preview remains focused. |
 
 #### `RenameOpenDocument`
 

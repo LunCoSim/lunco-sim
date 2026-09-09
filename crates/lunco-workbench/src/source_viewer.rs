@@ -211,6 +211,7 @@ enum SourceOpenRequest {
         root: PathBuf,
         relative: PathBuf,
         pinned: bool,
+        focus: bool,
     },
 }
 
@@ -289,6 +290,7 @@ pub(crate) fn on_open_twin_source(
         root: PathBuf::from(&trigger.event().twin_root),
         relative: PathBuf::from(&trigger.event().relative_path),
         pinned: trigger.event().pinned,
+        focus: trigger.event().focus.unwrap_or(true),
     });
 }
 
@@ -312,7 +314,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
     for request in opens {
         match request {
             SourceOpenRequest::Path(path) if !path.starts_with("mem://") => {
-                open_path(world, PathBuf::from(path), None, None, false);
+                open_path(world, PathBuf::from(path), None, None, false, true);
             }
             SourceOpenRequest::Path(_) => {}
             SourceOpenRequest::Asset(asset_path) => {
@@ -331,7 +333,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                 match asset {
                     Ok(Some(asset)) => {
                         let path = asset.abs_path.clone();
-                        open_path(world, path, None, Some(asset), false);
+                        open_path(world, path, None, Some(asset), false, true);
                     }
                     Ok(None) => {
                         warn!("[SourceEditor] rejected unregistered asset path: {asset_path}");
@@ -348,6 +350,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                 root,
                 relative,
                 pinned,
+                focus,
             } => {
                 let Some((root, relative, path)) = resolve_twin_file(world, &root, &relative)
                 else {
@@ -366,6 +369,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                     }),
                     None,
                     pinned,
+                    focus,
                 );
             }
         }
@@ -461,6 +465,7 @@ fn open_path(
     origin: Option<TwinSourceOrigin>,
     asset: Option<lunco_assets::discovery::AssetFile>,
     pinned: bool,
+    focus: bool,
 ) {
     let existing = world
         .resource::<EditorTabs<SourceTabState>>()
@@ -469,10 +474,7 @@ fn open_path(
         if pinned {
             world.resource_mut::<EditorTabs<SourceTabState>>().pin(tab);
         }
-        world.trigger(OpenTab {
-            kind: SOURCE_EDITOR_KIND,
-            instance: tab,
-        });
+        open_source_tab(world, tab, focus);
         return;
     }
 
@@ -508,10 +510,22 @@ fn open_path(
         });
     }
     start_read(world, tab, path, asset);
-    world.trigger(OpenTab {
-        kind: SOURCE_EDITOR_KIND,
-        instance: tab,
-    });
+    open_source_tab(world, tab, focus);
+}
+
+fn open_source_tab(world: &mut World, tab: EditorTabId, focus: bool) {
+    if focus {
+        world.trigger(OpenTab {
+            kind: SOURCE_EDITOR_KIND,
+            instance: tab,
+        });
+    } else {
+        world.trigger(crate::OpenTabPreserveFocus {
+            kind: SOURCE_EDITOR_KIND,
+            instance: tab,
+            restore: None,
+        });
+    }
 }
 
 fn start_read(
