@@ -473,6 +473,7 @@ fn on_browser_usd_document_ready(
                     twin_root: root.to_string_lossy().into_owned(),
                     relative_path: relative.to_string_lossy().into_owned(),
                     pinned: false,
+                    focus: Some(false),
                 });
             }
         }

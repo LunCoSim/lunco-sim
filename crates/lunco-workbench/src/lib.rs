@@ -698,6 +698,11 @@ pub struct OpenTwinSource {
     pub relative_path: String,
     /// Keep the file open when another preview is selected.
     pub pinned: bool,
+    /// Whether opening the source should focus its tab. `None` preserves the
+    /// normal source-opening behavior; USD's paired preview passes `Some(false)`
+    /// so its read-only text companion cannot steal focus from Visual mode.
+    #[serde(default)]
+    pub focus: Option<bool>,
 }
 
 /// Persist the editable source buffer, optionally refreshing its owning domain.
