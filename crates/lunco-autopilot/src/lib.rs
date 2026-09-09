@@ -1968,8 +1968,25 @@ fn on_engage_autopilot(
     trigger: On<EngageAutopilot>,
     q: Query<(Entity, &Autopilot)>,
     q_route: Query<(Has<usd_tree::BehaviorXml>, Has<AutopilotBehaviorSpec>)>,
+    q_gid: Query<&GlobalEntityId>,
+    mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
 ) {
+    // An explicit local EngageAutopilot is the authority handoff boundary.
+    // Possession and autopilot cannot both own one vessel: release the local
+    // human claim here, at the command owner, before the AI actor is added.
+    // Remote owners remain protected by the normal exclusive claim in
+    // setup_autopilot_session and therefore cannot be silently stolen.
+    if let Ok(gid) = q_gid.get(cmd.vessel) {
+        if registry.owns(SessionId::LOCAL, gid.get()) {
+            registry.clear_gid(gid.get());
+            commands.trigger(lunco_cosim::ReleaseControl { target: cmd.vessel });
+            info!(
+                "[autopilot] transferred local control of entity {} to the autopilot handoff",
+                gid.get()
+            );
+        }
+    }
     // NO implicit throttle. An unset `throttle` used to become 0.5, so *every*
     // engage — including the Command Deck button and Toggle Autopilot on a rover
     // that has no waypoints at all — drove the rover forward in a straight line.

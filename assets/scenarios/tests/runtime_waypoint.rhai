@@ -5,6 +5,7 @@ fn on_start(me) {
     this.elapsed = 0.0;
     this.spawn_issued = false;
     this.waypoint_issued = 0;
+    this.possession_issued = false;
     this.rover = -1;
     this.arrival_events = 0;
     this.first_arrival = "";
@@ -70,6 +71,37 @@ fn on_tick(me) {
         if this.elapsed > 10.0 {
             this.done = true;
             runtime_waypoint_fail("spawned rover command surface did not materialize");
+        }
+        return;
+    }
+
+    // The interactive flow possesses the rover before placing route markers.
+    // Keep this production test on that same path: AddRuntimeWaypoint must
+    // transfer the explicit local control claim to the route autopilot rather
+    // than leaving the newly created patrol permanently disengaged.
+    if !this.possession_issued {
+        let result = cmd("PossessVessel", #{
+            target: this.rover,
+            bind_camera: false,
+        });
+        if !result.ok {
+            if this.elapsed <= 10.0 { return; }
+            this.done = true;
+            runtime_waypoint_fail("PossessVessel failed: " + result.error);
+            return;
+        }
+        this.possession_issued = true;
+        return;
+    }
+
+    // PossessVessel is synchronous at the command boundary, but the authority
+    // table is the observable ownership contract. Do not let waypoint creation
+    // hide a failed local claim by immediately letting autopilot claim an
+    // otherwise-unowned rover.
+    if owner_of(this.rover) != 0 {
+        if this.elapsed > 10.0 {
+            this.done = true;
+            runtime_waypoint_fail("PossessVessel did not establish local ownership");
         }
         return;
     }
