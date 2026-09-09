@@ -31,7 +31,7 @@
 }
 #import lunco::pbr_lit::lit_n
 #import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, map_weights, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
-#import lunco::lunar::{regolith_factor, ORTHO_GAIN}
+#import lunco::lunar::{orthophoto_factor, regolith_factor}
 
 //!@ui      albedo            color  "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -41,6 +41,22 @@
 //!@default micro_bump        0.015
 //!@ui      roughness         0 1     "Base regolith roughness"
 //!@default roughness         0.88
+//!@ui      macro_clump_scale 1 20    "Macro clump scale (/m)"
+//!@default macro_clump_scale 8
+//!@ui      macro_bump        0 0.3   "Macro bump strength"
+//!@default macro_bump        0.06
+//!@ui      mid_scale         0.02 1  "Mid hummock scale (/m)"
+//!@default mid_scale         0.15
+//!@ui      mid_bump          0 1.5   "Mid hummock strength"
+//!@default mid_bump          0.6
+//!@ui      fine_scale        50 400   "Fine grain scale (/m)"
+//!@default fine_scale        180
+//!@ui      fine_bump         0 0.1    "Fine grain strength"
+//!@default fine_bump         0.025
+//!@ui      rough_mix         0 1      "Roughness mix"
+//!@default rough_mix         0.35
+//!@ui      mottle            0 0.6    "Albedo mottle"
+//!@default mottle            0.22
 // Derived-map weights come from the screen-space surface footprint and the map's
 // physical texel size. Authored-map weights come from USD. Mesh LOD is deliberately
 // absent, so replacing a tile by its parent cannot change colour.
@@ -52,6 +68,8 @@
 //!@default terrain_half_extent 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
+//!@ui      weight_mineral    0 1     "Overlay drape weight (unlit)"
+//!@default weight_mineral    0
 //!@ui      weight_rough      0 1    "Authored surface roughness weight"
 //!@default weight_rough      0
 //!@ui      weight_ao         0 1    "Authored surface AO weight"
@@ -76,8 +94,14 @@
 // BRIGHTEST directional light: correct only while the sun happens to be the
 // brightest, silent when it is not, and a different answer from the one the
 // static-mesh terrain shaders were already using from this very uniform.
+//!@engine  sun_dir
 //!@engine  sun_dir_world
+//!@engine  sun_tan_radius
+//!@engine  hf_size
+//!@engine  hf_res
+//!@engine  csm_far
 //!@engine  shadow_cache_on
+//!@engine  horizon_march_steps
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
@@ -86,21 +110,36 @@ struct Material {
     micro_scale:       f32,
     micro_bump:        f32,
     roughness:         f32,
-    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
-    derived_surface_on: f32, // engine-filled: derived surface map is the selected source
-    derived_normal_on:  f32, // engine-filled: derived normal map is the selected source
-    authored_surface_on: f32, // engine-filled: USD surface map is the selected source
-    authored_normal_on:  f32, // engine-filled: USD normal map is the selected source
-    terrain_half_extent: f32, // engine-filled: authored DEM half side in terrain metres
+    macro_clump_scale: f32,
+    macro_bump:        f32,
+    mid_scale:         f32,
+    mid_bump:          f32,
+    fine_scale:        f32,
+    fine_bump:         f32,
+    rough_mix:         f32,
+    mottle:            f32,
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
+    weight_mineral:    f32,  // AUTHORED mineral/classification overlay weight
     weight_rough:      f32,  // AUTHORED surface roughness weight
     weight_ao:         f32,  // AUTHORED surface AO weight
     weight_normal:     f32,  // AUTHORED normal weight
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
-    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun, the canonical scene sun
-    shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
+    sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
+    sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun direction
+    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun direction
+    hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
+    hf_res:            f32,  // engine-filled: heightfield resolution
+    csm_far:           f32,  // engine-filled: CSM far bound (m)
+    shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache is active
+    horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
+    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing (m)
+    derived_surface_on: f32, // engine-filled: derived surface map is active
+    derived_normal_on:  f32, // engine-filled: derived normal map is active
+    authored_surface_on: f32, // engine-filled: USD surface map is active
+    authored_normal_on:  f32, // engine-filled: USD normal map is active
+    terrain_half_extent: f32, // engine-filled: authored DEM half side (m)
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
     stitch_edges:      vec4<f32>, // [top,bottom,left,right] coarser-neighbour mask
@@ -339,25 +378,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // a given `weight_albedo` MEANS, or the same authored scene reads differently
     // depending on whether its site streams.
     //
-    // ORTHO_GAIN is what makes the multiply energy-preserving, and it is NOT
-    // arbitrary. The bake (`process.rs`, `kind = "map"`) writes a 1–99 PERCENTILE
-    // STRETCH: it spends the full 0..255 range on the site's own brightness
-    // spread, so the result is a CONTRAST map whose mean lands near 1/3 — not a
-    // reflectance map with mean 1. Multiplying by it therefore does not tint the
-    // regolith, it DIMS it by that mean.
-    //
-    // Measured on the shipped Apollo 15 ortho (2500², 2026-07-26): mean over real
-    // measurements = 0.412, so a plain multiply renders the authored 0.13 lunar
-    // albedo at 0.054 — 41% of it, a permanent ~1.3-stop underexposure of the
-    // ground and nothing else. That is the "near-black mud" this comment used to
-    // warn about while the code below did the plain multiply anyway.
-    //
-    // The exact normaliser is 1/mean ≈ 2.43; 3.0 is the authored round number and
-    // lands at 0.161 (124% of lunar), which is the right side of correct for a
-    // stretch whose mean drifts per site. If a future bake normalises the map to
-    // unit mean, this constant goes to 1.0 and the comment goes with it.
+    // The authored PNG is a percentile-stretched contrast map, not linear
+    // reflectance. Use the shared bounded transfer so its extrema cannot turn
+    // the streamed terrain into near-black mud or washed-out patches. This is
+    // the same transfer used by `terrain_layered.wgsl`.
     if (mat.weight_albedo > 0.0) {
-        albedo = mix(albedo, albedo * map_a * ORTHO_GAIN, mat.weight_albedo);
+        albedo = mix(albedo, albedo * orthophoto_factor(map_a), mat.weight_albedo);
     }
 
     // --- Lunar photometry: the actual realism lever -----------------------

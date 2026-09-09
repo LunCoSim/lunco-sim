@@ -78,6 +78,23 @@ property of the *asset*, not of the engine. A name that is not in the schema is
 dropped at pack time with a warning — it is never silently mis-packed into a
 neighbouring field.
 
+### Linked vertex stages share the material ABI
+
+`ShaderLook::vertex_shader` is an optional second stage of the same material, not a
+second parameter block. Both stages read `@binding(0)` from the one 256-byte block;
+the fragment stage's reflected schema is the layout that gets packed. A linked vertex
+shader must therefore declare the same `Material` fields, order, and WGSL types as its
+fragment shader. The terrain pair (`terrain_layered.wgsl` + `terrain_geomorph.wgsl`)
+keeps that ABI duplicated at the stage boundary and the cross-shader contract test
+guards it against drift.
+
+Authored grayscale orthophotos are another shared shader contract. The asset
+pipeline's percentile stretch produces a contrast map rather than linear
+reflectance, so both terrain paths pass samples through the single
+`lunco::lunar::orthophoto_factor` transfer. It bounds the albedo modulation and
+keeps map extrema from becoming black or washed-out terrain; the texture-role
+loader supplies the color layer as linear samples.
+
 ### Sharing, and how to not destroy it
 
 Identical looks share **one** material and **one** bind group. The binder caches by

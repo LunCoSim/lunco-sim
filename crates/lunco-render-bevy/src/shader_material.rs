@@ -32,6 +32,10 @@
 //! comments (UI ranges, defaults, engine-filled fields) straight out of the
 //! source (see [`lunco_materials::dyn_params`]). Values are stored by name and packed into
 //! the opaque [`raw`](ShaderMaterial::raw) block at the reflected offsets.
+//! When a look supplies a separate vertex shader, both linked stages read this
+//! same block and therefore MUST declare the same `Material` field order and
+//! types. The fragment schema is the one reflected and packed; a separate vertex
+//! layout would reinterpret unrelated values.
 //! ```wgsl
 //! //!@ui      albedo  color "Albedo"
 //! //!@default albedo  0.5,0.5,0.5
@@ -143,7 +147,9 @@ pub struct ShaderMaterial {
     /// `descriptor.vertex.shader` and extends the vertex layout with
     /// the custom geometry semantics required by that stage. `None` (the common
     /// case) = Bevy's default mesh vertex shader, so the fragment-only path is
-    /// unchanged.
+    /// unchanged. A supplied vertex shader must declare the exact same
+    /// `Material` uniform ABI as the fragment shader; the fragment schema owns
+    /// packing for both stages.
     pub vertex_shader: Option<Handle<Shader>>,
     /// Reflected parameter layout for [`shader`](Self::shader). Starts with the
     /// built-in layout and is replaced when the shader source is available.

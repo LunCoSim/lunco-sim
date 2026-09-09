@@ -28,27 +28,33 @@
 
 #define_import_path lunco::lunar
 
-// Gain that makes multiplying by a BAKED ORTHOPHOTO energy-preserving.
+// Gain used by the shared authored-orthophoto transfer.
 //
-// `process.rs` (`kind = "map"`) bakes orthos as a 1–99 PERCENTILE STRETCH — the
-// full 0..255 range is spent on the site's own brightness spread, so the texture
-// is a CONTRAST map with mean near 1/3, not a reflectance map with mean 1.
-// `albedo * map` therefore does not tint the regolith, it DIMS it by that mean.
+// `process.rs` (`kind = "map"`) bakes grayscale orthos as a 1–99 PERCENTILE
+// STRETCH: the full 0..255 range is spent on the site's brightness spread, so
+// the PNG is a CONTRAST map, not a linear reflectance map. A direct multiply
+// therefore turns its zero/one extrema into near-black/washed-out terrain.
 //
-// Measured on the shipped Apollo 15 ortho (2500², 2026-07-26): mean over real
-// measurements = 0.412 ⇒ a plain multiply renders the authored 0.13 lunar albedo
-// at 0.054, 41% of it — a permanent ~1.3-stop underexposure of the ground alone.
-// The exact normaliser is 1/mean ≈ 2.43; 3.0 is the authored round number and
-// lands at 0.161 (124% of lunar), the safe side for a stretch whose mean drifts
-// per site.
+// The texture loader decodes the authored colour layer from sRGB to linear. The
+// shared transfer below maps that linear contrast signal to a bounded albedo
+// factor [0.85, 1.75] for `ORTHO_GAIN = 3.0`; on the shipped Apollo 15 bake its
+// linear mean (~0.175) gives a near-unit mean factor while retaining relief tone.
 //
 // LIVES HERE, not in either terrain shader, because `terrain_geomorph.wgsl` (the
 // streamed CDLOD path) and `terrain_layered.wgsl` (the static-mesh path) must
 // agree on what a given `weight_albedo` MEANS — the same authored scene has to
-// read identically whether or not its site streams. Two copies of the number is
-// exactly how that guarantee rots. If a future bake normalises the map to unit
-// mean, this becomes 1.0 in one place.
+// read identically whether or not its site streams.
 const ORTHO_GAIN: f32 = 3.0;
+const ORTHO_BASE: f32 = 0.85;
+const ORTHO_CONTRAST: f32 = 0.30;
+
+/// Convert a percentile-stretched orthophoto sample into a bounded linear
+/// albedo multiplier. Keeping this in the shared lunar module makes the streamed
+/// and static terrain paths use one transfer contract.
+fn orthophoto_factor(map: vec3<f32>) -> vec3<f32> {
+    let contrast = clamp(map, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec3<f32>(ORTHO_BASE) + ORTHO_CONTRAST * contrast * ORTHO_GAIN;
+}
 
 /// Floor on μ = cos(emission). At a grazing view μ → 0 and the Lommel-Seeliger
 /// denominator collapses onto μ₀ alone, so `ls` would run away. The product that
