@@ -1453,7 +1453,6 @@ fn on_start_autopilot(
         Option<&lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     )>,
-    mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -1483,8 +1482,6 @@ fn on_start_autopilot(
         } else {
             String::new()
         };
-        registry.release_session(SessionId::LOCAL);
-
         // Throttle 0: engaging runs the vessel's route (`spec_json`), and a vessel
         // with no route HOLDS. A constant setpoint here drove routeless rovers
         // straight off the site.
@@ -1551,8 +1548,6 @@ fn on_toggle_autopilot(
         } else {
             String::new()
         };
-        registry.release_session(SessionId::LOCAL);
-
         // Throttle 0: engaging runs the vessel's route (`spec_json`), and a vessel
         // with no route HOLDS. A constant setpoint here drove routeless rovers
         // straight off the site.
