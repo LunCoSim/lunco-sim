@@ -189,10 +189,22 @@ transient session state. The correct split for the shipped surfaces is:
 | `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
 | lander control cards | authored USD `lunco:ui:controlHud` metadata, scoped to the active `SceneMountState` root | Already scene/Twin-authored opt-in |
 | `lunica-schema` | selected authored USD schema root | No; selection-derived |
-| `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in the Camera menu | Not migrated; it is an application view control |
+| `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in Settings ▸ HUD and the Camera menu | Global application view control |
 | terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
 | tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
-| notifications, blackout, perf/input overlays, theme, window geometry | runtime or user-global settings | No; session/diagnostic/application scope |
+| notifications, blackout | runtime session state | No; transient/application scope |
+| perf/input overlays | user-global settings | No; Settings ▸ HUD and typed commands share the persisted owner |
+| theme, window geometry | user-global settings | No; other Settings sections own these preferences |
+
+The workbench's **Settings ▸ HUD** submenu is a single presentation over those
+existing owners. Time and the celestial view switcher replace their respective
+`OverlaySettings` values; Performance and Input replace their typed persisted
+resources; and Camera/status reads and writes the active Twin's existing
+`ui.camera_status` setting. It does not introduce a registry or mirror of HUD
+visibility state. Rover, lander, terrain/download, tutorial, notification, and
+blackout rows are inventory-only because their owners must remain possession,
+authored USD, or lifecycle state; a global checkbox would conflict with those
+authoritative gates.
 
 When a future surface needs project-authored policy, add a manifest `setting`
 binding and use the generic Twin map. Do not persist its live progress, current

@@ -120,10 +120,14 @@ workflow.
 
 The shipped surfaces are the rover HUD, camera-status card, celestial view
 switcher, terrain progress card, and networking scenario-download card. The
-camera-status card is gated by the active Twin's generic `ui.camera_status`
-setting and defaults on when that key is absent; set it to `false` in
-`twin.toml` to hide it. Rhai owns camera selection and can read the current
-camera fact through `get_exposure("camera-status", "active_name")`;
+Settings ▸ HUD submenu is the user-facing view over the existing global HUD
+owners and the active Twin's camera-status setting; it does not add a second
+visibility registry. Camera-status is gated by the active Twin's generic
+`ui.camera_status` setting and defaults on when that key is absent; set it to
+`false` in `twin.toml` to hide it. Rover, terrain, download, tutorial, and
+notification surfaces remain automatic because possession, authored scene, or
+runtime lifecycle owns their visibility. Rhai owns camera selection and can
+read the current camera fact through `get_exposure("camera-status", "active_name")`;
 camera changes update the exposure through an event observer. Rich text editors
 and UTC date editing remain workbench-owned egui panels until explicit
 text-input semantics are added to this contract.

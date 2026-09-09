@@ -562,7 +562,7 @@ boot.
 
 ### 9b. Settings (`lunco-settings`)
 
-User preferences (perf HUD on/off, editor word-wrap, palette filters,
+User preferences (HUD visibility, editor word-wrap, palette filters,
 …) persist to a single `<OS config dir>/lunco/settings.json` via the
 `lunco-settings` crate. Layouts and recents stay separate by design
 — layouts are TOML and high-structure, recents are high-churn list
@@ -598,6 +598,14 @@ UI surfaces the same resource three ways — a named Settings submenu row
 (`WorkbenchLayout::register_settings_submenu`), a typed `#[Command]` for
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
+
+LunCoSim's Settings ▸ HUD submenu is the discoverable view for the shipped
+visibility controls. It edits the existing `OverlaySettings`, `PerfHudSettings`,
+and `InputOverlaySettings` resources and the active Twin's generic
+`ui.camera_status` value; it does not add a parallel visibility map. HUDs whose
+visibility is inherently automatic — driven-vessel/rover, authored lander
+controls, terrain or download progress, tutorials, notifications, and blackout
+state — are listed with their owner but remain lifecycle-controlled.
 
 Settings submenus are content-sized in both axes, capped at 640 logical px in
 width and 24 interaction rows in height. They become vertically scrollable
@@ -661,7 +669,8 @@ crates):
 | `modelica.canvas.add` | `lunco-modelica` | Auto-focus behaviour on AddComponent (None / Center / FitVisible), batch debounce window |
 | `modelica.canvas.collab` | `lunco-modelica` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
 | `modelica.editor` | `lunco-modelica` | Source editor word-wrap, tab width, auto-format-on-save |
-| `perf_hud` | `lunco-workbench` | Spike threshold, plot rolling window, Twin overlay toggles |
+| `perf_hud` | `lunco-workbench` | Performance HUD visibility and live status-bar diagnostics |
+| `input_overlay` | `lunco-workbench` | Input HUD visibility for recording and observation |
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
