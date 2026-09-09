@@ -42,7 +42,7 @@ fn sky_uses_shader_defaults() {
 fn waypoint_uses_shared_billboard_contract() {
     let record = query("QueryUsdPrim", #{
         path: WAYPOINT,
-        attrs: ["lunco:billboard", "lunco:billboard:offsetY", "lunco:billboard:fadeEnd"],
+        attrs: ["lunco:billboard", "lunco:billboard:text", "lunco:billboard:offsetY", "lunco:billboard:fadeEnd"],
     });
     record != () && record.ok != false && record.attrs != ()
         && record.attrs["lunco:billboard"] == true
