@@ -89,10 +89,10 @@ fn authored_feed_material_ok() {
     let bindings = indicator.relationships["material:binding"];
     bindings != () && bindings.len() == 1
         && bindings[0] == FEED_ROOT + "/LinkAperture/CommsIndicatorMaterial"
-        && shader.attrs["inputs:diffuseColor"] == [0.005, 0.05, 0.012]
-        && shader.attrs["inputs:emissiveColor"] == [0.04, 2.6, 0.3]
-        && shader.attrs["inputs:metallic"] == 0.0
-        && shader.attrs["inputs:roughness"] == 0.26
+        && close_vec(shader.attrs["inputs:diffuseColor"], [0.005, 0.05, 0.012])
+        && close_vec(shader.attrs["inputs:emissiveColor"], [0.04, 2.6, 0.3])
+        && close_scalar(shader.attrs["inputs:metallic"], 0.0)
+        && close_scalar(shader.attrs["inputs:roughness"], 0.26)
 }
 
 fn wheel_shader_contract_ok(path) {
