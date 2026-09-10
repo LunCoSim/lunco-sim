@@ -3041,6 +3041,23 @@ fn render_workbench(world: &mut World) {
         }
     };
 
+    // egui's expansion diagnostics are developer overlays, not workbench UI.
+    // Keep them disabled so debug builds cannot paint red layout markers over
+    // the application when the panel layout changes.
+    #[cfg(debug_assertions)]
+    {
+        let layout_debug_enabled = {
+            let style = ctx.global_style();
+            style.debug.show_expand_width || style.debug.show_expand_height
+        };
+        if layout_debug_enabled {
+            ctx.global_style_mut(|style| {
+                style.debug.show_expand_width = false;
+                style.debug.show_expand_height = false;
+            });
+        }
+    }
+
     let Some(mut layout) = world.remove_resource::<WorkbenchLayout>() else {
         return;
     };
