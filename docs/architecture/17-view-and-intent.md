@@ -210,10 +210,12 @@ selection is permitted.
 The local avatar also carries an `InputPorts` surface for free-flight movement
 (`forward`/`side`/`up`) and its normalized `speed_boost` modifier,
 but the `Avatar` domain marker makes that endpoint ineligible for vessel
-possession. Plain-click resolution continues past an avatar endpoint to the
-nearest non-avatar input surface, and direct `PossessVessel` requests apply the
-same rule before either camera binding or authority claim. Render markers such
-as `SceneCamera` do not participate in this control decision.
+possession. Plain-click resolution continues past an avatar endpoint and gives
+an enclosing authored control root (`ControlBinding` or `MobilityRoot`)
+priority over nested component input surfaces, so clicking any part of a vehicle
+rebinds the camera and controller to the vehicle. Standalone non-avatar input
+surfaces remain direct click targets. Render markers such as `SceneCamera` do
+not participate in this control decision.
 
 Possession and release are single-owner transactions in `lunco-avatar`: the command
 validates the writable endpoint and requested local binding before changing the

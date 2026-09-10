@@ -160,6 +160,11 @@ removal intents; editor-facing perspectives own unmodified clicks for
 selection and gizmos. Do not add a second per-crate mode flag or let global
 pointer observers infer ownership from the hit entity.
 
+In View, a click on a vehicle part resolves through the enclosing authored
+`ControlBinding`/`MobilityRoot` before considering nested component input
+surfaces, so the vehicle remains the possession target. Standalone non-avatar
+input surfaces remain valid direct targets.
+
 For interactive reusable-assembly authoring, follow the
 [edit-usd-assembly runbook](../edit-usd-assembly/SKILL.md): the production
 window must remain headful and visible to the user, each coherent typed edit
