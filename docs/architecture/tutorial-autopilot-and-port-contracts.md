@@ -25,6 +25,15 @@ must not write `LinearVelocity`, `Position`, `ModelicaModel.inputs`, or a
 private autopilot component to move the vehicle. Those paths bypass the
 authority and input plumbing that a person exercises.
 
+For the authored rover waypoint GNC, the continuous controller is an internal
+Modelica program: `RoverAutopilotGuidance.mo` consumes the live Avian
+position/yaw/rate ports through USD connections and produces the steering and
+forward-only drive command. Rhai publishes a waypoint setpoint once with
+`modelica_waypoint(...)`; it does not calculate steering or write actuator
+ports every tick. The generic `piloted` output is the authority gate in the
+drive law, so possession selects direct human inputs and an unpossessed rover
+can run its authored waypoint guidance.
+
 For a tutorial acceptance test, observe both command events and the resulting
 state:
 

@@ -95,6 +95,14 @@ end MyController;
 - **rumoca mis-lowers `if` on algebraic vars.** Use `min`/`max` for clamps and a
   branch-free arithmetic blend (`a*x+(1-a)*y`) for selection, never a nested `if`.
 
+For a rover waypoint GNC, `RoverAutopilotGuidance.mo` is the reusable control
+law and the rover drivetrain Modelica model is its actuator-side consumer.
+Rhai publishes only mission inputs through `modelica_waypoint(...)` (enable,
+target, speed, radius, and mode). The USD drive-law overlay wires Avian's live
+position, yaw, yaw-rate, and `piloted` outputs into that model. Possession is
+therefore still the single authority gate; Rhai does not become a second
+per-tick steering controller.
+
 ## 2. High-level logic → rhai, event-driven
 
 A a `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario

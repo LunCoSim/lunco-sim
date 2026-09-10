@@ -25,6 +25,41 @@ const PATROL_SPEED  = 0.6;
 const PATROL_RADIUS = 3.0;
 const PATROL_DWELL  = 0.0;
 
+// Publish one waypoint to the rover's authored Modelica guidance law. The
+// command is a mission setpoint, not an actuator calculation: Modelica reads
+// the live Avian pose through the USD wires and continuously closes the
+// heading/turn-rate loop. Possession remains the single authority gate: while
+// no external session owns the rover, its Modelica guidance runs; a human
+// possession automatically selects the direct control inputs.
+fn modelica_waypoint(vessel, target, speed, radius, turn_only) {
+    let s = if speed == () { PATROL_SPEED } else { speed };
+    let r = if radius == () { PATROL_RADIUS } else { radius };
+    let t = if turn_only == () { 0.0 } else { turn_only };
+    cmd("SetPorts", #{ target: vessel,
+        writes: [
+            ["autopilot_enable", 1.0],
+            ["autopilot_target_x", target[0]],
+            ["autopilot_target_z", target[2]],
+            ["autopilot_speed", s],
+            ["autopilot_radius", r],
+            ["autopilot_turn_only", t],
+            ["throttle", 0.0],
+            ["steer", 0.0],
+            ["brake", 0.0],
+        ], seq: 0, tick: 0 })
+}
+
+/// Disable waypoint guidance and hold the rover's authored brake.
+fn modelica_waypoint_stop(vessel) {
+    cmd("SetPorts", #{ target: vessel,
+        writes: [
+            ["autopilot_enable", 0.0],
+            ["throttle", 0.0],
+            ["steer", 0.0],
+            ["brake", 1.0],
+        ], seq: 0, tick: 0 });
+}
+
 /// Build a `BehaviorSpec::Patrol` map from `points`.
 fn __patrol_spec(points, speed, radius, dwell) {
     let waypoints = [];

@@ -40,6 +40,19 @@ def Xform "DriveLaw" (
     # generated network can receive those live InputPorts values.
     float inputs:throttle = 0.0
     float inputs:steer = 0.0
+    float inputs:autopilot_enable = 0.0
+    float inputs:autopilot_target_x = 0.0
+    float inputs:autopilot_target_z = 0.0
+    float inputs:autopilot_speed = 0.0
+    float inputs:autopilot_radius = 2.0
+    float inputs:autopilot_turn_only = 0.0
+    # Live Avian observations enter through the network boundary.  No Rust
+    # autopilot system calculates or republishes pose samples.
+    float inputs:autopilot_position_x.connect = </DriveLaw.outputs:position_x>
+    float inputs:autopilot_position_z.connect = </DriveLaw.outputs:position_z>
+    float inputs:autopilot_yaw.connect = </DriveLaw.outputs:yaw>
+    float inputs:autopilot_yaw_rate.connect = </DriveLaw.outputs:angvel_y>
+    float inputs:piloted.connect = </DriveLaw.outputs:piloted>
 
     # These connected outputs are the authoritative authored mapping. Their
     # presence makes the six-channel fan-out explicit in USD.
@@ -49,6 +62,9 @@ def Xform "DriveLaw" (
     float outputs:drive_w3.connect = </DriveLaw/Drivetrain.outputs:drive_right>
     float outputs:drive_w4.connect = </DriveLaw/Drivetrain.outputs:drive_right>
     float outputs:drive_w5.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:guidance_throttle.connect = </DriveLaw/Drivetrain.outputs:guidance_throttle>
+    float outputs:guidance_steer.connect = </DriveLaw/Drivetrain.outputs:guidance_steer>
+    float outputs:guidance_heading_error.connect = </DriveLaw/Drivetrain.outputs:guidance_heading_error>
 
     # The physics: per-side first-order motor lag, solver-clocked. In a CHILD
     # prim because the rover root already binds the OBC's model and
@@ -61,9 +77,23 @@ def Xform "DriveLaw" (
         uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
         float outputs:drive_left
         float outputs:drive_right
+        float outputs:guidance_throttle
+        float outputs:guidance_steer
+        float outputs:guidance_heading_error
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same authored command ports exposed by the OBC.
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>
         float inputs:steer.connect = </DriveLaw.inputs:steer>
+        float inputs:autopilot_enable.connect = </DriveLaw.inputs:autopilot_enable>
+        float inputs:autopilot_target_x.connect = </DriveLaw.inputs:autopilot_target_x>
+        float inputs:autopilot_target_z.connect = </DriveLaw.inputs:autopilot_target_z>
+        float inputs:autopilot_speed.connect = </DriveLaw.inputs:autopilot_speed>
+        float inputs:autopilot_radius.connect = </DriveLaw.inputs:autopilot_radius>
+        float inputs:autopilot_turn_only.connect = </DriveLaw.inputs:autopilot_turn_only>
+        float inputs:autopilot_position_x.connect = </DriveLaw.inputs:autopilot_position_x>
+        float inputs:autopilot_position_z.connect = </DriveLaw.inputs:autopilot_position_z>
+        float inputs:autopilot_yaw.connect = </DriveLaw.inputs:autopilot_yaw>
+        float inputs:autopilot_yaw_rate.connect = </DriveLaw.inputs:autopilot_yaw_rate>
+        float inputs:piloted.connect = </DriveLaw.inputs:piloted>
     }
 }

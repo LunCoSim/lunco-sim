@@ -1,6 +1,7 @@
 // Production acceptance for a goal initially behind a rover.
-// The shared navigation law must turn first, never command reverse travel, and
-// then make measurable forward progress toward the goal.
+// The authored Modelica guidance law must turn first, never command reverse
+// travel, and then make measurable forward progress toward the goal. This Rhai
+// script only orchestrates the mission and observes the resulting ports.
 
 const SETTLE_S = 3.0;
 const TIMEOUT_S = 60.0;
@@ -23,6 +24,11 @@ fn on_start(me) {
     this.max_steer = 0.0;
     this.forward_drive_samples = 0;
     this.max_goal_alignment = -1.0;
+    this.prev_heading_error = ();
+    this.heading_reversals = 0;
+    this.drive_heading_reversals = 0;
+    this.max_heading_error = 0.0;
+    this.was_driving = false;
     this.max_goal_progress = 0.0;
     this.samples = 0;
     this.moved_samples = 0;
@@ -46,26 +52,32 @@ fn on_tick(me) {
     }
 
     if this.phase == "settle" {
-        brake(this.rover);
-        if this.t >= SETTLE_S {
-            this.start = p;
-            this.goal = [p[0], p[1], p[2] + GOAL_M];
-            this.initial_forward = world_forward(this.rover);
-            if this.initial_forward == () {
-                this.done = true;
-                fail_fast("rear-approach rover has no authoritative heading");
-                return;
-            }
-            engage_patrol(this.rover, [this.goal], 0.6, ARRIVAL_RADIUS_M, 0.0);
-            this.phase = "drive";
-            print("[autopilot-forward] goal=" + this.goal +
-                  " initial_forward=" + this.initial_forward);
+        if this.t < SETTLE_S {
+            brake(this.rover);
+            return;
         }
+        this.start = p;
+        this.goal = [p[0], p[1], p[2] + GOAL_M];
+        this.initial_forward = world_forward(this.rover);
+        if this.initial_forward == () {
+            this.done = true;
+            fail_fast("rear-approach rover has no authoritative heading");
+            return;
+        }
+        // One Rhai mission transition publishes the target. The continuous
+        // steering, rate damping, front-half gate, and drive output all
+        // remain inside RoverAutopilotGuidance.mo. Do not issue ReleaseControl
+        // on this same tick: its lifecycle fence intentionally rejects a stale
+        // write, so the preceding settle brake must finish before this handoff.
+        modelica_waypoint(this.rover, this.goal, 0.6, ARRIVAL_RADIUS_M, 0.0);
+        this.phase = "drive";
+        print("[autopilot-forward] goal=" + this.goal +
+              " initial_forward=" + this.initial_forward);
         return;
     }
 
-    let throttle = get(this.rover, "throttle");
-    let steer = get(this.rover, "steer");
+    let throttle = get(this.rover, "guidance_throttle");
+    let steer = get(this.rover, "guidance_steer");
     let fwd = world_forward(this.rover);
     if throttle != () {
         if this.min_throttle == () || throttle < this.min_throttle {
@@ -77,11 +89,26 @@ fn on_tick(me) {
     }
     if fwd != () {
         let alignment = vdot(vnorm(fwd), [0.0, 0.0, 1.0]);
+        let heading_error = yaw_delta_deg(fwd, [0.0, 0.0, 1.0]);
+        if heading_error != () {
+            if heading_error.abs() > this.max_heading_error {
+                this.max_heading_error = heading_error.abs();
+            }
+            if this.prev_heading_error != () &&
+               this.prev_heading_error.abs() > 0.05 &&
+               heading_error.abs() > 0.05 &&
+               heading_error * this.prev_heading_error < 0.0 {
+                this.heading_reversals += 1;
+                if this.was_driving { this.drive_heading_reversals += 1; }
+            }
+            this.prev_heading_error = heading_error;
+        }
         if alignment > this.max_goal_alignment {
             this.max_goal_alignment = alignment;
         }
         if throttle != () && throttle > 0.05 && alignment > 0.7 {
             this.forward_drive_samples += 1;
+            this.was_driving = true;
         }
     }
     this.samples += 1;
@@ -123,6 +150,9 @@ fn on_tick(me) {
               " min_throttle=" + r2(this.min_throttle) +
               " max_steer=" + r2(this.max_steer) +
               " forward_drive_samples=" + this.forward_drive_samples +
+              " heading_reversals=" + this.heading_reversals +
+              " drive_heading_reversals=" + this.drive_heading_reversals +
+              " max_heading_error=" + r2(this.max_heading_error) +
               " goal_progress=" + r2(this.max_goal_progress) +
               " max_goal_alignment=" + r2(this.max_goal_alignment) +
               " final_alignment=" + r2(final_alignment));

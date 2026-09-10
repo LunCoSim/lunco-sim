@@ -76,5 +76,14 @@ over "OBC"
         float inputs:throttle = 0.0
         float inputs:steer = 0.0
         float inputs:brake = 0.0
+        # Waypoint guidance is still a command-surface input. The active
+        # Modelica drive law consumes these mission values together with its
+        # live pose; an ordinary direct controller leaves them disabled.
+        float inputs:autopilot_enable = 0.0
+        float inputs:autopilot_target_x = 0.0
+        float inputs:autopilot_target_z = 0.0
+        float inputs:autopilot_speed = 0.0
+        float inputs:autopilot_radius = 2.0
+        float inputs:autopilot_turn_only = 0.0
     }
 }
