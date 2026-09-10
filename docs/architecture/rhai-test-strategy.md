@@ -188,7 +188,7 @@ separate scenes.
 | Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
 | Possession and handoff authority | `tutorial_authority_handoff`, `descent_lander_runtime` | authority-conflict cases in those scenarios | semantic commands, events, and final owner |
 | Terrain stream readiness and terrain-progress completion | no repository-owned deterministic DEM fixture | external DEM scenes are not accepted as this branch's authored gate | `TerrainLodStatus` and `ReadExposures` exist; a test-owned DEM/Twin is still required |
-| Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body | terminal `physics-body-escaped` verdict |
+| Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body | terminal `physics-body-escaped` verdict; the owning physics boundary also emits one shared `TelemetryEvent` for log/status consumers |
 
 The two new authored contract fixtures deliberately do not assert terrain
 stream completion: a flat `Plane` is not a streamed DEM, and treating it as one

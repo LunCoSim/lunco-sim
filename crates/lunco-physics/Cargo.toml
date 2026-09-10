@@ -33,6 +33,9 @@ big_space = { workspace = true }
 lunco-readiness = { workspace = true }
 # Canonical WorldGrid and render/world conversion for physics queries.
 lunco-core = { path = "../lunco-core" }
+# Physics escape diagnostics carry the authoritative simulation epoch on the
+# shared telemetry event, when the time spine is installed.
+lunco-time = { path = "../lunco-time" }
 # Transport-free API registry only: physics owns active-frame proximity query
 # semantics and registers providers without pulling HTTP or networking.
 lunco-api = { path = "../lunco-api", default-features = false }
