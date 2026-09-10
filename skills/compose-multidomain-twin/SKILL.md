@@ -314,6 +314,12 @@ into `ModelicaModel.inputs`. Other propagated model inputs remain on
 one frame. Always write through a port (`SetPorts`, `set_input`, rhai `set()`),
 never bypass to the model.
 
+Use `SimulateIntent` for a held semantic control and
+`SimulateIntentEdge`/Rhai `intent_pulse` for a discrete transition. The latter
+publishes one target-scoped `intent.edge` event; Rhai owns the action policy and
+Modelica owns continuous state, so the edge must not be translated into a
+vehicle-specific Rust write or emulated with two ordered held commands.
+
 Battery empty events use the authored 0.1% usable-storage reserve in
 `Battery.mo`; do not replace that physical boundary with Rust actuator policy or
 a solver-epsilon comparison.

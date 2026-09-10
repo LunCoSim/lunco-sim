@@ -318,6 +318,27 @@ composites provide sequence, parallel, repeat, race, retry, and reactive policy.
 Both are hot-reloadable Rhai policy; Rust supplies only the generic runtime,
 command/query bridge, and behavior-kernel mechanism.
 
+For a discrete control transition, use the atomic semantic edge helpers from
+`prelude/control.rhai` rather than emulating a pulse with two ordered held
+writes:
+
+```rhai
+intent_pulse(lander, "release");
+
+fn on_event(me, evt) {
+    if evt.name == "intent.edge" && evt.value["target_gid"] == lander {
+        if evt.value["intent"] == "release" && evt.value["edge"] == "pulse" {
+            // Twin policy may now latch, detach, or otherwise consume the edge.
+        }
+    }
+}
+```
+
+`SimulateIntentEdge` is target-scoped and accepts `pressed`, `released`, or
+`pulse`. The controller only validates and publishes the semantic edge;
+authored policy owns its meaning and any port writes. Keep `SimulateIntent` or
+`SetPorts` for level-triggered and continuous control.
+
 The exact node contract is documented in
 [`rhai-task-tree.md`](rhai-task-tree.md): every node has an explicit `kind`,
 including leaves, and the adapter rejects missing, unknown, or cross-kind

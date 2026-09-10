@@ -253,6 +253,13 @@ def "Controls" (
   possessing avatar can drive it. No Rust, no restart. This is how you "build a new entity
   and teach the avatar to control it."
 
+For discrete controls, use `intent_pulse(target, "release")` or
+`intent_edge(target, intent, edge)` from the control prelude. The runtime
+publishes one target-scoped `intent.edge` event for `pressed`, `released`, or
+`pulse`; consume it in the authored Rhai supervisor and let that policy drive
+the appropriate Modelica/port behavior. Do not emulate a pulse with two
+ordered held commands, and do not add a vehicle-specific Rust action path.
+
 ## The recipe (checklist)
 
 0. Complete the exemplar audit above and identify the actual controller,

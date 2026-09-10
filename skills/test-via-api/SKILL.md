@@ -80,6 +80,23 @@ through `/api/commands`, then inspect the HUD and event stream. `RunScenario`
 is the live hot-reload path for a script attached to an existing host. Restart
 only when changing Rust or when a clean scene lifecycle is itself under test.
 
+To exercise a discrete semantic action, address the target's `api_id` and send
+one `SimulateIntentEdge` command; do not model a pulse as two API requests:
+
+```json
+{
+  "type": "ExecuteCommand",
+  "command": "SimulateIntentEdge",
+  "params": {"target": 1234, "intent": "release", "edge": "pulse"}
+}
+```
+
+The accepted response includes the canonical `intent` and `edge`. Confirm
+delivery through the `intent.edge` telemetry event (`source` and
+`value.target_gid` identify the same target). A target-scoped command still
+passes the normal ownership/authority gate; an acknowledgement alone does not
+prove that a consuming Twin policy acted on the edge.
+
 ## Live runtime HTML/CSS iteration
 
 The native `luncosim` UI watches the retained runtime surfaces under

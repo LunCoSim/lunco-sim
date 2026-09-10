@@ -1016,6 +1016,8 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<Parameter>()
             .register_type::<SampledParameter>()
             .register_type::<UserIntent>()
+            .register_type::<SemanticIntentEdgeKind>()
+            .register_type::<SemanticIntentEdge>()
             .register_type::<IntentAnalogState>()
             .register_type::<Port>()
             .register_type::<CausalStateSink>()

@@ -147,8 +147,82 @@ impl std::fmt::Display for UserIntent {
     }
 }
 
+impl UserIntent {
+    /// Canonical lower-case name used by authored bindings and event payloads.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::MoveForward => "forward",
+            Self::MoveBackward => "backward",
+            Self::MoveLeft => "left",
+            Self::MoveRight => "right",
+            Self::MoveUp => "yaw_right",
+            Self::MoveDown => "yaw_left",
+            Self::SpeedBoost => "speed_boost",
+            Self::Look => "look",
+            Self::Zoom => "zoom",
+            Self::Action => "action",
+            Self::Thrust => "thrust",
+            Self::Brake => "brake",
+            Self::Release => "release",
+            Self::SwitchMode => "switch_mode",
+            Self::Pause => "pause",
+            Self::Cancel => "cancel",
+            Self::PlaceWaypoint => "place_waypoint",
+            Self::DeleteSelection => "delete_selection",
+        }
+    }
+}
+
 /// Alias for the leafwing ActionState using our [UserIntent] enum.
 pub type IntentState = ActionState<UserIntent>;
+
+/// The discrete transition of a target-scoped semantic intent.
+///
+/// A pressed/released edge is distinct from a held port value: it is delivered
+/// once and does not latch an actuator. `Pulse` is one atomic one-shot event;
+/// the consuming Twin or domain decides whether that means a latch, release,
+/// toggle, or another policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub enum SemanticIntentEdgeKind {
+    /// The semantic intent became active.
+    Pressed,
+    /// The semantic intent became inactive.
+    Released,
+    /// A one-shot semantic action with no preceding held state required.
+    Pulse,
+}
+
+impl SemanticIntentEdgeKind {
+    /// Canonical wire/script spelling for this edge kind.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pressed => "pressed",
+            Self::Released => "released",
+            Self::Pulse => "pulse",
+        }
+    }
+}
+
+impl std::fmt::Display for SemanticIntentEdgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A target-scoped semantic edge emitted by the controller contract.
+///
+/// This event carries intent identity and target identity only. It does not
+/// choose a vehicle port or mutate a domain; authored policy consumes it and
+/// may issue the existing `SetPorts` command if that is the intended effect.
+#[derive(Event, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct SemanticIntentEdge {
+    /// The entity whose authored semantic control surface receives the edge.
+    pub target: Entity,
+    /// The shared semantic intent that changed or was pulsed.
+    pub intent: UserIntent,
+    /// The discrete transition delivered to the target.
+    pub kind: SemanticIntentEdgeKind,
+}
 
 /// A component that stores the current high-resolution analog values of user intents.
 ///

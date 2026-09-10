@@ -77,6 +77,14 @@ one-shot API/Rhai write remains deterministic across fixed ticks. Use
 vehicle state; the keyboard path continues to emit its resolved binding batch
 and therefore replaces or neutralizes its own values as intents change.
 
+For discrete actions, use `SimulateIntentEdge` (or the Rhai
+`intent_edge`/`intent_pulse` helpers) with a target and `pressed`, `released`,
+or `pulse`. The controller emits one typed `SemanticIntentEdge` and mirrors it
+onto the existing `intent.edge` telemetry/event bus with the target gid,
+canonical intent, and edge kind. It does not choose a port or action policy;
+the consuming Twin's Rhai/Modelica layer does that. This avoids requiring
+callers to emulate a pulse with two ordered `SimulateIntent` writes.
+
 ## See Also
 
 - `lunco-mobility` — Consumes the bound `SetPorts` inputs and projects them onto the authored actuator ports.

@@ -20,6 +20,19 @@ fn drive(rover, forward, steer) {
         seq: 0, tick: 0 })
 }
 
+/// Emit one target-scoped semantic edge. The consuming Twin decides whether
+/// the edge latches a control, releases it, toggles a device, or starts an
+/// action; this helper never writes a port itself. The runtime publishes the
+/// resulting `intent.edge` event to Rhai `on_event` hooks.
+fn intent_edge(target, intent, edge) {
+    cmd("SimulateIntentEdge", #{ target: target, intent: intent, edge: edge })
+}
+
+/// Emit a single atomic semantic pulse for a discrete action.
+fn intent_pulse(target, intent) {
+    intent_edge(target, intent, "pulse")
+}
+
 /// Release a vehicle's complete control intent and apply its safe state. This
 /// zeros throttle, steering, landing thrust, attitude, and RCS inputs, and
 /// engages a rover brake. The safe values persist until a new owner writes them.

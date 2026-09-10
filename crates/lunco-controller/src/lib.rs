@@ -37,7 +37,7 @@
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
-use lunco_core::{on_command, register_commands, Command, UserIntent};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId, UserIntent};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,9 +66,11 @@ pub struct SimulatedIntents(
 /// drive a possessed vessel over the API or from rhai.
 ///
 /// `held = true` is "stuck" (the key is down and stays down); `held = false` is
-/// "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
-/// The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
-/// …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
+/// "unstuck" (released). This command remains the level-triggered surface for
+/// driving a held control value. Use [`SimulateIntentEdge`] for an atomic
+/// momentary press/release or pulse. The named intent is the USD control
+/// vocabulary (`forward`, `action`, `yaw_left`, …), parsed by
+/// [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
 /// `Controls` profile binds.
 #[Command]
 pub struct SimulateIntent {
@@ -93,6 +95,108 @@ impl Default for SimulateIntent {
             target: Entity::PLACEHOLDER,
         }
     }
+}
+
+/// Deliver one atomic target-scoped semantic edge without requiring callers to
+/// emulate a pulse with ordered `held: true` / `held: false` commands.
+///
+/// This is the API/Rhai/network entry point. The handler validates the shared
+/// intent vocabulary and emits [`lunco_core::SemanticIntentEdge`]; it does not
+/// decide which port or mechanism the consuming Twin should actuate.
+#[Command]
+pub struct SimulateIntentEdge {
+    /// The entity whose semantic control surface receives the edge.
+    #[authz_target]
+    pub target: Entity,
+    /// Intent name (`action`, `release`, `forward`, …).
+    pub intent: String,
+    /// `pressed`, `released`, or `pulse`.
+    pub edge: String,
+}
+
+impl Default for SimulateIntentEdge {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            intent: String::new(),
+            edge: String::new(),
+        }
+    }
+}
+
+fn parse_intent_edge(name: &str) -> Option<lunco_core::SemanticIntentEdgeKind> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "pressed" | "press" => Some(lunco_core::SemanticIntentEdgeKind::Pressed),
+        "released" | "release" => Some(lunco_core::SemanticIntentEdgeKind::Released),
+        "pulse" => Some(lunco_core::SemanticIntentEdgeKind::Pulse),
+        _ => None,
+    }
+}
+
+#[on_command(SimulateIntentEdge)]
+fn on_simulate_intent_edge(
+    _trigger: On<SimulateIntentEdge>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
+        return Err(format!("unknown semantic intent '{}'", cmd.intent));
+    };
+    if cmd.target == Entity::PLACEHOLDER {
+        return Err("semantic intent edge requires a target entity".to_string());
+    }
+    let Some(kind) = parse_intent_edge(&cmd.edge) else {
+        return Err(format!(
+            "unknown semantic edge '{}'; expected pressed, released, or pulse",
+            cmd.edge
+        ));
+    };
+    commands.trigger(lunco_core::SemanticIntentEdge {
+        target: cmd.target,
+        intent,
+        kind,
+    });
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({
+            "target": format!("{:?}", cmd.target),
+            "intent": cmd.intent,
+            "edge": kind.as_str(),
+        }),
+    ))
+}
+
+/// Project the typed edge onto the existing script/telemetry event bus. Rhai
+/// scenarios can consume `intent.edge` in `on_event` without importing this
+/// crate or creating a second event transport.
+fn project_intent_edge(
+    trigger: On<lunco_core::SemanticIntentEdge>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    mut commands: Commands,
+) {
+    use lunco_core::telemetry::TelemetryValue;
+    use std::collections::BTreeMap;
+
+    let edge = trigger.event();
+    let mut data = BTreeMap::new();
+    data.insert(
+        "intent".to_string(),
+        TelemetryValue::String(edge.intent.canonical_name().to_string()),
+    );
+    data.insert(
+        "edge".to_string(),
+        TelemetryValue::String(edge.kind.as_str().to_string()),
+    );
+    data.insert(
+        "target_gid".to_string(),
+        TelemetryValue::I64(q_gid.get(edge.target).map_or(0, |gid| gid.get() as i64)),
+    );
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "intent.edge".to_string(),
+        source: q_gid.get(edge.target).map_or(0, |gid| gid.get()),
+        severity: lunco_core::Severity::Info,
+        data: TelemetryValue::Map(data),
+        timestamp: 0.0,
+    });
 }
 
 #[on_command(SimulateIntent)]
@@ -191,7 +295,11 @@ fn on_set_control_path(
     );
 }
 
-register_commands!(on_simulate_intent, on_set_control_path);
+register_commands!(
+    on_simulate_intent,
+    on_simulate_intent_edge,
+    on_set_control_path,
+);
 
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
@@ -223,6 +331,14 @@ impl Plugin for LunCoControllerPlugin {
         app.init_resource::<SimulatedIntents>()
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>();
+        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .register(
+                "SimulateIntentEdge",
+                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+            );
+        app.add_observer(project_intent_edge);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_control_state);
         // The blackout table the authorization gate reads. Empty by default, so an
         // app that never declares one is byte-for-byte unchanged.
@@ -344,12 +460,15 @@ fn drive_from_bindings(
     // Despawned vessels leave `was_active` — pruned below so a recycled
     // Entity id can't inherit a stale flag and mistime the all-zero batch.
     mut removed_bindings: RemovedComponents<ControlBinding>,
+    // Previous semantic state used to publish pressed/released transitions once.
+    mut edge_state: Local<std::collections::HashMap<(Entity, UserIntent), bool>>,
     mut commands: Commands,
 ) {
     // Prune despawned/unbound vessels before reading edges: a recycled Entity
     // id must start from "idle", not the previous vessel's last state.
     for vessel in removed_bindings.read() {
         was_active.remove(&vessel);
+        edge_state.retain(|(entity, _), _| *entity != vessel);
     }
 
     let client = matches!(*role, lunco_core::NetworkRole::Client);
@@ -426,6 +545,16 @@ fn drive_from_bindings(
             }
         }
 
+        emit_intent_edges(
+            link.vessel_entity,
+            binding,
+            intents,
+            sim_intents,
+            egui_keyboard,
+            &mut edge_state,
+            &mut commands,
+        );
+
         let writes = binding.resolve(|intent| held(link.vessel_entity, intent, intents));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
@@ -498,6 +627,41 @@ fn intent_held(
         || (!egui_keyboard && intents.pressed(&intent))
 }
 
+/// Publish each authored semantic intent transition exactly once for a target.
+/// The state is local to the producer schedule: a possessed vessel and a free
+/// avatar cannot inherit one another's edge history when control ownership or
+/// the scene changes.
+fn emit_intent_edges(
+    target: Entity,
+    binding: &ControlBinding,
+    intents: &ActionState<UserIntent>,
+    sim_intents: Option<&SimulatedIntents>,
+    egui_keyboard: bool,
+    previous: &mut std::collections::HashMap<(Entity, UserIntent), bool>,
+    commands: &mut Commands,
+) {
+    let mut seen = Vec::new();
+    for (intent, _, _) in &binding.binds {
+        if seen.contains(intent) {
+            continue;
+        }
+        seen.push(*intent);
+        let active = intent_held(target, *intent, intents, sim_intents, egui_keyboard);
+        let prior = previous.insert((target, *intent), active).unwrap_or(false);
+        if active != prior {
+            commands.trigger(lunco_core::SemanticIntentEdge {
+                target,
+                intent: *intent,
+                kind: if active {
+                    lunco_core::SemanticIntentEdgeKind::Pressed
+                } else {
+                    lunco_core::SemanticIntentEdgeKind::Released
+                },
+            });
+        }
+    }
+}
+
 /// Self-drive (the free avatar): drive the entity's OWN command surface from its
 /// OWN input via its OWN binding — the identical `SetPorts` path, no bespoke avatar
 /// movement code. Local & kinematic (`apply_fly` integrates the ports), so no
@@ -516,12 +680,22 @@ fn drive_self_drivers(
     q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
     egui_focus: Option<Res<lunco_core::EguiFocus>>,
     sim_intents: Option<Res<SimulatedIntents>>,
+    mut edge_state: Local<std::collections::HashMap<(Entity, UserIntent), bool>>,
     mut commands: Commands,
 ) {
     let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
     let sim_intents = sim_intents.as_deref();
     for (entity, intents, binding) in q_self.iter() {
         // A self-driver IS its own vessel, so it is its own intent subject.
+        emit_intent_edges(
+            entity,
+            binding,
+            intents,
+            sim_intents,
+            egui_keyboard,
+            &mut edge_state,
+            &mut commands,
+        );
         let writes = binding
             .resolve(|intent| intent_held(entity, intent, intents, sim_intents, egui_keyboard));
         commands.trigger(lunco_cosim::SetPorts {
@@ -1077,6 +1251,109 @@ mod input_ack_tests {
 mod tests {
     use super::*;
     use lunco_core::UserIntent;
+
+    #[derive(Resource, Default)]
+    struct SemanticEdgeObserved {
+        typed: Vec<lunco_core::SemanticIntentEdge>,
+        telemetry: Vec<lunco_core::TelemetryEvent>,
+    }
+
+    fn observe_semantic_edge(
+        trigger: On<lunco_core::SemanticIntentEdge>,
+        mut observed: ResMut<SemanticEdgeObserved>,
+    ) {
+        observed.typed.push(*trigger.event());
+    }
+
+    fn observe_edge_telemetry(
+        trigger: On<lunco_core::TelemetryEvent>,
+        mut observed: ResMut<SemanticEdgeObserved>,
+    ) {
+        if trigger.event().name == "intent.edge" {
+            observed.telemetry.push(trigger.event().clone());
+        }
+    }
+
+    #[test]
+    fn semantic_edge_is_atomic_target_scoped_and_script_visible() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<SimulatedIntents>()
+            .init_resource::<lunco_core::session::CommandPolicyRegistry>()
+            .add_observer(observe_semantic_edge)
+            .add_observer(observe_edge_telemetry);
+        app.world_mut()
+            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .register(
+                "SimulateIntentEdge",
+                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+            );
+        register_all_commands(&mut app);
+        app.add_observer(project_intent_edge);
+        app.init_resource::<SemanticEdgeObserved>();
+
+        let target = app
+            .world_mut()
+            .spawn(lunco_core::GlobalEntityId::from_raw(0x11))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn(lunco_core::GlobalEntityId::from_raw(0x22))
+            .id();
+
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core::session::CommandPolicyRegistry>()
+                .policy_for("SimulateIntentEdge"),
+            lunco_core::session::CommandPolicy::OWNED_CONTROL
+        );
+
+        app.world_mut().trigger(SimulateIntentEdge {
+            target,
+            intent: "release".into(),
+            edge: "pulse".into(),
+        });
+        app.update();
+
+        let observed = app.world().resource::<SemanticEdgeObserved>();
+        assert_eq!(
+            observed.typed,
+            vec![lunco_core::SemanticIntentEdge {
+                target,
+                intent: UserIntent::Release,
+                kind: lunco_core::SemanticIntentEdgeKind::Pulse,
+            }]
+        );
+        assert_eq!(observed.typed[0].target, target);
+        assert_ne!(observed.typed[0].target, other);
+        assert_eq!(observed.telemetry.len(), 1);
+        assert_eq!(observed.telemetry[0].source, 0x11);
+        let lunco_core::TelemetryValue::Map(data) = &observed.telemetry[0].data else {
+            panic!("semantic edge telemetry must be structured");
+        };
+        assert_eq!(
+            data["intent"],
+            lunco_core::TelemetryValue::String("release".into())
+        );
+        assert_eq!(
+            data["edge"],
+            lunco_core::TelemetryValue::String("pulse".into())
+        );
+        assert_eq!(data["target_gid"], lunco_core::TelemetryValue::I64(0x11));
+
+        app.world_mut().trigger(SimulateIntentEdge {
+            target,
+            intent: "release".into(),
+            edge: "not-an-edge".into(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<SemanticEdgeObserved>().typed.len(),
+            1,
+            "an invalid edge must not emit a typed event"
+        );
+    }
 
     #[derive(Resource, Default)]
     struct InteractionObserved(Option<(f64, f64, f64)>);

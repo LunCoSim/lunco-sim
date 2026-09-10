@@ -1915,8 +1915,9 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  drive a possessed vessel over the API or from rhai.
 
  `held = true` is "stuck" (the key is down and stays down); `held = false` is
- "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
- The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
+ "unstuck" (released). This is the level-triggered surface for held values;
+ use `SimulateIntentEdge` for an atomic momentary press/release or pulse. The
+ named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
  …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
  `Controls` profile binds.
 
@@ -1927,6 +1928,22 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
 | `held` | `bool` |  `true` = hold it down, `false` = release it. |
 | `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command  surface). An intent is meaningless without its target: two spawns of one  asset are two distinct entities, and a targetless intent is rejected. Over  the API this takes the target's `api_id` — the `GlobalEntityId` reported by  `ListEntities` — and is resolved to the live entity. |
+
+#### `SimulateIntentEdge`
+
+ Emit one atomic target-scoped semantic intent edge without requiring callers
+ to emulate a pulse with ordered held commands. The controller validates the
+ shared intent vocabulary and publishes the typed edge plus the `intent.edge`
+ telemetry event; the consuming Twin decides whether it means a latch, release,
+ toggle, or other action.
+
+- *defined in:* `crates/lunco-controller/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The target vessel or command surface. The normal control authority policy applies. |
+| `intent` | `String` |  Shared semantic intent name (`action`, `release`, `forward`, …). |
+| `edge` | `String` |  `pressed`, `released`, or `pulse`; `press`/`release` are accepted aliases for the first two. |
 
 ## Avatar & possession
 

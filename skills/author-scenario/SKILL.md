@@ -382,6 +382,13 @@ physics (`COLLISION_START`), lifecycle (`SCENE_LOADED`), and Modelica condition 
 connected to `LunCoEvent.inputs:trigger`. The event prim adds the bus-facing name and
 severity; threshold and hysteresis equations remain in Modelica.
 
+Discrete vessel actions have a dedicated atomic edge surface:
+`intent_edge(target, intent, "pressed"|"released"|"pulse")` or the shorter
+`intent_pulse(target, intent)` helper. It emits `intent.edge` with
+`value.target_gid`, `value.intent`, and `value.edge`; the consuming Twin decides
+what the edge means and whether to write a port. Use `SimulateIntent`/`SetPorts`
+for held or continuous values, and never build a pulse from two ordered writes.
+
 ## 6. Running & debugging
 
 Prefer the HTTP API (curl-first; canonical port **4101** — launch per the

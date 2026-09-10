@@ -265,6 +265,27 @@ surrenders retained egui editor focus before publishing `EguiFocus`, so a
 possessed vessel receives the shared input map immediately after the scene click.
 Text fields retain keyboard ownership until that explicit scene press.
 
+### 6.8 Atomic semantic intent edges
+
+Held controls and discrete actions use separate contracts. `SimulateIntent` is
+the level-triggered API/Rhai command for a target-scoped held intent. For a
+single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
+`released`, or `pulse`:
+
+```rhai
+intent_pulse(lander, "release");
+// equivalent: intent_edge(lander, "release", "pulse");
+```
+
+The controller validates the shared `UserIntent` vocabulary and emits one
+`SemanticIntentEdge { target, intent, kind }`. It does not select a port or
+mutate the Twin. Authored Rhai/Modelica policy consumes the edge and decides
+whether it means a latch, release, toggle, or other action. Rhai `on_event`
+hooks receive the same edge on the existing telemetry bus as `intent.edge`,
+with `value.intent`, `value.edge`, and `value.target_gid`; the event source is
+also the target gid. The target remains subject to the normal command authority
+policy, so two spawned vehicles cannot receive one another's edge.
+
 ---
 
 ## Technical Reference

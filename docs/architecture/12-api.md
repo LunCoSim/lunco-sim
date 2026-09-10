@@ -228,6 +228,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | Domain | Command | Description |
 |---|---|---|
 | **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels) — the one generic control command. |
+| **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
 | **Avatar** | `PossessVessel` | Attach camera and control to a vessel. |
 | | `FollowTarget` | Chase-camera a target. |
 | | `FocusTarget` | Orbit-camera a target. |
@@ -290,6 +291,26 @@ curl -X POST http://127.0.0.1:4101/api/commands \
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
       "writes": [["brake", 1.0]]
+    }
+  }'
+```
+
+### Example: Emit a Discrete Intent Edge
+
+Use the atomic edge command for a one-shot action such as release. The command
+does not write a port; the target's authored policy consumes the resulting
+`intent.edge` event.
+
+```bash
+curl -X POST http://127.0.0.1:4101/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "ExecuteCommand",
+    "command": "SimulateIntentEdge",
+    "params": {
+      "target": "01ARZ7NDEKTSV4M9",
+      "intent": "release",
+      "edge": "pulse"
     }
   }'
 ```

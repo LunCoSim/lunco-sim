@@ -35,11 +35,19 @@ fn on_start(me) {
     this.diagonal_speed = 0.0;
     this.boost_down_distance = 0.0;
     this.boost_up_distance = 0.0;
+    this.edge_seen = false;
     this.done = false;
 
     if this.avatar < 0 {
         this.done = true;
         fail("free-flight avatar did not compose");
+        return;
+    }
+
+    let edge = intent_pulse(this.avatar, "release");
+    if !edge.ok {
+        this.done = true;
+        fail("could not emit atomic semantic intent edge: " + edge.error);
         return;
     }
 
@@ -54,6 +62,16 @@ fn on_start(me) {
         return;
     }
     this.base_start = world_pos(this.avatar);
+}
+
+fn on_event(me, evt) {
+    if evt.name == "intent.edge" && evt.source == this.avatar {
+        let value = evt.value;
+        if value["intent"] == "release" && value["edge"] == "pulse" &&
+           value["target_gid"] == this.avatar {
+            this.edge_seen = true;
+        }
+    }
 }
 
 fn on_tick(me) {
@@ -152,6 +170,8 @@ fn on_tick(me) {
             "Shift+Q control frame did not produce the expected tenfold descent"));
         checks.push(t_true(this.boost_up_distance > this.base_speed * 5.0,
             "Shift+E control frame did not produce the expected tenfold ascent"));
+        checks.push(t_true(this.edge_seen,
+            "atomic semantic intent edge was not delivered to the Rhai event bus"));
         checks.push(t_bounded(world_pos(this.avatar), 1000.0,
             "free-flight avatar left the bounded acceptance fixture"));
         print("[free-flight-speed-boost] base=" + r4(this.base_speed) +
