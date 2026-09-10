@@ -6196,19 +6196,41 @@ fn read_mesh_points(reader: &dyn read::UsdReadObject, path: &SdfPath) -> Option<
     // does not spawn and nothing is logged. An empty result is `None` here, matching
     // the old contract: a points-less mesh is not a mesh.
     let points = reader.points3(path, "points");
-    if points.is_empty() {
+    if points.is_empty()
+        || points
+            .iter()
+            .any(|point| !Vec3::from_array(*point).is_finite())
+    {
+        if points
+            .iter()
+            .any(|point| !Vec3::from_array(*point).is_finite())
+        {
+            error!(
+                "[usd-bevy] {} has non-finite mesh points; refusing geometry projection",
+                path.as_str()
+            );
+        }
         return None;
     }
     let conv = stage_convention(reader).ok()?;
     if conv.is_identity() {
         return Some(points);
     }
-    Some(
-        points
-            .into_iter()
-            .map(|p| conv.point(Vec3::from_array(p)).to_array())
-            .collect(),
-    )
+    let points: Vec<[f32; 3]> = points
+        .into_iter()
+        .map(|p| conv.point(Vec3::from_array(p)).to_array())
+        .collect();
+    if points
+        .iter()
+        .any(|point| !Vec3::from_array(*point).is_finite())
+    {
+        error!(
+            "[usd-bevy] {} mesh points became non-finite after stage conversion; refusing geometry projection",
+            path.as_str()
+        );
+        return None;
+    }
+    Some(points)
 }
 
 /// A `Mesh` prim's normals, rotated into the canonical frame (`n' = Q·n`) — a

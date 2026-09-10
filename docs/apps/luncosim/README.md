@@ -126,7 +126,9 @@ target/debug/luncosim --api 4107 --offscreen --render-quality high \
   --scene /path/to/space-school-twin/sim/scenes/traverse.usda
 ```
 
-Use a free API port. The quality preset controls renderer budgets, including
+The requested API port must not already be in use; otherwise startup exits
+before the simulator window and loop are started. The quality preset controls
+renderer budgets, including
 shadows, the sky cubemap, lunar terrain LOD and tessellation; USD remains the
 owner of the scene's authored shader sources (such as the Summer Space School
 terrain and starfield shaders). The local graphics scene gate uses this preset by

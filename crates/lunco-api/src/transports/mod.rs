@@ -21,6 +21,9 @@ mod http;
 #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 pub use http::*;
 
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
+use bevy::prelude::Resource;
+
 /// Read-only content-addressed asset server (`GET /scenario-assets/<cid>`) — the
 /// bytes plane of scenario distribution. Native-only, same reasoning as `http` above.
 #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
@@ -38,6 +41,18 @@ pub use wasm::*;
 #[derive(Debug, Clone)]
 pub struct HttpServerConfig {
     pub port: u16,
+}
+
+/// A native HTTP listener failure that prevents the host from starting.
+///
+/// The listener is claimed while the host application is still being built,
+/// so a requested port conflict is reported to the composition root instead
+/// of leaving a running simulator with a missing API.
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
+#[derive(Debug, Resource)]
+pub struct HttpServerStartupError {
+    pub port: u16,
+    pub message: String,
 }
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
@@ -165,22 +180,23 @@ mod tests {
 // for short compute jobs and would occupy a pool slot forever). The
 // `disallowed_methods` ban targets wasm + short tasks, neither of which
 // applies to this native, `transport-http`-gated server, so it's locally
-// allowed. The previous triple `.unwrap()` panicked this *detached*
-// thread silently (e.g. on port-in-use → the API just never came up);
-// failures are now logged and the thread returns.
+// allowed. Bind the listener before spawning the thread: the composition
+// root can then refuse to run the simulator when the requested port is
+// unavailable, and the listener ownership transfers without a probe/rebind
+// race.
 #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)]
-pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
-    let port = config.port;
+pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) -> std::io::Result<()> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", config.port))?;
+    listener.set_nonblocking(true)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let listener = {
+        let _guard = runtime.enter();
+        tokio::net::TcpListener::from_std(listener)?
+    };
+
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                bevy::log::error!("[lunco-api] failed to start HTTP server runtime: {e}");
-                return;
-            }
-        };
-        rt.block_on(async move {
+        runtime.block_on(async move {
             // Four routes, all of them real (the docs used to list ones that were
             // never registered — every curl example 404'd):
             //   POST /api/commands        — the one command funnel
@@ -212,20 +228,31 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             // This is a trusted local boundary: it binds loopback only and has
             // no local user-authentication layer. Networked peers use the
             // authenticated session/RBAC path and must not be routed here.
-            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await
-            {
-                Ok(l) => l,
-                Err(e) => {
-                    bevy::log::error!(
-                        "[lunco-api] HTTP server failed to bind 127.0.0.1:{port}: {e} \
-                         (port already in use?) — API will be unavailable"
-                    );
-                    return;
-                }
-            };
             if let Err(e) = axum::serve(listener, app).await {
                 bevy::log::error!("[lunco-api] HTTP server stopped with error: {e}");
             }
         });
     });
+    Ok(())
+}
+
+#[cfg(all(test, feature = "transport-http", not(target_arch = "wasm32")))]
+mod http_server_tests {
+    use super::{spawn_server, HttpBridge, HttpServerConfig};
+    use std::net::TcpListener;
+
+    #[test]
+    fn refuses_an_api_port_that_is_already_bound() {
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("test listener must bind");
+        let port = occupied
+            .local_addr()
+            .expect("test listener has an address")
+            .port();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        let error = spawn_server(HttpServerConfig { port }, HttpBridge::new(tx))
+            .expect_err("an occupied API port must fail before a server thread starts");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+    }
 }

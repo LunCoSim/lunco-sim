@@ -621,6 +621,22 @@ fn run_with_mode(headless: bool) -> AppExit {
 
     let mut app = build_sim_app_with_profile(headless, offscreen, None, render_profile);
 
+    #[cfg(all(
+        feature = "lunco-api",
+        feature = "transport-http",
+        not(target_arch = "wasm32")
+    ))]
+    if let Some(error) = app
+        .world_mut()
+        .remove_resource::<lunco_api::transports::HttpServerStartupError>()
+    {
+        eprintln!(
+            "luncosim: cannot start HTTP API on 127.0.0.1:{}: {}",
+            error.port, error.message
+        );
+        return AppExit::error();
+    }
+
     #[cfg(feature = "ui")]
     app.insert_resource(lunco_workbench::screenshot::OfflineVideoSettings {
         preset: record_preset,

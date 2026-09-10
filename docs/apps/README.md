@@ -20,9 +20,10 @@ cargo build -p lunco-luncosim --bin luncosim -j 4
 target/debug/luncosim --api 4101
 ```
 
-Run from the repository root so the app can find its bundled assets. Choose a
-free API port if 4101 is already in use. For contributor setup and verification
-rules, read the [agent and contributor guide](../../AGENTS.md).
+Run from the repository root so the app can find its bundled assets. If 4101 or
+the requested API port is already in use, startup fails before the simulator
+window and loop are started. For contributor setup and verification rules, read
+the [agent and contributor guide](../../AGENTS.md).
 
 The simulator includes the Modelica workbench. To build the standalone
 Modelica application, use the `lunica` target in the table below.

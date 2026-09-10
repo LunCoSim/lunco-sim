@@ -162,6 +162,10 @@ app.add_plugins(LunCoApiPlugin::new(LunCoApiConfig {
 }));
 ```
 
+The requested loopback port is claimed while the host application is being
+built. If another process already owns it, the host exits before starting its
+window or simulation loop and reports the port-binding error.
+
 ## Features
 
 | Feature | Description |

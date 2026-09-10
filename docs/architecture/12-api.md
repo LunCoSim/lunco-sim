@@ -21,6 +21,9 @@ target/debug/luncosim --api 8080
 ```
 
 The `--api` flag enables the HTTP server. Without it, the sim runs normally with no network exposure.
+The requested loopback port is claimed before the application starts its
+window or simulation loop. If another process already owns that port, startup
+fails with a non-zero exit and reports the bind error.
 
 ### 2. Test the API
 

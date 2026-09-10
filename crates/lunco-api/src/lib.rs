@@ -266,7 +266,17 @@ impl Plugin for LunCoApiPlugin {
             #[allow(clippy::redundant_clone)]
             #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
             if let Some(config) = &self.config.http_config {
-                transports::spawn_server(config.clone(), bridge.clone());
+                if let Err(error) = transports::spawn_server(config.clone(), bridge.clone()) {
+                    let message = if error.kind() == std::io::ErrorKind::AddrInUse {
+                        format!("port is already in use ({error})")
+                    } else {
+                        error.to_string()
+                    };
+                    app.insert_resource(transports::HttpServerStartupError {
+                        port: config.port,
+                        message,
+                    });
+                }
             }
 
             // Wasm: register the bridge behind the `window.lunco_api` JS export.
