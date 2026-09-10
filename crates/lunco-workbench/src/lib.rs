@@ -5419,32 +5419,23 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                            if matches!(l.level, StatusLevel::Warn | StatusLevel::Error) {
-                                ui.add_sized(
-                                    [STATUS_BAR_NOTIFICATION_LEVEL_WIDTH, 18.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(status_level_label(l.level))
-                                            .small()
-                                            .strong()
-                                            .color(dot_color),
-                                    )
-                                    .truncate(),
-                                );
-                            }
-                            ui.add_sized(
-                                [STATUS_BAR_NOTIFICATION_SOURCE_WIDTH, 18.0],
-                                egui::Label::new(egui::RichText::new(l.source).small().strong())
-                                    .truncate(),
-                            )
-                            .on_hover_text(l.source);
-                            let text = egui::RichText::new(display_message).small();
-                            let message_width = status_bar_message_width(
+                            let notification = status_notification_layout_job(
+                                ui.style(),
+                                l.level,
+                                &l.source,
+                                display_message,
+                                dot_color,
+                            );
+                            let notification_width = status_bar_message_width(
                                 ui.available_width(),
                                 l.progress_pct.is_some(),
                                 ui.spacing().item_spacing.x,
                             );
-                            ui.add_sized([message_width, 18.0], egui::Label::new(text).truncate())
-                                .on_hover_text(&l.message);
+                            ui.add_sized(
+                                [notification_width, 18.0],
+                                egui::Label::new(notification).truncate(),
+                            )
+                            .on_hover_text(&l.message);
                             if l.level == StatusLevel::Progress {
                                 if let Some(pct) = l.progress_pct {
                                     ui.add(
@@ -5865,6 +5856,46 @@ fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(egui::FontFamily::Proportional)
 }
 
+fn status_notification_layout_job(
+    style: &egui::Style,
+    level: status_bus::StatusLevel,
+    source: &str,
+    message: &str,
+    level_color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let font_id = egui::TextStyle::Small.resolve(style);
+    let normal = egui::TextFormat {
+        font_id: font_id.clone(),
+        color: style.visuals.text_color(),
+        ..Default::default()
+    };
+    let source_format = egui::TextFormat {
+        font_id: font_id.clone(),
+        color: style.visuals.strong_text_color(),
+        ..Default::default()
+    };
+    let level_format = egui::TextFormat {
+        font_id,
+        color: level_color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(status_level_label(level), 0.0, level_format);
+    if !source.is_empty() {
+        job.append(" ", 0.0, normal.clone());
+        job.append(source, 0.0, source_format);
+    }
+    if !message.is_empty() {
+        job.append(
+            if source.is_empty() { " " } else { ": " },
+            0.0,
+            normal.clone(),
+        );
+        job.append(message, 0.0, normal);
+    }
+    job
+}
+
 fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
     match level {
         status_bus::StatusLevel::Info => "INFO",
@@ -5941,8 +5972,6 @@ const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
 const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 280.0;
 const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
 const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
-const STATUS_BAR_NOTIFICATION_LEVEL_WIDTH: f32 = 40.0;
-const STATUS_BAR_NOTIFICATION_SOURCE_WIDTH: f32 = 56.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
@@ -5966,8 +5995,8 @@ impl StatusBarRightWidths {
 }
 
 /// Give the latest-event notification a compact, stable footprint while
-/// preserving enough room for its source and a readable message. The full
-/// event remains available through the strip tooltip and history popup.
+/// preserving enough room for a readable single-line summary. The full event
+/// remains available through the strip tooltip and history popup.
 fn status_bar_notification_width(
     available_width: f32,
     right_reserve: f32,
@@ -7141,6 +7170,19 @@ mod tests {
         assert_eq!(status_bar_notification_width(520.0, 120.0, 960.0), 280.0);
         assert_eq!(status_bar_notification_width(400.0, 120.0, 420.0), 140.0);
         assert_eq!(status_bar_notification_width(120.0, 160.0, 420.0), 1.0);
+    }
+
+    #[test]
+    fn latest_status_notification_is_one_flowing_string() {
+        let job = status_notification_layout_job(
+            &egui::Style::default(),
+            status_bus::StatusLevel::Warn,
+            "updates",
+            "updates unavailable",
+            egui::Color32::YELLOW,
+        );
+
+        assert_eq!(job.text, "WARN updates: updates unavailable");
     }
 
     #[test]
