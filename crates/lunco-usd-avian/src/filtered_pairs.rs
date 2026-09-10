@@ -65,6 +65,22 @@ pub struct PendingFilteredPairs {
 #[derive(Component, Debug, Clone, Default)]
 pub struct FilteredPairs(pub EntityHashSet);
 
+/// Collision pairs suppressed by live joints.
+///
+/// This is separate from [`FilteredPairs`]: authored USD exclusions are
+/// permanent, while this storage exists only for the lifetime of a joint. The
+/// inner set records joint owners so duplicate joints between the same bodies
+/// do not re-enable a pair prematurely.
+#[derive(Component, Debug, Clone, Default)]
+pub struct JointFilteredPairs(pub EntityHashMap<EntityHashSet>);
+
+/// The bodies whose pair was suppressed for one live joint.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JointCollisionPair {
+    pub body0: Entity,
+    pub body1: Entity,
+}
+
 /// Marks a rigid body whose wheel-ground tangential force is supplied by the
 /// shared LunCo tire model rather than Avian's generic Coulomb tangent solver.
 ///
@@ -85,10 +101,10 @@ pub struct SharedTireContact;
 /// combine rule still come entirely from the authored [`Friction`] properties.
 const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.01;
 
-/// Declare that `a` and `b` must never collide, from this command flush onward.
+/// Suppress collisions between the bodies of one live joint.
 ///
-/// The programmatic counterpart of an authored `physics:filteredPairs`, writing
-/// the same component on both ends so the hook below needs no second code path.
+/// This intentionally does not share storage with authored
+/// `physics:filteredPairs`: the two exclusions have different lifetimes.
 ///
 /// Used by [`attach_joint`](crate::attach_joint) for every jointed pair, and
 /// that is not an optimisation — it is what makes deferring a joint SAFE. A
@@ -101,17 +117,58 @@ const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.01;
 /// that contact can form — wheel and fender overlap on the frame they spawn — so
 /// the pair is filtered at ATTACH time, before any narrow phase can see it,
 /// rather than at insert time.
-pub fn filter_pair(commands: &mut Commands, a: Entity, b: Entity) {
+pub fn filter_pair(commands: &mut Commands, joint: Entity, a: Entity, b: Entity) {
     for (from, to) in [(a, b), (b, a)] {
         commands
             .entity(from)
-            .entry::<FilteredPairs>()
+            .entry::<JointFilteredPairs>()
             .or_default()
             .and_modify(move |mut pairs| {
-                pairs.0.insert(to);
+                pairs.0.entry(to).or_default().insert(joint);
             });
         enable_collision_hook(commands, from, ActiveCollisionHooks::FILTER_PAIRS);
     }
+}
+
+/// Release the collision suppression owned by one joint.
+pub fn release_joint_pair(commands: &mut Commands, joint: Entity, a: Entity, b: Entity) {
+    for (from, to) in [(a, b), (b, a)] {
+        commands.queue(move |world: &mut World| {
+            let Some(mut pairs) = world.get_mut::<JointFilteredPairs>(from) else {
+                return;
+            };
+            if let Some(owners) = pairs.0.get_mut(&to) {
+                owners.remove(&joint);
+                if owners.is_empty() {
+                    pairs.0.remove(&to);
+                }
+            }
+            let empty = pairs.0.is_empty();
+            drop(pairs);
+            if empty {
+                if let Ok(mut entity) = world.get_entity_mut(from) {
+                    entity.remove::<JointFilteredPairs>();
+                }
+            }
+        });
+    }
+}
+
+/// Release a joint's transient pair filter before the joint entity is removed.
+pub fn on_remove_joint_collision_pair(
+    trigger: On<Remove, JointCollisionPair>,
+    pairs: Query<&JointCollisionPair>,
+    mut commands: Commands,
+) {
+    let Ok(pair) = pairs.get(trigger.entity) else {
+        return;
+    };
+    release_joint_pair(
+        &mut commands,
+        trigger.entity,
+        pair.body0,
+        pair.body1,
+    );
 }
 
 /// Add one Avian collision hook without erasing another hook already authored
@@ -361,6 +418,7 @@ pub(crate) fn resolve_filtered_pairs(
 #[derive(SystemParam)]
 pub struct UsdCollisionFilter<'w, 's> {
     filtered: Query<'w, 's, &'static FilteredPairs>,
+    joint_filtered: Query<'w, 's, &'static JointFilteredPairs>,
     collider_of: Query<'w, 's, &'static ColliderOf>,
     shared_tire: Query<'w, 's, (), With<SharedTireContact>>,
     friction: Query<'w, 's, &'static Friction>,
@@ -473,6 +531,9 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
             self.filtered
                 .get(a)
                 .is_ok_and(|f| f.0.contains(&b) || f.0.contains(&b_body))
+                || self.joint_filtered.get(a).is_ok_and(|f| {
+                    f.0.contains_key(&b) || f.0.contains_key(&b_body)
+                })
         };
 
         !(names(collider1, collider2, body2)
