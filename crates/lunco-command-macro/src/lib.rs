@@ -71,7 +71,7 @@ use syn::{
 ///   JSON with omitted fields fills in defaults.
 ///   ```ignore
 ///   #[Command(default)]
-///   pub struct OpenFile { pub path: String, pub doc: DocumentId }
+///   pub struct OpenFile { pub path: String, pub doc_id: DocumentId }
 ///   ```
 #[proc_macro_attribute]
 // Why: PascalCase mimics `#[derive(Trait)]` syntax at the call site

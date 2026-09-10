@@ -76,7 +76,7 @@ pub struct Foo { … }
 app.register_type::<Foo>().add_observer(on_foo);
 
 // ✗ u64 doc-id shim to dodge a Reflect requirement
-pub struct Foo { pub doc: u64 }   // use DocumentId
+pub struct Foo { pub doc_id: u64 }   // use DocumentId
 ```
 
 ## See also

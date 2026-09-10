@@ -39,7 +39,7 @@ fn on_tick(me) {
 
     if !this.sent_occupied {
         let result = cmd("AttachComponent", #{
-            doc: this.doc,
+            doc_id: this.doc,
             spec: #{
                 edit_target: "@runtime@",
                 socket_path: "/SocketAttachRejection/Chassis/Interfaces/occupied",
@@ -59,7 +59,7 @@ fn on_tick(me) {
 
     if !this.sent_incompatible {
         let result = cmd("AttachComponent", #{
-            doc: this.doc,
+            doc_id: this.doc,
             spec: #{
                 edit_target: "@runtime@",
                 socket_path: "/SocketAttachRejection/Chassis/Interfaces/incompatible",
@@ -79,7 +79,7 @@ fn on_tick(me) {
 
     if !this.sent_wrong_joint {
         let result = cmd("AttachComponent", #{
-            doc: this.doc,
+            doc_id: this.doc,
             spec: #{
                 edit_target: "@runtime@",
                 socket_path: "/SocketAttachRejection/Chassis/Interfaces/wrong_joint",

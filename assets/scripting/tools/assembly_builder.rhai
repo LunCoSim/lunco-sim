@@ -152,7 +152,7 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
     }
 
     let parent_record = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: parent,
         children: false,
     });
@@ -161,7 +161,7 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
     }
     let path = if parent == "/" { "/" + name } else { parent + "/" + name };
     let existing = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         children: false,
     });
@@ -251,7 +251,7 @@ fn select_variants_plan(doc, edit_target, path, variants) {
     if !path.starts_with("/") || path.ends_with("/") {
         return plan_error("select_variants_plan path must be an absolute USD prim path");
     }
-    let record = query("QueryUsdPrim", #{ doc: doc, path: path, children: false });
+    let record = query("QueryUsdPrim", #{ doc_id: doc, path: path, children: false });
     if !query_ok(record) {
         return plan_error(path + ": variant-selection target is unavailable");
     }
@@ -546,7 +546,7 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
     }
 
     let body = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         attrs: ["physics:mass", "physics:centerOfMass", "physics:diagonalInertia"],
         children: false,
@@ -572,7 +572,7 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
             return plan_error(collider_path + ": collider path is listed more than once");
         }
         let collider = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: collider_path,
             attrs: ["physics:collisionEnabled"],
         });
@@ -700,7 +700,7 @@ fn find_compatible_socket(doc, host_path, socket_kind, joint_kind, asset,
     }
 
     let host = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: host_path,
         rels: ["lunco:mount:sockets"],
     });
@@ -712,7 +712,7 @@ fn find_compatible_socket(doc, host_path, socket_kind, joint_kind, asset,
     let candidates = [];
     for socket_path in host.relationships["lunco:mount:sockets"] {
         let socket = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: socket_path,
             attrs: [
                 "lunco:mount:socket",
@@ -913,7 +913,7 @@ fn mount_transform_inverse(value) {
 
 fn mount_local_transform(doc, path) {
     let record = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         attrs: ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale", "xformOpOrder"],
     });
@@ -1039,7 +1039,7 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
     }
 
     let host = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: host_path,
         rels: ["lunco:mount:sockets"],
     });
@@ -1052,7 +1052,7 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
     }
 
     let socket = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: socket_path,
         attrs: ["lunco:mount:socket", "lunco:mount:joint", "lunco:mount:axis"],
         rels: ["lunco:mount:part"],
@@ -1078,7 +1078,7 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
     }
 
     let part = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: part_path,
         attrs: ["lunco:mount:plug"],
         rels: ["lunco:mount:frame", "lunco:mount:attachmentJoint"],
@@ -1103,7 +1103,7 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
     }
 
     let joint = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: joint_path,
         rels: ["physics:body0", "physics:body1"],
     });
@@ -1178,7 +1178,7 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
 /// policy cannot interpret. A missing translate opinion is USD identity.
 fn local_translation(doc, path) {
     let record = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         attrs: ["xformOp:translate", "xformOpOrder"],
     });

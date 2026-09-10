@@ -143,8 +143,8 @@ PASS=$((PASS+1))
 echo
 
 # ── 4. list_compile_candidates — assert RocketStage class present ─────
-echo "🧩 4. list_compile_candidates(doc=$DOC_ID)"
-RESP=$(cmd "ListCompileCandidates" "{\"doc\":$DOC_ID}")
+echo "🧩 4. list_compile_candidates(doc_id=$DOC_ID)"
+RESP=$(cmd "ListCompileCandidates" "{\"doc_id\":$DOC_ID}")
 HAS_ROCKETSTAGE=$(echo "$RESP" | jq -r '[.data.candidates[].short] | contains(["RocketStage"])')
 COUNT=$(echo "$RESP" | jq -r '.data.count')
 echo "  ℹ $COUNT candidates"
@@ -159,13 +159,13 @@ fi
 echo
 
 # ── 5. compile_model with explicit class ──────────────────────────────
-echo "🔨 5. compile_model(doc=$DOC_ID, class=\"RocketStage\")"
-RESP=$(cmd "CompileActiveModel" "{\"doc\":$DOC_ID,\"class\":\"RocketStage\"}")
+echo "🔨 5. compile_model(doc_id=$DOC_ID, class=\"RocketStage\")"
+RESP=$(cmd "CompileActiveModel" "{\"doc_id\":$DOC_ID,\"class\":\"RocketStage\"}")
 assert_truthy '.data.accepted' "Compile accepted"
 echo "  ⏳ waiting up to 60s for compile to finish…"
 for i in {1..120}; do
     sleep 0.5
-    RESP=$(cmd "CompileStatus" "{\"doc\":$DOC_ID}")
+    RESP=$(cmd "CompileStatus" "{\"doc_id\":$DOC_ID}")
     STATE=$(echo "$RESP" | jq -r '.data.state')
     if [ "$STATE" = "ok" ]; then
         echo "  ✅ compile state=ok after ${i}× 0.5s"
@@ -191,8 +191,8 @@ echo
 # Modelica.Blocks.Interfaces.RealInput). describe_model on RocketStage
 # surfaces the components; describe_model on Valve would surface the
 # `opening` input. We verify both shapes here.
-echo "📋 6a. describe_model(doc=$DOC_ID, class=\"RocketStage\")"
-RESP=$(cmd "DescribeModel" "{\"doc\":$DOC_ID,\"class\":\"RocketStage\"}")
+echo "📋 6a. describe_model(doc_id=$DOC_ID, class=\"RocketStage\")"
+RESP=$(cmd "DescribeModel" "{\"doc_id\":$DOC_ID,\"class\":\"RocketStage\"}")
 COMPONENT_COUNT=$(echo "$RESP" | jq -r '.data.components | length')
 HAS_VALVE_COMP=$(echo "$RESP" | jq -r '[.data.components[].name] | contains(["valve"])')
 if [ "$HAS_VALVE_COMP" = "true" ]; then
@@ -204,8 +204,8 @@ else
 fi
 echo
 
-echo "📋 6b. describe_model(doc=$DOC_ID, class=\"Valve\") — find opening input"
-RESP=$(cmd "DescribeModel" "{\"doc\":$DOC_ID,\"class\":\"Valve\"}")
+echo "📋 6b. describe_model(doc_id=$DOC_ID, class=\"Valve\") — find opening input"
+RESP=$(cmd "DescribeModel" "{\"doc_id\":$DOC_ID,\"class\":\"Valve\"}")
 HAS_OPENING=$(echo "$RESP" | jq -r '[.data.inputs[].name] | contains(["opening"])')
 if [ "$HAS_OPENING" = "true" ]; then
     echo "  ✅ opening listed as input on Valve (validates connector-typed input detection)"
@@ -221,8 +221,8 @@ echo
 # `RocketStage` has no top-level inputs of its own; the runtime
 # throttle is `valve.opening` after flattening. The simulation
 # worker's `inputs` map is keyed by the flattened name.
-echo "🎛  7. set_input(doc=$DOC_ID, name=\"valve.opening\", value=0.5)"
-RESP=$(cmd "SetModelInput" "{\"doc\":$DOC_ID,\"name\":\"valve.opening\",\"value\":0.5}")
+echo "🎛  7. set_input(doc_id=$DOC_ID, name=\"valve.opening\", value=0.5)"
+RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.opening\",\"value\":0.5}")
 OK=$(echo "$RESP" | jq -r '.data.ok // empty')
 if [ "$OK" = "true" ]; then
     echo "  ✅ set_input ok=true"
@@ -237,8 +237,8 @@ echo
 # ── 8. set_input — error path (typo) ─────────────────────────────────
 # The HTTP transport renders `ApiResponse::Error { message }` as
 # `{"error": "<message>"}` (not `.message`), so we read `.error` here.
-echo "🎛  8. set_input(doc=$DOC_ID, name=\"valve.openin\" /* typo */, value=0.5)"
-RESP=$(cmd "SetModelInput" "{\"doc\":$DOC_ID,\"name\":\"valve.openin\",\"value\":0.5}")
+echo "🎛  8. set_input(doc_id=$DOC_ID, name=\"valve.openin\" /* typo */, value=0.5)"
+RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.openin\",\"value\":0.5}")
 ERR=$(echo "$RESP" | jq -r '.error // .message // empty')
 if echo "$ERR" | grep -q "valve.opening"; then
     echo "  ✅ error lists the valid name: $ERR"
@@ -251,14 +251,14 @@ fi
 echo
 
 # ── 9. resume sim & 10. snapshot — assert thrust value comes back ─────
-echo "▶  9. ResumeActiveModel(doc=$DOC_ID)"
-RESP=$(cmd "ResumeActiveModel" "{\"doc\":$DOC_ID}")
+echo "▶  9. ResumeActiveModel(doc_id=$DOC_ID)"
+RESP=$(cmd "ResumeActiveModel" "{\"doc_id\":$DOC_ID}")
 assert_truthy '.data.accepted' "Resume accepted"
 sleep 1.5  # let a few sim steps run
 echo
 
-echo "📊 10. snapshot_variables(doc=$DOC_ID)"
-RESP=$(cmd "SnapshotVariables" "{\"doc\":$DOC_ID}")
+echo "📊 10. snapshot_variables(doc_id=$DOC_ID)"
+RESP=$(cmd "SnapshotVariables" "{\"doc_id\":$DOC_ID}")
 COMPILED=$(echo "$RESP" | jq -r '.data.compiled')
 T=$(echo "$RESP" | jq -r '.data.t')
 if [ "$COMPILED" = "true" ]; then
@@ -275,8 +275,8 @@ fi
 echo
 
 # ── 11. PauseActiveModel — clean shutdown ─────────────────────────────
-echo "⏸  11. PauseActiveModel(doc=$DOC_ID)"
-RESP=$(cmd "PauseActiveModel" "{\"doc\":$DOC_ID}")
+echo "⏸  11. PauseActiveModel(doc_id=$DOC_ID)"
+RESP=$(cmd "PauseActiveModel" "{\"doc_id\":$DOC_ID}")
 assert_truthy '.data.accepted' "Pause accepted"
 echo
 

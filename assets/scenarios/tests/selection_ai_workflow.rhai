@@ -135,8 +135,8 @@ fn on_tick(me) {
     }
     if this.phase == 7 {
         if !ready(12202, this.fork, 1) { return; }
-        let changed = query("QueryUsdPrim", #{ doc: this.fork, path: PART });
-        let untouched = query("QueryUsdPrim", #{ doc: this.original, path: PART });
+        let changed = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
+        let untouched = query("QueryUsdPrim", #{ doc_id: this.original, path: PART });
         this.checks.push(t_true(changed.attrs["xformOp:translate"][1] == 1.0,
             "correction reached selected document projection"));
         this.checks.push(t_true(untouched.attrs["xformOp:translate"][1] == 0.0
@@ -146,14 +146,14 @@ fn on_tick(me) {
             [#{ SetTranslate: #{ edit_target: "@root@", path: PART, value: [0.0, 9.0, 0.0] } }], 0);
         this.checks.push(t_true(stale.ok == false && assembly_edit::describe(this.fork).generation == 1,
             "stale generation fails without mutation"));
-        cmd("UndoDocument", #{ doc: this.fork });
+        cmd("UndoDocument", #{ doc_id: this.fork });
         this.phase = 8;
         return;
     }
     if this.phase == 8 {
         let generation = assembly_edit::describe(this.fork).generation;
         if generation <= 1 || !ready(12202, this.fork, generation) { return; }
-        let restored = query("QueryUsdPrim", #{ doc: this.fork, path: PART });
+        let restored = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
         this.checks.push(t_true(restored.attrs["xformOp:translate"][1] == 0.0,
             "undo restores the selected part through the same projection"));
         assembly_edit::preview_close(12202);

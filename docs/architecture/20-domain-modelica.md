@@ -487,13 +487,13 @@ GUI panels (per AGENTS.md §4.1):
 
 | API command | Wraps | Purpose |
 |-------------|-------|---------|
-| `SetDocumentSource { doc, source }` | `ReplaceSource` | Whole-buffer rewrite — agent batch edits, lint apply, source import |
-| `AddModelicaComponent { doc, class, type_name, name, x, y, w, h }` | `AddComponent` | Drop a component into a class with a placement |
-| `RemoveModelicaComponent { doc, class, name }` | `RemoveComponent` | Delete a component declaration |
-| `ConnectComponents { doc, class, from, to }` | `AddConnection` | Add a `connect(a.p, b.q);` equation; `from`/`to` are dot-paths |
-| `DisconnectComponents { doc, class, from, to }` | `RemoveConnection` | Drop the matching connect equation |
-| `ApplyModelicaOps { doc, ops: Vec<ApiOp> }` | All structural variants | Batch fan-out: `AddComponent / RemoveComponent / AddConnection / RemoveConnection / SetPlacement / SetParameter` in order |
-| `RenameModelicaClass { doc, old_name, new_name }` | string-level rewrite | Rename a top-level class declaration + its `end OLD;` closer; if the doc origin is `Untitled`, the origin name is updated too so the tab title follows |
+| `SetDocumentSource { doc_id, source }` | `ReplaceSource` | Whole-buffer rewrite — agent batch edits, lint apply, source import |
+| `AddModelicaComponent { doc_id, class, type_name, name, x, y, w, h }` | `AddComponent` | Drop a component into a class with a placement |
+| `RemoveModelicaComponent { doc_id, class, name }` | `RemoveComponent` | Delete a component declaration |
+| `ConnectComponents { doc_id, class, from, to }` | `AddConnection` | Add a `connect(a.p, b.q);` equation; `from`/`to` are dot-paths |
+| `DisconnectComponents { doc_id, class, from, to }` | `RemoveConnection` | Drop the matching connect equation |
+| `ApplyModelicaOps { doc_id, ops: Vec<ApiOp> }` | All structural variants | Batch fan-out: `AddComponent / RemoveComponent / AddConnection / RemoveConnection / SetPlacement / SetParameter` in order |
+| `RenameModelicaClass { doc_id, old_name, new_name }` | string-level rewrite | Rename a top-level class declaration + its `end OLD;` closer; if the doc origin is `Untitled`, the origin name is updated too so the tab title follows |
 
 `ApplyModelicaOps` is the primary path for agent / canvas drag-drop —
 each op in the batch becomes its own undoable step, but the caller

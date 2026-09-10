@@ -112,7 +112,7 @@ per-tick work in rhai — except in a rhai *test*, where stepping is the point.
 
 ## Attach a program through the shared contract
 
-Use `AttachProgram { doc, spec }` for a new Modelica or Python participant.
+Use `AttachProgram { doc_id, spec }` for a new Modelica or Python participant.
 The command validates the source path and explicit scalar interface, then
 authors the `LunCoProgramAPI` child, defaults, and native USD connections as one
 journal/undo change set. The Models palette and the `assembly_edit` Rhai tool

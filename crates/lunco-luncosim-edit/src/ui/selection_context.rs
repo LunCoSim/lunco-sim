@@ -144,7 +144,7 @@ fn selection_item(
     Some(serde_json::json!({
         "identity": {
             "preview": preview.0,
-            "doc": doc,
+            "doc_id": doc,
             "path": selection.path,
         },
         "path": selection.path,
@@ -179,7 +179,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         let Some(preview) = preview else {
             return ApiResponse::ok(serde_json::json!({
                 "preview": serde_json::Value::Null,
-                "doc": serde_json::Value::Null,
+                "doc_id": serde_json::Value::Null,
                 "edit_target": serde_json::Value::Null,
                 "focused": false,
                 "selection_state": "no_preview",
@@ -312,7 +312,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         if paths.is_empty() && !stale_target {
             return ApiResponse::ok(serde_json::json!({
                 "preview": preview.0,
-                "doc": doc,
+                "doc_id": doc,
                 "edit_target": edit_target,
                 "focused": focused,
                 "selection_state": "no_selection",
@@ -404,7 +404,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         let primary = selected.last().cloned().unwrap_or(serde_json::Value::Null);
         ApiResponse::ok(serde_json::json!({
             "preview": preview.0,
-            "doc": doc,
+            "doc_id": doc,
             "edit_target": edit_target,
             "focused": focused,
             "selection_state": selection_mode,

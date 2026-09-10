@@ -2471,7 +2471,7 @@ fn on_set_rhai_policy(
     ];
     for op in ops {
         commands.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             op,
         });
@@ -2572,7 +2572,7 @@ fn on_save_scenario(
         return;
     };
     commands.trigger(lunco_usd::ApplyUsdOps {
-        doc: scene_doc,
+        doc_id: scene_doc,
         parent_gen: None,
         label: "Save scenario source".into(),
         ops: lunco_usd::program::inline_program_source_ops(

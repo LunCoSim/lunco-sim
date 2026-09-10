@@ -145,7 +145,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                 });
                 serde_json::json!({
                     "preview": session.id().0,
-                    "doc": session.doc(),
+                    "doc_id": session.doc(),
                     "edit_target": session.edit_target().as_str(),
                     "projected_generation": session.projected_generation(),
                     "projection_ready": session.projection_ready(),
@@ -480,7 +480,7 @@ fn on_browser_usd_document_ready(
     }
     commands.trigger(OpenUsdPreview {
         preview,
-        doc,
+        doc_id: doc,
         edit_target: LayerId::root(),
     });
 }
@@ -2023,7 +2023,7 @@ pub struct OpenUsdPreview {
     /// Stable caller-owned identity of the preview session.
     pub preview: UsdPreviewId,
     /// The USD document to render.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// The authored layer to use for editor mutations made from this preview.
     pub edit_target: LayerId,
 }
@@ -2121,7 +2121,7 @@ pub struct ZoomUsdPreviewView {
 #[Command]
 pub struct ExplodeUsdPreview {
     pub preview: UsdPreviewId,
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Exact composed `kind = "assembly"` prim path.
     pub assembly: String,
     /// Exact composed prim paths below `assembly`. Rust sorts these paths for
@@ -2142,7 +2142,7 @@ pub struct ExplodeUsdPreview {
 fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
     let command = trigger.event();
     let preview = command.preview;
-    let doc = command.doc;
+    let doc = command.doc_id;
     let edit_target = command.edit_target.clone();
     commands.queue(move |world: &mut World| {
         if !world
@@ -2809,12 +2809,12 @@ fn collect_preview_explode_targets(
         let session = viewport
             .session(command.preview)
             .ok_or_else(|| format!("USD preview {} is not open", command.preview.0))?;
-        if session.doc() != command.doc {
+        if session.doc() != command.doc_id {
             return Err(format!(
                 "USD preview {} belongs to document {}, not document {}",
                 command.preview.0,
                 session.doc(),
-                command.doc
+                command.doc_id
             ));
         }
         (
@@ -3074,7 +3074,7 @@ fn execute_explode_usd_preview(
             OpId::new(),
             serde_json::json!({
                 "preview": command.preview.0,
-                "doc": command.doc,
+            "doc_id": command.doc_id,
                 "action": command.action.as_str(),
                 "assembly": assembly_path,
                 "parts": part_paths,
@@ -3183,7 +3183,7 @@ fn execute_explode_usd_preview(
         OpId::new(),
         serde_json::json!({
             "preview": command.preview.0,
-            "doc": command.doc,
+                "doc_id": command.doc_id,
             "action": command.action.as_str(),
             "assembly": assembly_path,
             "parts": part_paths,

@@ -42,7 +42,7 @@ fn find_document() {
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = query("QueryUsdPrim", #{
-                doc: item.doc_id,
+                doc_id: item.doc_id,
                 path: MISSION,
                 children: true,
             });
@@ -108,18 +108,18 @@ fn on_tick(me) {
     }
     if this.phase == 1 {
         let mission = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: MISSION,
             children: true,
         });
         let lander = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: LANDER,
             attrs: ["xformOp:translate", "xformOp:rotateXYZ"],
             children: true,
         });
         let flip = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: FLIP,
             attrs: ["xformOp:translate", "xformOp:rotateXYZ"],
             children: true,
@@ -179,17 +179,17 @@ fn on_tick(me) {
     }
     if this.phase == 2 {
         let mission = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: MISSION,
             children: true,
         });
         let lander = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: LANDER,
             children: true,
         });
         let flip = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: FLIP,
             attrs: [
                 "lunco:mission:payload", "lunco:mission:vehicle_family",
@@ -200,33 +200,33 @@ fn on_tick(me) {
             children: true,
         });
         let payload_deck = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: PAYLOAD_DECK,
             children: false,
         });
         let sensor_mast = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: SENSOR_MAST,
             children: true,
         });
         let solar_panel = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: SOLAR_PANEL,
             attrs: ["lunco:installation", "inputs:area", "inputs:efficiency"],
             children: false,
         });
         let chassis = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: CHASSIS,
             children: false,
         });
         let front_camera = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: FRONT_CAMERA,
             children: false,
         });
         let adapter = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: ADAPTER,
             attrs: [
                 "physics:localPos0", "physics:localPos1",
@@ -238,7 +238,7 @@ fn on_tick(me) {
         let wheel_contract = true;
         for i in 0..WHEELS.len() {
             let wheel = query("QueryUsdPrim", #{
-                doc: this.doc,
+                doc_id: this.doc,
                 path: WHEELS[i],
                 attrs: [
                     "physxVehicleWheelAttachment:index",

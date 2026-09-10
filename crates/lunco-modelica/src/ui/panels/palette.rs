@@ -670,7 +670,7 @@ pub(crate) fn place_component(
     world
         .commands()
         .trigger(crate::api::component::AddModelicaComponent {
-            doc: doc_id,
+            doc_id,
             class,
             type_name: def.name.clone(),
             name,

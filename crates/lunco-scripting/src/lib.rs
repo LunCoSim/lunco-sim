@@ -203,7 +203,7 @@ pub fn on_close_script_document(
     trigger: On<lunco_doc_bevy::CloseDocument>,
     mut registry: ResMut<ScriptRegistry>,
 ) {
-    registry.documents.remove(&trigger.event().doc);
+    registry.documents.remove(&trigger.event().doc_id);
 }
 
 pub struct LunCoScriptingPlugin;

@@ -95,7 +95,7 @@ fn on_tick(me) {
             }
         }
         if !ready { return; }
-        let prim = query("QueryUsdPrim", #{ doc: this.fork, path: "/DocumentIdentity/Part" });
+        let prim = query("QueryUsdPrim", #{ doc_id: this.fork, path: "/DocumentIdentity/Part" });
         this.checks.push(t_true(prim.ok != false, "fork preview resolves its USD document"));
         let wrong = assembly_edit::describe(this.modelica);
         this.checks.push(t_true(wrong.ok == false,
@@ -129,7 +129,7 @@ fn on_tick(me) {
             "closing USD fork preserves Modelica document"));
         this.checks.push(t_true(record_for(docs, this.original) != (),
             "closing USD fork preserves original document"));
-        cmd("CloseDocument", #{ doc: this.modelica });
+        cmd("CloseDocument", #{ doc_id: this.modelica });
         this.phase = 5;
         return;
     }

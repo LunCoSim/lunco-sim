@@ -26,7 +26,7 @@ use crate::state::ModelicaDocumentRegistry;
 #[Command(default)]
 pub struct SetModelInput {
     /// Document id; zero selects the documented active-document default.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Declared Modelica input name.
     pub name: String,
     /// Runtime input value.
@@ -42,7 +42,7 @@ fn on_set_model_input(
     pending: Option<Res<PendingApiRequest>>,
 ) {
     let cmd = trigger.event();
-    let doc = cmd.doc;
+    let doc = cmd.doc_id;
     let name = cmd.name.clone();
     let value = cmd.value;
     let command_id = active_id.get();
@@ -73,7 +73,7 @@ fn on_set_model_input(
     active_id: Res<ActiveCommandId>,
 ) {
     let cmd = trigger.event();
-    let doc = cmd.doc;
+    let doc = cmd.doc_id;
     let name = cmd.name.clone();
     let value = cmd.value;
     let command_id = active_id.get();
@@ -158,7 +158,7 @@ fn set_model_input_result(
             Ack::with_data(
                 OpId::new(),
                 serde_json::json!({
-                    "doc": applied_doc.raw(),
+                    "doc_id": applied_doc.raw(),
                     "name": name,
                     "value": value,
                 }),

@@ -73,12 +73,12 @@ fn on_tick(me) {
 
     if this.phase == 2 {
         let moving = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: MOVING,
             attrs: ["xformOp:translate"],
         });
         let target = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: TARGET,
             attrs: ["xformOp:translate"],
         });

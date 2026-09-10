@@ -74,7 +74,7 @@ fn on_tick(me) {
             return;
         }
         let moving = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: MOVING,
             attrs: ["xformOp:translate"],
         });

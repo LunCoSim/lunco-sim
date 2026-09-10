@@ -325,7 +325,7 @@ fn on_add_camera_here(
     }
 
     commands.trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::root(),
@@ -340,7 +340,7 @@ fn on_add_camera_here(
     // none, which a just-created Camera never does — so the op stack comes out
     // right without hand-authoring the token array.
     commands.trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         op: UsdOp::SetTranslate {
             edit_target: LayerId::root(),
@@ -350,7 +350,7 @@ fn on_add_camera_here(
     });
     let (rx, ry, rz) = euler_degrees(rot);
     commands.trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         op: UsdOp::SetRotate {
             edit_target: LayerId::root(),

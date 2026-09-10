@@ -480,7 +480,7 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.trigger(super::super::file_ops::RenameOpenDocument { doc, new_name });
+                ctx.trigger(super::super::file_ops::RenameOpenDocument { doc_id: doc, new_name });
             }
         }
         if doc_cancel {

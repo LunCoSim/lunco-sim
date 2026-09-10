@@ -224,15 +224,15 @@ impl Panel for TelemetryPanel {
             });
             if run_clicked {
                 ctx.trigger(crate::ui::commands::RunActiveModel {
-                    doc: doc_id,
+                    doc_id,
                     class: None,
                 });
             }
             if pause_clicked {
-                ctx.trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
+                ctx.trigger(crate::ui::commands::PauseActiveModel { doc_id });
             }
             if reset_clicked {
-                ctx.trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
+                ctx.trigger(crate::ui::commands::ResetActiveModel { doc_id });
             }
             ui.separator();
 
@@ -633,7 +633,7 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
     });
     if let Some(doc) = compile_doc {
         ctx.trigger(crate::ui::commands::CompileModel {
-            doc,
+            doc_id: doc,
             class: None,
             force: false,
             resume_after_compile: false,

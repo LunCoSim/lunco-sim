@@ -183,7 +183,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 }
                 world
                     .commands()
-                    .trigger(lunco_doc_bevy::CloseDocument { doc });
+                    .trigger(lunco_doc_bevy::CloseDocument { doc_id: doc });
             }
             // `BrowserAction` is `#[non_exhaustive]` upstream; future
             // variants land as warnings here, not silent drops.

@@ -74,7 +74,7 @@ viewport-specific edit/reload path.
 
 The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
-Browser opens the explicit `OpenUsdPreview { preview, doc, edit_target }`
+Browser opens the explicit `OpenUsdPreview { preview, doc_id, edit_target }`
 session and can later use `FocusUsdPreview` or `CloseUsdPreview`. A session
 owns one projected composed stage; `OpenUsdPreviewView { preview, view }`
 adds a camera/render target over that stage for another dock tab or split.
@@ -110,7 +110,7 @@ When an agent needs to answer “what is visible?” or edit the item a user has
 open, call the UI-owned `InspectUsdViewport` query (or
 `assembly_edit::viewport()`) and correlate its explicit preview/view handles
 with `CaptureScreenshot`. The query is presentation context, not a second
-document registry: use the returned `doc`, `edit_target`, and projection
+document registry: use the returned `doc_id`, `edit_target`, and projection
 generation with document inspection and typed edit commands. Never infer
 identity from a tab title, filesystem basename, entity order, or the live
 simulation viewport.
@@ -146,7 +146,7 @@ For agent or editor synchronization, call `SyncUsdDocument` with the explicit
 document generation. Use its typed delta while the cursor is covered; consume
 the returned base/runtime layer snapshot when it reports an expired history
 window. Reject future cursors. To edit a composed path, call
-`ResolveUsdTarget` with the explicit document, prim path, and `@root@` or
+`ResolveUsdTarget` with the explicit document id, prim path, and `@root@` or
 `@runtime@` target. Referenced and payloaded paths are valid only when the
 existing `CanonicalStage` is mounted; use its `edit_scope` and typed-operation
 validation rather than treating a composed read as permission to move or
@@ -164,7 +164,7 @@ library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,
 USDA writer, or operation log. `open`
 returns the normal asynchronous command acknowledgement and callers discover
 the resulting id through `ListOpenDocuments`. Read helpers require an explicit
-`doc`; authored helpers require `doc`, an edit target, and a USD path. Their
+`doc_id`; authored helpers require `doc_id`, an edit target, and a USD path. Their
 optional `parent_gen` is the existing stale-write precondition, and `batch`,
 `transform`, or a keyframe change land as typed journal/undo operations. A
 proposal requires a generation and explicit `SourceAsset`/`Assembly`/
@@ -215,7 +215,7 @@ and network replication**. Route every editor and runtime mutation through the
 same projection boundary.
 
 ```rust
-commands.trigger(ApplyUsdOp { doc, parent_gen: None, op });      // one op
+commands.trigger(ApplyUsdOp { doc_id: doc, parent_gen: None, op });      // one op
 apply_ops_as_change_set(world, doc, "Edit material", ops);       // N ops, ONE undo unit
 ```
 
@@ -227,7 +227,7 @@ Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).
 If a user would expect it to survive save-and-reload, it belongs in USD.
 
-`AttachProgram { doc, spec }` is the canonical multi-op authoring intent for a
+`AttachProgram { doc_id, spec }` is the canonical multi-op authoring intent for a
 source-backed Modelica, Python, Rhai, or behaviour-tree program. It lowers the
 complete `LunCoProgramAPI` child, source asset, scalar ports, defaults, and
 connections through this same change-set path. A palette or script must call

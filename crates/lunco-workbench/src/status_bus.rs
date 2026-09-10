@@ -790,7 +790,7 @@ pub fn clear_outcomes_on_close_document(
     trigger: On<lunco_doc_bevy::CloseDocument>,
     mut bus: ResMut<StatusBus>,
 ) {
-    bus.clear_outcomes_for(BusyScope::Document(trigger.event().doc.0));
+    bus.clear_outcomes_for(BusyScope::Document(trigger.event().doc_id.0));
 }
 
 /// Active Twin replacement is the lifetime boundary for live workbench

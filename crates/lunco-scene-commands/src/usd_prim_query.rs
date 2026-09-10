@@ -3,9 +3,9 @@
 //!
 //! ## Ownership
 //!
-//! An explicit `doc` resolves through the existing document-to-stage mapping
+//! An explicit `doc_id` resolves through the existing document-to-stage mapping
 //! and requires its synchronized generation to match the open document. Without
-//! `doc`, exactly one mounted live stage is required. Preview focus, duplicate
+//! `doc_id`, exactly one mounted live stage is required. Preview focus, duplicate
 //! prim paths, and detached cached stages never choose the query target.
 //!
 //! ## Why a query provider and not a rhai binding
@@ -38,7 +38,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "/Hab1/ShieldWall/OuterSurface"}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
-//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc": 7, "path": "…", "collision_bounds": true}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_bounds": true}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is
@@ -130,7 +130,7 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-/// `QueryUsdPrim { doc?, path, attrs?, rels?, children?, collision_bounds? }`
+/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds? }`
 /// → composed attributes, requested relationships, optional direct children,
 /// optional aggregate collision bounds, and world pose.
 pub struct QueryUsdPrimProvider;
@@ -180,11 +180,11 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        let doc = if params.get("doc").is_some() {
-            let Some(raw) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+        let doc = if params.get("doc_id").is_some() {
+            let Some(raw) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
                 return ApiResponse::error(
                     ApiErrorCode::DeserializationError,
-                    "QueryUsdPrim: doc must be an explicit numeric document id",
+                    "QueryUsdPrim: doc_id must be an explicit numeric document id",
                 );
             };
             Some(DocumentId::new(raw))
@@ -233,7 +233,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         if doc.is_none() && live_stages.len() != 1 {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
-                "QueryUsdPrim: exactly one mounted live stage is required; pass doc for an Editor document",
+                "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
             );
         }
         let live_stage = live_stages.drain().next();
@@ -381,7 +381,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             "spawned": spawned.is_some(),
         });
         if let Some(doc) = doc {
-            out["doc"] = serde_json::json!(doc);
+            out["doc_id"] = serde_json::json!(doc);
             out["generation"] = serde_json::json!(generation);
             if let Some(position) = authored_position {
                 out["world_position"] = serde_json::json!([position.x, position.y, position.z]);

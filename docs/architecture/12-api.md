@@ -77,17 +77,17 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
 | `ListMsl` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list the Modelica Standard Library (MSL). |
-| `ListCompileCandidates` | `{"doc": u64}` | List all non-package classes in a document that can be compiled. |
-| `QueryExperimentBounds` | `{"doc": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |
-| `CompileStatus` | `{"doc": u64}` | Get the current compilation and run state of a document. |
+| `ListCompileCandidates` | `{"doc_id": u64}` | List all non-package classes in a document that can be compiled. |
+| `QueryExperimentBounds` | `{"doc_id": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |
+| `CompileStatus` | `{"doc_id": u64}` | Get the current compilation and run state of a document. |
 | `RunStatus` | `{"experiment_id": string}` | Get the status of a specific simulation run. |
-| `ListRuns` | `{"doc": u64?}` | List all simulation runs, optionally filtered by document. |
+| `ListRuns` | `{"doc_id": u64?}` | List all simulation runs, optionally filtered by document. |
 | `GetExperimentResult` | `{"experiment_id": string, "max_points": u64?}` | Retrieve trajectory data (timeseries) for a completed run. |
-| `GetDocumentSource` | `{"doc": u64}` | Get the raw source code of a document (Modelica only). |
-| `DescribeModel` | `{"doc": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
-| `SnapshotVariables` | `{"doc": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
+| `GetDocumentSource` | `{"doc_id": u64}` | Get the raw source code of a document (Modelica only). |
+| `DescribeModel` | `{"doc_id": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
+| `SnapshotVariables` | `{"doc_id": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, MSL, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
-| `GetShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
+| `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
 
@@ -191,7 +191,7 @@ impl Plugin for ModelicaCommandsPlugin {
 
 ### Field types
 
-- **`DocumentId`** is `Reflect`-derived in `lunco-doc` — use the typed `DocumentId` directly in command fields. **Never `u64` shims.** The HTTP-wire `{"doc": 1}` auto-converts via reflection.
+- **`DocumentId`** is `Reflect`-derived in `lunco-doc` — use the typed `DocumentId` directly in command fields. **Never `u64` shims.** The HTTP-wire `{"doc_id": 1}` auto-converts via reflection.
 - New domain identifier types should derive `Reflect` for the same reason. Adding `bevy_reflect = "0.18"` to a leaf crate is cheap (no renderer / ECS deps).
 
 ### Anti-patterns (do not do this)
@@ -206,7 +206,7 @@ pub struct Foo { … }
 app.register_type::<Foo>().add_observer(on_foo);
 
 // ✗ Threading u64 doc-ids through commands to dodge a Reflect requirement
-pub struct Foo { pub doc: u64 }   // use DocumentId
+pub struct Foo { pub doc_id: u64 }   // use DocumentId
 ```
 
 ### When NOT to use `#[Command]`

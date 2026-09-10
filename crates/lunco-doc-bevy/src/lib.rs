@@ -239,7 +239,7 @@ impl DocumentSaved {
 #[Command(default)]
 pub struct UndoDocument {
     /// The document whose most recent history group should be undone.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Request to redo the last undone history group on the document.
@@ -248,7 +248,7 @@ pub struct UndoDocument {
 #[Command(default)]
 pub struct RedoDocument {
     /// The document whose most recent undone history group should be re-applied.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Request to persist the document's current source to disk.
@@ -265,7 +265,7 @@ pub struct RedoDocument {
 #[Command(default)]
 pub struct SaveDocument {
     /// The document to persist.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Request the owning domain persist the document **to a new location**.
@@ -287,7 +287,7 @@ pub struct SaveDocument {
 #[Command(default)]
 pub struct SaveAsDocument {
     /// The document to persist.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Target path. Empty triggers the picker.
     pub path: String,
 }
@@ -302,7 +302,7 @@ pub struct SaveAsDocument {
 #[Command(default)]
 pub struct CloseDocument {
     /// The document to close.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Fork an open file-backed document into an independently editable untitled
@@ -315,7 +315,7 @@ pub struct CloseDocument {
 #[Command(default)]
 pub struct ForkDocument {
     /// Existing document to snapshot.
-    pub source: DocumentId,
+    pub source_doc_id: DocumentId,
     /// Untitled name shown until Save-As.
     pub name: String,
 }
@@ -329,7 +329,7 @@ pub struct ForkDocument {
 #[Command(default)]
 pub struct DiscardDocument {
     /// The document whose local edits should be discarded.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Create a new untitled document of the given kind.
