@@ -467,13 +467,11 @@ pub fn on_spawn_entity_command(
         SpawnAnchor::scene_root(scene_root),
     );
 
-    // Networked identity (gap G2): a runtime instance gets a server-allocated
-    // unique id (SkipContentStamp → assign_global_entity_ids mints
-    // Authoritative, never colliding `Content`), is marked for transform
-    // replication, and records what to replicate so the host can broadcast the
-    // spawn to clients.
+    // Networked identity (gap G2): `spawn_usd_entry` already carries the shared
+    // runtime identity fence, so this caller only adds its replication contract
+    // and the host's spawn journal. Keeping the fence in the constructor is
+    // what makes palette spawns and runtime waypoint markers identical.
     commands.entity(result.root_entity).try_insert((
-        lunco_core::SkipContentStamp,
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
             entry_id: cmd.entry_id.clone(),
@@ -562,11 +560,11 @@ pub fn apply_replicated_spawns(
             local_rotation.as_quat(),
             SpawnAnchor::scene_root(scene_root),
         );
-        // Pin the host id; mark runtime instance + replication target. Forced
-        // Kinematic by `force_kinematic_proxies` so snapshots drive it.
+        // Pin the host id; the shared constructor already suppresses content
+        // identity and marks the instance root. Forced Kinematic by
+        // `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).try_insert((
             lunco_core::GlobalEntityId::from_raw(job.gid),
-            lunco_core::SkipContentStamp,
             lunco_core::NetReplicate,
         ));
     }

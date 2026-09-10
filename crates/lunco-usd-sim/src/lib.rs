@@ -565,7 +565,6 @@ impl Plugin for UsdSimPlugin {
             // skips the system entirely on frames with no unprocessed
             // USD prim (archetype-level check, near-zero cost).
             .init_resource::<GroundColliderPending>()
-            .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
             .init_resource::<physics_telemetry::PhysicsTelemetryState>()
             .add_systems(
@@ -592,12 +591,9 @@ impl Plugin for UsdSimPlugin {
                 )
                     .in_set(UsdSimSet::Projection),
             );
-        // Dynamic admission must happen before the fixed loop.  The main loop runs
-        // FixedUpdate before Update, so admitting a body from Update gives it one
-        // live solver tick at its authored loading pose before the terrain placement
-        // pass can observe it.  USD projection still publishes `ShouldBeDynamic` in
-        // Update; this pre-fixed pass consumes it on the following frame, after the
-        // terrain readiness state is authoritative.
+        // Dynamic admission must happen before the fixed loop. The body remains
+        // kinematic until the initialization policy has accepted its composed
+        // authored state; no terrain system can move it across this boundary.
         app.add_systems(
             PreUpdate,
             activate_dynamic_bodies
@@ -1406,6 +1402,47 @@ fn process_usd_sim_prim_read(
         commands
             .entity(entity)
             .try_insert(lunco_core::ArticulatedLink);
+    }
+    // Initialization is a pre-admission policy, not an implicit terrain
+    // placement algorithm. The default is installed by the USD→Avian body owner;
+    // this optional authored override only selects a named Twin policy. An
+    // invalid value is retained as an error and leaves the body pending — it
+    // is never replaced with a built-in policy.
+    if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
+        commands
+            .entity(entity)
+            .try_remove::<lunco_physics::PhysicsInitializationInvalid>();
+    }
+    if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI")
+        && reader.has_authored_attribute(&sdf_path, "lunco:physics:initializationPolicy")
+    {
+        match reader
+            .text(&sdf_path, "lunco:physics:initializationPolicy")
+            .and_then(|name| lunco_physics::PhysicsInitializationPolicy::new(name).ok())
+        {
+            Some(policy) => {
+                commands.entity(entity).try_insert(policy);
+            }
+            None => {
+                commands.entity(entity).try_insert(
+                    lunco_physics::PhysicsInitializationInvalid,
+                );
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "physics-initialization-policy",
+                    "lunco:physics:initializationPolicy must be a non-empty token or string without whitespace",
+                );
+                warn!(
+                    "USD prim {} has malformed `lunco:physics:initializationPolicy`; dynamic admission remains held",
+                    prim_path.path
+                );
+            }
+        }
+    } else if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
+        commands.entity(entity).try_insert(
+            lunco_physics::PhysicsInitializationPolicy::default(),
+        );
     }
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
@@ -3865,17 +3902,9 @@ fn resolve_differential_coupling(
 #[derive(Resource, Default)]
 pub struct GroundColliderPending(pub bool);
 
-/// Raised for the frame boundary in which authored bodies become dynamic after
-/// terrain loading. Terrain observes dynamic bodies in `Update`, while physics
-/// can run in the fixed loop between updates; the application assembly clears
-/// this only after the terrain gate has evaluated that promoted set.
-#[derive(Resource, Default)]
-pub struct GroundActivationInFlight(pub u8);
-
 fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
-    mut activation: ResMut<GroundActivationInFlight>,
     q_kinematic: Query<
         (
             Entity,
@@ -3883,7 +3912,11 @@ fn activate_dynamic_bodies(
             Option<&AuthoredInitialVelocity>,
             Option<&avian3d::prelude::RigidBodyDisabled>,
         ),
-        With<ShouldBeDynamic>,
+        (
+            With<ShouldBeDynamic>,
+            Without<lunco_physics::PhysicsInitializationPending>,
+            Without<lunco_physics::PhysicsInitializationInvalid>,
+        ),
     >,
     q_pending_joints: Query<
         (&UsdPrimPath, &lunco_usd_avian::PendingUsdJoint),
@@ -3903,11 +3936,6 @@ fn activate_dynamic_bodies(
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     topology_index: Res<JointTopologyIndex>,
     mut binding_epoch: ResMut<crate::cosim::BindingEpochDirty>,
-    // Physical wheels arm their joint-connected assembly for one-time
-    // drop-onto-terrain placement. Free dynamic bodies (balloons, etc.) must
-    // not be pinned to the ground. Probe-based models publish their own
-    // `PhysicsSupportFootprint` and placement policy from their physics owner.
-    q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
     // pass runs in Update. A body may not become dynamic until every authored
@@ -4010,29 +4038,15 @@ fn activate_dynamic_bodies(
                 .entity(entity)
                 .try_remove::<AuthoredInitialVelocity>();
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
-            // A physical wheel is part of the chassis' joint-connected assembly,
-            // so marking it moves the whole vehicle as one.
-            if q_wheel.contains(entity) {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_core::NeedsGroundSettle);
-            }
             promoted = true;
         }
     }
     if promoted {
-        // The assembly root owns the ground-activation hold. This projector only
-        // publishes the promotion boundary; a second physics-hold writer here
-        // made the release order depend on plugin insertion order.
         // Promotion publishes the authored physical initial condition through
         // deferred component insertion. Reopen the co-sim binding epoch so the
         // next sealed pass seeds every already-valid sensor/actuator wire from
         // that finalized state rather than retaining its pre-admission zero.
         binding_epoch.0 = true;
-        // Two Update passes: this one spans deferred insertion of Dynamic, the
-        // next lets the terrain ring observe that inserted body before its
-        // dedicated hold becomes the only gate.
-        activation.0 = 2;
     }
 }
 
@@ -4194,7 +4208,6 @@ mod dynamic_activation_tests {
     fn pending_typed_joint_keeps_only_its_bodies_kinematic_until_admission() {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
-            .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
             .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
@@ -4260,7 +4273,6 @@ mod dynamic_activation_tests {
     fn authored_joint_topology_holds_bodies_before_joint_observer_state_lands() {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
-            .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
             .init_resource::<crate::cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);

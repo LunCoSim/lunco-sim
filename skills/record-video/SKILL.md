@@ -60,6 +60,10 @@ target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps
 - `--offscreen --api PORT` (without `--record-offline`) gives a windowless
   interactive instance: `StartOfflineRecording` / `CaptureScreenshot` work over
   HTTP and read the offscreen target.
+- Terrain appearance fixtures keep the DEM's authored elevation datum. Author
+  the presentation camera near that datum; a camera aimed at elevation zero can
+  validly cull every terrain tile. The terrain graphics gate also checks the
+  full PNG and far/middle/near bands for real relief, not just file creation.
 
 ## Scripted episodes (rhai)
 

@@ -189,6 +189,12 @@ fn apply_usd_shader_material_read(
     // `twin://<name>` the stage itself was loaded from); already-schemed paths
     // pass through. A scene from Bevy's default source has no root to resolve
     // against — those inputs warn and skip rather than guess.
+    //
+    // The role also owns the image transfer contract. Albedo and mineral maps
+    // are color data and must be decoded from sRGB to linear before WGSL uses
+    // them. Surface, normal, and shadow maps carry encoded/scalar data; treating
+    // those PNGs as sRGB changes their values before the shader decodes them
+    // (notably turning a neutral encoded normal into a downward-facing one).
     let mut textures: BTreeMap<TextureLayer, Handle<Image>> = BTreeMap::new();
     for (layer, authored) in read_shader_texture_inputs(reader, &shader_prim) {
         let uri = if authored.contains("://") {
@@ -204,7 +210,16 @@ fn apply_usd_shader_material_read(
             };
             format!("{base}/{authored}")
         };
-        textures.insert(layer, asset_server.load(&uri));
+        let is_srgb = texture_layer_is_srgb(layer);
+        textures.insert(
+            layer,
+            asset_server
+                .load_builder()
+                .with_settings(move |settings: &mut bevy::image::ImageLoaderSettings| {
+                    settings.is_srgb = is_srgb;
+                })
+                .load::<Image>(uri),
+        );
     }
     // No platform swap: the terrain shaders are one file per family now. What used
     // to justify a `_web` twin — 2D vs 3D noise and a halved octave budget — lives
@@ -524,6 +539,16 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
     }
 }
 
+/// Color-space defaults for the fixed shader texture roles.
+///
+/// This is a role contract, not a filename or extension heuristic: a PNG can
+/// carry a normal or packed scalar map just as readily as it can carry albedo.
+/// The shader receives linear samples for every role; only the two color layers
+/// need the image loader's sRGB-to-linear decode.
+fn texture_layer_is_srgb(layer: TextureLayer) -> bool {
+    matches!(layer, TextureLayer::Albedo | TextureLayer::Mineral)
+}
+
 /// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, authored
 /// path)` pairs. CONNECTED inputs are skipped for the same reason as in
 /// [`read_shader_inputs`] — a connected port is fed by a producer node
@@ -645,5 +670,14 @@ def Xform "World"
             !driven_shader_inputs(&view, &driven, &shader).is_empty(),
             "load_frac IS declared by the shader, so this prim needs a private material"
         );
+    }
+
+    #[test]
+    fn shader_texture_roles_preserve_data_map_values() {
+        assert!(texture_layer_is_srgb(TextureLayer::Albedo));
+        assert!(texture_layer_is_srgb(TextureLayer::Mineral));
+        assert!(!texture_layer_is_srgb(TextureLayer::Surface));
+        assert!(!texture_layer_is_srgb(TextureLayer::Normal));
+        assert!(!texture_layer_is_srgb(TextureLayer::ShadowCache));
     }
 }

@@ -560,9 +560,23 @@ write via temp-file + rename — a kill mid-write can't corrupt the
 file. A corrupt file silently falls back to empty recents on next
 boot.
 
+### 9a.1 Scenario registry failure presentation
+
+The Scenarios menu owns only presentation. If `TwinRoots`, the shared asset
+manifest, or scene discovery is unavailable, it renders the concise
+`Scenarios unavailable` state and sends the full cause through the existing
+`StatusBus` Recent-status reader. The UI does not remove or replace the active
+Twin to manufacture that failure.
+
+The windowed production harness exposes the explicit typed
+`SetScenarioRegistryFixture { unavailable }` command. It toggles a transient
+UI-owned fixture resource, so acceptance can exercise the real menu and status
+path without mutating `TwinRoots` or scene data. Its default is disabled and
+`unavailable: false` restores normal discovery.
+
 ### 9b. Settings (`lunco-settings`)
 
-User preferences (perf HUD on/off, editor word-wrap, palette filters,
+User preferences (HUD visibility, editor word-wrap, palette filters,
 …) persist to a single `<OS config dir>/lunco/settings.json` via the
 `lunco-settings` crate. Layouts and recents stay separate by design
 — layouts are TOML and high-structure, recents are high-churn list
@@ -598,6 +612,14 @@ UI surfaces the same resource three ways — a named Settings submenu row
 (`WorkbenchLayout::register_settings_submenu`), a typed `#[Command]` for
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
+
+LunCoSim's Settings ▸ HUD submenu is the discoverable view for the shipped
+visibility controls. It edits the existing `OverlaySettings`, `PerfHudSettings`,
+and `InputOverlaySettings` resources and the active Twin's generic
+`ui.camera_status` value; it does not add a parallel visibility map. HUDs whose
+visibility is inherently automatic — driven-vessel/rover, authored lander
+controls, terrain or download progress, tutorials, notifications, and blackout
+state — are listed with their owner but remain lifecycle-controlled.
 
 Settings submenus are content-sized in both axes, capped at 640 logical px in
 width and 24 interaction rows in height. They become vertically scrollable
@@ -661,7 +683,8 @@ crates):
 | `modelica.canvas.add` | `lunco-modelica` | Auto-focus behaviour on AddComponent (None / Center / FitVisible), batch debounce window |
 | `modelica.canvas.collab` | `lunco-modelica` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
 | `modelica.editor` | `lunco-modelica` | Source editor word-wrap, tab width, auto-format-on-save |
-| `perf_hud` | `lunco-workbench` | Spike threshold, plot rolling window, Twin overlay toggles |
+| `perf_hud` | `lunco-workbench` | Performance HUD visibility and live status-bar diagnostics |
+| `input_overlay` | `lunco-workbench` | Input HUD visibility for recording and observation |
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |

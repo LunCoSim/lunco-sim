@@ -32,6 +32,8 @@ use lunco_usd_bevy::{scene_root_ancestor, CanonicalStages, SdfPath, UsdStageAsse
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
+const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
+
 /// Optional progress resources projected into generic runtime surfaces.
 ///
 /// The values stay domain-neutral after this boundary: HUI and egui consumers
@@ -727,6 +729,7 @@ mod exposure_tests {
     fn lunar_map_projection_wraps_longitude_and_places_lunar_marker() {
         let projection = project_lunar_map(
             true,
+            true,
             Some(301),
             Some(lunar_surface_pose(lunco_celestial::Geodetic::new(
                 45.0, 180.0, 12.0,
@@ -744,15 +747,22 @@ mod exposure_tests {
 
     #[test]
     fn lunar_map_projection_hides_marker_without_a_valid_lunar_surface_pose() {
-        let orbit = project_lunar_map(true, Some(301), None);
+        let orbit = project_lunar_map(true, true, Some(301), None);
         assert_eq!(orbit.display, "flex");
         assert_eq!(orbit.status, "AWAITING LUNAR FIX");
         assert_eq!(orbit.marker_display, "none");
 
-        let no_moon = project_lunar_map(false, None, None);
-        assert_eq!(no_moon.display, "none");
-        assert_eq!(no_moon.status, "MOON UNAVAILABLE");
-        assert_eq!(no_moon.marker_display, "none");
+        let hidden = project_lunar_map(
+            false,
+            true,
+            Some(301),
+            Some(lunar_surface_pose(lunco_celestial::Geodetic::new(
+                45.0, 180.0, 12.0,
+            ))),
+        );
+        assert_eq!(hidden.display, "none");
+        assert_eq!(hidden.status, "MOON UNAVAILABLE");
+        assert_eq!(hidden.marker_display, "none");
     }
 
     #[test]
@@ -941,6 +951,7 @@ pub(crate) fn mark_exposure_dirty(
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
     scene_mount: Res<SceneMountState>,
     overlays: RuntimeOverlayInputs,
@@ -956,7 +967,11 @@ pub(crate) fn mark_exposure_dirty(
         || !q_autopilot.is_empty();
 
     let schema_changed = selected.is_changed();
-    let celestial_changed = !q_bodies.is_empty() || orbital_pin.is_some_and(|pin| pin.is_changed());
+    let celestial_changed = !q_bodies.is_empty()
+        || orbital_pin.is_some_and(|pin| pin.is_changed())
+        || workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.is_changed());
     let authored_changed = stage_revision.is_some_and(|revision| revision.is_changed());
     let scene_mount_changed = scene_mount.is_changed();
 
@@ -1119,6 +1134,7 @@ pub(crate) fn publish_exposure(
     trace_inputs: SeminarTraceInputs,
     mut seminar: Local<SeminarExposureTrace>,
     mut control_roots: Local<ControlRootCache>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
 ) {
     if let Some(overlay) = overlays.overlay.as_deref() {
@@ -1299,6 +1315,7 @@ pub(crate) fn publish_exposure(
             &runtime.local_avatar,
             &queries.avatar,
             &geo.surface_pose,
+            workspace.as_deref(),
         );
     }
     if update_overlay {
@@ -1313,6 +1330,7 @@ fn publish_celestial_capability(
     local_avatar: &TheLocalAvatar,
     avatars: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     surface_pose: &lunco_celestial::SurfacePoseQuery,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
     let mut moon = false;
     let mut earth = false;
@@ -1329,7 +1347,12 @@ fn publish_celestial_capability(
         .0
         .and_then(|avatar| avatars.get(avatar).ok())
         .and_then(|controller| surface_pose.get(controller.vessel_entity));
-    let lunar_map = project_lunar_map(moon, active_body, local_surface_pose);
+    let lunar_map = project_lunar_map(
+        twin_setting_is_enabled(workspace, LUNAR_MAP_SETTING_KEY),
+        moon,
+        active_body,
+        local_surface_pose,
+    );
     let mut ui = exposures.writer("celestial-view");
     ui.visible(moon || earth);
     ui.property("body_moon_present", moon);
@@ -1362,22 +1385,47 @@ struct LunarMapProjection {
     marker_top: String,
 }
 
+impl LunarMapProjection {
+    fn hidden() -> Self {
+        Self {
+            display: "none",
+            status: "MOON UNAVAILABLE",
+            coordinates: "—".into(),
+            altitude: "—".into(),
+            marker_display: "none",
+            marker_left: "0%".into(),
+            marker_top: "0%".into(),
+        }
+    }
+}
+
+fn twin_setting_is_enabled(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    key: &str,
+) -> bool {
+    let Some(workspace) = workspace else {
+        return false;
+    };
+    let Some(twin_id) = workspace.active_twin else {
+        return false;
+    };
+    matches!(
+        workspace
+            .twin(twin_id)
+            .and_then(|twin| twin.manifest.as_ref())
+            .and_then(|manifest| manifest.setting(key)),
+        Some(lunco_twin::TwinSettingValue::Bool(true))
+    )
+}
+
 fn project_lunar_map(
+    map_visible: bool,
     moon_present: bool,
     active_body: Option<i32>,
     pose: Option<lunco_celestial::SurfacePose>,
 ) -> LunarMapProjection {
-    let hidden = LunarMapProjection {
-        display: "none",
-        status: "MOON UNAVAILABLE",
-        coordinates: "—".into(),
-        altitude: "—".into(),
-        marker_display: "none",
-        marker_left: "0%".into(),
-        marker_top: "0%".into(),
-    };
-    if !moon_present {
-        return hidden;
+    if !map_visible || !moon_present {
+        return LunarMapProjection::hidden();
     }
 
     let Some(pose) = pose else {

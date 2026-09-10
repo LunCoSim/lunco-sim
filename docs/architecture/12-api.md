@@ -252,6 +252,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `AddTwin` | Add an existing Twin folder to the workspace. |
 | **System** | `SetTheme` | Switch between Dark and Light modes. |
 | | `TogglePerfHud` | Show/hide the performance overlay. |
+| **Test harness** | `SetScenarioRegistryFixture` | Explicitly exercise the Scenarios-unavailable presentation without mutating Twin data. |
 | | `RunPython` | Execute a Python script snippet. |
 
 ### Example: Drive a Rover

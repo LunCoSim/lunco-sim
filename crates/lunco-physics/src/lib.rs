@@ -58,8 +58,11 @@ pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
-    PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
-    PhysicsSupportSet,
+    evaluate_initialization_policy, PhysicsInitializationExternalValidator,
+    PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
+    PhysicsInitializationSubject, PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact,
+    PhysicsSupportFootprint, PhysicsSupportSet, PHYSICS_INITIALIZATION_HOOK_PREFIX,
+    STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -628,11 +631,6 @@ pub struct PhysicsHolds {
 impl PhysicsHolds {
     /// Terrain DEM build / collider-ring warm-up (`lunco-terrain-surface`).
     pub const TERRAIN_READY: &'static str = "terrain-ready";
-    /// A body was promoted from its authored kinematic loading pose to Dynamic.
-    /// This one-frame bridge prevents a freshly promoted rover from stepping in
-    /// the fixed loop before the terrain ring has observed the new body and made
-    /// its collider live beneath it.
-    pub const GROUND_ACTIVATION: &'static str = "ground-activation";
     /// Something the world needs is not ready yet — a scene still composing, a
     /// program still compiling. Raised from [`lunco_readiness`] by
     /// [`readiness::apply_world_readiness_hold`]; the *scope* of a wait (world vs
@@ -1192,6 +1190,82 @@ fn project_prismatic_angular_velocity(
     }
 }
 
+/// Admit a finite authored pose in a scene with no domain-specific surface
+/// validator. Terrain installs the external-validator flag and owns the richer
+/// support/penetration check instead.
+fn validate_surface_independent_initialization(
+    external_validator: Res<PhysicsInitializationExternalValidator>,
+    q_pending: Query<
+        (
+            Entity,
+            &Position,
+            &Rotation,
+            Option<&PhysicsInitializationPolicy>,
+            Option<&PhysicsInitializationSubject>,
+        ),
+        (
+            With<PhysicsInitializationPending>,
+            Without<PhysicsInitializationInvalid>,
+            With<PhysicsPoseSeeded>,
+        ),
+    >,
+    mut commands: Commands,
+    mut diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
+) {
+    if external_validator.0 {
+        return;
+    }
+    let mut findings = Vec::new();
+    for (entity, position, rotation, policy, subject) in &q_pending {
+        let subject = subject
+            .map(|subject| subject.0.as_str())
+            .unwrap_or("<unidentified physics body>");
+        let policy = policy.cloned().unwrap_or_default();
+        if !position.0.is_finite() || !rotation.0.is_finite() {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-non-finite".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "physics-initialization".to_string(),
+                subject: subject.to_string(),
+                message: "authored initial position or rotation is non-finite; dynamic admission remains held".to_string(),
+            });
+            continue;
+        }
+        let facts = lunco_hooks::HookValue::map([
+            ("subject", lunco_hooks::HookValue::str(subject)),
+            ("policy", lunco_hooks::HookValue::str(policy.0.clone())),
+            (
+                "entity",
+                lunco_hooks::HookValue::Int(entity.to_bits() as i64),
+            ),
+            (
+                "position",
+                lunco_hooks::HookValue::Array(
+                    [position.0.x, position.0.y, position.0.z]
+                        .into_iter()
+                        .map(lunco_hooks::HookValue::Float)
+                        .collect(),
+                ),
+            ),
+        ]);
+        match evaluate_initialization_policy(&policy, facts) {
+            Ok(()) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<PhysicsInitializationPending>();
+            }
+            Err(message) => findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-policy".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "physics-initialization".to_string(),
+                subject: subject.to_string(),
+                message,
+            }),
+        }
+    }
+    diagnostics.replace_producer("physics-initialization", findings);
+}
+
 /// Installs the physics readiness gate. Add wherever `avian3d`'s `PhysicsPlugins`
 /// are added — whoever owns physics owns its gate.
 pub struct PhysicsGatePlugin;
@@ -1199,7 +1273,11 @@ pub struct PhysicsGatePlugin;
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
-        app.register_type::<PhysicsSupportFootprint>()
+        app.register_type::<PhysicsInitializationPolicy>()
+            .register_type::<PhysicsInitializationPending>()
+            .register_type::<PhysicsInitializationInvalid>()
+            .register_type::<PhysicsInitializationSubject>()
+            .register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()
             .configure_sets(
                 Update,
@@ -1221,7 +1299,14 @@ impl Plugin for PhysicsGatePlugin {
             // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsHolds>()
+            .init_resource::<PhysicsInitializationExternalValidator>()
             .init_resource::<PhysicsStepRequest>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_systems(
+                Update,
+                validate_surface_independent_initialization
+                    .in_set(PhysicsSupportSet::Consume),
+            )
             .add_systems(PreUpdate, apply_physics_holds)
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
@@ -1283,6 +1368,69 @@ mod tests {
             DEFAULT_SUBSTEP_COUNT
         );
         assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
+    }
+
+    #[test]
+    fn terrain_free_scene_admits_finite_authored_pose_without_rewriting_it() {
+        let mut app = App::new();
+        app.init_resource::<PhysicsInitializationExternalValidator>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_systems(Update, validate_surface_independent_initialization);
+        let authored = DVec3::new(3.0, 42.0, -7.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Position(authored),
+                Rotation(DQuat::IDENTITY),
+                PhysicsPoseSeeded,
+                PhysicsInitializationPending,
+                PhysicsInitializationPolicy::default(),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(app.world().get::<Position>(entity).unwrap().0, authored);
+        assert!(app
+            .world()
+            .get::<PhysicsInitializationPending>(entity)
+            .is_none());
+    }
+
+    #[test]
+    fn non_finite_authored_pose_is_reported_and_remains_pending() {
+        let mut app = App::new();
+        app.init_resource::<PhysicsInitializationExternalValidator>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_systems(Update, validate_surface_independent_initialization);
+        let authored = DVec3::new(f64::NAN, 42.0, -7.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Position(authored),
+                Rotation(DQuat::IDENTITY),
+                PhysicsPoseSeeded,
+                PhysicsInitializationPending,
+                PhysicsInitializationPolicy::default(),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app
+            .world()
+            .get::<PhysicsInitializationPending>(entity)
+            .is_some());
+        assert_eq!(
+            app.world().resource::<lunco_core::RuntimeDiagnostics>().findings,
+            vec![lunco_core::RuntimeDiagnostic {
+                code: "physics-initialization-non-finite".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "physics-initialization".into(),
+                subject: "<unidentified physics body>".into(),
+                message: "authored initial position or rotation is non-finite; dynamic admission remains held".into(),
+            }]
+        );
     }
 
     #[test]

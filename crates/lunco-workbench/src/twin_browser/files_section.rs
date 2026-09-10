@@ -674,6 +674,7 @@ impl BrowserSection for FilesSection {
                     twin_root: twin_root.to_string_lossy().into_owned(),
                     relative_path: relative_path.to_string_lossy().into_owned(),
                     pinned,
+                    focus: None,
                 });
             }
         }

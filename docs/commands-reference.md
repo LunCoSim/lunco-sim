@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**216 commands** across **27** crates. All documented.
+**217 commands** across **27** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -94,7 +94,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`lunco-assets`](#lunco-assets) (2 commands)
-- [`lunco-luncosim`](#lunco-luncosim) (2 commands)
+- [`lunco-luncosim`](#lunco-luncosim) (3 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workspace`](#lunco-workspace) (7 commands)
@@ -104,6 +104,18 @@ actually call, with the fields the deserializer actually accepts. See the
 ## Scene editing & authoring
 
 ### `lunco-luncosim-edit` <a id="lunco-luncosim-edit"></a>
+
+#### `AcquireDiagnosticVisual`
+
+ Acquire one explicit camera or collider diagnostic.
+
+- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  Stable entity address.  The API bridge accepts the entity's `api_id`. |
+| `kind` | `String` |  `camera` or `collider`. |
+| `policy` | `String` |  Presentation policy.  The initial implementation accepts `default`. |
 
 #### `AddCameraHere`
 
@@ -131,6 +143,16 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-luncosim-edit/src/ui/waypoint_click.rs`
 - *fields:* none — call with `CancelWaypointEdit` (no params)
 
+#### `ReleaseDiagnosticVisual`
+
+ Release one opaque diagnostic lease.
+
+- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `lease` | `u64` |  Opaque handle returned by `AcquireDiagnosticVisual`. |
+
 #### `SelectEntity`
 
  Select an entity by API id — the headless/scriptable equivalent of a
@@ -150,7 +172,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. `0` clears the selection. |
 | `extend` | `bool` |  If true, maintains the previous selection and adds this entity to it (like Shift-click) |
 | `toggle` | `bool` |  If true, toggles the selection state of the entity (like Cmd/Ctrl-click) |
-| `remove_only` | `bool` |  If true, removes this entity without adding it (like Ctrl+Left-click) |
+| `remove_only` | `bool` |  If true, removes this entity without adding it when it is not selected  (the Ctrl+Left-click viewport intent). |
 
 #### `SelectUsdPrim`
 
@@ -201,44 +223,18 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `vessel` | `Entity` |  The vessel entity to toggle autopilot on/off. |
 
-#### `AcquireDiagnosticVisual`
-
- Acquire one explicit camera or runtime-collider diagnostic lease. The API
- bridge resolves the stable target `api_id`; the returned `lease_id` is opaque.
- Repeating the same target/kind/policy is idempotent.
-
-- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Entity` |  Explicit camera or collider entity. |
-| `kind` | `String` |  `camera` or `collider`. |
-| `policy` | `String` |  Optional `default` presentation policy. |
-
-#### `ReleaseDiagnosticVisual`
-
- Release an opaque temporary diagnostic lease. Releasing an already-released
- or stale handle returns a visible command failure.
-
-- *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `lease` | `u64` |  Opaque lease id from `AcquireDiagnosticVisual`. |
-
 #### `UpdateDiagnosticVisual`
 
- Update an existing explicit diagnostic lease in place. Unchanged updates do
- not rebuild the diagnostic snapshot or create another overlay.
+ Replace the target/kind/policy of one lease without creating a second one.
 
 - *defined in:* `crates/lunco-luncosim-edit/src/diagnostic_visuals.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `lease` | `u64` |  Opaque lease id from `AcquireDiagnosticVisual`. |
-| `target` | `GlobalEntityId` |  Optional replacement stable `api_id`; omitted to keep the current target. |
-| `kind` | `String` |  Optional replacement kind. |
-| `policy` | `String` |  Optional replacement `default` policy. |
+| `lease` | `u64` |  Opaque handle returned by `AcquireDiagnosticVisual`. |
+| `target` | `Option < GlobalEntityId >` |  Optional replacement target. |
+| `kind` | `Option < String >` |  Optional replacement kind. |
+| `policy` | `Option < String >` |  Optional replacement policy. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 
@@ -2251,6 +2247,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `twin_root` | `String` |  Absolute root of the already-open Twin. |
 | `relative_path` | `String` |  File path relative to that root. |
 | `pinned` | `bool` |  Keep the file open when another preview is selected. |
+| `focus` | `Option<bool>` |  Whether to focus the source tab; omitted keeps the normal focused-source behavior. USD's paired text companion passes `false` so Visual preview remains focused. |
 
 #### `RenameOpenDocument`
 
@@ -3416,6 +3413,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | `source` | `String` |  The rhai source defining `entry` (+ helpers). |
 | `deterministic` | `bool` |  Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)  must be `true`; the host-only authorize gate may be `false`. |
 
+#### `SetScenarioRegistryFixture`
+
+ Toggle the explicit production-harness failure fixture.
+
+ This command is intentionally narrow: it changes only the menu's
+ presentation fixture and leaves every Twin/scene resource untouched. The
+ default `false` state has no effect on ordinary production runs.
+
+- *defined in:* `crates/lunco-luncosim/src/ui/scenario_fixture.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `unavailable` | `bool` |  `true` injects the unavailable state; `false` restores normal discovery. |
+
 ### `lunco-telemetry` <a id="lunco-telemetry"></a>
 
 #### `ControlTelemetry`
@@ -3558,7 +3569,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 216 commands from the runtime schema; scanned 685 .rs files for docs (0 parse failure(s) skipped).
+<!-- 217 commands from the runtime schema; scanned 689 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

@@ -36,11 +36,17 @@
     mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility_resolved
-#import lunco::lunar::{regolith_factor, ORTHO_GAIN}
+#import lunco::lunar::{orthophoto_factor, regolith_factor}
 #import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
+//!@ui      micro_scale       8 80        "Regolith micro scale (/m)"
+//!@default micro_scale       35
+//!@ui      micro_bump        0 0.05      "Regolith micro-normal strength"
+//!@default micro_bump        0.015
+//!@ui      roughness         0 1         "Base regolith roughness"
+//!@default roughness         0.88
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
 //!@ui      macro_bump        0 0.3       "Macro bump strength"
@@ -95,8 +101,23 @@
 //!@engine  csm_far
 //!@engine  shadow_cache_on
 //!@engine  horizon_march_steps
+//!@default map_texel_size_m 1.0
+//!@default derived_surface_on 0
+//!@default derived_normal_on  0
+//!@default authored_surface_on 0
+//!@default authored_normal_on  0
+//!@default terrain_half_extent 1.0
+//!@default morph_start  1.0e20
+//!@default morph_end    1.0e21
+//!@default stitch_edges 0,0,0,0
+// `info:wgsl:vertexAsset` can pair this fragment with `terrain_geomorph.wgsl`.
+// Both stages therefore declare this exact uniform ABI; the cross-file contract
+// test in `lunco-materials` prevents either stage from silently drifting.
 struct Material {
     albedo:            vec3<f32>,
+    micro_scale:       f32,
+    micro_bump:        f32,
+    roughness:         f32,
     macro_clump_scale: f32,
     macro_bump:        f32,
     mid_scale:         f32,
@@ -110,11 +131,6 @@ struct Material {
     weight_rough:      f32,
     weight_ao:         f32,
     weight_normal:     f32,
-    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
-    derived_surface_on: f32, // engine-filled: derived surface map is the selected source
-    derived_normal_on:  f32, // engine-filled: derived normal map is the selected source
-    authored_surface_on: f32, // engine-filled: USD surface map is the selected source
-    authored_normal_on:  f32, // engine-filled: USD normal map is the selected source
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
@@ -126,6 +142,15 @@ struct Material {
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
     horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
+    map_texel_size_m:  f32,  // engine-filled: level-zero map spacing (m)
+    derived_surface_on: f32, // engine-filled: derived surface is active
+    derived_normal_on:  f32, // engine-filled: derived normal is active
+    authored_surface_on: f32, // engine-filled: authored surface is active
+    authored_normal_on:  f32, // engine-filled: authored normal is active
+    terrain_half_extent: f32, // engine-filled: streamed DEM half extent (m)
+    morph_start:      f32,  // engine-filled: CDLOD morph start distance
+    morph_end:        f32,  // engine-filled: CDLOD morph end distance
+    stitch_edges:     vec4<f32>, // engine-filled: coarser-neighbour edge mask
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -236,14 +261,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let map_weight_rough = map_weights.y;
     let map_weight_ao = map_weights.z;
     let map_weight_tone = map_weights.w;
-    // Albedo: real colour mosaic mixed over the procedural albedo. `ORTHO_GAIN`
-    // undoes the bake's 1–99 percentile stretch (mean ≈ 1/3, not 1) so the
-    // multiply modulates the regolith instead of dimming it — see the constant's
-    // definition in `lunar_brdf.wgsl`. Must stay identical to the streamed path
-    // in `terrain_geomorph.wgsl` or the same scene reads two ways.
+    // Albedo: the real colour mosaic is a percentile-stretched contrast map, not
+    // linear reflectance. The shared transfer bounds its tone modulation so map
+    // extrema cannot collapse the ground to black or wash it to white. It must
+    // stay identical to the streamed path in `terrain_geomorph.wgsl`.
     if (mat.weight_albedo > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * a * ORTHO_GAIN, mat.weight_albedo);
+        albedo = mix(albedo, albedo * orthophoto_factor(a), mat.weight_albedo);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a

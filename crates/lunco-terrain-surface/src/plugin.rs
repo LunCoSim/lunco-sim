@@ -33,6 +33,10 @@ pub struct TerrainSurfacePlugin;
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
         use lunco_settings::AppSettingsExt;
+        app.init_resource::<lunco_physics::PhysicsInitializationExternalValidator>();
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsInitializationExternalValidator>()
+            .0 = true;
         lunco_settings::ensure_download_settings(app);
         app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
@@ -217,14 +221,12 @@ impl Plugin for TerrainSurfacePlugin {
         // CCD, so they free-fell through the one-sided heightfield. Both are fixed
         // (`SweptCcd` on the wheels + liveness-gated hold), so a body can no longer
         // end up under the terrain and needs no reseat.
-        // One-time drop-onto-terrain placement for freshly-activated physical
-        // newly activated assemblies (marked `NeedsGroundSettle` by their physics
-        // owner): lift the
-        // assembly so its wheels clear the one-sided heightfield instead of starting
-        // embedded (authored chassis-at-surface + wheels-hang-below) and sinking.
+        // Validate authored dynamic poses after the terrain collider is live.
+        // This is a diagnostic/admission boundary only: it never moves a body
+        // or invents a support pose.
         app.add_systems(
             Update,
-            crate::collider_ring::settle_grounded_assemblies
+            crate::collider_ring::validate_initial_physics_poses
                 .in_set(lunco_physics::PhysicsSupportSet::Consume),
         );
         // NO automatic overturn recovery. A vessel on its roof stays there until

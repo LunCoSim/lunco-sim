@@ -53,18 +53,18 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{
-    DockArea, DockState, NodeIndex, Style, TabViewer, widgets::tab_viewer::OnCloseResponse,
+    widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod icons;
-pub use icons::{UiIcon, icon_button, icon_button_sized, icon_text_button, paint_icon};
+pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
 
 mod editor_tabs;
 mod menu;
@@ -119,19 +119,19 @@ pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
     app.add_systems(schedule, render_robustness::reset_render_recovery);
 }
 pub use window_command::{
-    CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized, merged_titlebar_window,
+    merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };
 pub use window_persistence::{
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, SkipWindowGeometrySave, WindowGeometry,
-    WindowPersistencePlugin, load_window_geometry, restored_window,
+    load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
+    WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
+pub use window_placement::wire_window_placement;
 #[cfg(not(target_arch = "wasm32"))]
 pub use window_placement::WindowPlacement;
-pub use window_placement::wire_window_placement;
 pub use workspace_state::{
-    AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot,
-    RuntimeSurfaceLayout, RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin,
-    WorkspaceStateRestorePolicy, finalize_revision, revision_term, workspace_state_path,
+    finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
+    DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
+    RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
 };
 
 pub use menu::{MenuCtx, UndoProbeCtx};
@@ -278,11 +278,11 @@ impl HelpAnchors {
     }
 }
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
-pub use files_panel::{FILES_PANEL_ID, FilesPanel};
+pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
-    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
-    TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
+    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
+    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
 };
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
@@ -698,6 +698,11 @@ pub struct OpenTwinSource {
     pub relative_path: String,
     /// Keep the file open when another preview is selected.
     pub pinned: bool,
+    /// Whether opening the source should focus its tab. `None` preserves the
+    /// normal source-opening behavior; USD's paired preview passes `Some(false)`
+    /// so its read-only text companion cannot steal focus from Visual mode.
+    #[serde(default)]
+    pub focus: Option<bool>,
 }
 
 /// Persist the editable source buffer, optionally refreshing its owning domain.
@@ -719,8 +724,8 @@ pub use perspective::{Perspective, PerspectiveId};
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, VIEWPORT_PANEL_ID,
-    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin,
+    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
+    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -4906,9 +4911,18 @@ fn render_layout(
     // ── Status bar ──────────────────────────────────────────────────
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
-    egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
-        render_status_bar_inner(ui, world, theme);
-    });
+    let status_surface_fill = panel_surface_fill(
+        theme,
+        world
+            .resource::<WorkbenchAppearanceSettings>()
+            .translucent_tab_content,
+    );
+    egui::Panel::bottom("lunco_workbench_status_bar")
+        .frame(egui::Frame::NONE.fill(status_surface_fill))
+        .show_separator_line(false)
+        .show(&mut viewport_ui, |ui| {
+            render_status_bar_inner(ui, world, theme);
+        });
 
     // ── Activity bar ────────────────────────────────────────────────
     if layout.activity_bar {
@@ -5342,11 +5356,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
 
     ui.horizontal(|ui| {
+        let bar_width = ui.available_width();
         // Reserve the exact bounded footprint of every control to the right of
         // the status scope. The controls shrink together on compact windows;
         // the left scope never competes with an unbounded label.
         let right_widths = status_bar_right_widths(
-            ui.available_width(),
+            bar_width,
             perf_enabled,
             net_active,
             !tutorial_title.is_empty(),
@@ -5354,7 +5369,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         );
         let right_reserve = right_widths.total();
 
-        let status_width = (ui.available_width() - right_reserve).max(1.0);
+        let status_width = status_bar_notification_width(bar_width, right_reserve);
 
         // The status message scope on the left
         let latest_attention = latest
@@ -5374,18 +5389,23 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
                         };
                         let attention = l.level == StatusLevel::Attention;
+                        // The strip is a single-line summary surface. Keep the
+                        // complete event in the tooltip and history popup, but
+                        // never let diagnostic/newline-heavy payloads define
+                        // the button or label's intrinsic width.
+                        let display_message = status_message_summary(&l.message);
                         if attention {
                             attention_clicked = ui
                                 .add_sized(
                                     [ui.available_width(), 18.0],
                                     egui::Button::new(
-                                        egui::RichText::new(&l.message)
+                                        egui::RichText::new(display_message)
                                             .small()
                                             .strong()
                                             .color(theme.tokens.error),
                                     ),
                                 )
-                                .on_hover_text("Click to continue")
+                                .on_hover_text(&l.message)
                                 .clicked();
                         } else {
                             // Painted circle instead of `●` so we don't depend
@@ -5404,7 +5424,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                 );
                             }
                             ui.label(egui::RichText::new(l.source).small().strong());
-                            let text = egui::RichText::new(&l.message).small();
+                            let text = egui::RichText::new(display_message).small();
                             let message_width = status_bar_message_width(
                                 ui.available_width(),
                                 l.progress_pct.is_some(),
@@ -5430,6 +5450,15 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 },
             )
             .response;
+
+        // Keep the notification compact without pulling the right-hand
+        // controls away from the edge of the status bar. The spacer absorbs
+        // the remaining width after the bounded notification and reserved
+        // controls have been laid out.
+        let spacer_width = (bar_width - status_width - right_reserve).max(0.0);
+        if spacer_width > 0.0 {
+            ui.add_space(spacer_width);
+        }
 
         if attention_clicked {
             if let Some(source) = latest
@@ -5896,6 +5925,7 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 }
 
 const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
+const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 420.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
@@ -5916,6 +5946,15 @@ impl StatusBarRightWidths {
     fn total(self) -> f32 {
         self.tutorial + self.scene + self.net + self.perf + self.overhead
     }
+}
+
+/// Give the latest-event notification a compact, stable footprint while
+/// preserving enough room for its source and a readable message. The full
+/// event remains available through the strip tooltip and history popup.
+fn status_bar_notification_width(available_width: f32, right_reserve: f32) -> f32 {
+    (available_width - right_reserve)
+        .max(1.0)
+        .min(STATUS_BAR_NOTIFICATION_MAX_WIDTH)
 }
 
 /// Keep every right-hand status control inside the width reserved from the
@@ -7072,6 +7111,16 @@ mod tests {
     }
 
     #[test]
+    fn latest_status_notification_stays_compact_and_yields_to_right_controls() {
+        assert_eq!(
+            status_bar_notification_width(1600.0, 120.0),
+            STATUS_BAR_NOTIFICATION_MAX_WIDTH
+        );
+        assert_eq!(status_bar_notification_width(520.0, 120.0), 400.0);
+        assert_eq!(status_bar_notification_width(120.0, 160.0), 1.0);
+    }
+
+    #[test]
     fn status_bar_right_controls_fit_the_reserved_compact_width() {
         let compact = status_bar_right_widths(960.0, true, true, true, true);
         assert!(compact.total() <= 800.0);
@@ -7224,7 +7273,7 @@ mod tests {
         }
 
         fn title(&self) -> String {
-            self.0.0.to_string()
+            self.0 .0.to_string()
         }
 
         fn default_slot(&self) -> PanelSlot {
@@ -7299,12 +7348,10 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
         assert!(layout.center.is_empty());
-        assert!(
-            !layout
-                .dock
-                .iter_all_tabs()
-                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center")))
-        );
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center"))));
         assert!(layout.panels.contains_key(&PanelId("late_center")));
     }
 
@@ -7562,12 +7609,10 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert!(layout.dock_cache.is_empty());
-        assert!(
-            !layout
-                .dock
-                .iter_all_tabs()
-                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale")))
-        );
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 

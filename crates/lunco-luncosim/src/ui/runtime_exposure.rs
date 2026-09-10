@@ -1885,6 +1885,65 @@ mod tests {
     }
 
     #[test]
+    fn shipped_view_switcher_keeps_its_authored_top_right_anchor() {
+        let manifest: RuntimeUiManifest =
+            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
+                .expect("shipped runtime UI manifest should parse");
+        let surface = manifest
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == "celestial-view")
+            .expect("shipped manifest should author the celestial-view surface");
+
+        assert!(!surface.draggable);
+        match &surface.placement {
+            RuntimeUiPlacementDefinition::Window {
+                anchor,
+                offset,
+                width,
+                height,
+            } => {
+                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopRight);
+                assert_eq!(*offset, [-12.0, 34.0]);
+                assert_eq!(*width, 444.0);
+                assert_eq!(*height, 276.0);
+            }
+            _ => panic!("view-mode must use a window placement"),
+        }
+    }
+
+    #[test]
+    fn fixed_view_switcher_ignores_a_persisted_layout_override() {
+        let manifest: RuntimeUiManifest =
+            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
+                .expect("shipped runtime UI manifest should parse");
+        let definition = manifest
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == "celestial-view")
+            .expect("shipped manifest should author the celestial-view surface");
+        let surface =
+            RuntimeUiSurface::from_definition(definition, Handle::default(), Handle::default());
+        let mut layouts = RuntimeSurfaceLayouts::default();
+        layouts.set(
+            "celestial-view",
+            RuntimeSurfaceLayout {
+                left: 7_000.0,
+                top: 6_000.0,
+            },
+        );
+
+        let placement =
+            resolve_surface_placement(&surface, &layouts, None, None, Some(&Window::default()))
+                .expect("fixed view switcher placement should resolve");
+        let window = Window::default();
+        let expected_left = window.width() - 444.0 - 12.0;
+
+        assert_eq!(placement.rect.min.x, expected_left);
+        assert_eq!(placement.rect.min.y, 34.0);
+    }
+
+    #[test]
     fn draggable_surfaces_require_window_placement() {
         let manifest: RuntimeUiManifest = serde_json::from_str(
             r#"{

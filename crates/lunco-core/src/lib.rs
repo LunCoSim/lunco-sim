@@ -102,7 +102,7 @@ pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
     CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
-    HorizonShadowTerrain, NeedsGroundSettle, NextScene, PhysicsPoseAuthoritative,
+    HorizonShadowTerrain, NextScene, PhysicsPoseAuthoritative,
     ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind,
     CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
     TRIGGER_COLLISION_LAYER,
@@ -665,9 +665,12 @@ impl SceneInteractionMode {
         modified || matches!(self, Self::Editor)
     }
 
-    /// Whether the avatar possession observer owns a plain primary scene click.
-    pub const fn possession_owns_primary_click(self) -> bool {
-        matches!(self, Self::Simulation)
+    /// Whether avatar possession owns this primary scene click.
+    ///
+    /// Simulation reserves unmodified clicks for possession; explicit modifier
+    /// clicks belong to selection/removal in every perspective.
+    pub const fn possession_owns_click(self, modified: bool) -> bool {
+        !modified && matches!(self, Self::Simulation)
     }
 }
 
@@ -677,11 +680,13 @@ mod scene_interaction_mode_tests {
 
     #[test]
     fn primary_click_has_one_owner_per_mode() {
-        assert!(SceneInteractionMode::Simulation.possession_owns_primary_click());
+        assert!(SceneInteractionMode::Simulation.possession_owns_click(false));
+        assert!(!SceneInteractionMode::Simulation.possession_owns_click(true));
         assert!(!SceneInteractionMode::Simulation.selection_owns_click(false));
         assert!(SceneInteractionMode::Simulation.selection_owns_click(true));
         assert!(SceneInteractionMode::Editor.selection_owns_click(false));
-        assert!(!SceneInteractionMode::Editor.possession_owns_primary_click());
+        assert!(!SceneInteractionMode::Editor.possession_owns_click(false));
+        assert!(!SceneInteractionMode::Editor.possession_owns_click(true));
     }
 }
 
@@ -1004,7 +1009,6 @@ impl Plugin for LunCoCorePlugin {
         app.init_resource::<SceneMountState>();
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
-            .register_type::<NeedsGroundSettle>()
             .register_type::<PhysicsPoseAuthoritative>()
             .register_type::<SoiMigrant>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`

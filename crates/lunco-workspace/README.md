@@ -57,7 +57,9 @@ ceremonial moves.
   live in domain registries (e.g. `ModelicaDocumentRegistry`). Domain
   registries mirror the authoritative dirty state on document events.
 - **`Recents`** — bounded lists (10 twin folders, 20 loose files),
-  most-recent-first, dedupe-on-push.
+  most-recent-first, deduplicated by canonical filesystem identity. Existing
+  aliases are cleaned at startup; missing entries use lexical normalization
+  and remain reopenable.
 
 ## Twin-document association rule
 

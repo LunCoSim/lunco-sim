@@ -13,6 +13,7 @@
 def Xform "SelectionIntentReview" (
     doc = "Review authored selection intents in the editor."
     kind = "assembly"
+    doc = "Interactive editor review scene for replacing and extending selected USD targets."
 )
 {
     def DistantLight "TestLight"

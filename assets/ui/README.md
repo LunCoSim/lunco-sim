@@ -61,8 +61,17 @@ projects that vessel's canonical `SurfacePose.geodetic` into the map's
 equirectangular marker coordinates, and publishes only typed status and marker
 properties. The HUI/Flair template owns the map, grid, marker, and no-fix
 states; it does not reconstruct coordinates or retain a second location model.
-When there is no complete lunar surface pose, the exposure deliberately hides
-the marker and reports the authored no-fix state.
+The map is opt-in per Twin through the boolean `[settings] ui.lunar_map` key;
+an absent key is the hidden default. The existing `RuntimeSurfaceLayouts`
+workspace state owns the draggable window override per Twin and clears it on
+`TwinClosed`, so camera/world movement cannot move the map. When there is no
+complete lunar surface pose, the exposure deliberately hides the marker and
+reports the authored no-fix state.
+
+The view switcher keeps its button card in the root's normal vertical flow and
+anchors the map below it. The map is absolutely positioned inside the fixed
+surface rectangle, so centering both children would let the later map panel
+paint over the switcher controls.
 
 ## Performance and placement
 
@@ -120,10 +129,14 @@ workflow.
 
 The shipped surfaces are the rover HUD, camera-status card, celestial view
 switcher, terrain progress card, and networking scenario-download card. The
-camera-status card is gated by the active Twin's generic `ui.camera_status`
-setting and defaults on when that key is absent; set it to `false` in
-`twin.toml` to hide it. Rhai owns camera selection and can read the current
-camera fact through `get_exposure("camera-status", "active_name")`;
+Settings ▸ HUD submenu is the user-facing view over the existing global HUD
+owners and the active Twin's camera-status setting; it does not add a second
+visibility registry. Camera-status is gated by the active Twin's generic
+`ui.camera_status` setting and defaults on when that key is absent; set it to
+`false` in `twin.toml` to hide it. Rover, terrain, download, tutorial, and
+notification surfaces remain automatic because possession, authored scene, or
+runtime lifecycle owns their visibility. Rhai owns camera selection and can
+read the current camera fact through `get_exposure("camera-status", "active_name")`;
 camera changes update the exposure through an event observer. Rich text editors
 and UTC date editing remain workbench-owned egui panels until explicit
 text-input semantics are added to this contract.

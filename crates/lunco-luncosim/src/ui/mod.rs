@@ -38,6 +38,8 @@ mod rhai_repl_panel;
 /// Generic retained HUI/Flair exposure boundary shared by runtime-authored
 /// templates and engine value producers.
 mod runtime_exposure;
+/// Explicit production-harness injection for the Scenarios menu failure path.
+mod scenario_fixture;
 /// Native Velopack update checks and package installation. WASM has no native
 /// process/update helper and intentionally does not compile this module.
 #[cfg(not(target_arch = "wasm32"))]
@@ -201,6 +203,7 @@ impl Plugin for SandboxUiPlugin {
         }
 
         add_runtime_ui_layer(app);
+        scenario_fixture::install(app);
         // A windowed host requires a presentation contract. Authored tracks and
         // LocalAvatar cameras remain authoritative; the USD projection may add
         // one Twin-scoped presentation camera/light for a standalone assembly
@@ -1374,6 +1377,18 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         };
 
+        if ctx
+            .resource::<scenario_fixture::ScenarioRegistryFixture>()
+            .is_some_and(|fixture| fixture.unavailable)
+        {
+            report_scenario_registry_error(
+                ctx,
+                "the injected production-harness fixture is active",
+            );
+            render_scenario_registry_unavailable(ui);
+            return;
+        }
+
         let Some(manifest) = ctx.resource::<lunco_assets::discovery::AssetManifest>() else {
             render_scenario_registry_unavailable(ui);
             return;
@@ -1687,5 +1702,15 @@ mod tests {
             "scenario-registry-unavailable [source=0]: Twin registry unavailable: missing twin.toml"
         );
         assert!(!super::SCENARIO_REGISTRY_ERROR_LABEL.contains("missing twin.toml"));
+    }
+
+    #[test]
+    fn scenario_registry_fixture_is_transient_and_disabled_by_default() {
+        let mut fixture = super::scenario_fixture::ScenarioRegistryFixture::default();
+        assert!(!fixture.unavailable);
+        fixture.unavailable = true;
+        assert!(fixture.unavailable);
+        fixture.unavailable = false;
+        assert!(!fixture.unavailable);
     }
 }

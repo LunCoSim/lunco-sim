@@ -29,7 +29,6 @@ use lunco_modelica::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
-use crate::GroundActivationInFlight;
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy::UsdAwaitingStage;
@@ -43,10 +42,10 @@ struct SceneLoadWait {
 
 /// The open world-scoped wait for the USD → Avian admission boundary.
 ///
-/// `ShouldBeDynamic` is the authoritative marker that a body is still held in
-/// its kinematic loading state. `GroundActivationInFlight` covers the deferred
-/// command boundary after promotion, when the authored velocity has been
-/// queued but the next schedule has not yet observed it.
+/// `ShouldBeDynamic` and `PhysicsStatePending` are the authoritative markers
+/// that a body is still held before dynamic admission. Initialization policy
+/// pending state is intentionally included in the latter boundary so a bad
+/// authored pose cannot enter the solver between projection and validation.
 #[derive(Resource)]
 struct PhysicsAdmissionWait {
     ticket: ReadinessTicket,
@@ -174,13 +173,18 @@ fn track_model_compiles(
 /// articulated participants.
 fn track_physics_admission(
     still_kinematic: Query<&UsdPrimPath, With<ShouldBeDynamic>>,
-    still_pending: Query<&UsdPrimPath, With<lunco_core::PhysicsStatePending>>,
-    activation: Res<GroundActivationInFlight>,
+    still_pending: Query<
+        &UsdPrimPath,
+        Or<(
+            With<lunco_core::PhysicsStatePending>,
+            With<lunco_physics::PhysicsInitializationPending>,
+        )>,
+    >,
     wait: Option<Res<PhysicsAdmissionWait>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    let waiting = !still_kinematic.is_empty() || !still_pending.is_empty() || activation.0 != 0;
+    let waiting = !still_kinematic.is_empty() || !still_pending.is_empty();
     match (waiting, wait) {
         (true, None) => {
             let held = still_kinematic
@@ -356,7 +360,6 @@ mod tests {
     fn physics_admission_wait_covers_the_authored_velocity_boundary() {
         let mut app = App::new();
         app.init_resource::<ReadinessRegistry>()
-            .init_resource::<GroundActivationInFlight>()
             .add_systems(Update, track_physics_admission);
 
         let body = app

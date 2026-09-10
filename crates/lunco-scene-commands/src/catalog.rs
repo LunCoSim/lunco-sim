@@ -326,6 +326,13 @@ pub fn spawn_usd_entry(
         Name::new(entry.display_name.clone()),
         lunco_core::CatalogEntryId(entry.id.clone()),
         lunco_core::SelectableRoot,
+        // Runtime USD instances must suppress content-derived identity on the
+        // root and its descendants. The root receives one authoritative id;
+        // descendants derive from that root, so repeated waypoint markers and
+        // repeated palette spawns cannot collide on the asset's default prim
+        // path. Keep this in the shared constructor so every runtime caller
+        // has the same identity contract.
+        lunco_core::SkipContentStamp,
         // Seeds hierarchical instance identity (gap G2/B.1): the USD loader
         // gives this runtime spawn's descendants `Derived` ids off this root's
         // unique id, so two spawns of the same asset don't collide. Atomic with
@@ -931,6 +938,10 @@ mod spawn_anchor_tests {
         assert!(
             world.get::<big_space::prelude::CellCoord>(root).is_some(),
             "a spawned top-level prim must carry a CellCoord in the scene-root grid"
+        );
+        assert!(
+            world.get::<lunco_core::SkipContentStamp>(root).is_some(),
+            "every runtime USD instance root must suppress content-derived identity"
         );
         assert!(
             world.get::<lunco_core::GridAnchor>(root).is_none(),

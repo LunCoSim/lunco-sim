@@ -7705,7 +7705,9 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-core",
+ "lunco-hooks",
  "lunco-readiness",
+ "lunco-time",
  "serde_json",
 ]
 
@@ -7930,6 +7932,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-environment",
+ "lunco-hooks",
  "lunco-materials",
  "lunco-obstacle-field",
  "lunco-physics",

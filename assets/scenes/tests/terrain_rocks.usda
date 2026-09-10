@@ -1,0 +1,107 @@
+#usda 1.0
+(
+    defaultPrim = "TerrainRocksTest"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Production DEM terrain fixture for full-footprint deterministic rock scatter and High-quality visual/performance acceptance."
+)
+
+def Xform "TerrainRocksTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    kind = "assembly"
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_rocks.rhai@
+    }
+
+    # The DEM and the fixed light share a declared lunar site frame. The
+    # GeoTIFF carries the matching raster georeference and MOON_ME frame.
+    double lunco:anchor:lat = 26.0371
+    double lunco:anchor:lon = 3.6584
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+
+    def Xform "Terrain" (
+        prepend apiSchemas = ["LunCoTerrainAPI"]
+    )
+    {
+        string lunco:assetMode = "layered"
+        bool lunco:terrain:horizonShadows = false
+        rel material:binding = </TerrainRocksTest/Looks/TerrainLook>
+
+        def Xform "Ground" (
+            prepend apiSchemas = ["LunCoTerrainLayerAPI"]
+        )
+        {
+            uniform token lunco:layer = "dem"
+            asset lunco:layer:demSource = @terrain/rocks_fixture@
+            float lunco:layer:windowM = 1000.0
+            int lunco:layer:targetRes = 257
+            bool lunco:layer:lodViz = true
+            bool lunco:layer:colliderRing = true
+            int lunco:layer:colliderDepth = 5
+            int lunco:layer:colliderResolution = 33
+        }
+
+        def Xform "Rocks" (
+            prepend apiSchemas = ["LunCoTerrainLayerAPI"]
+        )
+        {
+            uniform token lunco:layer = "rocks"
+            # 12 rocks/ha over the full 1 km² DEM requests 1,200 instances;
+            # the graphics profile's cap remains the authoritative bound.
+            float lunco:layer:density = 12.0
+            float lunco:layer:sizeMode = 1.4
+            float lunco:layer:sizeMin = 0.6
+            float lunco:layer:sizeMax = 3.5
+            float lunco:layer:regionM = 0.0
+            int lunco:layer:seed = 27092026
+        }
+    }
+
+    def Camera "VisualCamera" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (300.0, 350.0, 300.0)
+        float2 clippingRange = (0.1, 200000.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "VisualCamera",
+        }
+    }
+
+    # Existing authored terrain shader intent; the streamed geometry and its
+    # relief remain owned by the DEM/oracle runtime path.
+    def Scope "Looks"
+    {
+        def Material "TerrainLook"
+        {
+            token outputs:surface.connect = </TerrainRocksTest/Looks/TerrainLook/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+                uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+            }
+        }
+    }
+}

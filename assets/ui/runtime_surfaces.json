@@ -290,7 +290,7 @@
       "visible_in_perspective": "sandbox_view",
       "gate": "view_switcher",
       "interactive": true,
-      "draggable": true,
+      "draggable": false,
       "placement": {
         "mode": "window",
         "anchor": "top_right",

@@ -111,7 +111,7 @@ The fields are:
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
-| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. |
+| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. Fixed controls such as the shipped `view-mode` switcher leave this false so their authored anchor remains stable across reloads. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
@@ -175,8 +175,12 @@ engine resolves the authoritative local avatar and driven vessel, reads the
 canonical `SurfacePose.geodetic`, and publishes a pure equirectangular
 projection plus explicit loading, no-fix, and valid-fix properties through the
 existing `celestial-view` namespace. HUI/Flair owns the map grid and marker
-presentation. It must not derive coordinates from transforms, duplicate pose
-state, or keep a stale marker across avatar, Twin, or scene lifecycle changes.
+presentation. Twin policy owns only the boolean `[settings] ui.lunar_map`
+setting; omission means hidden. The workbench's existing Twin-scoped
+`RuntimeSurfaceLayouts` owns the map window override and clears it on
+`TwinClosed`, so camera/world transforms cannot alter its rectangle. The map
+must not derive coordinates from transforms, duplicate pose state, or keep a
+stale marker across avatar, Twin, or scene lifecycle changes.
 
 ### Overlay ownership audit
 
@@ -189,10 +193,22 @@ transient session state. The correct split for the shipped surfaces is:
 | `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
 | lander control cards | authored USD `lunco:ui:controlHud` metadata, scoped to the active `SceneMountState` root | Already scene/Twin-authored opt-in |
 | `lunica-schema` | selected authored USD schema root | No; selection-derived |
-| `celestial-view` | runtime exposure plus global view-switcher host gate; its visibility preference is in the Camera menu | Not migrated; it is an application view control |
+| `celestial-view` | runtime exposure plus global view-switcher host gate; the lunar map itself is controlled by active Twin `[settings].ui_lunar_map`, while the view-switcher preference is surfaced in Settings ▸ HUD and the Camera menu | Map policy is Twin-authored; the view-selector host gate remains application chrome |
 | terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
 | tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
-| notifications, blackout, perf/input overlays, theme, window geometry | runtime or user-global settings | No; session/diagnostic/application scope |
+| notifications, blackout | runtime session state | No; transient/application scope |
+| perf/input overlays | user-global settings | No; Settings ▸ HUD and typed commands share the persisted owner |
+| theme, window geometry | user-global settings | No; other Settings sections own these preferences |
+
+The workbench's **Settings ▸ HUD** submenu is a single presentation over those
+existing owners. Time and the celestial view switcher replace their respective
+`OverlaySettings` values; Performance and Input replace their typed persisted
+resources; and Camera/status reads and writes the active Twin's existing
+`ui.camera_status` setting. It does not introduce a registry or mirror of HUD
+visibility state. Rover, lander, terrain/download, tutorial, notification, and
+blackout rows are inventory-only because their owners must remain possession,
+authored USD, or lifecycle state; a global checkbox would conflict with those
+authoritative gates.
 
 When a future surface needs project-authored policy, add a manifest `setting`
 binding and use the generic Twin map. Do not persist its live progress, current

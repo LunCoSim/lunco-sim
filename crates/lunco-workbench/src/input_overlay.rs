@@ -8,13 +8,19 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_controller::{key_label, InputBindingsSettings};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_settings::{AppSettingsExt, SettingsSection};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Persisted settings for the input overlay HUD.
-#[derive(Resource, Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
 pub struct InputOverlaySettings {
     /// Whether the overlay is rendered.
     pub enabled: bool,
+}
+
+impl SettingsSection for InputOverlaySettings {
+    const KEY: &'static str = "input_overlay";
 }
 
 /// Simulated inputs from scripts or playback.
@@ -309,6 +315,7 @@ register_commands!(
 /// Register the typed presentation commands without installing an egui panel.
 /// Offscreen/headless scenario runners still receive the shared command surface.
 pub fn register_input_overlay_commands(app: &mut App) {
+    app.register_settings_section::<InputOverlaySettings>();
     app.init_resource::<InputOverlaySettings>();
     app.init_resource::<InputBindingsSettings>();
     app.init_resource::<SimulatedInputs>();
@@ -328,4 +335,18 @@ pub fn build_input_overlay(app: &mut App) {
         PreUpdate,
         emit_injected_pointer.before(bevy::input::InputSystems),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_overlay_settings_use_the_shared_persisted_section() {
+        assert_eq!(InputOverlaySettings::KEY, "input_overlay");
+        assert_eq!(
+            serde_json::to_value(InputOverlaySettings::default()).unwrap(),
+            serde_json::json!({"enabled": false})
+        );
+    }
 }
