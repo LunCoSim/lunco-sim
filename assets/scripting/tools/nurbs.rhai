@@ -6,7 +6,7 @@
 //! re-composed by the normal USD projection.
 
 fn ui_label() { "NURBS points" }
-fn ui_hint() { "Click a NURBS prim to select it; use set_point(path, index, p) from Rhai" }
+fn ui_hint() { "Click a NURBS prim to select it; call set_point(doc, path, index, p) from Rhai" }
 
 fn on_click(context) {
     if context.target_entity_id == () { return; }
