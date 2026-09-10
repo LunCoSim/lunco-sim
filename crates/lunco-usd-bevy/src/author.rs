@@ -182,24 +182,70 @@ pub fn author_reference(
     let spec = data
         .spec_mut(prim_path)
         .ok_or_else(|| anyhow!("author_reference: no prim spec at {prim_path}"))?;
-    let reference_prim_path = reference_prim_path
-        .map(SdfPath::new)
-        .transpose()
-        .map_err(|e| anyhow!("author_reference: invalid referenced prim path: {e}"))?
-        .unwrap_or_default();
-    let explicit_target = !reference_prim_path.is_empty();
-    let reference = sdf::Reference {
-        asset_path: asset_path.to_string(),
-        prim_path: reference_prim_path,
-        ..Default::default()
-    };
-    let references = if explicit_target {
-        sdf::ReferenceListOp::prepended([reference])
+    let list_op = if reference_prim_path.is_some() {
+        ReferenceListEdit::Prepend
     } else {
-        sdf::ReferenceListOp::explicit([reference])
+        ReferenceListEdit::Explicit
     };
-    spec.add("references", Value::ReferenceListOp(references));
+    let value = reference_list_value(
+        &[(
+            asset_path.to_owned(),
+            reference_prim_path.map(str::to_owned),
+        )],
+        list_op,
+    )?;
+    spec.add("references", value);
     Ok(())
+}
+
+/// The ordinary USD list-edit forms supported by the document's typed
+/// reference operation. This stays in the authoring owner so callers do not
+/// hand-build `sdf::ReferenceListOp` values or duplicate path conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceListEdit {
+    /// Add the arcs before the weaker/composed list.
+    Prepend,
+    /// Add the arcs after the weaker/composed list.
+    Append,
+    /// Add the arcs without changing their relative position.
+    Add,
+    /// Remove matching arcs from weaker opinions.
+    Delete,
+    /// Replace the complete list; an empty input explicitly clears it.
+    Explicit,
+}
+
+/// Build a typed OpenUSD reference list value from the document operation's
+/// plain asset identities. The returned value is suitable for either
+/// `Prim::set_metadata` or an authored SDF spec.
+pub fn reference_list_value(
+    arcs: &[(String, Option<String>)],
+    edit: ReferenceListEdit,
+) -> Result<Value> {
+    let references = arcs
+        .iter()
+        .map(|(asset_path, prim_path)| {
+            let prim_path = prim_path
+                .as_deref()
+                .map(SdfPath::new)
+                .transpose()
+                .map_err(|error| anyhow!("invalid referenced prim path: {error}"))?
+                .unwrap_or_default();
+            Ok(sdf::Reference {
+                asset_path: asset_path.clone(),
+                prim_path,
+                ..Default::default()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let op = match edit {
+        ReferenceListEdit::Prepend => sdf::ReferenceListOp::prepended(references),
+        ReferenceListEdit::Append => sdf::ReferenceListOp::appended(references),
+        ReferenceListEdit::Add => sdf::ReferenceListOp::added(references),
+        ReferenceListEdit::Delete => sdf::ReferenceListOp::deleted(references),
+        ReferenceListEdit::Explicit => sdf::ReferenceListOp::explicit(references),
+    };
+    Ok(Value::ReferenceListOp(op))
 }
 
 /// Remove the time sample at `time` from the attribute at `attr_path`, the

@@ -220,6 +220,31 @@ impl Default for LayerId {
     }
 }
 
+/// One explicit USD reference arc used by [`UsdOp::SetReferenceArcs`].
+/// `asset_path` is the resolver identity without USDA `@` delimiters;
+/// `prim_path` is omitted when the referenced layer's default prim is used.
+#[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
+pub struct UsdReferenceArc {
+    pub asset_path: String,
+    #[serde(default)]
+    pub prim_path: Option<String>,
+}
+
+/// The USD list-op form authored by [`UsdOp::SetReferenceArcs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+pub enum UsdReferenceListOp {
+    /// Insert arcs before weaker-layer opinions.
+    Prepend,
+    /// Insert arcs after weaker-layer opinions.
+    Append,
+    /// Add arcs without replacing weaker-layer opinions.
+    Add,
+    /// Delete matching arcs while preserving other weaker-layer opinions.
+    Delete,
+    /// Replace the complete list; an empty list explicitly clears the opinion.
+    Explicit,
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // UsdChange — Omniverse-style change notification
 // ─────────────────────────────────────────────────────────────────────
@@ -539,6 +564,20 @@ pub enum UsdOp {
         /// Asset paths to payload (e.g. `["@meshes/hull.usdc@"]`). Empty clears.
         asset_paths: Vec<String>,
     },
+    /// Author one USD `references` list-op on an existing prim. The operation
+    /// edits only the selected layer, so prepend/append/add/delete preserve
+    /// weaker-layer arcs and `Explicit` is the deliberate replacement/clear
+    /// form. References remain composition arcs; they are never flattened.
+    SetReferenceArcs {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim carrying the reference list.
+        path: String,
+        /// Asset identities and optional target prims to add, remove, or set.
+        references: Vec<UsdReferenceArc>,
+        /// The USD list-op semantics for this edit.
+        list_op: UsdReferenceListOp,
+    },
     /// Activate or deactivate the prim. A deactivated prim and its whole subtree
     /// vanish from composition without being deleted — the non-destructive
     /// "disable this part" every assembly editor needs, and cheaply reversible
@@ -586,6 +625,7 @@ impl UsdOp {
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
             | Self::SetPayload { edit_target, .. }
+            | Self::SetReferenceArcs { edit_target, .. }
             | Self::SetActive { edit_target, .. } => edit_target,
         }
     }
@@ -616,6 +656,7 @@ impl UsdOp {
             | Self::SetApiSchemas { path, .. }
             | Self::SetVariantSelection { path, .. }
             | Self::SetPayload { path, .. }
+            | Self::SetReferenceArcs { path, .. }
             | Self::SetActive { path, .. } => vec![path.clone()],
             Self::MovePrim {
                 from_path, to_path, ..
@@ -1380,6 +1421,121 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
         .map_err(|e| DocumentError::ValidationFailed(format!("invalid prim path `{path}`: {e}")))
 }
 
+fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentError> {
+    let normalized = lunco_assets::asset_path::slashed(asset_path);
+    if normalized.is_empty() || normalized.contains('@') || normalized.contains('\0') {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetReferenceArcs requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
+        )));
+    }
+    if let Some((scheme, rest)) = lunco_assets::asset_path::split_scheme(&normalized) {
+        if scheme.is_empty()
+            || rest.is_empty()
+            || rest
+                .split('/')
+                .any(|segment| segment == "." || segment == ".." || segment.contains('\0'))
+        {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetReferenceArcs asset identity is not safe: `{asset_path}`"
+            )));
+        }
+    } else {
+        let relative = normalized.strip_prefix('/').unwrap_or(&normalized);
+        if !lunco_assets::asset_path::is_safe_relative_path(relative) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetReferenceArcs asset identity is not a safe asset path: `{asset_path}`"
+            )));
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_reference_prim_path(path: Option<&str>) -> Result<Option<String>, DocumentError> {
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = parse_prim_path(path)?;
+    if !path.starts_with('/') || parsed.is_property_path() {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetReferenceArcs referenced target `{path}` must be an absolute prim path"
+        )));
+    }
+    Ok(Some(path.to_owned()))
+}
+
+fn reference_list_edit(edit: UsdReferenceListOp) -> author::ReferenceListEdit {
+    match edit {
+        UsdReferenceListOp::Prepend => author::ReferenceListEdit::Prepend,
+        UsdReferenceListOp::Append => author::ReferenceListEdit::Append,
+        UsdReferenceListOp::Add => author::ReferenceListEdit::Add,
+        UsdReferenceListOp::Delete => author::ReferenceListEdit::Delete,
+        UsdReferenceListOp::Explicit => author::ReferenceListEdit::Explicit,
+    }
+}
+
+fn reference_arc_from_sdf(reference: &sdf::Reference) -> Option<UsdReferenceArc> {
+    if reference.asset_path.is_empty()
+        || reference.layer_offset != sdf::LayerOffset::default()
+        || !reference.custom_data.is_empty()
+    {
+        return None;
+    }
+    Some(UsdReferenceArc {
+        asset_path: reference.asset_path.clone(),
+        prim_path: (!reference.prim_path.is_empty()).then(|| reference.prim_path.to_string()),
+    })
+}
+
+fn reference_list_inverse(
+    op: &sdf::ReferenceListOp,
+    edit_target: &LayerId,
+    path: &str,
+) -> Option<UsdOp> {
+    let (list_op, items) = if op.explicit {
+        (UsdReferenceListOp::Explicit, &op.explicit_items)
+    } else if !op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Prepend, &op.prepended_items)
+    } else if !op.appended_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Append, &op.appended_items)
+    } else if !op.added_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Add, &op.added_items)
+    } else if !op.deleted_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Delete, &op.deleted_items)
+    } else {
+        return None;
+    };
+    let references = items
+        .iter()
+        .map(reference_arc_from_sdf)
+        .collect::<Option<Vec<_>>>()?;
+    Some(UsdOp::SetReferenceArcs {
+        edit_target: edit_target.clone(),
+        path: path.to_owned(),
+        references,
+        list_op,
+    })
+}
+
 /// True when `data` holds a prim spec at `sdf`.
 ///
 /// **A flat spec lookup is not the whole answer**, because a prim authored
@@ -1526,6 +1682,7 @@ impl Document for UsdDocument {
             | UsdOp::SetApiSchemas { edit_target, .. }
             | UsdOp::SetVariantSelection { edit_target, .. }
             | UsdOp::SetPayload { edit_target, .. }
+            | UsdOp::SetReferenceArcs { edit_target, .. }
             | UsdOp::SetActive { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
@@ -2427,6 +2584,65 @@ impl Document for UsdDocument {
                             payloads,
                         )),
                     )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetReferenceArcs {
+                path,
+                references,
+                list_op,
+                ..
+            } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetReferenceArcs target `{path}` must name a prim, not a property"
+                        )))
+                    }
+                    Err(_) if self.path_is_under_composed_arc_path(
+                        &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                    ) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetReferenceArcs target `{path}` is composed/read-only; author the owning prim or a local override"
+                        )))
+                    }
+                    Err(error) => return Err(error),
+                };
+                let arcs = references
+                    .iter()
+                    .map(|reference| {
+                        let asset_path = validate_reference_asset_path(&reference.asset_path)?;
+                        let prim_path =
+                            normalize_reference_prim_path(reference.prim_path.as_deref())?;
+                        Ok((asset_path, prim_path))
+                    })
+                    .collect::<Result<Vec<_>, DocumentError>>()?;
+
+                // A typed inverse can restore one complete list-op bucket. A
+                // prior list with offsets/custom data or multiple buckets is
+                // restored from the exact target-layer snapshot instead of
+                // losing authored USD information.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::References.as_str())
+                    .cloned();
+                let inverse = prior
+                    .and_then(|value| match value {
+                        sdf::Value::ReferenceListOp(op) => reference_list_inverse(&op, &id, &path),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.coarse_inverse(target, &id));
+
+                let value = author::reference_list_value(&arcs, reference_list_edit(list_op))
+                    .map_err(author_err)?;
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(sdf::FieldKey::References.as_str(), value)
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
@@ -3655,6 +3871,150 @@ mod tests {
             original,
             "coarse undo removes the created opinion"
         );
+    }
+
+    #[test]
+    fn set_reference_arcs_preserves_weaker_layer_opinions() {
+        let source = "#usda 1.0\n\
+def Xform \"World\" (\n\
+    prepend references = @base.usda@</Base>\n\
+)\n\
+{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(49), source);
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: "lunco://components/rover.usda".into(),
+                prim_path: Some("/Rover".into()),
+            }],
+            list_op: UsdReferenceListOp::Prepend,
+        })
+        .expect("runtime reference prepend applies");
+
+        let path = SdfPath::new("/World").unwrap();
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected composed reference list");
+        };
+        let items = op.flatten();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].asset_path, "lunco://components/rover.usda");
+        assert_eq!(items[0].prim_path.as_str(), "/Rover");
+        assert_eq!(items[1].asset_path, "base.usda");
+
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: "base.usda".into(),
+                prim_path: Some("/Base".into()),
+            }],
+            list_op: UsdReferenceListOp::Delete,
+        })
+        .expect("reference delete applies");
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected deleted reference list");
+        };
+        assert!(op.flatten().is_empty());
+
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: Vec::new(),
+            list_op: UsdReferenceListOp::Explicit,
+        })
+        .expect("explicit empty reference list applies");
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected explicit clear reference list");
+        };
+        assert!(op.explicit && op.flatten().is_empty());
+    }
+
+    #[test]
+    fn set_reference_arcs_overwrite_undo_is_typed_and_round_trips() {
+        let mut doc = UsdDocument::new(DocumentId::new(50), TINY_USDA);
+        let explicit = |asset_path: &str| UsdOp::SetReferenceArcs {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: asset_path.into(),
+                prim_path: None,
+            }],
+            list_op: UsdReferenceListOp::Explicit,
+        };
+        let original = doc.source();
+        let first_inverse = doc.apply(explicit("base.usda")).unwrap();
+        assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                references: vec![UsdReferenceArc {
+                    asset_path: "override.usda".into(),
+                    prim_path: Some("/Root".into()),
+                }],
+                list_op: UsdReferenceListOp::Prepend,
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetReferenceArcs {
+                references,
+                list_op: UsdReferenceListOp::Explicit,
+                ..
+            } if references.len() == 1 && references[0].asset_path == "base.usda"
+        ));
+        let encoded = serde_json::to_value(&inverse).unwrap();
+        let decoded: UsdOp = serde_json::from_value(encoded).unwrap();
+        doc.apply(decoded).unwrap();
+        assert_eq!(doc.source(), before, "typed undo restores the prior list");
+        doc.apply(first_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the first opinion"
+        );
+    }
+
+    #[test]
+    fn set_reference_arcs_rejects_unsafe_assets_and_composed_only_targets() {
+        let source = "#usda 1.0\ndef Xform \"World\" (\n\
+    prepend references = @base.usda@</Base>\n\
+)\n{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(51), source);
+        let invalid = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                references: vec![UsdReferenceArc {
+                    asset_path: "../escape.usda".into(),
+                    prim_path: None,
+                }],
+                list_op: UsdReferenceListOp::Explicit,
+            })
+            .unwrap_err();
+        assert!(invalid.to_string().contains("safe asset path"));
+
+        let read_only = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                references: Vec::new(),
+                list_op: UsdReferenceListOp::Explicit,
+            })
+            .unwrap_err();
+        assert!(read_only.to_string().contains("composed/read-only"));
     }
 
     #[test]

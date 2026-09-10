@@ -446,6 +446,14 @@ let plan = [#{ SetAttribute: #{
 assembly_edit::batch(doc, "Declare rover assembly", plan, changed.data.generation);
 ```
 
+Use `assembly_edit::references` to edit an existing prim's USD reference list
+without flattening it. Entries are `#{ asset_path: "lunco://…", prim_path: () }`;
+`Prepend`, `Append`, `Add`, and `Delete` retain weaker-layer arcs, while
+`Explicit` replaces the selected layer's list and an empty list clears it.
+`InspectUsdDocument` exposes `prim.references.authored` and
+`prim.references.composed`; resolve the target before submitting so a
+composed-only prim fails as read-only.
+
 `propose` submits a complete typed plan for review without changing the
 document. Use `review_session` to inspect its state, `review_proposal` to mute,
 unmute, or reject it, and `commit_proposal` to enter the accepted plan as one

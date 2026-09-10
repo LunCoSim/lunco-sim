@@ -12,7 +12,7 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_bevy::{usd_data::UsdDataExt, UsdRead};
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use crate::document::UsdDocument;
 use crate::edit_session::UsdEditSessions;
@@ -195,6 +195,101 @@ fn composed_attribute_inspection(
     (false, None, false, Vec::new(), Vec::new())
 }
 
+fn reference_json(reference: &openusd::sdf::Reference) -> serde_json::Value {
+    serde_json::json!({
+        "asset_path": reference.asset_path,
+        "prim_path": if reference.prim_path.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(reference.prim_path.to_string())
+        },
+    })
+}
+
+fn references_json(references: &[openusd::sdf::Reference]) -> Vec<serde_json::Value> {
+    references.iter().map(reference_json).collect()
+}
+
+fn reference_list_json(data: &dyn openusd::sdf::AbstractData, path: &SdfPath) -> serde_json::Value {
+    let Some(value) = data
+        .try_field(path, openusd::sdf::FieldKey::References.as_str())
+        .ok()
+        .flatten()
+    else {
+        return serde_json::json!({
+            "present": false,
+            "items": [],
+        });
+    };
+    let SdfValue::ReferenceListOp(op) = value.as_ref() else {
+        return serde_json::json!({
+            "present": false,
+            "items": [],
+        });
+    };
+    serde_json::json!({
+        "present": true,
+        "explicit": op.explicit,
+        "explicit_items": references_json(&op.explicit_items),
+        "prepended_items": references_json(&op.prepended_items),
+        "appended_items": references_json(&op.appended_items),
+        "added_items": references_json(&op.added_items),
+        "deleted_items": references_json(&op.deleted_items),
+        "ordered_items": references_json(&op.ordered_items),
+        "items": references_json(&op.flatten()),
+    })
+}
+
+/// Read reference opinions from the canonical PCP stack when the document is
+/// mounted. The document-layer view above remains the synchronous authoring
+/// source; this additional view reports the composed sites and list result
+/// after external references and local overrides have been resolved.
+fn canonical_reference_json(
+    world: &World,
+    doc: DocumentId,
+    path: &SdfPath,
+) -> Option<serde_json::Value> {
+    let stage = canonical_stage_for_document(world, doc)?;
+    let prim = stage.stage().prim(path.clone());
+    if !prim.is_valid().ok()? {
+        return None;
+    }
+    let stack = prim.prim_stack().ok()?;
+    let mut sites = Vec::new();
+    let mut list_ops = Vec::new();
+    for (layer_id, authored_path) in stack {
+        let Some(layer) = stage.stage().layer(&layer_id) else {
+            continue;
+        };
+        let Some(value) = layer
+            .data()
+            .try_field(&authored_path, openusd::sdf::FieldKey::References.as_str())
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let SdfValue::ReferenceListOp(op) = value.as_ref() else {
+            continue;
+        };
+        sites.push(serde_json::json!({
+            "layer": layer_id,
+            "path": authored_path.to_string(),
+            "list": reference_list_json(layer.data(), &authored_path),
+        }));
+        list_ops.push(op.clone());
+    }
+    let mut composed = Vec::new();
+    for op in list_ops.iter().rev() {
+        composed = op.compose_over(&composed);
+    }
+    Some(serde_json::json!({
+        "source": "canonical_stage",
+        "sites": sites,
+        "items": references_json(&composed),
+    }))
+}
+
 /// Read-only query for one explicit open USD document.
 ///
 /// Parameters:
@@ -287,6 +382,16 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             };
             let (exists, type_name, active, children, attributes) =
                 composed_attribute_inspection(world, doc, document, &path);
+            let mut references = serde_json::json!({
+                "authored": {
+                    "root": reference_list_json(document.data(), &path),
+                    "runtime": reference_list_json(document.runtime_data(), &path),
+                },
+                "composed": reference_list_json(document.composed_arc().as_ref(), &path),
+            });
+            if let Some(canonical) = canonical_reference_json(world, doc, &path) {
+                references["canonical_stage"] = canonical;
+            }
             response["prim"] = serde_json::json!({
                 "path": raw_path,
                 "exists": exists,
@@ -294,6 +399,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 "active": active,
                 "children": children,
                 "attributes": attributes,
+                "references": references,
             });
         }
 

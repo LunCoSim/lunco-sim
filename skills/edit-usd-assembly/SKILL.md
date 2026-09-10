@@ -473,6 +473,14 @@ Use the smallest existing typed intent that expresses the change:
   existing typed structural USD operations. They require an explicit target,
   exact paths, and the inspected generation; they never replace a layer's raw
   source.
+- `assembly_edit::references(doc, edit_target, path, references, list_op,
+  parent_gen)` authors existing reference arcs through `SetReferenceArcs`.
+  Each entry carries an asset identity and optional absolute target prim path.
+  `Prepend`, `Append`, `Add`, and `Delete` preserve weaker-layer opinions;
+  `Explicit` replaces the selected layer's list and an empty explicit list
+  clears it. Inspect `references.authored` and `references.composed` before
+  editing, and resolve the target first so a composed-only prim is reported as
+  read-only rather than flattened or guessed.
 - `assembly_edit::attach_component` and `assembly_edit::detach_component` use
   the existing mount, socket, joint, frame, ownership, and occupancy
   validators. Supply exact paths in the

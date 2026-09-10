@@ -274,6 +274,18 @@ Inherited `xformOpOrder` comes from that composition; the edit authors only an
 never flattened into saved source. `referenced_part_edit` exercises this path,
 missing-target rejection, inherited scale, and grouped undo.
 
+Reference-list edits use the same document owner through `UsdOp::SetReferenceArcs`
+and `ApplyUsdOp`. Each arc carries an asset identity and optional target prim;
+the operation authors the requested OpenUSD `prepend`, `append`, `add`, `delete`,
+or `explicit` list-op on the selected layer. Non-explicit forms preserve weaker
+opinions, while an empty explicit list is the deliberate clear operation. The
+`InspectUsdDocument` prim response reports root/runtime authored opinions and the
+document-composed list, plus canonical-stage stack sites when the preview is
+mounted. Invalid asset identities, non-prim target paths, composed-only targets,
+and stale generations fail at the typed command boundary. The operation is
+journalled, undoable, and treated as a composition resync so the live projection
+rebuilds the affected composition rather than replaying a flattened delta.
+
 Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
 simulation projector. Domain member discovery, synthesis, and asynchronous
 completion use `lunco_usd_bevy::is_preview_only`; presentation collections do

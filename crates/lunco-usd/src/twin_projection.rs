@@ -1095,6 +1095,7 @@ fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
             // subtree wholesale, which the incremental sink can't express.
             | UsdOp::SetVariantSelection { .. }
             | UsdOp::SetPayload { .. }
+            | UsdOp::SetReferenceArcs { .. }
     )
 }
 

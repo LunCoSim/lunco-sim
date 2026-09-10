@@ -50,7 +50,7 @@ pub use commands::{
     ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
     ReviewUsdProposal, UsdCommandsPlugin, UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
-pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
+pub use document::{LayerId, UsdChange, UsdDocument, UsdOp, UsdReferenceArc, UsdReferenceListOp};
 pub use edit_session::{
     UsdEditScope, UsdEditSessions, UsdProposal, UsdProposalId, UsdProposalState, UsdProposalSummary,
 };

@@ -454,6 +454,25 @@ fn payload(doc, edit_target, path, asset_paths, parent_gen) {
     })
 }
 
+/// Author one typed USD reference list-op on an existing prim. Each entry is
+/// #{ asset_path: "lunco://…", prim_path: () } (or an explicit absolute prim
+/// path); use `"Explicit"` with an empty list to clear this layer's opinion.
+/// Prepend/Append/Add/Delete preserve weaker-layer arcs according to USD list
+/// composition. Resolve the target first so composed-only prims are rejected
+/// visibly rather than guessed.
+fn references(doc, edit_target, path, references, list_op, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ SetReferenceArcs: #{
+            edit_target: edit_target,
+            path: path,
+            references: references,
+            list_op: list_op,
+        }},
+    })
+}
+
 /// Activate or deactivate one exact prim without deleting its authored subtree.
 fn active(doc, edit_target, path, is_active, parent_gen) {
     cmd("ApplyUsdOp", #{
