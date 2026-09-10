@@ -1465,69 +1465,6 @@ pub fn on_set_usd_connection(
     });
 }
 
-/// Author one standard USD attribute in the active document's runtime layer.
-///
-/// This is the generic authoring verb for data-driven editor tools. It does not
-/// add a LunCo schema or mutate an ECS component: the USD type and literal are
-/// passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
-/// remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
-/// `point3f[] points` without a Rust handler for every geometry type. The path
-/// may name a composed child of a referenced asset; the runtime layer is the
-/// stronger session opinion and does not flatten or rewrite that reference.
-#[Command(default)]
-pub struct SetUsdAttribute {
-    /// Absolute USD prim path in the active document's composed namespace.
-    pub path: String,
-    /// Attribute name, for example `points` or `inputs:radius`.
-    pub name: String,
-    /// USD type name, for example `point3f[]`, `float`, or `token`.
-    pub type_name: String,
-    /// USD literal, exactly as it would appear in USDA (except `string`, which
-    /// is raw content according to `UsdOp::SetAttribute`'s contract).
-    pub value: String,
-}
-
-#[on_command(SetUsdAttribute)]
-pub fn on_set_usd_attribute(
-    trigger: On<SetUsdAttribute>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    if cmd.path.is_empty() || cmd.name.is_empty() || cmd.type_name.is_empty() {
-        warn!("SET_USD_ATTRIBUTE: path, name, and type_name are required");
-        return;
-    }
-    if !cmd.path.starts_with('/') {
-        warn!("SET_USD_ATTRIBUTE: path must be absolute: `{}`", cmd.path);
-        return;
-    }
-    if lunco_usd_bevy::SdfPath::new(&cmd.path).is_err() {
-        warn!("SET_USD_ATTRIBUTE: invalid prim path `{}`", cmd.path);
-        return;
-    }
-    let Some(doc) = workspace.as_deref().and_then(|ws| ws.0.active_document) else {
-        debug!("SET_USD_ATTRIBUTE: no active document");
-        return;
-    };
-    if usd_registry.host(doc).is_none() {
-        warn!("SET_USD_ATTRIBUTE: active document {doc} is unavailable");
-        return;
-    }
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::SetAttribute {
-            edit_target: LayerId::runtime(),
-            path: cmd.path.clone(),
-            name: cmd.name.clone(),
-            type_name: cmd.type_name.clone(),
-            value: cmd.value.clone(),
-        },
-    });
-}
-
 /// One wheel-dynamics parameter — **the** single source of truth for it.
 ///
 /// A wheel param has exactly three facets and they must never drift apart:
@@ -1887,7 +1824,7 @@ pub fn persist_environment_light_to_runtime_layer(
             }
             for (name, type_name, value) in &fill_attrs {
                 commands.trigger(ApplyUsdOp {
-                doc_id: doc,
+                    doc_id: doc,
                     parent_gen: None,
                     op: UsdOp::SetAttribute {
                         edit_target: LayerId::runtime(),
@@ -3556,7 +3493,6 @@ register_commands!(
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
-    on_set_usd_attribute,
     on_set_usd_connection,
     on_spawn_entity_command,
     on_step_physics,

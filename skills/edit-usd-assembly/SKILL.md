@@ -477,6 +477,13 @@ Use the smallest existing typed intent that expresses the change:
   existing typed structural USD operations. They require an explicit target,
   exact paths, and the inspected generation; they never replace a layer's raw
   source.
+- Source-defined geometry tools follow the same explicit contract. For example,
+  `nurbs::set_points(doc, path, points, parent_gen)` returns the `ApplyUsdOp`
+  result; pass the `DocumentId` and generation from `describe`/`QueryUsdPrim`,
+  and inspect `ok`, `data.doc_id`, `data.paths`, `data.generation`, and
+  `data.change_set_id` before treating the edit as accepted. Use
+  `nurbs::set_point(doc, path, index, point)` only when the boolean convenience
+  result is sufficient. Never infer the document from the active editor tab.
 - `assembly_edit::references(doc, edit_target, path, references, list_op,
   parent_gen)` authors existing reference arcs through `SetReferenceArcs`.
   Each entry carries an asset identity and optional absolute target prim path.

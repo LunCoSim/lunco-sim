@@ -557,27 +557,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
 | `source` | `String` |  New WGSL source text. |
 
-#### `SetUsdAttribute`
-
- Author one standard USD attribute in the active document's runtime layer.
-
- This is the generic authoring verb for data-driven editor tools. It does not
- add a LunCo schema or mutate an ECS component: the USD type and literal are
- passed to the document's typed `UsdOp::SetAttribute` path, so composed USD
- remains the source of truth. A tool such as `nurbs.rhai` can therefore edit
- `point3f[] points` without a Rust handler for every geometry type. The path
- may name a composed child of a referenced asset; the runtime layer is the
- stronger session opinion and does not flatten or rewrite that reference.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` |  Absolute USD prim path in the active document's composed namespace. |
-| `name` | `String` |  Attribute name, for example `points` or `inputs:radius`. |
-| `type_name` | `String` |  USD type name, for example `point3f[]`, `float`, or `token`. |
-| `value` | `String` |  USD literal, exactly as it would appear in USDA (except `string`, which  is raw content according to `UsdOp::SetAttribute`'s contract). |
-
 #### `SetUsdConnection`
 
  Author a native USD attribute connection (`connectionPaths`) onto a prim.

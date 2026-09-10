@@ -22,7 +22,7 @@ fn waypoint_event_index(evt) {
 ///
 /// The USD simulation projection owns the runtime-only look transition. This
 /// helper validates the typed event for callers but deliberately does not issue
-/// `SetUsdAttribute`: authoring a material while a mission is running would
+/// a runtime USD edit: authoring a material while a mission is running would
 /// trigger a scene-wide visual refresh and tear down active co-simulation.
 fn apply_waypoint_reached(evt) {
     let path = waypoint_event_path(evt);

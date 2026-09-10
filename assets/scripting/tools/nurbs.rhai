@@ -26,20 +26,25 @@ fn points_literal(points) {
     return text + "]";
 }
 
-/// Replace the standard USD control net at `path`.
-fn set_points(path, points) {
-    cmd("SetUsdAttribute", #{
-        path: path,
-        name: "points",
-        type_name: "point3f[]",
-        value: points_literal(points)
+/// Replace the standard USD control net at `path` in the explicit document.
+fn set_points(doc, path, points, parent_gen) {
+    return cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ SetAttribute: #{
+            edit_target: "@runtime@",
+            path: path,
+            name: "points",
+            type_name: "point3f[]",
+            value: points_literal(points),
+        }},
     });
 }
 
 /// Edit one control point without losing the other points.
 /// Returns false when the prim or index is invalid.
-fn set_point(path, index, point) {
-    let prim = query("QueryUsdPrim", #{ path: path, attrs: ["points"] });
+fn set_point(doc, path, index, point) {
+    let prim = query("QueryUsdPrim", #{ doc_id: doc, path: path, attrs: ["points"] });
     if type_of(prim) == "()" || type_of(prim.attrs["points"]) == "()" {
         return false;
     }
@@ -48,6 +53,6 @@ fn set_point(path, index, point) {
         return false;
     }
     points[index] = point;
-    set_points(path, points);
+    set_points(doc, path, points, prim.generation);
     return true;
 }

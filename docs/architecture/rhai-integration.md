@@ -182,7 +182,7 @@ Representative commands already covering the user's surface:
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
 | Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SelectUsdPrim` (`lunco-luncosim-edit/src/selection.rs`) |
-| USD geometry editing | `SetUsdAttribute` (`lunco-scene-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this command |
+| USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
