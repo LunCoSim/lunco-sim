@@ -61,7 +61,13 @@ fn load_recents_at_startup(
     mut snapshot: ResMut<RecentsLastSnapshot>,
 ) {
     let path = recents_path();
-    let loaded = lunco_workspace::Recents::load(&path);
+    let mut loaded = lunco_workspace::Recents::load(&path);
+    if loaded.deduplicate() {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = loaded.save(&path) {
+            warn!("[Recents] cleanup save to {} failed: {e}", path.display());
+        }
+    }
     snapshot.json = serde_json::to_string_pretty(&loaded).unwrap_or_default();
     workspace.recents = loaded;
 }
